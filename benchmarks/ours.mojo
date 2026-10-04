@@ -5,7 +5,8 @@ where an accelerator answers, on the device.
     mojo build -I . benchmarks/ours.mojo -o <binary> && <binary> <data directory>
 
 Prints one tab-separated row per measurement, in the shape `run.py` reads from every tool:
-`tool, workload, task, device, seconds, answer`.
+`tool, workload, task, device, seconds, answer`. Every measurement is taken warm and in-process
+(see `measure`), the way every runner takes its own.
 """
 
 from std.sys import argv
@@ -58,9 +59,74 @@ def checksum(values: List[Int]) -> String:
     return String(total, ":", weighted)
 
 
-def emit(workload: String, task: String, device: String, started: Int, values: List[Int]):
-    var seconds = Float64(perf_counter_ns() - started) / 1e9
-    print("dinara-align", workload, task, device, seconds, checksum(values), sep="\t")
+comptime BATCH_SCORE = 0
+"""The tasks `call` runs: a whole file as one batch, scored or aligned."""
+comptime BATCH_ALIGNMENT = 1
+comptime PAIR_SCORE = 2
+"""One pair, scored or aligned, by the affine-gap kernels."""
+comptime PAIR_ALIGNMENT = 3
+comptime EDIT_DISTANCE = 4
+"""One pair by the bit-parallel edit distance, distance alone or with its alignment."""
+comptime EDIT_ALIGNMENT = 5
+
+comptime BATCHES = 20
+"""Batches a short call is repeated in; the fastest batch's average is its time."""
+comptime BATCH_SECONDS = 0.01
+"""About how long one batch runs."""
+comptime ONCE_SECONDS = 0.1
+"""A call at least this long is timed once: noise is small next to it."""
+
+
+def call[
+    task: Int
+](data: Pairs, index: Int, scoring: Scoring, placement: Placement, threads: Int) raises -> String:
+    """Runs one task once and returns its answer as the checksum `run.py` compares."""
+    comptime if task == BATCH_SCORE:
+        var values = List[Int]()
+        for value in scores[GLOBAL](data.firsts, data.seconds, scoring, placement):
+            values.append(Int(value))
+        return checksum(values)
+    elif task == BATCH_ALIGNMENT:
+        var values = List[Int]()
+        for result in alignments[GLOBAL](data.firsts, data.seconds, scoring, placement):
+            values.append(Int(result.score))
+        return checksum(values)
+    elif task == PAIR_SCORE:
+        return checksum([Int(score[GLOBAL](data.firsts[index], data.seconds[index], scoring, placement))])
+    elif task == PAIR_ALIGNMENT:
+        return checksum([Int(align[GLOBAL](data.firsts[index], data.seconds[index], scoring, placement).score)])
+    elif task == EDIT_DISTANCE:
+        return checksum([edit_distance(data.firsts[index], data.seconds[index], threads)])
+    else:
+        return checksum([Int(edit_alignment(data.firsts[index], data.seconds[index], threads).score)])
+
+
+def measure[
+    task: Int
+](data: Pairs, index: Int, scoring: Scoring, placement: Placement, threads: Int) raises -> Tuple[Float64, String]:
+    """The time of one call, in seconds, and its answer, measured as every runner measures its own.
+
+    A first call sizes the batches; a call shorter than `ONCE_SECONDS` is then repeated in `BATCHES`
+    batches of about `BATCH_SECONDS` each, and the fastest batch's average is the time, since
+    anything slowing a batch down comes from outside the aligner. A longer call is timed once.
+    """
+    var started = perf_counter_ns()
+    var answer = call[task](data, index, scoring, placement, threads)
+    var once = Float64(perf_counter_ns() - started) / 1e9
+    if once >= ONCE_SECONDS:
+        return (once, answer)
+    var size = max(Int(BATCH_SECONDS / max(once, 1e-9)), 1)
+    var best = Float64.MAX
+    for _ in range(BATCHES):
+        started = perf_counter_ns()
+        for _ in range(size):
+            answer = call[task](data, index, scoring, placement, threads)
+        best = min(best, Float64(perf_counter_ns() - started) / 1e9 / Float64(size))
+    return (best, answer)
+
+
+def emit(tool: String, workload: String, task: String, device: String, timed: Tuple[Float64, String]):
+    print(tool, workload, task, device, timed[0], timed[1], sep="\t")
 
 
 def gpu_answers(scoring: Scoring) raises -> Bool:
@@ -74,88 +140,41 @@ def gpu_answers(scoring: Scoring) raises -> Bool:
 
 def run_batch(data: Pairs, scoring: Scoring, device: String, placement: Placement) raises:
     """A whole file as one batch, which is how a caller with many pairs would use the package."""
-    var started = perf_counter_ns()
-    var scored = scores[GLOBAL](data.firsts, data.seconds, scoring, placement)
-    var values = List[Int]()
-    for value in scored:
-        values.append(Int(value))
-    emit(data.names[0], "score", device, started, values)
-
-    started = perf_counter_ns()
-    var aligned = alignments[GLOBAL](data.firsts, data.seconds, scoring, placement)
-    values = List[Int]()
-    for result in aligned:
-        values.append(Int(result.score))
-    emit(data.names[0], "alignment", device, started, values)
+    emit("dinara-align", data.names[0], "score", device, measure[BATCH_SCORE](data, 0, scoring, placement, 1))
+    emit("dinara-align", data.names[0], "alignment", device, measure[BATCH_ALIGNMENT](data, 0, scoring, placement, 1))
 
 
-def run_pairs(data: Pairs, scoring: Scoring, negate: Bool, device: String, placement: Placement) raises:
+def run_pairs(data: Pairs, scoring: Scoring, device: String, placement: Placement) raises:
     """Each pair as its own workload, so long pairs are timed one at a time."""
-    var sign = -1 if negate else 1
     for index in range(len(data.names)):
-        var started = perf_counter_ns()
-        var value = score[GLOBAL](data.firsts[index], data.seconds[index], scoring, placement)
-        emit(data.names[index], "score", device, started, [sign * Int(value)])
-        started = perf_counter_ns()
-        var aligned = align[GLOBAL](data.firsts[index], data.seconds[index], scoring, placement)
-        emit(data.names[index], "alignment", device, started, [sign * Int(aligned.score)])
+        emit("dinara-align", data.names[index], "score", device, measure[PAIR_SCORE](data, index, scoring, placement, 1))
+        emit(
+            "dinara-align",
+            data.names[index],
+            "alignment",
+            device,
+            measure[PAIR_ALIGNMENT](data, index, scoring, placement, 1),
+        )
 
 
-comptime BATCHES = 20
-"""Batches a short bit-parallel call is repeated in; the fastest batch's average is its time."""
-comptime BATCH_SECONDS = 0.01
-"""About how long one batch runs."""
-comptime ONCE_SECONDS = 0.1
-"""A call at least this long is timed once: noise is small next to it."""
-
-
-def call[align: Bool](first: String, second: String, threads: Int) raises -> Int:
-    comptime if align:
-        return Int(edit_alignment(first, second, threads).score)
-    else:
-        return edit_distance(first, second, threads)
-
-
-def measure[align: Bool](first: String, second: String, threads: Int) raises -> Tuple[Float64, Int]:
-    """The time of one call, in seconds, and its answer, measured as A*PA's runner measures its own.
-
-    A first call sizes the batches; a short call is then repeated in `BATCHES` batches of about
-    `BATCH_SECONDS` each, and the fastest batch's average is the time.
-    """
-    var started = perf_counter_ns()
-    var value = call[align](first, second, threads)
-    var once = Float64(perf_counter_ns() - started) / 1e9
-    if once >= ONCE_SECONDS:
-        return (once, value)
-    var size = max(Int(BATCH_SECONDS / max(once, 1e-9)), 1)
-    var best = Float64.MAX
-    for _ in range(BATCHES):
-        started = perf_counter_ns()
-        for _ in range(size):
-            value = call[align](first, second, threads)
-        best = min(best, Float64(perf_counter_ns() - started) / 1e9 / Float64(size))
-    return (best, value)
-
-
-def run_bit_parallel(data: Pairs) raises:
+def run_bit_parallel(data: Pairs, scoring: Scoring) raises:
     """The bit-parallel edit distance and alignment, on one thread and on all of them, each its own column.
 
-    One thread is the like-for-like against A*PA, which never forks; all threads is what a caller
-    gets. Timed warm and in-process, as A*PA's runner times its own aligners, since a single cold
-    call of a few microseconds measures the allocator and the scheduler as much as the aligner.
+    One thread is the like-for-like against A*PA, which never forks; all threads is what a caller gets.
     """
-    # A short spin first, so the scheduler has moved this process onto a fast core.
-    var spun = perf_counter_ns()
-    while perf_counter_ns() - spun < 200_000_000:
-        pass
+    var placement = Placement.on_cpu(1)
     var widths: List[Int] = [1, hardware_threads()]
     for threads in widths:
         var tool = String("dinara-align (bit-parallel, ", threads, " thread", "" if threads == 1 else "s", ")")
         for index in range(len(data.names)):
-            var scored = measure[False](data.firsts[index], data.seconds[index], threads)
-            print(tool, data.names[index], "score", "cpu", scored[0], checksum([scored[1]]), sep="\t")
-            var aligned = measure[True](data.firsts[index], data.seconds[index], threads)
-            print(tool, data.names[index], "alignment", "cpu", aligned[0], checksum([aligned[1]]), sep="\t")
+            emit(tool, data.names[index], "score", "cpu", measure[EDIT_DISTANCE](data, index, scoring, placement, threads))
+            emit(
+                tool,
+                data.names[index],
+                "alignment",
+                "cpu",
+                measure[EDIT_ALIGNMENT](data, index, scoring, placement, threads),
+            )
 
 
 def write_scoring(directory: String, scoring: Scoring) raises:
@@ -173,8 +192,11 @@ def write_scoring(directory: String, scoring: Scoring) raises:
 def main() raises:
     var directory = String(argv()[1])
     var dna = Scoring.dna()
-    var unit = Scoring.edit_distance()
     write_scoring(directory, dna)
+    # A short spin first, so the scheduler has moved this process onto a fast core.
+    var spun = perf_counter_ns()
+    while perf_counter_ns() - spun < 200_000_000:
+        pass
 
     var devices = List[String]()
     devices.append("cpu")
@@ -190,7 +212,7 @@ def main() raises:
         var placement = Placement.on_gpu(0, threads) if device == "gpu" else Placement.on_cpu(threads)
         run_batch(reads, dna, device, placement)
         run_batch(kilobase, dna, device, placement)
-        run_pairs(affine, dna, False, device, placement)
-        # Edit distance is the unit-cost global recurrence, negated.
-        run_pairs(edit, unit, True, device, placement)
-    run_bit_parallel(edit)
+        run_pairs(affine, dna, device, placement)
+    # The edit-distance pairs go to the bit-parallel path alone: the affine-gap kernels would answer
+    # them with a full quadratic sweep, a minute and more per 100 kbp pair, comparing nothing new.
+    run_bit_parallel(edit, dna)

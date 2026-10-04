@@ -1,14 +1,22 @@
-//! The hyalite side of the comparison: global (`Mode::Nw`) alignment of every workload `run.py` wrote,
-//! pair by pair through `align_pair` (score) and `align` (alignment), on one CPU thread.
+//! The hyalite side of the comparison: global (`Mode::Nw`) affine-gap alignment of the DNA batches
+//! and pairs `run.py` wrote, through `align_pair` (score) and `align` (alignment), on one CPU thread.
 //!
-//! The affine workloads read `dna_scoring.txt`, which dinara-align writes from its own default, so
-//! both tools score with the same numbers. Prints the same tab-separated rows as every other runner.
+//! Every workload reads `dna_scoring.txt`, which dinara-align writes from its own default, so both
+//! tools score with the same numbers. The edit-distance pairs are left to the bit-parallel aligners:
+//! hyalite would answer them with a full quadratic sweep. Prints the same tab-separated rows as every
+//! other runner, each measured warm and in-process as they all measure (see `measure`).
 
 use hyalite::{Mode, Scoring, SearchType, align, align_pair};
 use std::{env, fs, time::Instant};
 
 /// Traceback working memory hyalite may use before it switches to its checkpoint path.
 const BUDGET: usize = 1 << 30;
+/// Batches whose average is reported: the fastest of them.
+const BATCHES: usize = 20;
+/// About how long one batch runs, in seconds.
+const BATCH_SECONDS: f64 = 0.01;
+/// A run at least this long, in seconds, is timed once: noise is small next to it.
+const ONCE_SECONDS: f64 = 0.1;
 
 struct Pairs {
     names: Vec<String>,
@@ -39,38 +47,55 @@ fn checksum(values: &[i64]) -> String {
     format!("{total}:{weighted}")
 }
 
-fn emit(workload: &str, task: &str, started: Instant, values: &[i64]) {
-    let seconds = started.elapsed().as_secs_f64();
-    println!("hyalite\t{workload}\t{task}\tcpu\t{seconds}\t{}", checksum(values));
+/// The time of one call of `run`, in seconds, and the value it returned.
+///
+/// A first call sizes the batches; a short call is then repeated in `BATCHES` batches of about
+/// `BATCH_SECONDS` each, and the fastest batch's average is the time. A long call is timed once.
+fn measure<T>(mut run: impl FnMut() -> T) -> (f64, T) {
+    let started = Instant::now();
+    let mut value = run();
+    let once = started.elapsed().as_secs_f64();
+    if once >= ONCE_SECONDS {
+        return (once, value);
+    }
+    let size = ((BATCH_SECONDS / once.max(1e-9)) as usize).max(1);
+    let mut best = f64::INFINITY;
+    for _ in 0..BATCHES {
+        let started = Instant::now();
+        for _ in 0..size {
+            value = run();
+        }
+        best = best.min(started.elapsed().as_secs_f64() / size as f64);
+    }
+    (best, value)
 }
 
-/// Times the chosen pairs as one workload: every score first, then every alignment.
-fn time(workload: &str, pairs: &Pairs, chosen: &[usize], scoring: &Scoring, sign: i64) {
-    let started = Instant::now();
-    let scored: Vec<i64> = chosen
-        .iter()
-        .map(|&i| {
-            let hit = align_pair(&pairs.firsts[i], &pairs.seconds[i], scoring, Mode::Nw, SearchType::Score);
-            sign * hit.unwrap().score as i64
-        })
-        .collect();
-    emit(workload, "score", started, &scored);
-    let started = Instant::now();
-    let aligned: Vec<i64> = chosen
-        .iter()
-        .map(|&i| sign * align(&pairs.firsts[i], &pairs.seconds[i], scoring, Mode::Nw, BUDGET).unwrap().score as i64)
-        .collect();
-    emit(workload, "alignment", started, &aligned);
+/// Times the chosen pairs as one workload: every score, then every alignment.
+fn time(workload: &str, pairs: &Pairs, chosen: &[usize], scoring: &Scoring) {
+    let (seconds, scored) = measure(|| {
+        chosen
+            .iter()
+            .map(|&i| align_pair(&pairs.firsts[i], &pairs.seconds[i], scoring, Mode::Nw, SearchType::Score).unwrap().score as i64)
+            .collect::<Vec<i64>>()
+    });
+    println!("hyalite\t{workload}\tscore\tcpu\t{seconds}\t{}", checksum(&scored));
+    let (seconds, aligned) = measure(|| {
+        chosen
+            .iter()
+            .map(|&i| align(&pairs.firsts[i], &pairs.seconds[i], scoring, Mode::Nw, BUDGET).unwrap().score as i64)
+            .collect::<Vec<i64>>()
+    });
+    println!("hyalite\t{workload}\talignment\tcpu\t{seconds}\t{}", checksum(&aligned));
 }
 
 fn batch(pairs: &Pairs, scoring: &Scoring) {
     let every: Vec<usize> = (0..pairs.names.len()).collect();
-    time(&pairs.names[0], pairs, &every, scoring, 1);
+    time(&pairs.names[0], pairs, &every, scoring);
 }
 
-fn each(pairs: &Pairs, scoring: &Scoring, sign: i64) {
+fn each(pairs: &Pairs, scoring: &Scoring) {
     for index in 0..pairs.names.len() {
-        time(&pairs.names[index], pairs, &[index], scoring, sign);
+        time(&pairs.names[index], pairs, &[index], scoring);
     }
 }
 
@@ -86,14 +111,12 @@ fn main() {
     let matrix: Vec<i32> = lines.map(|l| l.parse().unwrap()).collect();
     let dna = Scoring::new(alphabet.len(), matrix, open, ext).unwrap();
 
+    // A short spin first, so the scheduler has moved this process onto a fast core.
+    let started = Instant::now();
+    while started.elapsed().as_millis() < 200 {
+        std::hint::black_box(0);
+    }
     batch(&read(&format!("{directory}/dna_reads.tsv"), &alphabet), &dna);
     batch(&read(&format!("{directory}/dna_kilobase.tsv"), &alphabet), &dna);
-    each(&read(&format!("{directory}/dna_affine.tsv"), &alphabet), &dna, 1);
-
-    let mut unit = vec![-1; 16];
-    for i in 0..4 {
-        unit[i * 4 + i] = 0;
-    }
-    let unit = Scoring::new(4, unit, 1, 1).unwrap();
-    each(&read(&format!("{directory}/dna_edit.tsv"), "ACGT"), &unit, -1);
+    each(&read(&format!("{directory}/dna_affine.tsv"), &alphabet), &dna);
 }

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Times dinara-align against other exact global DNA aligners, and checks that every answer agrees.
 
-    pixi run bench                    # 1k and 10k workloads, best of three, about two minutes
-    pixi run bench --full             # adds the 100k DNA pairs, best of three, about half an hour
+    pixi run bench                    # 1k and 10k workloads, about a minute
+    pixi run bench --full             # adds the 100k DNA pairs, about five minutes
     pixi run bench --install-rust     # also installs the nightly A*PA needs, privately
 
 Every rival is cloned at a pinned commit into `benchmarks/.cache/` and built there; nothing of
@@ -10,6 +10,10 @@ theirs is vendored. Inputs are generated from a fixed seed, so two runs time the
 runner prints `tool, workload, task, device, seconds, answer` rows, and the answers within a
 workload must all be equal: a speed table over disagreeing aligners would compare different
 questions, so a disagreement fails the run.
+
+Every runner times each measurement the same way, warm and in-process: a call shorter than a tenth
+of a second is repeated in twenty batches and the fastest batch's average kept, a longer one is
+timed once. So one run of each runner is enough.
 """
 
 import argparse
@@ -238,7 +242,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--full", action="store_true", help="include the 100k DNA pairs")
     parser.add_argument("--install-rust", action="store_true", help="install A*PA's nightly under the cache")
-    parser.add_argument("--repeat", type=int, default=3, help="runs per tool, keeping the fastest (default 3)")
+    parser.add_argument("--repeat", type=int, default=1, help="runs per tool, keeping the fastest (default 1)")
     options = parser.parse_args()
 
     generate(options.full)
