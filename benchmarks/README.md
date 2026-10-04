@@ -17,7 +17,7 @@ Every rival is cloned at a pinned commit into `.cache/` and built there; nothing
 | Tool                                                                            | Commit    | License    | What it is run on                                                          |
 | :------------------------------------------------------------------------------ | :-------- | :--------- | :------------------------------------------------------------------------- |
 | dinara-align                                                                    | this tree | Apache-2.0 | every workload, on the CPU and on the GPU where one answers                |
-| dinara-align (bit-parallel, …)                                                  | this tree | MPL-2.0    | the edit-distance workloads, score only: `edit_distance`, ported from A\*PA, on one thread and on all of them |
+| dinara-align (bit-parallel, …)                                                  | this tree | MPL-2.0    | the edit-distance workloads: `edit_distance` and `edit_alignment`, ported from A\*PA2-simple, on one thread and on all of them |
 | [hyalite](https://github.com/Psy-Fer/hyalite)                                   | `0189bcb` | MIT        | every workload, global mode (`Mode::Nw`), one CPU thread with its NEON or AVX2 kernels |
 | [A\*PA, A\*PA2](https://github.com/RagnarGrootKoerkamp/astar-pairwise-aligner) | `bf2e14e` | MPL-2.0    | the edit-distance workloads, because it computes edit distance and nothing else |
 
@@ -25,6 +25,10 @@ A\*PA runs four of its aligners: A\*PA2-full (its default), A\*PA2-simple, the o
 The three A\*PA2 aligners run twice, with traceback and without, so each has a score row and an alignment row; the original A\*PA has no cost-only entry point and reports its alignment alone.
 `a*pa2-nw` against `dinara-align (bit-parallel, 1 thread)` is the same algorithm in Rust and in Mojo; the all-threads column is the same kernel tiled across cores, which A\*PA does not do.
 A\*PA2-simple's score-only mode is slower than its alignment mode on long pairs, so read its best row, not its score row, as its speed.
+
+The edit-distance rows of A\*PA and of dinara-align's bit-parallel columns run in microseconds, where a single cold call measures the allocator and the scheduler as much as the aligner.
+Both runners therefore time those rows the same way, warm and in-process: a 200 ms spin first so the process sits on a fast core, then one call to size the batches, then twenty batches of about 10 ms each, reporting the fastest batch's average; a call of 0.1 s or more is timed once.
+Every other row is one call per run, the fastest of three runs.
 
 ## Workloads
 
@@ -44,46 +48,48 @@ dinara-align writes its default scoring to the data directory and hyalite reads 
 
 ## Results
 
-Measured with `pixi run bench --full`, best of three, on an Apple M2 (4 performance and 4 efficiency cores, 24 GB) under macOS 27.0.1, with Mojo 1.1.0 and Xcode 27.0.
+Measured with `pixi run bench --full` at commit `641819a`, on an Apple M2 (4 performance and 4 efficiency cores, 24 GB) under macOS 27.0.1, with Mojo 1.1.0 and Xcode 27.0.
 Hyalite built with Rust 1.92, A\*PA with the nightly its repository pins.
 A dash marks a task the tool does not offer.
 
-| workload | task | dinara-align (cpu) | dinara-align (gpu) | hyalite | a*pa2-full | a*pa2-simple | a*pa | a*pa2-nw | agree |
-| :-- | :-- | --: | --: | --: | --: | --: | --: | --: | :-: |
-| reads-150bp | score | 641 ms | 26.7 ms | 278 ms | — | — | — | — | ✓ |
-| reads-150bp | alignment | 1.05 s | 99.1 ms | 905 ms | — | — | — | — | ✓ |
-| reads-1kbp | score | 2.98 s | 39.8 ms | 1.23 s | — | — | — | — | ✓ |
-| reads-1kbp | alignment | 4.5 s | 134 ms | 5.58 s | — | — | — | — | ✓ |
-| affine-1k | score | 2.93 ms | 5.43 ms | 1.24 ms | — | — | — | — | ✓ |
-| affine-1k | alignment | 4.39 ms | 8.99 ms | 5.28 ms | — | — | — | — | ✓ |
-| affine-10k | score | 304 ms | 18.1 ms | 205 ms | — | — | — | — | ✓ |
-| affine-10k | alignment | 730 ms | 33.9 ms | 942 ms | — | — | — | — | ✓ |
-| affine-100k | score | 30.7 s | 356 ms | 19.7 s | — | — | — | — | ✓ |
-| affine-100k | alignment | 73.3 s | 717 ms | 77.6 s | — | — | — | — | ✓ |
-| edit-1k-1% | score | 2.95 ms | 5.39 ms | 1.1 ms | — | — | — | — | ✓ |
-| edit-1k-1% | alignment | 4.49 ms | 9.12 ms | 5.01 ms | 90 µs | 29 µs | 246 µs | 93 µs | ✓ |
-| edit-1k-5% | score | 2.97 ms | 5.18 ms | 1.12 ms | — | — | — | — | ✓ |
-| edit-1k-5% | alignment | 4.48 ms | 8.92 ms | 4.99 ms | 67 µs | 31 µs | 211 µs | 73 µs | ✓ |
-| edit-1k-15% | score | 3 ms | 5.15 ms | 1.13 ms | — | — | — | — | ✓ |
-| edit-1k-15% | alignment | 4.54 ms | 10.5 ms | 4.92 ms | 82 µs | 47 µs | 606 µs | 77 µs | ✓ |
-| edit-10k-1% | score | 305 ms | 18.4 ms | 112 ms | — | — | — | — | ✓ |
-| edit-10k-1% | alignment | 729 ms | 34.5 ms | 826 ms | 593 µs | 166 µs | 1.81 ms | 5.03 ms | ✓ |
-| edit-10k-5% | score | 306 ms | 17.8 ms | 112 ms | — | — | — | — | ✓ |
-| edit-10k-5% | alignment | 725 ms | 34.5 ms | 819 ms | 627 µs | 294 µs | 1.68 ms | 4.02 ms | ✓ |
-| edit-10k-15% | score | 305 ms | 18.4 ms | 112 ms | — | — | — | — | ✓ |
-| edit-10k-15% | alignment | 732 ms | 34.2 ms | 951 ms | 1.18 ms | 808 µs | 40.2 ms | 3.23 ms | ✓ |
-| edit-100k-1% | score | 31.1 s | 361 ms | 17.7 s | — | — | — | — | ✓ |
-| edit-100k-1% | alignment | 73.3 s | 717 ms | 77.9 s | 4.7 ms | 3.36 ms | 22.1 ms | 404 ms | ✓ |
-| edit-100k-5% | score | 31.1 s | 361 ms | 17.7 s | — | — | — | — | ✓ |
-| edit-100k-5% | alignment | 73.3 s | 716 ms | 77.8 s | 6.23 ms | 16.3 ms | 20.6 ms | 339 ms | ✓ |
-| edit-100k-15% | score | 30.9 s | 361 ms | 17.6 s | — | — | — | — | ✓ |
-| edit-100k-15% | alignment | 73.3 s | 717 ms | 77.8 s | 24.4 ms | 25.2 ms | 6.41 s | 336 ms | ✓ |
+| workload | task | dinara-align (cpu) | dinara-align (gpu) | dinara-align (bit-parallel, 1 thread) | dinara-align (bit-parallel, 8 threads) | hyalite | a*pa2-full | a*pa2-simple | a*pa2-nw | a*pa | agree |
+| :-- | :-- | --: | --: | --: | --: | --: | --: | --: | --: | --: | :-: |
+| reads-150bp | score | 644 ms | 31.8 ms | — | — | 277 ms | — | — | — | — | ✓ |
+| reads-150bp | alignment | 1.04 s | 114 ms | — | — | 909 ms | — | — | — | — | ✓ |
+| reads-1kbp | score | 2.99 s | 39.9 ms | — | — | 1.24 s | — | — | — | — | ✓ |
+| reads-1kbp | alignment | 4.51 s | 184 ms | — | — | 4.81 s | — | — | — | — | ✓ |
+| affine-1k | score | 2.94 ms | 5.47 ms | — | — | 1.24 ms | — | — | — | — | ✓ |
+| affine-1k | alignment | 4.39 ms | 8.89 ms | — | — | 3.89 ms | — | — | — | — | ✓ |
+| affine-10k | score | 305 ms | 18.7 ms | — | — | 205 ms | — | — | — | — | ✓ |
+| affine-10k | alignment | 725 ms | 35.2 ms | — | — | 767 ms | — | — | — | — | ✓ |
+| affine-100k | score | 30.8 s | 357 ms | — | — | 19.7 s | — | — | — | — | ✓ |
+| affine-100k | alignment | 73.7 s | 717 ms | — | — | 77.7 s | — | — | — | — | ✓ |
+| edit-1k-1% | score | 2.95 ms | 5.64 ms | 8 µs | 8 µs | 1.1 ms | 37 µs | 20 µs | 22 µs | — | ✓ |
+| edit-1k-1% | alignment | 4.55 ms | 9.49 ms | 15 µs | 15 µs | 5.05 ms | 38 µs | 18 µs | 57 µs | 149 µs | ✓ |
+| edit-1k-5% | score | 2.96 ms | 5.37 ms | 9 µs | 9 µs | 1.11 ms | 37 µs | 20 µs | 22 µs | — | ✓ |
+| edit-1k-5% | alignment | 4.5 ms | 9.31 ms | 17 µs | 17 µs | 4.98 ms | 40 µs | 18 µs | 58 µs | 139 µs | ✓ |
+| edit-1k-15% | score | 3 ms | 5.38 ms | 16 µs | 16 µs | 1.13 ms | 31 µs | 20 µs | 22 µs | — | ✓ |
+| edit-1k-15% | alignment | 4.59 ms | 11.6 ms | 29 µs | 29 µs | 5.69 ms | 48 µs | 31 µs | 59 µs | 505 µs | ✓ |
+| edit-10k-1% | score | 307 ms | 18.4 ms | 78 µs | 77 µs | 112 ms | 485 µs | 928 µs | 1.69 ms | — | ✓ |
+| edit-10k-1% | alignment | 728 ms | 34.6 ms | 140 µs | 129 µs | 879 ms | 496 µs | 152 µs | 2.87 ms | 1.6 ms | ✓ |
+| edit-10k-5% | score | 308 ms | 17.7 ms | 158 µs | 152 µs | 112 ms | 497 µs | 1.62 ms | 1.67 ms | — | ✓ |
+| edit-10k-5% | alignment | 728 ms | 33.9 ms | 242 µs | 205 µs | 869 ms | 535 µs | 264 µs | 2.9 ms | 1.49 ms | ✓ |
+| edit-10k-15% | score | 308 ms | 18.2 ms | 232 µs | 206 µs | 112 ms | 863 µs | 2.78 ms | 1.69 ms | — | ✓ |
+| edit-10k-15% | alignment | 732 ms | 34 ms | 377 µs | 304 µs | 826 ms | 1.08 ms | 759 µs | 3.13 ms | 39 ms | ✓ |
+| edit-100k-1% | score | 30.8 s | 356 ms | 2.38 ms | 1.53 ms | 17.7 s | 4.26 ms | 182 ms | 161 ms | — | ✓ |
+| edit-100k-1% | alignment | 73.3 s | 714 ms | 3.01 ms | 1.97 ms | 77.8 s | 4.39 ms | 3.32 ms | 404 ms | 19.5 ms | ✓ |
+| edit-100k-5% | score | 30.7 s | 360 ms | 6.36 ms | 4.48 ms | 17.6 s | 4.58 ms | 272 ms | 161 ms | — | ✓ |
+| edit-100k-5% | alignment | 73.5 s | 723 ms | 7.28 ms | 5.08 ms | 77.9 s | 4.96 ms | 16.1 ms | 335 ms | 17.7 ms | ✓ |
+| edit-100k-15% | score | 30.7 s | 357 ms | 16.3 ms | 10.3 ms | 17.6 s | 21.7 ms | 241 ms | 161 ms | — | ✓ |
+| edit-100k-15% | alignment | 73.6 s | 718 ms | 18.1 ms | 11.4 ms | 77.6 s | 23.6 ms | 25 ms | 333 ms | 6.44 s | ✓ |
 
 ## Reading the Numbers
 
 - **Every answer agreed**, so each row compares tools answering the same question. The answers are the optimal scores and distances: a sum and a position-weighted sum per workload, so a reordered batch cannot pass.
-- **The rivals run on one CPU thread.** dinara-align's CPU batch also runs one pair at a time today, and its linear-space traceback does not yet speed up with more threads, so the CPU columns compare single-threaded code throughout.
+- **On edit distance, the bit-parallel path beats A\*PA2-simple on every workload, on one thread**, distance and alignment alike: 15 against 18 µs aligning 1 kbp at 1%, 140 against 152 µs at 10 kbp and 1%, 18.1 against 25 ms at 100 kbp and 15%. Its score rows beat every A\*PA2 aligner's score row by more, since A\*PA2's cost-only mode is its slower one.
+- **A\*PA2-full is still faster at 100 kbp and 5%**: 4.96 ms aligning, against 7.28 ms on one thread and 5.08 ms on all of them. Its gap-chaining seed heuristic prunes far more of a long, moderately divergent pair than the gap heuristic dinara-align ports from A\*PA2-simple.
+- **The other rivals run on one CPU thread.** dinara-align's affine CPU batch also runs one pair at a time today, and its linear-space traceback does not yet speed up with more threads, so those CPU columns compare single-threaded code throughout. The bit-parallel all-threads column sweeps a long pair from both ends at once, one direction per thread.
 - **dinara-align's GPU times include the overheads a caller pays**: opening the device context on every call, copying sequences over, and copying results back. That is why a single short pair is slower on the GPU than on the CPU.
 - **hyalite's traceback budget is 1 GiB.** It keeps the whole matrix when it fits and switches to a checkpointed sweep above that, as the 100 kbp pairs do. dinara-align switches to its linear-space recursion above six million cells on the host and one million on the device.
-- **A\*PA answers only edit distance**, and its time depends on how similar the sequences are, where every other column here does not. On near-identical DNA it skips almost the whole matrix.
-- **One machine, best of three.** Rerun on your own hardware before quoting any of this.
+- **A\*PA answers only edit distance**, and its time depends on how similar the sequences are, as does the bit-parallel path's; the affine columns do not. On near-identical DNA both skip almost the whole matrix.
+- **One machine.** Rerun on your own hardware before quoting any of this.

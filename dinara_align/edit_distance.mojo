@@ -23,7 +23,12 @@ Myers' step is regrouped so the next column waits on fewer operations than in A*
 The matrix is rarely swept whole. As in A*PA2-simple, band doubling guesses a bound, computes only
 the cells a path within it could cross, prunes rows whose score already rules them out, and repeats
 with a larger guess until the distance fits under it (see `pruned_distance`). Unlike A*PA2, the next
-guess is aimed from where the failed round died rather than doubled (see `edit_distance`).
+guess is aimed from where the failed round died rather than doubled (see `band_doubling`).
+
+Before any band, diagonal transition, as WFA runs it, searches from the start for as long as it
+stays cheaper than a band would be (see `diagonal_transition`). Near-identical pairs, which the post
+on A*PA2 names as its weak spot, finish there, traceback included; any other pair leaves with a
+projection of its distance, which becomes the band's first bound.
 
 A pair too divergent for a band is swept whole, cut into tiles of `LANES` words by `TILE_COLUMNS`
 columns. A tile needs only the tile above it and the tile to its left, so every tile on one
@@ -34,7 +39,7 @@ Unit costs only: a substitution, an insertion and a deletion each cost one, so t
 distance `levenshtein_alignment` returns, without the alignment.
 """
 
-from std.bit import byte_swap, count_leading_zeros, pop_count
+from std.bit import byte_swap, count_leading_zeros, count_trailing_zeros, pop_count
 from std.math import ceildiv
 from std.sys import inlined_assembly
 
@@ -106,19 +111,6 @@ comptime NARROW_BAND = 1024
 
 comptime MEET_COLUMNS = 2048
 """Columns below which one direction finishes before a second thread would pay for itself."""
-
-comptime BAND_START = 64
-"""
-The least the first guess reaches past the length difference. A round costs at least a tile's height
-of rows across the matrix whatever the guess, so starting from the bare difference only adds rounds.
-"""
-
-comptime FIRST_GUESS_DIVISOR = 64
-"""
-The first guess allows one edit per this many columns, about 1.6%. Close pairs then finish in one
-round, and a more distant pair fails it late enough for its estimate (see `edit_distance`) to land
-near the distance; starting from `BAND_START` alone failed early, on a noisier estimate.
-"""
 
 comptime COLUMN_PADDING = LANES
 """Columns of zero bases before and after the profile's planes, for lanes standing outside a tile."""
@@ -287,16 +279,27 @@ struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
     def words(self, first_word: Int, end_word: Int, first_column: Int, end_column: Int):
         """Words `[first_word, end_word)` through columns `[first_column, end_column)`.
 
-        Full groups of `LANES` take the staggered vector sweep when the span is wide enough for it,
-        then one group of `NARROW_LANES` if that many are left, then two or three words staggered in
-        scalar registers; a single word left goes on its own.
+        Full groups of `LANES` take the staggered vector sweep when the span is wide enough for it.
+        Of what is left, four words take a narrow vector, five to seven a narrow vector with the rest
+        in scalar registers beside it, two or three scalar registers alone, and one word goes on its own.
         """
         var word = first_word
         if end_column - first_column >= 2 * LANES:
             while word + LANES <= end_word:
                 self.block[LANES](word, first_column, end_column)
                 word += LANES
-            if word + NARROW_LANES <= end_word:
+            # Five to seven words left: a narrow vector with the rest in scalar registers in its shadow.
+            var left = end_word - word
+            if left == 7:
+                self.hybrid_block[NARROW_LANES, 3](word, first_column, end_column)
+                word += 7
+            elif left == 6:
+                self.hybrid_block[NARROW_LANES, 2](word, first_column, end_column)
+                word += 6
+            elif left == 5:
+                self.hybrid_block[NARROW_LANES, 1](word, first_column, end_column)
+                word += 5
+            elif left == 4:
                 self.block[NARROW_LANES](word, first_column, end_column)
                 word += NARROW_LANES
             # Two or three words left run side by side in scalar registers, which beats a vector
@@ -312,145 +315,295 @@ struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
             word += 1
 
     def block[lanes: Int](self, first_word: Int, first_column: Int, end_column: Int):
-        """`lanes` words through `[first_column, end_column)`, staggered a column apart.
-
-        Lane `k` holds word `first_word + lanes - 1 - k` and works column `offset + 1 + k`, so the
-        lowest word sits in lane zero and works furthest behind. The stagger fills over the first
-        `lanes - 1` steps, while the lower lanes still stand left of the tile, and drains over the
-        last ones; a lane outside the tile keeps its state, and reads bases from the profile's
-        padding. Needs at least `2 * lanes` columns, which `words` checks.
-        """
-        var row_low = SIMD[DType.uint64, lanes]()
-        var row_high = SIMD[DType.uint64, lanes]()
-        var vertical_plus = SIMD[DType.uint64, lanes]()
-        var vertical_minus = SIMD[DType.uint64, lanes]()
-        var horizontal_plus = SIMD[DType.uint64, lanes]()
-        var horizontal_minus = SIMD[DType.uint64, lanes]()
-        var lane_columns = SIMD[DType.int, lanes]()
-        comptime for lane in range(lanes):
-            var word = first_word + lanes - 1 - lane
-            row_low[lane] = self.row_low[unsafe_offset=word]
-            row_high[lane] = self.row_high[unsafe_offset=word]
-            vertical_plus[lane] = self.vertical_plus[unsafe_offset=word]
-            vertical_minus[lane] = self.vertical_minus[unsafe_offset=word]
-            lane_columns[lane] = lane + 1
-
-        @always_inline
-        def stagger[
-            masked: Bool, enters: Bool, leaves: Bool
-        ](offset: Int) {
-            imm self,
-            imm row_low,
-            imm row_high,
-            mut vertical_plus,
-            mut vertical_minus,
-            mut horizontal_plus,
-            mut horizontal_minus,
-            imm lane_columns,
-            imm first_column,
-            imm end_column,
-        }:
-            # Each lane takes the difference the lane above sent last step; the top lane takes the
-            # one entering the block from above, while its column is still inside the tile.
-            horizontal_plus = horizontal_plus.rotate_left[1]()
-            horizontal_minus = horizontal_minus.rotate_left[1]()
-            comptime if enters:
-                horizontal_plus[lanes - 1] = self.horizontal_plus[unsafe_offset=offset + lanes]
-                horizontal_minus[lanes - 1] = self.horizontal_minus[unsafe_offset=offset + lanes]
-            # The bases lane `k` needs sit side by side, from column `offset + 1`.
-            var low = self.column_low.unsafe_offset(offset + 1).unsafe_load[width=lanes]()
-            var high = self.column_high.unsafe_offset(offset + 1).unsafe_load[width=lanes]()
-            var matches = (low ^ row_low) & (high ^ row_high)
-            comptime if masked:
-                var kept_plus = vertical_plus
-                var kept_minus = vertical_minus
-                advance[lanes](horizontal_plus, horizontal_minus, vertical_plus, vertical_minus, matches)
-                var columns = lane_columns + offset
-                var inside = columns.ge(first_column) & columns.lt(end_column)
-                vertical_plus = inside.select(vertical_plus, kept_plus)
-                vertical_minus = inside.select(vertical_minus, kept_minus)
-            else:
-                advance[lanes](horizontal_plus, horizontal_minus, vertical_plus, vertical_minus, matches)
-            # The lowest word's difference is final, and leaves the block at its column.
-            comptime if leaves:
-                self.horizontal_plus[unsafe_offset=offset + 1] = horizontal_plus[0]
-                self.horizontal_minus[unsafe_offset=offset + 1] = horizontal_minus[0]
-
-        for offset in range(first_column - lanes, first_column - 1):
-            stagger[True, True, False](offset)
-        for offset in range(first_column - 1, end_column - lanes):
-            stagger[False, True, True](offset)
-        for offset in range(end_column - lanes, end_column - 1):
-            stagger[True, False, True](offset)
-
-        comptime for lane in range(lanes):
-            var word = first_word + lanes - 1 - lane
-            self.vertical_plus[unsafe_offset=word] = vertical_plus[lane]
-            self.vertical_minus[unsafe_offset=word] = vertical_minus[lane]
+        """`lanes` words through `[first_column, end_column)` in one vector, staggered (see `VectorGroup`)."""
+        var group = VectorGroup[lanes](self, first_word, first_column, end_column)
+        stagger(group)
+        group.finish()
 
     def scalar_block[lanes: Int](self, first_word: Int, first_column: Int, end_column: Int):
-        """`block` in general-purpose registers, one scalar chain per word, staggered the same way.
+        """`lanes` words through `[first_column, end_column)` in scalar registers, staggered (see `ScalarGroup`)."""
+        var group = ScalarGroup[lanes](self, first_word, first_column, end_column)
+        stagger(group)
+        group.finish()
 
-        Each word's horizontal difference passes to the word below through a register rather than a
-        vector rotation, and scalar operations take one cycle where vector ones take two, so a band
-        a few words tall, which is all latency, runs faster here than across vector lanes.
+    def hybrid_block[lanes: Int, below: Int](self, first_word: Int, first_column: Int, end_column: Int):
+        """`lanes` words in a vector and the `below` words under them in scalar registers, in one loop.
+
+        A narrow vector's chain leaves the integer units idle, so the scalar words run in its
+        shadow, a few columns behind so the differences the vector sends down are already stored.
         """
-        for j in range(lanes):
-            self.run(first_word + j, first_column, first_column + lanes - j)
+        var top = VectorGroup[lanes](self, first_word, first_column, end_column)
+        var bottom = ScalarGroup[below](self, first_word + lanes, first_column, end_column)
+        stagger_pair(top, bottom, below + 2)
+        top.finish()
+        bottom.finish()
 
-        # Word `j` from the top: its row planes, its vertical differences, and the horizontal
-        # difference it last sent down, which the word below takes next.
-        var row_low = Array[UInt64, lanes](fill=0)
-        var row_high = Array[UInt64, lanes](fill=0)
-        var vertical_plus = Array[UInt64, lanes](fill=0)
-        var vertical_minus = Array[UInt64, lanes](fill=0)
-        var horizontal_plus = Array[UInt64, lanes](fill=0)
-        var horizontal_minus = Array[UInt64, lanes](fill=0)
-        comptime for j in range(lanes):
-            row_low[j] = self.row_low[unsafe_offset=first_word + j]
-            row_high[j] = self.row_high[unsafe_offset=first_word + j]
-            vertical_plus[j] = self.vertical_plus[unsafe_offset=first_word + j]
-            vertical_minus[j] = self.vertical_minus[unsafe_offset=first_word + j]
-            horizontal_plus[j] = self.horizontal_plus[unsafe_offset=first_column + lanes - 1 - j]
-            horizontal_minus[j] = self.horizontal_minus[unsafe_offset=first_column + lanes - 1 - j]
 
-        for offset in range(first_column, end_column - lanes):
-            # Bottom word first, so each word reads what the one above sent before it is replaced.
-            comptime for i in range(lanes):
-                comptime j = lanes - 1 - i
-                var column = offset + lanes - j
-                var hp: UInt64
-                var hm: UInt64
-                comptime if j == 0:
-                    hp = self.horizontal_plus[unsafe_offset=column]
-                    hm = self.horizontal_minus[unsafe_offset=column]
-                else:
-                    hp = horizontal_plus[j - 1]
-                    hm = horizontal_minus[j - 1]
-                var vp = vertical_plus[j]
-                var vm = vertical_minus[j]
-                var matches = (self.column_low[unsafe_offset=column] ^ row_low[j]) & (
-                    self.column_high[unsafe_offset=column] ^ row_high[j]
-                )
-                advance[1](hp, hm, vp, vm, matches)
-                vertical_plus[j] = vp
-                vertical_minus[j] = vm
-                comptime if j == lanes - 1:
-                    self.horizontal_plus[unsafe_offset=column] = hp
-                    self.horizontal_minus[unsafe_offset=column] = hm
-                else:
-                    horizontal_plus[j] = hp
-                    horizontal_minus[j] = hm
+trait Staggered(Movable):
+    """A group of words swept through one tile, each a column behind the word above it.
 
-        comptime for j in range(lanes):
-            comptime if j != lanes - 1:
-                self.horizontal_plus[unsafe_offset=end_column - 1 - j] = horizontal_plus[j]
-                self.horizontal_minus[unsafe_offset=end_column - 1 - j] = horizontal_minus[j]
-            self.vertical_plus[unsafe_offset=first_word + j] = vertical_plus[j]
-            self.vertical_minus[unsafe_offset=first_word + j] = vertical_minus[j]
+    At step `offset`, the group's `k`-th word from the bottom works column `offset + 1 + k`, so a
+    word takes the difference the word above it sent down on the step before. The group takes the
+    difference entering its top word from the horizontal edge, and leaves its bottom word's there.
+    """
 
-        for j in range(lanes):
-            self.run(first_word + j, end_column - j, end_column)
+    def width(self) -> Int:
+        """How many words, and so how many steps the stagger takes to fill."""
+        ...
+
+    def first_column(self) -> Int:
+        ...
+
+    def end_column(self) -> Int:
+        ...
+
+    def step[masked: Bool](mut self, offset: Int):
+        """One step. `masked` when some word stands outside the tile: such a word keeps its state,
+        and the edge is read and written only for columns inside it."""
+        ...
+
+    def finish(self):
+        """Writes the words' vertical differences back to the frontier."""
+        ...
+
+
+struct VectorGroup[lanes: Int](Staggered, TrivialRegisterPassable):
+    """`lanes` words in one SIMD vector: lane `k` holds the `k`-th word from the bottom.
+
+    Each lane takes the difference the lane above sent by rotating the lanes, and the top lane
+    takes the one entering from the edge. A lane outside the tile reads bases from the profile's
+    padding and keeps its state.
+    """
+
+    var sweep: Sweep
+    var first_word: Int
+    var first: Int
+    var end: Int
+    var row_low: SIMD[DType.uint64, Self.lanes]
+    var row_high: SIMD[DType.uint64, Self.lanes]
+    var vertical_plus: SIMD[DType.uint64, Self.lanes]
+    var vertical_minus: SIMD[DType.uint64, Self.lanes]
+    var horizontal_plus: SIMD[DType.uint64, Self.lanes]
+    var horizontal_minus: SIMD[DType.uint64, Self.lanes]
+    var lane_columns: SIMD[DType.int, Self.lanes]
+
+    @always_inline
+    def __init__(out self, sweep: Sweep, first_word: Int, first_column: Int, end_column: Int):
+        self.sweep = sweep
+        self.first_word = first_word
+        self.first = first_column
+        self.end = end_column
+        self.row_low = SIMD[DType.uint64, Self.lanes]()
+        self.row_high = SIMD[DType.uint64, Self.lanes]()
+        self.vertical_plus = SIMD[DType.uint64, Self.lanes]()
+        self.vertical_minus = SIMD[DType.uint64, Self.lanes]()
+        self.horizontal_plus = SIMD[DType.uint64, Self.lanes]()
+        self.horizontal_minus = SIMD[DType.uint64, Self.lanes]()
+        self.lane_columns = SIMD[DType.int, Self.lanes]()
+        comptime for lane in range(Self.lanes):
+            var word = first_word + Self.lanes - 1 - lane
+            self.row_low[lane] = sweep.row_low[unsafe_offset=word]
+            self.row_high[lane] = sweep.row_high[unsafe_offset=word]
+            self.vertical_plus[lane] = sweep.vertical_plus[unsafe_offset=word]
+            self.vertical_minus[lane] = sweep.vertical_minus[unsafe_offset=word]
+            self.lane_columns[lane] = lane + 1
+
+    @always_inline
+    def width(self) -> Int:
+        return Self.lanes
+
+    @always_inline
+    def first_column(self) -> Int:
+        return self.first
+
+    @always_inline
+    def end_column(self) -> Int:
+        return self.end
+
+    @always_inline
+    def step[masked: Bool](mut self, offset: Int):
+        self.horizontal_plus = self.horizontal_plus.rotate_left[1]()
+        self.horizontal_minus = self.horizontal_minus.rotate_left[1]()
+        var top = offset + Self.lanes
+        if not masked or (top >= self.first and top < self.end):
+            self.horizontal_plus[Self.lanes - 1] = self.sweep.horizontal_plus[unsafe_offset=top]
+            self.horizontal_minus[Self.lanes - 1] = self.sweep.horizontal_minus[unsafe_offset=top]
+        # The bases lane `k` needs sit side by side, from column `offset + 1`.
+        var low = self.sweep.column_low.unsafe_offset(offset + 1).unsafe_load[width=Self.lanes]()
+        var high = self.sweep.column_high.unsafe_offset(offset + 1).unsafe_load[width=Self.lanes]()
+        var matches = (low ^ self.row_low) & (high ^ self.row_high)
+        comptime if masked:
+            var kept_plus = self.vertical_plus
+            var kept_minus = self.vertical_minus
+            advance[Self.lanes](
+                self.horizontal_plus, self.horizontal_minus, self.vertical_plus, self.vertical_minus, matches
+            )
+            var columns = self.lane_columns + offset
+            var inside = columns.ge(self.first) & columns.lt(self.end)
+            self.vertical_plus = inside.select(self.vertical_plus, kept_plus)
+            self.vertical_minus = inside.select(self.vertical_minus, kept_minus)
+        else:
+            advance[Self.lanes](
+                self.horizontal_plus, self.horizontal_minus, self.vertical_plus, self.vertical_minus, matches
+            )
+        # The bottom word's difference is final, and leaves the group at its column.
+        var bottom = offset + 1
+        if not masked or (bottom >= self.first and bottom < self.end):
+            self.sweep.horizontal_plus[unsafe_offset=bottom] = self.horizontal_plus[0]
+            self.sweep.horizontal_minus[unsafe_offset=bottom] = self.horizontal_minus[0]
+
+    @always_inline
+    def finish(self):
+        comptime for lane in range(Self.lanes):
+            var word = self.first_word + Self.lanes - 1 - lane
+            self.sweep.vertical_plus[unsafe_offset=word] = self.vertical_plus[lane]
+            self.sweep.vertical_minus[unsafe_offset=word] = self.vertical_minus[lane]
+
+
+struct ScalarGroup[lanes: Int](Staggered):
+    """`lanes` words in general-purpose registers, one scalar chain each, staggered as `VectorGroup`.
+
+    Each word's difference passes down through a register rather than a rotation, and a scalar
+    operation takes one cycle where a vector one takes two, so a band a few words tall, which is
+    all latency, runs faster here. Word `j` is the `j`-th from the top.
+    """
+
+    var sweep: Sweep
+    var first_word: Int
+    var first: Int
+    var end: Int
+    var row_low: Array[UInt64, Self.lanes]
+    var row_high: Array[UInt64, Self.lanes]
+    var vertical_plus: Array[UInt64, Self.lanes]
+    var vertical_minus: Array[UInt64, Self.lanes]
+    var horizontal_plus: Array[UInt64, Self.lanes]
+    var horizontal_minus: Array[UInt64, Self.lanes]
+
+    @always_inline
+    def __init__(out self, sweep: Sweep, first_word: Int, first_column: Int, end_column: Int):
+        self.sweep = sweep
+        self.first_word = first_word
+        self.first = first_column
+        self.end = end_column
+        self.row_low = Array[UInt64, Self.lanes](fill=0)
+        self.row_high = Array[UInt64, Self.lanes](fill=0)
+        self.vertical_plus = Array[UInt64, Self.lanes](fill=0)
+        self.vertical_minus = Array[UInt64, Self.lanes](fill=0)
+        self.horizontal_plus = Array[UInt64, Self.lanes](fill=0)
+        self.horizontal_minus = Array[UInt64, Self.lanes](fill=0)
+        comptime for j in range(Self.lanes):
+            self.row_low[j] = sweep.row_low[unsafe_offset=first_word + j]
+            self.row_high[j] = sweep.row_high[unsafe_offset=first_word + j]
+            self.vertical_plus[j] = sweep.vertical_plus[unsafe_offset=first_word + j]
+            self.vertical_minus[j] = sweep.vertical_minus[unsafe_offset=first_word + j]
+
+    @always_inline
+    def width(self) -> Int:
+        return Self.lanes
+
+    @always_inline
+    def first_column(self) -> Int:
+        return self.first
+
+    @always_inline
+    def end_column(self) -> Int:
+        return self.end
+
+    @always_inline
+    def step[masked: Bool](mut self, offset: Int):
+        # Bottom word first, so each word reads what the one above sent before it is replaced.
+        comptime for i in range(Self.lanes):
+            comptime j = Self.lanes - 1 - i
+            var column = offset + Self.lanes - j
+            var inside = column >= self.first and column < self.end
+            var hp: UInt64
+            var hm: UInt64
+            comptime if j == 0:
+                hp = 0
+                hm = 0
+                if not masked or inside:
+                    hp = self.sweep.horizontal_plus[unsafe_offset=column]
+                    hm = self.sweep.horizontal_minus[unsafe_offset=column]
+            else:
+                hp = self.horizontal_plus[j - 1]
+                hm = self.horizontal_minus[j - 1]
+            var vp = self.vertical_plus[j]
+            var vm = self.vertical_minus[j]
+            var matches = (self.sweep.column_low[unsafe_offset=column] ^ self.row_low[j]) & (
+                self.sweep.column_high[unsafe_offset=column] ^ self.row_high[j]
+            )
+            advance[1](hp, hm, vp, vm, matches)
+            comptime if masked:
+                self.vertical_plus[j] = vp if inside else self.vertical_plus[j]
+                self.vertical_minus[j] = vm if inside else self.vertical_minus[j]
+            else:
+                self.vertical_plus[j] = vp
+                self.vertical_minus[j] = vm
+            comptime if j == Self.lanes - 1:
+                if not masked or inside:
+                    self.sweep.horizontal_plus[unsafe_offset=column] = hp
+                    self.sweep.horizontal_minus[unsafe_offset=column] = hm
+            else:
+                self.horizontal_plus[j] = hp
+                self.horizontal_minus[j] = hm
+
+    @always_inline
+    def finish(self):
+        comptime for j in range(Self.lanes):
+            self.sweep.vertical_plus[unsafe_offset=self.first_word + j] = self.vertical_plus[j]
+            self.sweep.vertical_minus[unsafe_offset=self.first_word + j] = self.vertical_minus[j]
+
+
+@always_inline
+def stagger[G: Staggered](mut group: G):
+    """One group through its tile: the stagger fills with the lower words masked, runs, then drains.
+
+    Steps `first - width ..< end - 1` take every word through every column; only between
+    `first - 1` and `end - width` is every word inside the tile.
+    """
+    var first = group.first_column()
+    var end = group.end_column()
+    var width = group.width()
+    for offset in range(first - width, first - 1):
+        group.step[True](offset)
+    for offset in range(first - 1, end - width):
+        group.step[False](offset)
+    for offset in range(max(end - width, first - 1), end - 1):
+        group.step[True](offset)
+
+
+@always_inline
+def masked_step[G: Staggered](mut group: G, offset: Int):
+    """A masked step, or none when the group has not started or has already finished."""
+    if offset >= group.first_column() - group.width() and offset < group.end_column() - 1:
+        group.step[True](offset)
+
+
+@always_inline
+def stagger_pair[A: Staggered, B: Staggered](mut first: A, mut second: B, lag: Int):
+    """Two groups through the same tile in one loop, `second` running `lag` steps behind `first`.
+
+    Two chains in flight hide each other's latency. The groups may be independent, or `second`
+    may be the words just under `first`, as long as `lag` lets every difference `first` sends down
+    be stored before `second` reads it: at least `second`'s width.
+    """
+    var first_column = first.first_column()
+    var end_column = first.end_column()
+    var start = min(first_column - first.width(), first_column - second.width() + lag)
+    var stop = max(end_column - 1, end_column - 1 + lag)
+    var steady = first_column - 1 + lag
+    var steady_end = min(end_column - first.width(), end_column - second.width() + lag)
+    if steady_end < steady:
+        steady_end = steady
+    for offset in range(start, steady):
+        masked_step(first, offset)
+        masked_step(second, offset - lag)
+    for offset in range(steady, steady_end):
+        first.step[False](offset)
+        second.step[False](offset - lag)
+    for offset in range(steady_end, stop):
+        masked_step(first, offset)
+        masked_step(second, offset - lag)
 
 
 def tile_bounds(columns: Int, width: Int) -> List[Int]:
@@ -775,6 +928,143 @@ struct Round(ImplicitlyCopyable, TrivialRegisterPassable):
     """Matrix columns crossed before every row was pruned, or all of them when a distance was found."""
 
 
+struct HalfBand(Movable):
+    """One round of band doubling, advanced a tile at a time, so two rounds can share a loop.
+
+    `pruned_distance` documents the round; this holds its state between tiles: the frontier, the
+    band's top and bottom words, the score at the top, and the deepest kept row and its score.
+    """
+
+    var frontier: Frontier
+    var sweep: Sweep
+    var bounds: List[Int]
+    var columns: Int
+    var rows: Int
+    var words: Int
+    var difference: Int
+    var extra: Int
+    var threshold: Int
+    var stop_column: Int
+    var top: Int
+    var end_word: Int
+    var anchor: Int
+    """The score at the top of word `top`, on the left edge of the coming tile."""
+    var deepest: Int
+    """The deepest row a kept cell, scoring `floor` at the least, sits on, after the last tile."""
+    var floor: Int
+    var outcome: Round
+    """Set once the round has pruned every row, the reason it stopped."""
+
+    def __init__(out self, mut profile: Profile, threshold: Int, stop_column: Int):
+        self.columns = profile.columns
+        self.rows = profile.rows
+        self.words = profile.words
+        self.difference = self.rows - self.columns
+        self.extra = (threshold - abs(self.difference)) // 2
+        self.threshold = threshold
+        self.stop_column = stop_column
+        # One tile's width of horizontal edge, since each tile starts again from `+1` above (see
+        # `Sweep.shifted`); the last tile may absorb a sliver of up to `2 * LANES` more columns.
+        self.frontier = Frontier(BAND_COLUMNS + 2 * LANES, self.words)
+        self.sweep = self.frontier.sweep(profile)
+        self.bounds = tile_bounds(stop_column, NARROW_COLUMNS if threshold < NARROW_BAND else BAND_COLUMNS)
+        self.top = 0
+        self.end_word = 0
+        self.anchor = 0
+        self.deepest = 0
+        self.floor = 0
+        self.outcome = Round(-1, -1)
+
+    def tiles(self) -> Int:
+        return len(self.bounds) - 1
+
+    def first_column(self, tile: Int) -> Int:
+        return self.bounds[tile]
+
+    def end_column(self, tile: Int) -> Int:
+        return self.bounds[tile + 1]
+
+    def prepare[record: Bool](mut self, tile: Int, mut trail: Trail) -> Bool:
+        """Sets the tile's words and readies its edge; false, with `outcome` set, when no word is left."""
+        var first_column = self.bounds[tile]
+        var end_column = self.bounds[tile + 1]
+        var width = end_column - first_column
+        # Ukkonen's band bounds the bottom, and so does the deepest kept row: going `k` rows past it
+        # costs at least `k` over the score there, at least `floor`, and below the diagonal that leads
+        # to the end each such row also adds one to the gap still to close.
+        var band_row = end_column + max(0, self.difference) + self.extra
+        var slack = self.threshold - self.floor
+        var end_diagonal = self.rows - (self.columns - end_column)
+        var reach_row = min(
+            band_row,
+            self.deepest + width + slack,
+            max(end_diagonal, (slack + self.deepest + width + end_diagonal) // 2),
+            self.rows,
+        )
+        var reach = (reach_row - 1) // WORD_BITS + 1
+        # Exactly the words the band reaches: `words` has a kernel for every count. The bottom never
+        # rises, which would leave words behind whose differences the next tile still reads.
+        self.end_word = max(self.end_word, min(reach, self.words))
+        if self.end_word <= self.top:
+            self.outcome = Round(-1, first_column)
+            return False
+        comptime if record:
+            trail.record(first_column, end_column, self.top, self.end_word, self.anchor, self.frontier)
+        self.frontier.restart_horizontal(width)
+        return True
+
+    def tile_sweep(self, tile: Int) -> Sweep:
+        """The sweep for one tile, its horizontal edge starting at the tile's first column."""
+        return self.sweep.shifted(self.bounds[tile])
+
+    def finish(mut self, tile: Int, mut edge: Edge) -> Bool:
+        """Prunes after a swept tile; false, with `outcome` set, when every row went."""
+        var end_column = self.bounds[tile + 1]
+        self.anchor += end_column - self.bounds[tile]
+        # Read the right edge back as scores and keep, as A*PA2 does, the rows from the first to the
+        # last whose score plus gap to the end fits the bound. Both scores and gaps change by at most
+        # one per row, so their sum by at most two, and a row `x` over the bound rules out the next
+        # `ceil(x / 2)` rows without reading them.
+        edge.capture(self.top, self.end_word, self.anchor, self.frontier, self.rows)
+        var to_end = self.rows - (self.columns - end_column)
+        var first_kept = edge.low_row
+        var last_kept = edge.high_row
+        while first_kept <= last_kept:
+            var over = edge.score(first_kept) + abs(first_kept - to_end) - self.threshold
+            if over <= 0:
+                break
+            first_kept += (over + 1) // 2
+        while last_kept >= first_kept:
+            var over = edge.score(last_kept) + abs(last_kept - to_end) - self.threshold
+            if over <= 0:
+                break
+            last_kept -= (over + 1) // 2
+        if first_kept > last_kept:
+            self.outcome = Round(-1, end_column)
+            return False
+
+        # Move the top down to the word whose top row is at or above the first kept row, carrying the
+        # anchor past the words it leaves.
+        var new_top = first_kept // WORD_BITS
+        for word in range(self.top, new_top):
+            self.anchor += word_value(self.frontier.vertical_plus[word], self.frontier.vertical_minus[word])
+        self.top = new_top
+        # The bottom-most kept cell bounds every path below it: from there each row past the diagonal
+        # costs one more, so its exact score is the floor the next tile's reach is measured from.
+        self.deepest = last_kept
+        self.floor = edge.score(last_kept)
+        return True
+
+    def result(mut self, mut edge: Edge) -> Round:
+        """What the round found once every tile is swept, with the last edge captured."""
+        edge.capture(self.top, self.end_word, self.anchor, self.frontier, self.rows)
+        if self.stop_column < self.columns:
+            return Round(-1, self.stop_column)
+        if self.end_word < self.words:
+            return Round(-1, self.columns)
+        return Round(edge.score(self.rows), self.columns)
+
+
 def pruned_distance[
     record: Bool
 ](mut profile: Profile, threshold: Int, stop_column: Int, mut trail: Trail, mut edge: Edge) -> Round:
@@ -808,92 +1098,246 @@ def pruned_distance[
     """
     comptime if record:
         trail.clear()
+    var band = HalfBand(profile, threshold, stop_column)
+    for tile in range(band.tiles()):
+        if not band.prepare[record](tile, trail):
+            return band.outcome
+        band.tile_sweep(tile).words(band.top, band.end_word, band.first_column(tile), band.end_column(tile))
+        if not band.finish(tile, edge):
+            return band.outcome
+    return band.result(edge)
+
+
+# region Diagonal transition
+
+comptime UNREACHED_OFFSET = Int32(-1)
+"""A diagonal no path of the score reaches."""
+
+comptime PROBE_START = 8
+"""The score from which the diagonal transition judges whether to go on, so the projection has a few
+edits to go on."""
+
+comptime PROBE_BUDGET = 3
+"""Twice the columns' worth of diagonals the diagonal transition may still have to search, `d² - s²`.
+
+A diagonal costs about five nanoseconds, a column of a narrow band about seven to ten, so past
+`1.5 * columns` diagonals the band is cheaper for a distance."""
+
+comptime PROBE_ALIGNMENT_BUDGET = 5
+"""`PROBE_BUDGET` when an alignment is wanted, `2.5 * columns`: the diagonal transition's traceback
+is nearly free, where the band records its edges and retraces every tile, about thirteen to
+seventeen nanoseconds a column in all."""
+
+comptime PROBE_MARGIN = 16
+"""How far past the projected distance the band's first bound reaches, on top of an eighth of it."""
+
+comptime PROBE_CEILING = 2048
+"""The highest score the diagonal transition reaches, which bounds its memory to a few megabytes."""
+
+
+struct DiagonalFronts(Movable):
+    """Every score's wavefront: for score `s`, the furthest column each diagonal reaches.
+
+    Diagonal `k` holds the cells whose column minus row is `k`. Score `s` keeps diagonals
+    `lows[s] ..= highs[s]` from position `starts[s]` of `offsets`; all of them stay, since the
+    traceback reads them back.
+    """
+
+    var offsets: List[Int32]
+    var starts: List[Int]
+    var lows: List[Int]
+    var highs: List[Int]
+
+    def __init__(out self):
+        self.offsets = List[Int32](capacity=4096)
+        self.starts = List[Int](capacity=64)
+        self.lows = List[Int](capacity=64)
+        self.highs = List[Int](capacity=64)
+
+    @always_inline
+    def at(self, score: Int, diagonal: Int) -> Int:
+        """The furthest column of `diagonal` at `score`, or -1 when no path of that score reaches it."""
+        if diagonal < self.lows[score] or diagonal > self.highs[score]:
+            return -1
+        return Int(self.offsets[self.starts[score] + diagonal - self.lows[score]])
+
+
+@fieldwise_init
+struct Probe(ImplicitlyCopyable, TrivialRegisterPassable):
+    """What the diagonal transition learned: the distance, or a projection of it and a floor under it."""
+
+    var distance: Int
+    """The edit distance, or -1 when the search stopped first."""
+    var estimate: Int
+    """Where the distance was heading when the search stopped: its score scaled by the progress made."""
+    var floor: Int
+    """Every score up to this was searched, so the distance exceeds it."""
+
+
+@always_inline
+def extend(
+    first: ImmPointer[UInt8, _], second: ImmPointer[UInt8, _], column: Int, row: Int, columns: Int, rows: Int
+) -> Int:
+    """How far matches carry `(column, row)` along its diagonal, eight bases at a time while both have eight."""
+    var at = column
+    var down = row
+    while at + 8 <= columns and down + 8 <= rows:
+        var mismatches = (
+            first.unsafe_offset(at).unsafe_bitcast[UInt64]().unsafe_load()
+            ^ second.unsafe_offset(down).unsafe_bitcast[UInt64]().unsafe_load()
+        )
+        if mismatches != 0:
+            return at + Int(count_trailing_zeros(mismatches)) // 8
+        at += 8
+        down += 8
+    while at < columns and down < rows and first[unsafe_offset=at] == second[unsafe_offset=down]:
+        at += 1
+        down += 1
+    return at
+
+
+@always_inline
+def best_source(fronts: DiagonalFronts, score: Int, diagonal: Int, columns: Int, rows: Int) -> Tuple[Int, UInt8]:
+    """The furthest column a path of `score` reaches on `diagonal` before sliding over matches, and its last move.
+
+    One more edit after the furthest point of score `score - 1` on this diagonal or a neighbour,
+    each only where that edit stays inside the matrix; -1 when none does.
+    """
+    var best = -1
+    var move = DIAGONAL
+    var same = fronts.at(score - 1, diagonal)
+    if same >= 0 and same < columns and same - diagonal < rows:
+        best = same + 1
+    # A base of the first sequence against a gap, from the diagonal below.
+    var left = fronts.at(score - 1, diagonal - 1)
+    if left >= 0 and left < columns and left + 1 > best:
+        best = left + 1
+        move = LEFT
+    # A base of the second sequence against a gap, from the diagonal above.
+    var up = fronts.at(score - 1, diagonal + 1)
+    if up >= 0 and up - diagonal - 1 < rows and up > best:
+        best = up
+        move = UP
+    return (best, move)
+
+
+def diagonal_transition(profile: Profile, budget: Int, mut fronts: DiagonalFronts) -> Probe:
+    """The edit distance by diagonal transition, as WFA computes it, while it stays cheaper than a band.
+
+    Score `s` reaches, on every diagonal, the furthest cell some path of `s` edits reaches; matches
+    are free, so each front slides as far as they carry it. The distance is the first score whose
+    front reaches the corner, after about `d²` diagonals and the matches along the way, where the
+    band's sweep pays for every column whatever the distance. So near-identical pairs, the case the
+    post on A*PA2 names as its weak spot, finish here.
+
+    From `PROBE_START` on, the furthest anti-diagonal reached projects the distance, and once the
+    search still to do, the projection squared less the score squared, passes `budget`, it stops
+    and hands the projection on as the band's first bound.
+    """
     var columns = profile.columns
     var rows = profile.rows
-    var words = profile.words
-    var difference = rows - columns
-    var extra = (threshold - abs(difference)) // 2
-    # One tile's width of horizontal edge, since each tile starts again from `+1` above (see `Sweep.shifted`);
-    # the last tile may absorb a sliver of up to `2 * LANES` more columns.
-    var frontier = Frontier(BAND_COLUMNS + 2 * LANES, words)
-    var sweep = frontier.sweep(profile)
-    var bounds = tile_bounds(stop_column, NARROW_COLUMNS if threshold < NARROW_BAND else BAND_COLUMNS)
+    var first = profile.column_codes.unsafe_ptr()
+    var second = profile.row_codes.unsafe_ptr()
+    var target = columns - rows
+    fronts.offsets.clear()
+    fronts.starts.clear()
+    fronts.lows.clear()
+    fronts.highs.clear()
 
-    var top = 0
-    var end_word = 0
-    # The score at the top of word `top`, on the left edge of the coming tile.
-    var anchor = 0
-    # The deepest row a kept cell, scoring `floor` at the least, sits on, after the last tile.
-    var deepest = 0
-    var floor = 0
-    for tile in range(len(bounds) - 1):
-        var first_column = bounds[tile]
-        var end_column = bounds[tile + 1]
-        var width = end_column - first_column
-        # Ukkonen's band bounds the bottom, and so does the deepest kept row: going `k` rows past it
-        # costs at least `k` over the score there, at least `floor`, and below the diagonal that leads
-        # to the end each such row also adds one to the gap still to close.
-        var band_row = end_column + max(0, difference) + extra
-        var slack = threshold - floor
-        var end_diagonal = rows - (columns - end_column)
-        var reach_row = min(
-            band_row, deepest + width + slack, max(end_diagonal, (slack + deepest + width + end_diagonal) // 2), rows
-        )
-        var reach = (reach_row - 1) // WORD_BITS + 1
-        # Fewer words than a narrow vector go through scalar registers as they are; more grow to whole
-        # groups of `NARROW_LANES` from the top, which keeps every word on the vector path, since
-        # `words` takes groups of `LANES` and then at most one of `NARROW_LANES`. The bottom grows
-        # to fill the last group rather than the top rising, which would revisit words already left.
-        var span = reach - top
-        if span > NARROW_LANES:
-            span = ceildiv(span, NARROW_LANES) * NARROW_LANES
-        end_word = max(end_word, min(top + span, words))
-        if end_word <= top:
-            return Round(-1, first_column)
-        comptime if record:
-            trail.record(first_column, end_column, top, end_word, anchor, frontier)
-        frontier.restart_horizontal(width)
-        sweep.shifted(first_column).words(top, end_word, first_column, end_column)
-        anchor += width
+    var start = extend(first, second, 0, 0, columns, rows)
+    fronts.starts.append(0)
+    fronts.lows.append(0)
+    fronts.highs.append(0)
+    fronts.offsets.append(Int32(start))
+    if target == 0 and start == columns:
+        return Probe(0, 0, 0)
+    var score = 0
+    while score < PROBE_CEILING:
+        score += 1
+        var previous_low = fronts.lows[score - 1]
+        var previous_high = fronts.highs[score - 1]
+        var previous_start = fronts.starts[score - 1]
+        var low = max(-score, -rows)
+        var high = min(score, columns)
+        var row_start = len(fronts.offsets)
+        fronts.starts.append(row_start)
+        fronts.lows.append(low)
+        fronts.highs.append(high)
+        fronts.offsets.resize(unsafe_uninit_length=row_start + high - low + 1)
+        var offsets = fronts.offsets.unsafe_ptr()
+        # The previous front, indexed by diagonal, and the new one being written.
+        var previous = offsets.unsafe_offset(previous_start - previous_low)
+        var current = offsets.unsafe_offset(row_start - low)
+        # The furthest anti-diagonal, column plus row, any front reached.
+        var furthest = 0
+        for diagonal in range(low, high + 1):
+            # Each source only where its edit stays inside the matrix, and only where the previous
+            # front has that diagonal; a missing one reads as unreached, far below any column.
+            var same = (
+                Int(previous[unsafe_offset=diagonal]) if diagonal >= previous_low and diagonal <= previous_high else -1
+            )
+            var below = (
+                Int(previous[unsafe_offset=diagonal - 1]) if diagonal - 1 >= previous_low
+                and diagonal - 1 <= previous_high else -1
+            )
+            var above = (
+                Int(previous[unsafe_offset=diagonal + 1]) if diagonal + 1 >= previous_low
+                and diagonal + 1 <= previous_high else -1
+            )
+            var best = same + 1 if same >= 0 and same < columns and same - diagonal < rows else -1
+            # A base of the first sequence against a gap, from the diagonal below.
+            best = max(best, below + 1 if below >= 0 and below < columns else -1)
+            # A base of the second sequence against a gap, from the diagonal above.
+            best = max(best, above if above >= 0 and above - diagonal - 1 < rows else -1)
+            if best < 0:
+                current[unsafe_offset=diagonal] = UNREACHED_OFFSET
+                continue
+            var column = extend(first, second, best, best - diagonal, columns, rows)
+            current[unsafe_offset=diagonal] = Int32(column)
+            furthest = max(furthest, 2 * column - diagonal)
+            if diagonal == target and column == columns:
+                return Probe(score, score, score - 1)
+        if score >= PROBE_START:
+            var estimate = score * (columns + rows) // max(furthest, 1)
+            # What is left to search, about `estimate² - score²` diagonals, against what a band
+            # would cost; the work already done is spent either way.
+            if estimate * estimate - score * score > budget:
+                return Probe(-1, max(estimate, score + 1), score)
+    return Probe(-1, PROBE_CEILING + 1, PROBE_CEILING)
 
-        # Read the right edge back as scores and keep, as A*PA2 does, the rows from the first to the
-        # last whose score plus gap to the end fits the bound. Both scores and gaps change by at most
-        # one per row, so their sum by at most two, and a row `x` over the bound rules out the next
-        # `ceil(x / 2)` rows without reading them.
-        edge.capture(top, end_word, anchor, frontier, rows)
-        var to_end = rows - (columns - end_column)
-        var first_kept = edge.low_row
-        var last_kept = edge.high_row
-        while first_kept <= last_kept:
-            var over = edge.score(first_kept) + abs(first_kept - to_end) - threshold
-            if over <= 0:
-                break
-            first_kept += (over + 1) // 2
-        while last_kept >= first_kept:
-            var over = edge.score(last_kept) + abs(last_kept - to_end) - threshold
-            if over <= 0:
-                break
-            last_kept -= (over + 1) // 2
-        if first_kept > last_kept:
-            return Round(-1, end_column)
 
-        # Move the top down to the word whose top row is at or above the first kept row, carrying the
-        # anchor past the words it leaves.
-        var new_top = first_kept // WORD_BITS
-        for word in range(top, new_top):
-            anchor += word_value(frontier.vertical_plus[word], frontier.vertical_minus[word])
-        top = new_top
-        # The bottom-most kept cell bounds every path below it: from there each row past the diagonal
-        # costs one more, so its exact score is the floor the next tile's reach is measured from.
-        deepest = last_kept
-        floor = edge.score(last_kept)
+def trace_diagonals(profile: Profile, fronts: DiagonalFronts, distance: Int, mut moves: List[UInt8]):
+    """The optimal path `diagonal_transition` found, as moves right to left, like `trace_back`.
 
-    edge.capture(top, end_word, anchor, frontier, rows)
-    if stop_column < columns:
-        return Round(-1, stop_column)
-    if end_word < words:
-        return Round(-1, columns)
-    return Round(edge.score(rows), columns)
+    From the corner, each score's front is undone: the matches it slid over, then the edit that
+    reached its start from the furthest front of one score less, which `best_source` finds again.
+    """
+    var columns = profile.columns
+    var rows = profile.rows
+    var diagonal = columns - rows
+    var column = columns
+    var score = distance
+    while score > 0:
+        var source = best_source(fronts, score, diagonal, columns, rows)
+        var best = source[0]
+        for _ in range(column - best):
+            moves.append(DIAGONAL)
+        var move = source[1]
+        moves.append(move)
+        if move == DIAGONAL:
+            column = best - 1
+        elif move == LEFT:
+            column = best - 1
+            diagonal -= 1
+        else:
+            column = best
+            diagonal += 1
+        score -= 1
+    for _ in range(column):
+        moves.append(DIAGONAL)
+
+
+# endregion Diagonal transition
 
 
 @fieldwise_init
@@ -915,6 +1359,7 @@ def band_doubling[
     mut backward: Profile,
     meet: Bool,
     give_up_wide: Bool,
+    probe: Probe,
     mut forward_trail: Trail,
     mut backward_trail: Trail,
     mut forward_edge: Edge,
@@ -932,12 +1377,15 @@ def band_doubling[
     at which a half pruned every row, from which the distance is estimated as the bound scaled to the
     whole width; the next bound aims just past the estimate rather than doubling. Once the band would
     cover the matrix, `give_up_wide` hands back to the caller, else the bound is lifted past any path.
+
+    The first bound aims just past where the diagonal transition's `probe` projected the distance,
+    and above every score it ruled out.
     """
     var columns = forward.columns
     var rows = forward.rows
     var middle = columns // 2 if meet else columns
     var gap = abs(rows - columns)
-    var threshold = gap + max(BAND_START, columns // FIRST_GUESS_DIVISOR)
+    var threshold = max(gap, probe.floor + 1, probe.estimate + probe.estimate // 8 + PROBE_MARGIN)
     var best = Int.MAX
     while True:
         if 2 * (threshold + BAND_COLUMNS) >= rows:
@@ -1003,7 +1451,7 @@ def band_doubling[
             if meet and backward_round.reached < columns - middle and backward_round.reached > 0:
                 estimate = min(estimate, threshold * columns // backward_round.reached)
             if estimate != Int.MAX:
-                next = max(threshold + threshold // 4, estimate + estimate // 8 + BAND_START)
+                next = max(threshold + threshold // 4, estimate + estimate // 8 + PROBE_MARGIN)
         threshold = min(next, best)
 
 
@@ -1024,6 +1472,10 @@ def edit_distance(first: String, second: String, threads: Optional[Int] = None) 
     if forward.columns >= MEET_COLUMNS or forward.columns * forward.rows >= PARALLEL_CELLS:
         # A system call, so only a pair long enough to use more than one thread asks.
         workers = max(threads.or_else(hardware_threads()), 1)
+    var fronts = DiagonalFronts()
+    var probe = diagonal_transition(forward, PROBE_BUDGET * forward.columns // 2, fronts)
+    if probe.distance >= 0:
+        return probe.distance
     var meet = workers > 1 and forward.columns >= MEET_COLUMNS
     var backward = Profile(first, second, reverse=True) if meet else Profile(String(), String())
     var forward_trail = Trail()
@@ -1031,7 +1483,7 @@ def edit_distance(first: String, second: String, threads: Optional[Int] = None) 
     var forward_edge = Edge()
     var backward_edge = Edge()
     var outcome = band_doubling[False](
-        forward, backward, meet, True, forward_trail, backward_trail, forward_edge, backward_edge
+        forward, backward, meet, True, probe, forward_trail, backward_trail, forward_edge, backward_edge
     )
     if outcome.distance >= 0:
         return outcome.distance
@@ -1461,6 +1913,15 @@ def edit_alignment(
         for _ in range(rows):
             path.append(UP)
     else:
+        var fronts = DiagonalFronts()
+        var probe = diagonal_transition(forward, PROBE_ALIGNMENT_BUDGET * columns // 2, fronts)
+        if probe.distance >= 0:
+            distance = probe.distance
+            var moves = List[UInt8](capacity=columns + rows)
+            trace_diagonals(forward, fronts, distance, moves)
+            for index in range(len(moves) - 1, -1, -1):
+                path.append(moves[index])
+            return gapped_rows(first, second, path, distance)
         # Asking for the thread count is a system call, so only a pair long enough to split asks.
         var meet = columns >= MEET_COLUMNS and max(threads.or_else(hardware_threads()), 1) > 1
         var backward = Profile(first, second, reverse=True) if meet else Profile(String(), String())
@@ -1469,7 +1930,7 @@ def edit_alignment(
         var forward_edge = Edge()
         var backward_edge = Edge()
         var outcome = band_doubling[True](
-            forward, backward, meet, False, forward_trail, backward_trail, forward_edge, backward_edge
+            forward, backward, meet, False, probe, forward_trail, backward_trail, forward_edge, backward_edge
         )
         distance = outcome.distance
         var forward_moves = List[UInt8](capacity=columns + rows)
@@ -1513,6 +1974,13 @@ def edit_alignment(
         for move in backward_moves:
             path.append(move)
 
+    return gapped_rows(first, second, path, distance)
+
+
+def gapped_rows(first: String, second: String, path: List[UInt8], distance: Int) -> AlignmentResult:
+    """The alignment `path`, moves left to right, written out as the two gapped rows."""
+    var columns = first.byte_length()
+    var rows = second.byte_length()
     # Branch-free: a move other than `UP` takes the next base of the first sequence, one other than
     # `LEFT` the next base of the second, and the other row of the pair gets a gap.
     var length = len(path)
