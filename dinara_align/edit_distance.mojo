@@ -939,12 +939,20 @@ comptime SEED_EDITS = 1500
 nanoseconds a column; what it saves grows with the distance, the band otherwise sweeping rows in
 proportion to it, and passes the setup about here."""
 
-comptime SEED_DIVERGENCE = 11
-"""Columns per projected edit below which the seeds are left out: past about one edit in eleven bases,
-few seeds of twelve still match exactly, and the heuristic barely beats the gap's."""
+comptime SEED_DIVERGENCE = 7
+"""Columns per projected edit below which the seeds are left out: past about one edit in seven bases,
+almost no seed survives local pruning, the heuristic is little more than an edit a seed, and its
+setup is not repaid."""
 
-comptime ORIGIN_REACH = 4
-"""The band's first bound reaches at least a `1 / ORIGIN_REACH` past the heuristic at the origin."""
+comptime CHAINED_SHARE = 32
+"""With seeds, the band's first bound starts at the origin's when at least one seed in this many is
+chained there; with fewer, the bound is little more than an edit a seed, and the projection leads."""
+
+comptime SEED_SLACK = 64
+"""With seeds, the band's first bound reaches at least this far past the heuristic at the origin."""
+
+comptime LOOKAHEAD_SEEDS = 14
+"""Seeds a match's local pruning looks ahead, its own included: A*PA2-full's `p`."""
 
 comptime LAYER_SLOTS = 8
 """Starts a layer holds in place before the rest spill into a shared list."""
@@ -994,8 +1002,12 @@ struct SeedHeuristic(Movable):
         self.spill_y = List[Int32]()
         self.hint = 0
 
-    def __init__(out self, profile: Profile):
-        """Seeds of the profile's first sequence, matched exactly in its second."""
+    def __init__(out self, profile: Profile, lookahead: Int = LOOKAHEAD_SEEDS):
+        """Seeds of the profile's first sequence, matched exactly in its second.
+
+        With `lookahead`, a match is kept only if a path from its end crosses the next `lookahead`
+        seeds for less than they would cost unmatched (see `worth_keeping`).
+        """
         self.columns = profile.columns
         self.rows = profile.rows
         self.seeds = profile.columns // SEED_LENGTH
@@ -1075,18 +1087,102 @@ struct SeedHeuristic(Movable):
             rows_by_seed[Int(filled[seed])] = found_row[index]
             filled[seed] += 1
 
-        # A match starts one layer above the best its end can chain on to.
+        # A match starts one layer above the best its end can chain on to. Right to left on every
+        # diagonal, as the seeds go last first, so local pruning sees the matches kept after it.
+        var leftmost = List[Int32](length=self.columns + self.rows + 1, fill=Int32.MAX)
+        var fronts = List[Int](length=4 * LOOKAHEAD_SEEDS + 3, fill=0)
+        var spare = List[Int](length=4 * LOOKAHEAD_SEEDS + 3, fill=0)
         for seed in range(self.seeds - 1, -1, -1):
             var column = seed * SEED_LENGTH
             var potential = self.seeds - seed
             for index in range(Int(firsts[seed]), Int(firsts[seed + 1])):
                 var start_row = Int(rows_by_seed[index])
+                if lookahead > 0 and not self.worth_keeping(
+                    first, second, seed, start_row, lookahead, leftmost, fronts, spare
+                ):
+                    continue
+                leftmost[column - start_row + self.rows] = Int32(column)
                 var x = column - start_row - potential
                 var y = start_row - column - potential
                 var layer = self.score(x + 1, y + 1) + 1
                 if layer == len(self.counts):
                     self.add_layer()
                 self.add_point(layer, x, y)
+
+    def worth_keeping(
+        self,
+        first: ImmPointer[UInt8, _],
+        second: ImmPointer[UInt8, _],
+        seed: Int,
+        start_row: Int,
+        lookahead: Int,
+        leftmost: List[Int32],
+        mut fronts: List[Int],
+        mut spare: List[Int],
+    ) -> Bool:
+        """A*PA's local pruning: whether a match can lower the cost of some path, so dropping it would not.
+
+        A match only helps a path that goes on to cross the next seeds for fewer edits than the
+        seeds it crosses. A diagonal transition from the match's end, over the next `lookahead`
+        seeds counting its own, looks for such a path: the match stays if a front reaches past the
+        last of them, or slides into a match already kept on its diagonal, which then continues it.
+        A front whose edits already equal the seeds crossed can no longer gain, and is dropped. Every
+        match an optimal path's chain relies on passes, so the heuristic stays a lower bound.
+        """
+        var start_column = seed * SEED_LENGTH
+        var start_potential = self.seeds - seed
+        var last = min(seed + lookahead - 1, self.seeds - 1)
+        var end_column = (last + 1) * SEED_LENGTH
+        var reach = start_potential - self.potential(end_column)
+        var end_row = start_row + SEED_LENGTH
+        var origin = (start_column + SEED_LENGTH) - end_row
+        # Front `d` is the diagonal `origin + d - reach`, at `fronts[d]`, its furthest column.
+        var low = reach
+        var high = reach + 1
+        fronts[reach] = start_column + SEED_LENGTH
+        fronts[reach] = extend(first, second, fronts[reach], end_row, self.columns, self.rows)
+        if fronts[reach] >= end_column:
+            return True
+        var kept = Int(leftmost[origin + self.rows])
+        if kept <= fronts[reach]:
+            return True
+        for cost in range(1, reach):
+            # One more edit: from the same diagonal, or from either neighbour.
+            for d in range(low - 1, high + 1):
+                var best = -1
+                if d >= low and d < high:
+                    best = fronts[d] + 1
+                if d + 1 >= low and d + 1 < high:
+                    best = max(best, fronts[d + 1])
+                if d - 1 >= low and d - 1 < high:
+                    best = max(best, fronts[d - 1] + 1)
+                spare[d] = min(best, self.columns)
+            for d in range(low - 1, high + 1):
+                fronts[d] = spare[d]
+            low -= 1
+            high += 1
+            # A front whose edits match the seeds it has crossed can no longer gain.
+            while low < high and cost + self.potential(fronts[low]) >= start_potential:
+                low += 1
+            while high > low and cost + self.potential(fronts[high - 1]) >= start_potential:
+                high -= 1
+            if low == high:
+                return False
+            for d in range(low, high):
+                var diagonal = origin + d - reach
+                var before = fronts[d]
+                var row = before - diagonal
+                if row < 0 or row > self.rows:
+                    continue
+                fronts[d] = extend(first, second, before, row, self.columns, self.rows)
+                if fronts[d] >= end_column:
+                    return True
+                var next = Int(
+                    leftmost[diagonal + self.rows]
+                ) if diagonal + self.rows >= 0 and diagonal + self.rows < len(leftmost) else Int(Int32.MAX)
+                if before <= next and next <= fronts[d]:
+                    return True
+        return False
 
     def add_layer(mut self):
         for _ in range(LAYER_SLOTS):
@@ -1687,7 +1783,17 @@ def band_doubling[
     # The heuristic at the origin is a lower bound on the distance. With seeds it lands within about a
     # sixth of it on a close pair, where the projection from a few edits strays further.
     var origin = forward_heuristic.h(0, 0)
-    var threshold = max(gap, probe.floor + 1, aimed + PROBE_MARGIN, origin + origin // ORIGIN_REACH)
+    var threshold = max(gap, probe.floor + 1, aimed + PROBE_MARGIN)
+    if forward_heuristic.seeds > 0:
+        if (forward_heuristic.seeds - origin) * CHAINED_SHARE >= forward_heuristic.seeds:
+            # Matches survive: the origin's bound lies within a few percent of the distance on a
+            # close pair, closer than any projection, so start just past it. On a more divergent
+            # pair the round dies early, a share of the way across proportional to how far the
+            # bound sits above the origin's, and its death estimates the rest (see below).
+            threshold = origin + SEED_SLACK
+        # Otherwise few matches survive and the bound is one edit a seed, well short of a divergent
+        # pair's distance: the projection leads, the bound only floors it.
+        threshold = max(threshold, gap, probe.floor + 1, origin + SEED_SLACK)
     var best = Int.MAX
     while True:
         if 2 * (threshold + BAND_COLUMNS) >= rows:
@@ -1761,6 +1867,9 @@ def band_doubling[
                 estimate = min(estimate, origin + (threshold - origin) * columns // backward_round.reached)
             if estimate != Int.MAX:
                 next = max(threshold + threshold // 4, estimate + estimate // 8 + PROBE_MARGIN)
+                if forward_heuristic.seeds > 0:
+                    # The origin's bound is certain; only the climb above it is estimated.
+                    next = max(threshold + SEED_SLACK, estimate + (estimate - origin) // 4 + PROBE_MARGIN)
         threshold = min(next, best)
 
 
