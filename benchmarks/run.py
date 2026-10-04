@@ -41,10 +41,6 @@ RIVALS = {
 }
 """Each rival's repository and the commit its numbers were taken at."""
 
-APPROXIMATE = {"wfa-adaptive"}
-"""Tools that may return a cost above the optimum: left out of the agreement check, and a time whose
-answer was not optimal is starred."""
-
 DNA = "ACGT"
 
 # region Inputs
@@ -209,8 +205,7 @@ def report(rows: list[list[str]]) -> bool:
 
     answers = defaultdict(set)
     for tool, workload, _task, _device, _seconds, answer in rows:
-        if tool not in APPROXIMATE:
-            answers[workload].add(answer)
+        answers[workload].add(answer)
     disagreeing = sorted(workload for workload, seen in answers.items() if len(seen) > 1)
 
     columns = []
@@ -224,10 +219,7 @@ def report(rows: list[list[str]]) -> bool:
         key = (workload, task)
         if key not in order:
             order.append(key)
-        cell = duration(float(seconds))
-        if tool in APPROXIMATE and answers[workload] and answer not in answers[workload]:
-            cell += " *"
-        cells[key, f"{tool} ({device})" if tool == "dinara-align" else tool] = cell
+        cells[key, f"{tool} ({device})" if tool == "dinara-align" else tool] = duration(float(seconds))
 
     lines = [
         "| workload | task | " + " | ".join(columns) + " | agree |",
