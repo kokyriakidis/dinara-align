@@ -928,6 +928,269 @@ struct Round(ImplicitlyCopyable, TrivialRegisterPassable):
     """Matrix columns crossed before every row was pruned, or all of them when a distance was found."""
 
 
+# region Seed heuristic
+
+comptime SEED_LENGTH = 12
+"""Bases per seed: A*PA2-full's `k`, long enough that a random match is rare, short enough that most
+seeds of a moderately divergent pair still match exactly."""
+
+comptime SEED_EDITS = 1500
+"""Projected edits from which a band prunes with the seed heuristic. Its setup costs about ten
+nanoseconds a column; what it saves grows with the distance, the band otherwise sweeping rows in
+proportion to it, and passes the setup about here."""
+
+comptime SEED_DIVERGENCE = 11
+"""Columns per projected edit below which the seeds are left out: past about one edit in eleven bases,
+few seeds of twelve still match exactly, and the heuristic barely beats the gap's."""
+
+comptime ORIGIN_REACH = 4
+"""The band's first bound reaches at least a `1 / ORIGIN_REACH` past the heuristic at the origin."""
+
+comptime LAYER_SLOTS = 8
+"""Starts a layer holds in place before the rest spill into a shared list."""
+
+
+struct SeedHeuristic(Movable):
+    """A*PA2-full's gap-chaining seed heuristic, without match pruning.
+
+    The first sequence is cut into disjoint seeds of `SEED_LENGTH` bases, and every exact occurrence
+    of a seed in the second sequence is a match. A path that misses a seed must spend an edit on it,
+    so the seeds still ahead of a cell, its potential `P`, bound the cost to the end, less one for
+    each match a path can still chain. Chaining charges the gap between matches: in the coordinates
+    `T(i, j) = (i - j - P(i), j - i - P(i))` one match can follow another exactly when the second's
+    start lies above and right of the first's end, so the longest chain from a cell is a dominance
+    query, answered from layers of match starts, layer `v` holding the starts from which `v` matches
+    chain (see `score`).
+
+    The heuristic never overestimates the cost to the end and changes by at most one per row, so the
+    band's pruning stays exact and its jumps stay valid. With no seeds it is the plain gap to the
+    end's diagonal, which is what every band used before.
+    """
+
+    var columns: Int
+    var rows: Int
+    var seeds: Int
+    var slot_x: List[Int32]
+    """Per layer, `LAYER_SLOTS` slots for the transformed starts of the matches from which that many
+    matches chain; a layer rarely holds more than three, and any past the slots spill over."""
+    var slot_y: List[Int32]
+    var counts: List[Int32]
+    var spill_layer: List[Int32]
+    var spill_x: List[Int32]
+    var spill_y: List[Int32]
+    var hint: Int
+    """The layer the last query ended on: neighbouring queries land near it."""
+
+    def __init__(out self, columns: Int, rows: Int):
+        """No seeds: the gap heuristic."""
+        self.columns = columns
+        self.rows = rows
+        self.seeds = 0
+        self.slot_x = List[Int32]()
+        self.slot_y = List[Int32]()
+        self.counts = List[Int32]()
+        self.spill_layer = List[Int32]()
+        self.spill_x = List[Int32]()
+        self.spill_y = List[Int32]()
+        self.hint = 0
+
+    def __init__(out self, profile: Profile):
+        """Seeds of the profile's first sequence, matched exactly in its second."""
+        self.columns = profile.columns
+        self.rows = profile.rows
+        self.seeds = profile.columns // SEED_LENGTH
+        self.slot_x = List[Int32](capacity=LAYER_SLOTS * (self.seeds + 1))
+        self.slot_y = List[Int32](capacity=LAYER_SLOTS * (self.seeds + 1))
+        self.counts = List[Int32](capacity=self.seeds + 1)
+        self.spill_layer = List[Int32]()
+        self.spill_x = List[Int32]()
+        self.spill_y = List[Int32]()
+        self.hint = 0
+        self.add_sentinel()
+        if self.seeds == 0 or profile.rows < SEED_LENGTH:
+            return
+
+        # Every seed's two-bit code, hashed by open addressing on the multiply's top bits; a slot
+        # holds its code and the first seed with it in one word, and seeds sharing a code chain on.
+        comptime MASK = (1 << (2 * SEED_LENGTH)) - 1
+        comptime EMPTY = Int64(-1)
+        var first = profile.column_codes.unsafe_ptr()
+        var second = profile.row_codes.unsafe_ptr()
+        var bits = 1
+        while (1 << bits) < 2 * self.seeds:
+            bits += 1
+        var size = 1 << bits
+        var table = List[Int64](length=size, fill=EMPTY)
+        var next = List[Int32](length=self.seeds, fill=-1)
+        var slots = table.unsafe_ptr()
+        for seed in range(self.seeds):
+            var code = 0
+            for offset in range(SEED_LENGTH):
+                code = (code << 2) | Int(first[unsafe_offset=seed * SEED_LENGTH + offset])
+            var slot = Int((UInt64(code) * 0x9E3779B97F4A7C15) >> UInt64(64 - bits))
+            while slots[unsafe_offset=slot] != EMPTY and Int(slots[unsafe_offset=slot] >> 32) != code:
+                slot = (slot + 1) & (size - 1)
+            var held = slots[unsafe_offset=slot]
+            next[seed] = Int32(held & 0xFFFFFFFF) if held != EMPTY else -1
+            slots[unsafe_offset=slot] = (Int64(code) << 32) | Int64(seed)
+
+        # Every window of the second sequence looked up. Each match whose chain can still reach the
+        # end is kept, bucketed by seed: a start can dominate another match's end only from a later
+        # seed, so taking the seeds last first is an order the layers can be built in, no sort.
+        var target_x = self.columns - self.rows
+        var target_y = self.rows - self.columns
+        var found_seed = List[Int32]()
+        var found_row = List[Int32]()
+        var code = 0
+        for row in range(self.rows):
+            code = ((code << 2) | Int(second[unsafe_offset=row])) & MASK
+            if row + 1 < SEED_LENGTH:
+                continue
+            var slot = Int((UInt64(code) * 0x9E3779B97F4A7C15) >> UInt64(64 - bits))
+            var held = slots[unsafe_offset=slot]
+            while held != EMPTY and Int(held >> 32) != code:
+                slot = (slot + 1) & (size - 1)
+                held = slots[unsafe_offset=slot]
+            if held == EMPTY:
+                continue
+            var start_row = row + 1 - SEED_LENGTH
+            var seed = Int(held & 0xFFFFFFFF)
+            while seed >= 0:
+                var column = seed * SEED_LENGTH
+                var potential = self.seeds - seed
+                # The match's end, one seed on, is `(x + 1, y + 1)` in transformed coordinates.
+                if column - start_row - potential + 1 <= target_x and start_row - column - potential + 1 <= target_y:
+                    found_seed.append(Int32(seed))
+                    found_row.append(Int32(start_row))
+                seed = Int(next[seed])
+        var firsts = List[Int32](length=self.seeds + 1, fill=0)
+        for index in range(len(found_seed)):
+            firsts[Int(found_seed[index]) + 1] += 1
+        for seed in range(self.seeds):
+            firsts[seed + 1] += firsts[seed]
+        var rows_by_seed = List[Int32](length=len(found_seed), fill=0)
+        var filled = firsts.copy()
+        for index in range(len(found_seed)):
+            var seed = Int(found_seed[index])
+            rows_by_seed[Int(filled[seed])] = found_row[index]
+            filled[seed] += 1
+
+        # A match starts one layer above the best its end can chain on to.
+        for seed in range(self.seeds - 1, -1, -1):
+            var column = seed * SEED_LENGTH
+            var potential = self.seeds - seed
+            for index in range(Int(firsts[seed]), Int(firsts[seed + 1])):
+                var start_row = Int(rows_by_seed[index])
+                var x = column - start_row - potential
+                var y = start_row - column - potential
+                var layer = self.score(x + 1, y + 1) + 1
+                if layer == len(self.counts):
+                    self.add_layer()
+                self.add_point(layer, x, y)
+
+    def add_layer(mut self):
+        for _ in range(LAYER_SLOTS):
+            self.slot_x.append(0)
+            self.slot_y.append(0)
+        self.counts.append(0)
+
+    def add_point(mut self, layer: Int, x: Int, y: Int):
+        var count = Int(self.counts[layer])
+        if count < LAYER_SLOTS:
+            self.slot_x[layer * LAYER_SLOTS + count] = Int32(x)
+            self.slot_y[layer * LAYER_SLOTS + count] = Int32(y)
+            self.counts[layer] = Int32(count + 1)
+        else:
+            self.spill_layer.append(Int32(layer))
+            self.spill_x.append(Int32(x))
+            self.spill_y.append(Int32(y))
+
+    def add_sentinel(mut self):
+        """Layer zero: a point dominating everything, as no match is chained."""
+        self.add_layer()
+        self.add_point(0, Int(Int32.MAX), Int(Int32.MAX))
+
+    @always_inline
+    def contains(self, layer: Int, x: Int, y: Int) -> Bool:
+        """Whether a start in `layer` lies at or above and right of `(x, y)`."""
+        var count = Int(self.counts[layer])
+        var xs = self.slot_x.unsafe_ptr().unsafe_offset(layer * LAYER_SLOTS)
+        var ys = self.slot_y.unsafe_ptr().unsafe_offset(layer * LAYER_SLOTS)
+        for index in range(count):
+            if x <= Int(xs[unsafe_offset=index]) and y <= Int(ys[unsafe_offset=index]):
+                return True
+        if count == LAYER_SLOTS:
+            for index in range(len(self.spill_layer)):
+                if (
+                    Int(self.spill_layer[index]) == layer
+                    and x <= Int(self.spill_x[index])
+                    and y <= Int(self.spill_y[index])
+                ):
+                    return True
+        return False
+
+    def score(mut self, x: Int, y: Int) -> Int:
+        """The most matches a chain from transformed point `(x, y)` takes.
+
+        Layers nest, every start of layer `v + 1` lying below some start of layer `v`, so the
+        layers containing a point are a prefix: a search galloping out from the last answer, as
+        neighbouring queries land on neighbouring layers, finds its end.
+        """
+        var last = len(self.counts) - 1
+        var guess = min(self.hint, last)
+        var low: Int
+        var high: Int
+        if self.contains(guess, x, y):
+            # The end lies at or above the guess.
+            low = guess
+            var step = 1
+            high = min(guess + step, last)
+            while high > low and self.contains(high, x, y):
+                low = high
+                step *= 2
+                high = min(low + step, last)
+            if high == low:
+                self.hint = low
+                return low
+            high -= 1
+        else:
+            # The end lies below the guess; layer zero always contains.
+            high = guess - 1
+            var step = 1
+            low = max(guess - step, 0)
+            while low > 0 and not self.contains(low, x, y):
+                high = low - 1
+                step *= 2
+                low = max(high - step, 0)
+        while low < high:
+            var middle = (low + high + 1) // 2
+            if self.contains(middle, x, y):
+                low = middle
+            else:
+                high = middle - 1
+        self.hint = low
+        return low
+
+    @always_inline
+    def potential(self, column: Int) -> Int:
+        """Seeds starting at or after `column`."""
+        return self.seeds - min(self.seeds, ceildiv(column, SEED_LENGTH))
+
+    def h(mut self, column: Int, row: Int) -> Int:
+        """A lower bound on the cost from `(column, row)` to the end."""
+        var gap = abs((self.columns - column) - (self.rows - row))
+        if self.seeds == 0:
+            return gap
+        var potential = self.potential(column)
+        var chained = self.score(column - row - potential, row - column - potential)
+        if chained == 0:
+            return max(gap, potential)
+        return potential - chained
+
+
+# endregion Seed heuristic
+
+
 struct HalfBand(Movable):
     """One round of band doubling, advanced a tile at a time, so two rounds can share a loop.
 
@@ -984,7 +1247,7 @@ struct HalfBand(Movable):
     def end_column(self, tile: Int) -> Int:
         return self.bounds[tile + 1]
 
-    def prepare[record: Bool](mut self, tile: Int, mut trail: Trail) -> Bool:
+    def prepare[record: Bool](mut self, tile: Int, mut trail: Trail, mut heuristic: SeedHeuristic) -> Bool:
         """Sets the tile's words and readies its edge; false, with `outcome` set, when no word is left."""
         var first_column = self.bounds[tile]
         var end_column = self.bounds[tile + 1]
@@ -1001,6 +1264,17 @@ struct HalfBand(Movable):
             max(end_diagonal, (slack + self.deepest + width + end_diagonal) // 2),
             self.rows,
         )
+        if heuristic.seeds > 0:
+            # The seeds bound the bottom tighter, as A*PA2 bounds a block's: a row `k` past the
+            # diagonal from the deepest kept cell costs at least `floor + k` to reach, so it is in
+            # reach only while that plus the heuristic there fits the bound. Both change by at most
+            # one a row, so a row `x` over rules out the next `ceil(x / 2)` above it unread.
+            var diagonal_row = self.deepest + width
+            while reach_row > diagonal_row:
+                var over = self.floor + (reach_row - diagonal_row) + heuristic.h(end_column, reach_row) - self.threshold
+                if over <= 0:
+                    break
+                reach_row = max(reach_row - (over + 1) // 2, diagonal_row)
         var reach = (reach_row - 1) // WORD_BITS + 1
         # Exactly the words the band reaches: `words` has a kernel for every count. The bottom never
         # rises, which would leave words behind whose differences the next tile still reads.
@@ -1017,7 +1291,7 @@ struct HalfBand(Movable):
         """The sweep for one tile, its horizontal edge starting at the tile's first column."""
         return self.sweep.shifted(self.bounds[tile])
 
-    def finish(mut self, tile: Int, mut edge: Edge) -> Bool:
+    def finish(mut self, tile: Int, mut edge: Edge, mut heuristic: SeedHeuristic) -> Bool:
         """Prunes after a swept tile; false, with `outcome` set, when every row went."""
         var end_column = self.bounds[tile + 1]
         self.anchor += end_column - self.bounds[tile]
@@ -1026,16 +1300,15 @@ struct HalfBand(Movable):
         # one per row, so their sum by at most two, and a row `x` over the bound rules out the next
         # `ceil(x / 2)` rows without reading them.
         edge.capture(self.top, self.end_word, self.anchor, self.frontier, self.rows)
-        var to_end = self.rows - (self.columns - end_column)
         var first_kept = edge.low_row
         var last_kept = edge.high_row
         while first_kept <= last_kept:
-            var over = edge.score(first_kept) + abs(first_kept - to_end) - self.threshold
+            var over = edge.score(first_kept) + heuristic.h(end_column, first_kept) - self.threshold
             if over <= 0:
                 break
             first_kept += (over + 1) // 2
         while last_kept >= first_kept:
-            var over = edge.score(last_kept) + abs(last_kept - to_end) - self.threshold
+            var over = edge.score(last_kept) + heuristic.h(end_column, last_kept) - self.threshold
             if over <= 0:
                 break
             last_kept -= (over + 1) // 2
@@ -1067,7 +1340,14 @@ struct HalfBand(Movable):
 
 def pruned_distance[
     record: Bool
-](mut profile: Profile, threshold: Int, stop_column: Int, mut trail: Trail, mut edge: Edge) -> Round:
+](
+    mut profile: Profile,
+    threshold: Int,
+    stop_column: Int,
+    mut trail: Trail,
+    mut edge: Edge,
+    mut heuristic: SeedHeuristic,
+) -> Round:
     """One round of band doubling with A*PA2-simple's pruning, on one thread.
 
     Only cells a path of cost at most `threshold` could cross are computed. Ukkonen's band bounds
@@ -1100,10 +1380,10 @@ def pruned_distance[
         trail.clear()
     var band = HalfBand(profile, threshold, stop_column)
     for tile in range(band.tiles()):
-        if not band.prepare[record](tile, trail):
+        if not band.prepare[record](tile, trail, heuristic):
             return band.outcome
         band.tile_sweep(tile).words(band.top, band.end_word, band.first_column(tile), band.end_column(tile))
-        if not band.finish(tile, edge):
+        if not band.finish(tile, edge, heuristic):
             return band.outcome
     return band.result(edge)
 
@@ -1378,6 +1658,8 @@ def band_doubling[
     mut backward_trail: Trail,
     mut forward_edge: Edge,
     mut backward_edge: Edge,
+    mut forward_heuristic: SeedHeuristic,
+    mut backward_heuristic: SeedHeuristic,
 ) -> Outcome:
     """Band doubling, from the start alone or from both ends at once to meet in the middle.
 
@@ -1402,7 +1684,10 @@ def band_doubling[
     var aimed = probe.estimate + probe.estimate // 8
     if columns <= SHORT_COLUMNS:
         aimed = min(probe.estimate * SHORT_AIM // 10, probe.estimate + SHORT_REACH)
-    var threshold = max(gap, probe.floor + 1, aimed + PROBE_MARGIN)
+    # The heuristic at the origin is a lower bound on the distance. With seeds it lands within about a
+    # sixth of it on a close pair, where the projection from a few edits strays further.
+    var origin = forward_heuristic.h(0, 0)
+    var threshold = max(gap, probe.floor + 1, aimed + PROBE_MARGIN, origin + origin // ORIGIN_REACH)
     var best = Int.MAX
     while True:
         if 2 * (threshold + BAND_COLUMNS) >= rows:
@@ -1424,20 +1709,26 @@ def band_doubling[
                 mut backward_edge,
                 mut forward_round,
                 mut backward_round,
+                mut forward_heuristic,
+                mut backward_heuristic,
                 imm threshold,
                 imm middle,
                 imm columns,
             }:
                 if index == 0:
-                    forward_round = pruned_distance[record](forward, threshold, middle, forward_trail, forward_edge)
+                    forward_round = pruned_distance[record](
+                        forward, threshold, middle, forward_trail, forward_edge, forward_heuristic
+                    )
                 else:
                     backward_round = pruned_distance[record](
-                        backward, threshold, columns - middle, backward_trail, backward_edge
+                        backward, threshold, columns - middle, backward_trail, backward_edge, backward_heuristic
                     )
 
             parallelize(half, 2, 2)
         else:
-            forward_round = pruned_distance[record](forward, threshold, columns, forward_trail, forward_edge)
+            forward_round = pruned_distance[record](
+                forward, threshold, columns, forward_trail, forward_edge, forward_heuristic
+            )
 
         var found = -1
         var meeting_row = rows
@@ -1461,12 +1752,13 @@ def band_doubling[
             best = min(best, found)
         else:
             # A half pruned every row `reached` columns into its sweep, where the best alignment's
-            # score had passed the bound; scaled to the whole width, that estimates the distance.
+            # score plus heuristic had climbed from the heuristic at the origin past the bound;
+            # that climb scaled to the whole width estimates the distance.
             var estimate = Int.MAX
             if forward_round.reached < middle and forward_round.reached > 0:
-                estimate = min(estimate, threshold * columns // forward_round.reached)
+                estimate = min(estimate, origin + (threshold - origin) * columns // forward_round.reached)
             if meet and backward_round.reached < columns - middle and backward_round.reached > 0:
-                estimate = min(estimate, threshold * columns // backward_round.reached)
+                estimate = min(estimate, origin + (threshold - origin) * columns // backward_round.reached)
             if estimate != Int.MAX:
                 next = max(threshold + threshold // 4, estimate + estimate // 8 + PROBE_MARGIN)
         threshold = min(next, best)
@@ -1499,8 +1791,23 @@ def edit_distance(first: String, second: String, threads: Optional[Int] = None) 
     var backward_trail = Trail()
     var forward_edge = Edge()
     var backward_edge = Edge()
+    var seeded = probe.estimate >= SEED_EDITS and probe.estimate * SEED_DIVERGENCE <= forward.columns
+    var forward_heuristic = SeedHeuristic(forward) if seeded else SeedHeuristic(forward.columns, forward.rows)
+    var backward_heuristic = SeedHeuristic(backward) if seeded and meet else SeedHeuristic(
+        backward.columns, backward.rows
+    )
     var outcome = band_doubling[False](
-        forward, backward, meet, True, probe, forward_trail, backward_trail, forward_edge, backward_edge
+        forward,
+        backward,
+        meet,
+        True,
+        probe,
+        forward_trail,
+        backward_trail,
+        forward_edge,
+        backward_edge,
+        forward_heuristic,
+        backward_heuristic,
     )
     if outcome.distance >= 0:
         return outcome.distance
@@ -1946,8 +2253,23 @@ def edit_alignment(
         var backward_trail = Trail(columns)
         var forward_edge = Edge()
         var backward_edge = Edge()
+        var seeded = probe.estimate >= SEED_EDITS and probe.estimate * SEED_DIVERGENCE <= columns
+        var forward_heuristic = SeedHeuristic(forward) if seeded else SeedHeuristic(columns, rows)
+        var backward_heuristic = SeedHeuristic(backward) if seeded and meet else SeedHeuristic(
+            backward.columns, backward.rows
+        )
         var outcome = band_doubling[True](
-            forward, backward, meet, False, probe, forward_trail, backward_trail, forward_edge, backward_edge
+            forward,
+            backward,
+            meet,
+            False,
+            probe,
+            forward_trail,
+            backward_trail,
+            forward_edge,
+            backward_edge,
+            forward_heuristic,
+            backward_heuristic,
         )
         distance = outcome.distance
         if meet:
