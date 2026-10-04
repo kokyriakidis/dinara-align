@@ -1,0 +1,15 @@
+[package]
+name = "astarpa-runner"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# `run.py` clones A*PA here at a pinned commit; nothing of it is vendored into this repository.
+# It needs the nightly named in `rust-toolchain.toml`, which `rustup` selects automatically.
+[dependencies]
+astarpa = { path = "../.cache/astar-pairwise-aligner/astarpa" }
+astarpa2 = { path = "../.cache/astar-pairwise-aligner/astarpa2" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
