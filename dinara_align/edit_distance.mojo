@@ -1267,6 +1267,13 @@ struct SeedHeuristic(Movable):
         self.hint = low
         return low
 
+    def chains_well(mut self) -> Bool:
+        """Whether at least one seed in `CHAINED_SHARE` is chained from the origin: then the bound
+        there lies close to the distance, rather than at little more than an edit a seed."""
+        if self.seeds == 0:
+            return False
+        return (self.seeds - self.h(0, 0)) * CHAINED_SHARE >= self.seeds
+
     @always_inline
     def potential(self, column: Int) -> Int:
         """Seeds starting at or after `column`."""
@@ -1785,7 +1792,7 @@ def band_doubling[
     var origin = forward_heuristic.h(0, 0)
     var threshold = max(gap, probe.floor + 1, aimed + PROBE_MARGIN)
     if forward_heuristic.seeds > 0:
-        if (forward_heuristic.seeds - origin) * CHAINED_SHARE >= forward_heuristic.seeds:
+        if forward_heuristic.chains_well():
             # Matches survive: the origin's bound lies within a few percent of the distance on a
             # close pair, closer than any projection, so start just past it. On a more divergent
             # pair the round dies early, a share of the way across proportional to how far the
@@ -1895,15 +1902,15 @@ def edit_distance(first: String, second: String, threads: Optional[Int] = None) 
     if probe.distance >= 0:
         return probe.distance
     var seeded = probe.estimate >= SEED_EDITS and probe.estimate * SEED_DIVERGENCE <= forward.columns
-    # A seeded band is narrow enough that a second thread's half, with its own heuristic to build and
-    # a weaker start, costs more than it saves.
-    var meet = workers > 1 and forward.columns >= MEET_COLUMNS and not seeded
+    var forward_heuristic = SeedHeuristic(forward) if seeded else SeedHeuristic(forward.columns, forward.rows)
+    # A band narrowed by many chained seeds gains less from a second thread than that thread's half,
+    # with its own heuristic to build and a weaker start, costs.
+    var meet = workers > 1 and forward.columns >= MEET_COLUMNS and not forward_heuristic.chains_well()
     var backward = Profile(first, second, reverse=True) if meet else Profile(String(), String())
     var forward_trail = Trail()
     var backward_trail = Trail()
     var forward_edge = Edge()
     var backward_edge = Edge()
-    var forward_heuristic = SeedHeuristic(forward) if seeded else SeedHeuristic(forward.columns, forward.rows)
     var backward_heuristic = SeedHeuristic(backward) if seeded and meet else SeedHeuristic(
         backward.columns, backward.rows
     )
@@ -2359,14 +2366,19 @@ def edit_alignment(
             return gapped_rows(first, second, forward_moves, columns, rows, backward_moves, probe.distance)
         # Asking for the thread count is a system call, so only a pair long enough to split asks.
         var seeded = probe.estimate >= SEED_EDITS and probe.estimate * SEED_DIVERGENCE <= columns
-        # A seeded band is narrow enough that a second thread's half costs more than it saves.
-        var meet = not seeded and columns >= MEET_COLUMNS and max(threads.or_else(hardware_threads()), 1) > 1
+        var forward_heuristic = SeedHeuristic(forward) if seeded else SeedHeuristic(columns, rows)
+        # A band narrowed by many chained seeds gains less from a second thread than its half costs.
+        # Asking for the thread count is a system call, so only a pair long enough to split asks.
+        var meet = (
+            not forward_heuristic.chains_well()
+            and columns >= MEET_COLUMNS
+            and max(threads.or_else(hardware_threads()), 1) > 1
+        )
         var backward = Profile(first, second, reverse=True) if meet else Profile(String(), String())
         var forward_trail = Trail(columns)
         var backward_trail = Trail(columns)
         var forward_edge = Edge()
         var backward_edge = Edge()
-        var forward_heuristic = SeedHeuristic(forward) if seeded else SeedHeuristic(columns, rows)
         var backward_heuristic = SeedHeuristic(backward) if seeded and meet else SeedHeuristic(
             backward.columns, backward.rows
         )
