@@ -389,7 +389,6 @@ dependencies = [
  "rust-wfa2",
  "serde",
  "strum",
- "triple_accel",
 ]
 
 [[package]]
@@ -585,11 +584,6 @@ dependencies = [
  "quote",
  "unicode-ident",
 ]
-
-[[package]]
-name = "triple_accel"
-version = "0.4.0"
-source = "git+https://github.com/Daniel-Liu-c0deb0t/triple_accel#0f2119a6bbc3e6f007bcca0051660408c47ee883"
 
 [[package]]
 name = "unicode-ident"
