@@ -1131,6 +1131,20 @@ seventeen nanoseconds a column in all."""
 comptime PROBE_MARGIN = 16
 """How far past the projected distance the band's first bound reaches, on top of an eighth of it."""
 
+comptime SHORT_COLUMNS = 4096
+"""Pairs up to this many columns aim the band's first bound further past the projection.
+
+On a short pair the projection from a handful of edits ran as much as 1.7 times under the distance,
+and a first round that fails there costs nearly a whole round more, where aiming wide costs a band
+some rows taller; a long pair's projection landed within about a sixth either way."""
+
+comptime SHORT_AIM = 17
+"""A short pair's first bound, in tenths of the projection."""
+
+comptime SHORT_REACH = 128
+"""The most a short pair's first bound reaches past the projection, so a projection already too
+high, as on very divergent pairs, does not widen the band by most of the matrix."""
+
 comptime PROBE_CEILING = 2048
 """The highest score the diagonal transition reaches, which bounds its memory to a few megabytes."""
 
@@ -1385,7 +1399,10 @@ def band_doubling[
     var rows = forward.rows
     var middle = columns // 2 if meet else columns
     var gap = abs(rows - columns)
-    var threshold = max(gap, probe.floor + 1, probe.estimate + probe.estimate // 8 + PROBE_MARGIN)
+    var aimed = probe.estimate + probe.estimate // 8
+    if columns <= SHORT_COLUMNS:
+        aimed = min(probe.estimate * SHORT_AIM // 10, probe.estimate + SHORT_REACH)
+    var threshold = max(gap, probe.floor + 1, aimed + PROBE_MARGIN)
     var best = Int.MAX
     while True:
         if 2 * (threshold + BAND_COLUMNS) >= rows:
@@ -1903,25 +1920,25 @@ def edit_alignment(
     var forward = Profile(first, second)
     var columns = forward.columns
     var rows = forward.rows
-    # Moves left to right, from the origin to the corner.
-    var path = List[UInt8](capacity=columns + rows)
+    # Moves right to left, from the corner, or from where the halves met, back to the origin.
+    var forward_moves = List[UInt8](capacity=columns + rows)
+    # Moves left to right, from where the halves met to the corner; none without meeting.
+    var backward_moves = List[UInt8]()
     var distance: Int
+    var middle = columns
+    var meeting_row = rows
     if columns == 0 or rows == 0:
         distance = columns + rows
-        for _ in range(columns):
-            path.append(LEFT)
         for _ in range(rows):
-            path.append(UP)
+            forward_moves.append(UP)
+        for _ in range(columns):
+            forward_moves.append(LEFT)
     else:
         var fronts = DiagonalFronts()
         var probe = diagonal_transition(forward, PROBE_ALIGNMENT_BUDGET * columns // 2, fronts)
         if probe.distance >= 0:
-            distance = probe.distance
-            var moves = List[UInt8](capacity=columns + rows)
-            trace_diagonals(forward, fronts, distance, moves)
-            for index in range(len(moves) - 1, -1, -1):
-                path.append(moves[index])
-            return gapped_rows(first, second, path, distance)
+            trace_diagonals(forward, fronts, probe.distance, forward_moves)
+            return gapped_rows(first, second, forward_moves, columns, rows, backward_moves, probe.distance)
         # Asking for the thread count is a system call, so only a pair long enough to split asks.
         var meet = columns >= MEET_COLUMNS and max(threads.or_else(hardware_threads()), 1) > 1
         var backward = Profile(first, second, reverse=True) if meet else Profile(String(), String())
@@ -1933,11 +1950,9 @@ def edit_alignment(
             forward, backward, meet, False, probe, forward_trail, backward_trail, forward_edge, backward_edge
         )
         distance = outcome.distance
-        var forward_moves = List[UInt8](capacity=columns + rows)
-        var backward_moves = List[UInt8]()
         if meet:
-            var middle = outcome.middle
-            var meeting_row = outcome.meeting_row
+            middle = outcome.middle
+            meeting_row = outcome.meeting_row
             var forward_score = forward_edge.score(meeting_row)
             var backward_score = backward_edge.score(rows - meeting_row)
 
@@ -1969,21 +1984,53 @@ def edit_alignment(
             trace_back(forward, forward_trail, columns, rows, distance, forward_moves)
         # The forward half runs right to left; the backward half, traced on the reversed sequences
         # right to left, is already the original suffix left to right, move for move.
-        for index in range(len(forward_moves) - 1, -1, -1):
-            path.append(forward_moves[index])
-        for move in backward_moves:
-            path.append(move)
-
-    return gapped_rows(first, second, path, distance)
+    return gapped_rows(first, second, forward_moves, middle, meeting_row, backward_moves, distance)
 
 
-def gapped_rows(first: String, second: String, path: List[UInt8], distance: Int) -> AlignmentResult:
-    """The alignment `path`, moves left to right, written out as the two gapped rows."""
-    var columns = first.byte_length()
-    var rows = second.byte_length()
-    # Branch-free: a move other than `UP` takes the next base of the first sequence, one other than
-    # `LEFT` the next base of the second, and the other row of the pair gets a gap.
-    var length = len(path)
+@always_inline
+def copy_bytes(destination: MutPointer[UInt8, _], source: ImmPointer[UInt8, _], count: Int):
+    """`count` bytes, sixteen at a time while that many are left."""
+    var index = 0
+    while index + 16 <= count:
+        destination.unsafe_offset(index).unsafe_store(source.unsafe_offset(index).unsafe_load[width=16]())
+        index += 16
+    while index < count:
+        destination[unsafe_offset=index] = source[unsafe_offset=index]
+        index += 1
+
+
+@always_inline
+def diagonal_run(moves: ImmPointer[UInt8, _], start: Int, end: Int) -> Int:
+    """How many moves from `start` on, before `end`, are `DIAGONAL`, eight at a time."""
+    var index = start
+    while index + 8 <= end:
+        var eight = moves.unsafe_offset(index).unsafe_bitcast[UInt64]().unsafe_load()
+        if eight != 0:
+            return index - start + Int(count_trailing_zeros(eight)) // 8
+        index += 8
+    while index < end and moves[unsafe_offset=index] == DIAGONAL:
+        index += 1
+    return index - start
+
+
+def gapped_rows(
+    first: String,
+    second: String,
+    prefix: List[UInt8],
+    middle: Int,
+    meeting_row: Int,
+    suffix: List[UInt8],
+    distance: Int,
+) -> AlignmentResult:
+    """An alignment written out as the two gapped rows.
+
+    `prefix` holds the moves from the origin to `(middle, meeting_row)` right to left, as the
+    traceback appends them, and `suffix` the moves from there to the corner left to right, so
+    neither is reversed first. A run of diagonal moves, most of any alignment, copies both
+    sequences' bases a block at a time; a gap move writes one base against `-`.
+    """
+    comptime GAP = UInt8(ord("-"))
+    var length = len(prefix) + len(suffix)
     var top_row = List[UInt8](capacity=length)
     var bottom_row = List[UInt8](capacity=length)
     top_row.resize(unsafe_uninit_length=length)
@@ -1992,27 +2039,63 @@ def gapped_rows(first: String, second: String, path: List[UInt8], distance: Int)
     var second_bytes = second.unsafe_ptr()
     var top = top_row.unsafe_ptr()
     var bottom = bottom_row.unsafe_ptr()
-    var moves = path.unsafe_ptr()
-    var column = 0
-    var row = 0
-    comptime GAP = UInt8(ord("-"))
-    if columns == 0 or rows == 0:
-        # All gaps against one sequence, with nothing of the other to read.
-        for index in range(length):
-            top[unsafe_offset=index] = first_bytes[unsafe_offset=index] if columns > 0 else GAP
-            bottom[unsafe_offset=index] = second_bytes[unsafe_offset=index] if rows > 0 else GAP
-        length = 0
-    for index in range(length):
+
+    # The prefix, from its last move back to its first, fills the rows from `len(prefix)` down.
+    var moves = prefix.unsafe_ptr()
+    var count = len(prefix)
+    var column = middle
+    var row = meeting_row
+    var at = count
+    var index = 0
+    while index < count:
+        var run = diagonal_run(moves, index, count)
+        if run > 0:
+            at -= run
+            column -= run
+            row -= run
+            copy_bytes(top.unsafe_offset(at), first_bytes.unsafe_offset(column), run)
+            copy_bytes(bottom.unsafe_offset(at), second_bytes.unsafe_offset(row), run)
+            index += run
+            continue
         var move = moves[unsafe_offset=index]
-        var takes_first = move != UP
-        var takes_second = move != LEFT
-        # Past either end only on the move that does not read it, so the read stays in bounds.
-        var first_byte = first_bytes[unsafe_offset=min(column, columns - 1)]
-        var second_byte = second_bytes[unsafe_offset=min(row, rows - 1)]
-        top[unsafe_offset=index] = first_byte if takes_first else GAP
-        bottom[unsafe_offset=index] = second_byte if takes_second else GAP
-        column += Int(takes_first)
-        row += Int(takes_second)
+        at -= 1
+        if move == LEFT:
+            column -= 1
+            top[unsafe_offset=at] = first_bytes[unsafe_offset=column]
+            bottom[unsafe_offset=at] = GAP
+        else:
+            row -= 1
+            top[unsafe_offset=at] = GAP
+            bottom[unsafe_offset=at] = second_bytes[unsafe_offset=row]
+        index += 1
+
+    # The suffix, first move first, fills the rest.
+    var later = suffix.unsafe_ptr()
+    count = len(suffix)
+    column = middle
+    row = meeting_row
+    at = len(prefix)
+    index = 0
+    while index < count:
+        var run = diagonal_run(later, index, count)
+        if run > 0:
+            copy_bytes(top.unsafe_offset(at), first_bytes.unsafe_offset(column), run)
+            copy_bytes(bottom.unsafe_offset(at), second_bytes.unsafe_offset(row), run)
+            at += run
+            column += run
+            row += run
+            index += run
+            continue
+        if later[unsafe_offset=index] == LEFT:
+            top[unsafe_offset=at] = first_bytes[unsafe_offset=column]
+            bottom[unsafe_offset=at] = GAP
+            column += 1
+        else:
+            top[unsafe_offset=at] = GAP
+            bottom[unsafe_offset=at] = second_bytes[unsafe_offset=row]
+            row += 1
+        at += 1
+        index += 1
     return AlignmentResult(Int32(distance), String(unsafe_from_utf8=top_row), String(unsafe_from_utf8=bottom_row))
 
 
