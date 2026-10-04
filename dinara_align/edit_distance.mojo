@@ -1607,9 +1607,10 @@ comptime STEP_TENTHS_DISTANCE = 60
 """Diagonal steps, in tenths, a distance's diagonal transition may still take per column before a band
 would be cheaper, at no distance: a step costs about 1.3 ns, a band column about 6 ns."""
 
-comptime STEP_TENTHS_ALIGNMENT = 120
-"""`STEP_TENTHS_DISTANCE` when an alignment is wanted: the band's then records and retraces, about
-12 ns a column, where the diagonal transition's traceback is nearly free."""
+comptime STEP_TENTHS_ALIGNMENT = 50
+"""`STEP_TENTHS_DISTANCE` when an alignment is wanted: the diagonal transition then keeps every front
+and the band records and retraces, which roughly cancel, so the budget sits a little under the
+distance's."""
 
 comptime TWO_ENDED_PERCENT = 57
 """The two-ended search's cost per square edit of distance, in percent of one front's step."""
@@ -2707,8 +2708,8 @@ def wavefront_segment(
         var zero = start + TRACE_PADDING - low
         var reached = fronts.reached.unsafe_ptr()
         for index in range(1, TRACE_PADDING + 1):
-            reached[zero + low - index] = UNREACHED
-            reached[zero + high + index] = UNREACHED
+            reached[unsafe_offset=zero + low - index] = UNREACHED
+            reached[unsafe_offset=zero + high + index] = UNREACHED
         return zero
 
     var finish_cost = -1
@@ -2728,17 +2729,17 @@ def wavefront_segment(
         high += 1
         var current_zero = row(fronts, low, high)
         # The previous row is laid out from its own first stored diagonal, unreached outside its live ones.
-        var previous = fronts.reached.unsafe_ptr() + zero
-        var current = fronts.reached.unsafe_ptr() + current_zero
-        var landed = fronts.landed.unsafe_ptr() + current_zero
-        var how = fronts.how.unsafe_ptr() + current_zero
+        var previous = fronts.reached.unsafe_ptr().unsafe_offset(zero)
+        var current = fronts.reached.unsafe_ptr().unsafe_offset(current_zero)
+        var landed = fronts.landed.unsafe_ptr().unsafe_offset(current_zero)
+        var how = fronts.how.unsafe_ptr().unsafe_offset(current_zero)
         zero = current_zero
         var furthest = NONE
         var nearest_column = NONE
         for offset in range(low, high + 1):
-            var same = previous[offset]
-            var below = previous[offset - 1]
-            var above = previous[offset + 1]
+            var same = previous[unsafe_offset=offset]
+            var below = previous[unsafe_offset=offset - 1]
+            var above = previous[unsafe_offset=offset + 1]
             var best = NONE
             var move = DIAGONAL
             var diagonal = home + offset
@@ -2753,14 +2754,14 @@ def wavefront_segment(
             if above + diagonal + 1 > 0 and above < best:
                 best = above
                 move = UP
-            how[offset] = move
+            how[unsafe_offset=offset] = move
             if best == NONE:
-                landed[offset] = UNREACHED
-                current[offset] = UNREACHED
+                landed[unsafe_offset=offset] = UNREACHED
+                current[unsafe_offset=offset] = UNREACHED
                 continue
-            landed[offset] = best
+            landed[unsafe_offset=offset] = best
             var slid = slide(first, second, best, diagonal, first_column)
-            current[offset] = slid
+            current[unsafe_offset=offset] = slid
             furthest = min(furthest, 2 * slid - offset)
             nearest_column = min(nearest_column, slid)
             if finish_cost < 0 and ends_here(slid, offset, cost):
@@ -2775,17 +2776,17 @@ def wavefront_segment(
 
         @always_inline
         def dropped(offset: Int) {imm current, imm furthest, imm first_column} -> Bool:
-            var at = current[offset]
+            var at = current[unsafe_offset=offset]
             return at <= first_column or 2 * at - offset > furthest + FRONT_DROP
 
         # Shrink the live diagonals from both ends, marking the dropped ones unreached in place.
         var new_low = low
         var new_high = high
         while new_low < new_high and dropped(new_low):
-            current[new_low] = UNREACHED
+            current[unsafe_offset=new_low] = UNREACHED
             new_low += 1
         while new_high > new_low and dropped(new_high):
-            current[new_high] = UNREACHED
+            current[unsafe_offset=new_high] = UNREACHED
             new_high -= 1
         if dropped(new_low):
             return -1
@@ -2814,19 +2815,19 @@ def wavefront_segment(
         at_cost -= 1
     var block = len(moves)
     moves.resize(unsafe_uninit_length=block + length)
-    var out = moves.unsafe_ptr() + block + length
+    var out = moves.unsafe_ptr().unsafe_offset(block + length)
     offset = finish_offset
     at_cost = finish_cost
     while True:
         var index = fronts.starts[at_cost] + offset - fronts.lows[at_cost]
         var run = fronts.landed[index] - fronts.reached[index]
-        out -= run
+        out = out.unsafe_offset(-run)
         for step in range(run):
-            out[step] = DIAGONAL
+            out[unsafe_offset=step] = DIAGONAL
         if at_cost == 0:
             break
         var move = fronts.how[index]
-        out -= 1
+        out = out.unsafe_offset(-1)
         out[] = move
         if move == LEFT:
             offset -= 1
