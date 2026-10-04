@@ -1,12 +1,11 @@
-//! The aligners A*PA2's evaluation compared against, on the edit-distance workloads: Edlib, WFA2-lib's
-//! BiWFA and WFA, and WFA-adaptive, each through pa-bench's `pa-wrapper` with the parameters that
-//! evaluation used. Block Aligner is left out, as it scores affine costs only; KSW2, as its kernels
-//! are SSE only; TripleAccel, as its quadratic time makes a 100 kbp pair take minutes.
+//! The exact aligners A*PA2's evaluation compared against, on the edit-distance workloads: Edlib, and
+//! WFA2-lib's BiWFA and WFA, each through pa-bench's `pa-wrapper` with the parameters that evaluation
+//! used. Every column of the comparison computes the optimum, so WFA-adaptive and Block Aligner, which
+//! may not, are left out; so is KSW2, as its kernels are SSE only, and TripleAccel, as its quadratic
+//! time makes a 100 kbp pair take minutes.
 //!
 //! Each aligner runs twice per pair, with traceback and without, as the A*PA runner does, and each
 //! measurement is taken warm and in-process the same way every runner takes its own (see `measure`).
-//! WFA-adaptive drops lagging diagonals and is not exact; `run.py` leaves its answers out of the
-//! agreement check and marks a time whose answer was not optimal.
 
 use pa_types::CostModel;
 use pa_wrapper::{
@@ -59,13 +58,6 @@ fn main() {
         (
             "wfa",
             AlignerParams::Wfa(WfaParams { memory_model: MemoryModel::MemoryHigh, heuristic: Heuristic::None }),
-        ),
-        (
-            "wfa-adaptive",
-            AlignerParams::Wfa(WfaParams {
-                memory_model: MemoryModel::MemoryUltraLow,
-                heuristic: Heuristic::WFadaptive(10, 50, 10),
-            }),
         ),
     ];
     for line in fs::read_to_string(format!("{directory}/dna_edit.tsv")).unwrap().lines() {
