@@ -48,6 +48,8 @@ from .common import (
 )
 from .errors import AlignmentError, ErrorKind
 
+from max.algorithm import parallelize
+
 comptime STORED_MATRIX_BUDGET = 6_000_000
 """
 Cells above which the host traceback switches to the linear-space recursion. Three `int32` layers at twelve bytes a
@@ -397,6 +399,16 @@ def align[
     return align_on_host[mode](encoded_first, encoded_second, scoring, stored_budget)
 
 
+comptime CHUNKS_PER_THREAD = 8
+"""Chunks a host batch is cut into per thread, so a thread that draws long pairs does not hold up
+the rest while the others sit idle."""
+
+
+def chunk_count(pairs: Int, threads: Int) -> Int:
+    """How many contiguous chunks a host batch of `pairs` is cut into for `threads` threads."""
+    return min(pairs, max(threads, 1) * CHUNKS_PER_THREAD)
+
+
 def scores[
     mode: AlignmentMode
 ](firsts: List[String], seconds: List[String], scoring: Scoring, placement: Optional[Placement] = None) raises -> List[
@@ -409,8 +421,27 @@ def scores[
     if pairs == 0:
         return results^
     if resolved.device != Device.GPU:
+        var out = results.unsafe_ptr()
+        var failed = List[Bool](length=pairs, fill=False)
+        var flags = failed.unsafe_ptr()
+        var single = Placement.on_cpu(1)
+
+        # The pairs are independent, so each is aligned on one thread start to finish, in
+        # contiguous chunks, several a thread so one that draws long pairs does not hold up the rest.
+        var chunks = chunk_count(pairs, resolved.threads)
+
+        def score_range(slot: Int) {imm}:
+            for index in range(pairs * slot // chunks, pairs * (slot + 1) // chunks):
+                try:
+                    out[unsafe_offset=index] = score[mode](firsts[index], seconds[index], scoring, single)
+                except:
+                    flags[unsafe_offset=index] = True
+
+        parallelize(score_range, chunks, max(resolved.threads, 1))
+        # A pair that failed raises here, the same error a serial loop would have raised first.
         for index in range(pairs):
-            results[index] = score[mode](firsts[index], seconds[index], scoring, resolved)
+            if failed[index]:
+                results[index] = score[mode](firsts[index], seconds[index], scoring, single)
         return results^
 
     var scope = DeviceScope(resolved.gpu_id)
@@ -456,8 +487,29 @@ def alignments[
     if pairs == 0:
         return results^
     if resolved.device != Device.GPU:
+        var out = results.unsafe_ptr()
+        var failed = List[Bool](length=pairs, fill=False)
+        var flags = failed.unsafe_ptr()
+        var single = Placement.on_cpu(1)
+
+        # The pairs are independent, so each is aligned on one thread start to finish, in
+        # contiguous chunks, several a thread so one that draws long pairs does not hold up the rest.
+        var chunks = chunk_count(pairs, resolved.threads)
+
+        def align_range(slot: Int) {imm}:
+            for index in range(pairs * slot // chunks, pairs * (slot + 1) // chunks):
+                try:
+                    out[unsafe_offset=index] = align[mode](
+                        firsts[index], seconds[index], scoring, single, stored_budget
+                    )
+                except:
+                    flags[unsafe_offset=index] = True
+
+        parallelize(align_range, chunks, max(resolved.threads, 1))
+        # A pair that failed raises here, the same error a serial loop would have raised first.
         for index in range(pairs):
-            results[index] = align[mode](firsts[index], seconds[index], scoring, resolved, stored_budget)
+            if failed[index]:
+                results[index] = align[mode](firsts[index], seconds[index], scoring, single, stored_budget)
         return results^
 
     # A batch of one is a single pair however it arrived, and gets the single pair's crossover.
