@@ -1,0 +1,30 @@
+[workspace]
+authors = ["Konstantinos Kyriakidis <kkyriaki@ucsc.edu>"]
+channels = ["conda-forge", "https://conda.modular.com/max"]
+description = "Exact affine-gap sequence alignment with traceback on CPU and GPU, in Mojo — Needleman-Wunsch, Smith-Waterman and Levenshtein with Gotoh adjustments, ported from AffineGaps"
+license = "Apache-2.0"
+license-file = "LICENSE"
+name = "dinara-align"
+platforms = ["linux-64", "linux-aarch64", "osx-arm64"]
+readme = "README.md"
+version = "0.1.0"
+
+# `max` carries `max.gpu` and `max.algorithm`, which the kernels import alongside the standard library.
+[dependencies]
+max = ">=26.6,<27"
+mojo = ">=1.1.0,<2"
+
+[tasks]
+# `mojo build -o` writes into a directory but will not create one.
+prepare = "mkdir -p build"
+# A precompiled package is tied to the compiler that wrote it, so it is a build artifact, not a release.
+build = {cmd = "mojo precompile dinara_align -o build/dinara_align.mojoc", depends-on = ["prepare"]}
+# `$MOJO_ACCELERATOR` is empty by default, so the kernels target the host's own GPU. Set it to
+# `--target-accelerator <arch>` to target another; see the README for macOS without Xcode.
+build-tests = {cmd = "mojo build -I . tests/test_alignment.mojo -o build/test_alignment $MOJO_ACCELERATOR", depends-on = ["prepare"]}
+test = {cmd = "./build/test_alignment", depends-on = ["build-tests"]}
+format = "mojo format -l 120 dinara_align tests"
+# Times dinara-align against other exact global aligners; see `benchmarks/run.py` for the flags.
+bench = "python3 benchmarks/run.py"
+# Regenerates the ported kernels from an AffineGaps checkout: `pixi run port /path/to/AffineGaps`.
+port = "python3 scripts/port_from_affinegaps.py"

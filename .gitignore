@@ -1,0 +1,6 @@
+build/
+.pixi/
+*.mojoc
+__pycache__/
+.DS_Store
+benchmarks/.cache/

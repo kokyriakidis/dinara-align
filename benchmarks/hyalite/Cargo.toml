@@ -1,0 +1,14 @@
+[package]
+name = "hyalite-runner"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# `run.py` clones hyalite here at a pinned commit; nothing of it is vendored into this repository.
+[dependencies]
+hyalite = { path = "../.cache/hyalite" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
