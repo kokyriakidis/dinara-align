@@ -40,7 +40,7 @@ distance `levenshtein_alignment` returns, without the alignment.
 """
 
 from std.bit import byte_swap, count_leading_zeros, count_trailing_zeros, pop_count
-from std.math import ceildiv
+from std.math import ceildiv, sqrt
 from std.sys import inlined_assembly
 
 from max.algorithm import parallelize
@@ -111,6 +111,15 @@ comptime NARROW_BAND = 1024
 
 comptime MEET_COLUMNS = 2048
 """Columns below which one direction finishes before a second thread would pay for itself."""
+
+comptime CODE_PADDING = 16
+"""Sentinel bytes after each sequence's codes, enough for a sixteen-byte comparison at the last base."""
+
+comptime FIRST_SENTINEL = UInt8(0xFE)
+"""Past the first sequence's last base: no code, and unequal to `SECOND_SENTINEL`."""
+
+comptime SECOND_SENTINEL = UInt8(0xFF)
+"""Past the second sequence's last base."""
 
 comptime COLUMN_PADDING = LANES
 """Columns of zero bases before and after the profile's planes, for lanes standing outside a tile."""
@@ -650,7 +659,8 @@ def all_bases(text: String) -> Bool:
 
 
 struct Profile(Movable):
-    """Both sequences as the bit planes `Sweep` reads; see `Sweep` for the encoding."""
+    """Both sequences as codes, and once a band needs them, as the bit planes `Sweep` reads; see
+    `Sweep` for the encoding."""
 
     var columns: Int
     var rows: Int
@@ -680,24 +690,15 @@ struct Profile(Movable):
                 _ = base_code(byte)
 
         # Every byte is now `A`, `C`, `G` or `T`, whose ASCII bits give the code directly: bit 2 is
-        # set for `G` and `T`, the code's high bit, and bit 1 differs from bit 2 for `C` and `T`, its low bit.
-        # The planes run `COLUMN_PADDING` columns past either end, zero, for the lanes a staggered
-        # block holds outside its tile (see `Sweep.block`).
-        var padded = self.columns + 2 * COLUMN_PADDING
-        self.column_low = List[UInt64](capacity=padded)
-        self.column_high = List[UInt64](capacity=padded)
-        self.column_codes = List[UInt8](capacity=self.columns)
-        self.column_low.resize(unsafe_uninit_length=padded)
-        self.column_high.resize(unsafe_uninit_length=padded)
+        # set for `G` and `T`, the code's high bit, and bit 1 differs from bit 2 for `C` and `T`, its
+        # low bit. Only the codes are built here; the planes wait for a band (see `build_planes`).
+        self.column_low = List[UInt64]()
+        self.column_high = List[UInt64]()
+        self.row_low = List[UInt64]()
+        self.row_high = List[UInt64]()
+        self.column_codes = List[UInt8](capacity=self.columns + CODE_PADDING)
         self.column_codes.resize(unsafe_uninit_length=self.columns)
-        for index in range(COLUMN_PADDING):
-            self.column_low[index] = 0
-            self.column_high[index] = 0
-            self.column_low[padded - 1 - index] = 0
-            self.column_high[padded - 1 - index] = 0
         var first_bytes = first.unsafe_ptr()
-        var low = self.column_low.unsafe_ptr().unsafe_offset(COLUMN_PADDING)
-        var high = self.column_high.unsafe_ptr().unsafe_offset(COLUMN_PADDING)
         var column_codes = self.column_codes.unsafe_ptr()
         comptime CHUNK = 16
         var column = 0
@@ -707,29 +708,16 @@ struct Profile(Movable):
                 bytes = first_bytes.unsafe_offset(self.columns - CHUNK - column).unsafe_load[width=CHUNK]().reversed()
             else:
                 bytes = first_bytes.unsafe_offset(column).unsafe_load[width=CHUNK]()
-            var low_bits = ((bytes >> 1) ^ (bytes >> 2)) & 1
-            var high_bits = (bytes >> 2) & 1
-            column_codes.unsafe_offset(column).unsafe_store(low_bits | (high_bits << 1))
-            low.unsafe_offset(column).unsafe_store(UInt64(0) - low_bits.cast[DType.uint64]())
-            high.unsafe_offset(column).unsafe_store(UInt64(0) - high_bits.cast[DType.uint64]())
+            column_codes.unsafe_offset(column).unsafe_store((((bytes >> 1) ^ (bytes >> 2)) & 1) | ((bytes >> 1) & 2))
             column += CHUNK
         while column < self.columns:
             var byte = first_bytes[unsafe_offset=self.columns - 1 - column if reverse else column]
-            var low_bit = ((byte >> 1) ^ (byte >> 2)) & 1
-            var high_bit = (byte >> 2) & 1
-            column_codes[unsafe_offset=column] = low_bit | (high_bit << 1)
-            low[unsafe_offset=column] = UInt64(0) - low_bit.cast[DType.uint64]()
-            high[unsafe_offset=column] = UInt64(0) - high_bit.cast[DType.uint64]()
+            column_codes[unsafe_offset=column] = (((byte >> 1) ^ (byte >> 2)) & 1) | ((byte >> 1) & 2)
             column += 1
 
-        # Eight bases at a time as one word, each byte's bit packed into a byte of the plane by a
-        # multiply whose partial products never overlap.
         comptime ONES = UInt64(0x0101010101010101)
-        comptime GATHER = UInt64(0x0102040810204080)
         var second_bytes = second.unsafe_ptr()
-        self.row_low = List[UInt64](length=self.words, fill=0)
-        self.row_high = List[UInt64](length=self.words, fill=0)
-        self.row_codes = List[UInt8](capacity=self.rows)
+        self.row_codes = List[UInt8](capacity=self.rows + CODE_PADDING)
         self.row_codes.resize(unsafe_uninit_length=self.rows)
         var row_codes = self.row_codes.unsafe_ptr()
         var row = 0
@@ -744,19 +732,64 @@ struct Profile(Movable):
             var low_bits = ((eight >> 1) ^ (eight >> 2)) & ONES
             var high_bits = (eight >> 2) & ONES
             row_codes.unsafe_offset(row).unsafe_bitcast[UInt64]().unsafe_store(low_bits | (high_bits << 1))
-            var shift = UInt64(row % WORD_BITS)
-            # Stored negated, so a row matches a column where both planes XOR to ones.
-            self.row_low[row // WORD_BITS] |= ((((low_bits * GATHER) >> 56) ^ 0xFF)) << shift
-            self.row_high[row // WORD_BITS] |= ((((high_bits * GATHER) >> 56) ^ 0xFF)) << shift
             row += 8
         while row < self.rows:
             var byte = second_bytes[unsafe_offset=self.rows - 1 - row if reverse else row]
-            var low_bit = ((byte >> 1) ^ (byte >> 2)) & 1
-            var high_bit = (byte >> 2) & 1
-            row_codes[unsafe_offset=row] = low_bit | (high_bit << 1)
+            row_codes[unsafe_offset=row] = (((byte >> 1) ^ (byte >> 2)) & 1) | ((byte >> 1) & 2)
+            row += 1
+        # Past the last base of each, sentinels that match nothing, the two of them distinct, so a
+        # match extension stops at the matrix's edge without checking it (see `slide_forward`).
+        for _ in range(CODE_PADDING):
+            self.column_codes.append(FIRST_SENTINEL)
+            self.row_codes.append(SECOND_SENTINEL)
+
+    def build_planes(mut self):
+        """The bit planes a band sweeps, from the codes, once; a pair the diagonal transition settles
+        never pays for them.
+
+        The column planes run `COLUMN_PADDING` columns past either end, zero, for the lanes a
+        staggered block holds outside its tile (see `Sweep.block`). The row planes take eight bases
+        at a time, each byte's bit packed into the plane by a multiply whose partial products never
+        overlap, stored negated so a row matches a column where both planes XOR to ones.
+        """
+        if len(self.column_low) > 0 or self.columns == 0:
+            return
+        var padded = self.columns + 2 * COLUMN_PADDING
+        self.column_low = List[UInt64](length=padded, fill=0)
+        self.column_high = List[UInt64](length=padded, fill=0)
+        var low = self.column_low.unsafe_ptr().unsafe_offset(COLUMN_PADDING)
+        var high = self.column_high.unsafe_ptr().unsafe_offset(COLUMN_PADDING)
+        var column_codes = self.column_codes.unsafe_ptr()
+        comptime CHUNK = 16
+        var column = 0
+        while column + CHUNK <= self.columns:
+            var codes = column_codes.unsafe_offset(column).unsafe_load[width=CHUNK]()
+            low.unsafe_offset(column).unsafe_store(UInt64(0) - (codes & 1).cast[DType.uint64]())
+            high.unsafe_offset(column).unsafe_store(UInt64(0) - (codes >> 1).cast[DType.uint64]())
+            column += CHUNK
+        while column < self.columns:
+            var code = column_codes[unsafe_offset=column]
+            low[unsafe_offset=column] = UInt64(0) - (code & 1).cast[DType.uint64]()
+            high[unsafe_offset=column] = UInt64(0) - (code >> 1).cast[DType.uint64]()
+            column += 1
+
+        comptime ONES = UInt64(0x0101010101010101)
+        comptime GATHER = UInt64(0x0102040810204080)
+        self.row_low = List[UInt64](length=self.words, fill=0)
+        self.row_high = List[UInt64](length=self.words, fill=0)
+        var row_codes = self.row_codes.unsafe_ptr()
+        var row = 0
+        while row + 8 <= self.rows:
+            var eight = row_codes.unsafe_offset(row).unsafe_bitcast[UInt64]().unsafe_load()
             var shift = UInt64(row % WORD_BITS)
-            self.row_low[row // WORD_BITS] |= (low_bit ^ 1).cast[DType.uint64]() << shift
-            self.row_high[row // WORD_BITS] |= (high_bit ^ 1).cast[DType.uint64]() << shift
+            self.row_low[row // WORD_BITS] |= ((((eight & ONES) * GATHER) >> 56) ^ 0xFF) << shift
+            self.row_high[row // WORD_BITS] |= (((((eight >> 1) & ONES) * GATHER) >> 56) ^ 0xFF) << shift
+            row += 8
+        while row < self.rows:
+            var code = row_codes[unsafe_offset=row]
+            var shift = UInt64(row % WORD_BITS)
+            self.row_low[row // WORD_BITS] |= ((code & 1) ^ 1).cast[DType.uint64]() << shift
+            self.row_high[row // WORD_BITS] |= ((code >> 1) ^ 1).cast[DType.uint64]() << shift
             row += 1
 
     @always_inline
@@ -833,6 +866,7 @@ struct Frontier(Movable):
 
 def full_distance(mut profile: Profile, workers: Int) -> Int:
     """The whole matrix, tiled across `workers` threads once it is large enough to pay for them."""
+    profile.build_planes()
     var frontier = Frontier(profile.columns, profile.words)
     var sweep = frontier.sweep(profile)
     var words = profile.words
@@ -1332,6 +1366,7 @@ struct HalfBand(Movable):
         # One tile's width of horizontal edge, since each tile starts again from `+1` above (see
         # `Sweep.shifted`); the last tile may absorb a sliver of up to `2 * LANES` more columns.
         self.frontier = Frontier(BAND_COLUMNS + 2 * LANES, self.words)
+        profile.build_planes()
         self.sweep = self.frontier.sweep(profile)
         self.bounds = tile_bounds(stop_column, NARROW_COLUMNS if threshold < NARROW_BAND else BAND_COLUMNS)
         self.top = 0
@@ -1493,23 +1528,36 @@ def pruned_distance[
 
 # region Diagonal transition
 
-comptime UNREACHED_OFFSET = Int32(-1)
-"""A diagonal no path of the score reaches."""
+comptime UNREACHED_OFFSET = Int32(-(1 << 28))
+"""A diagonal no path of the score reaches: far enough below zero that one more column stays negative."""
+
+comptime FRONT_PADDING = 2
+"""Unreached diagonals stored either side of a front, so the next front reads its neighbours unchecked."""
+
+comptime FRONT_LANES = 8
+"""Diagonals a front step computes at once."""
+
+comptime PROBE_STRIDE = 4
+"""Scores between the diagonal transition's checks of its projection."""
 
 comptime PROBE_START = 8
 """The score from which the diagonal transition judges whether to go on, so the projection has a few
 edits to go on."""
 
-comptime PROBE_BUDGET = 3
-"""Twice the columns' worth of diagonals the diagonal transition may still have to search, `d² - s²`.
+comptime STEP_TENTHS_DISTANCE = 46
+"""Diagonal steps, in tenths, a distance's diagonal transition may still take per column before a band
+would be cheaper, at no distance: a step costs about 1.3 ns, a band column about 6 ns."""
 
-A diagonal costs about five nanoseconds, a column of a narrow band about seven to ten, so past
-`1.5 * columns` diagonals the band is cheaper for a distance."""
+comptime STEP_TENTHS_ALIGNMENT = 92
+"""`STEP_TENTHS_DISTANCE` when an alignment is wanted: the band's then records and retraces, about
+12 ns a column, where the diagonal transition's traceback is nearly free."""
 
-comptime PROBE_ALIGNMENT_BUDGET = 5
-"""`PROBE_BUDGET` when an alignment is wanted, `2.5 * columns`: the diagonal transition's traceback
-is nearly free, where the band records its edges and retraces every tile, about thirteen to
-seventeen nanoseconds a column in all."""
+comptime PROJECTION_ONLY = -(1 << 40)
+"""A budget no search fits: the diagonal transition stops at its first check, with its projection."""
+
+comptime EDITS_PER_STEP = 108
+"""A band's column grows about 1.3 ns, a step, per this many edits of projected distance, its band
+growing taller with the distance."""
 
 comptime PROBE_MARGIN = 16
 """How far past the projected distance the band's first bound reaches, on top of an eighth of it."""
@@ -1536,8 +1584,8 @@ struct DiagonalFronts(Movable):
     """Every score's wavefront: for score `s`, the furthest column each diagonal reaches.
 
     Diagonal `k` holds the cells whose column minus row is `k`. Score `s` keeps diagonals
-    `lows[s] ..= highs[s]` from position `starts[s]` of `offsets`; all of them stay, since the
-    traceback reads them back.
+    `lows[s] ..= highs[s]`, with `FRONT_PADDING` unreached diagonals either side, from position
+    `starts[s]` of `offsets`; all of them stay, since the traceback reads them back.
     """
 
     var offsets: List[Int32]
@@ -1556,7 +1604,8 @@ struct DiagonalFronts(Movable):
         """The furthest column of `diagonal` at `score`, or -1 when no path of that score reaches it."""
         if diagonal < self.lows[score] or diagonal > self.highs[score]:
             return -1
-        return Int(self.offsets[self.starts[score] + diagonal - self.lows[score]])
+        var column = Int(self.offsets[self.starts[score] + FRONT_PADDING + diagonal - self.lows[score]])
+        return column if column >= 0 else -1
 
 
 @fieldwise_init
@@ -1569,6 +1618,32 @@ struct Probe(ImplicitlyCopyable, TrivialRegisterPassable):
     """Where the distance was heading when the search stopped: its score scaled by the progress made."""
     var floor: Int
     """Every score up to this was searched, so the distance exceeds it."""
+
+
+@always_inline
+def slide_forward(first: ImmPointer[UInt8, _], second: ImmPointer[UInt8, _], column: Int, row: Int) -> Int:
+    """How far matches carry `(column, row)` along its diagonal, sixteen bases at a time.
+
+    The sequences' sentinels differ from every base and from each other, so the run stops at the
+    matrix's edge by itself (see `CODE_PADDING`).
+    """
+    var at = column
+    var down = row
+    while True:
+        var low = (
+            first.unsafe_offset(at).unsafe_bitcast[UInt64]().unsafe_load()
+            ^ second.unsafe_offset(down).unsafe_bitcast[UInt64]().unsafe_load()
+        )
+        if low != 0:
+            return at + Int(count_trailing_zeros(low)) // 8
+        var high = (
+            first.unsafe_offset(at + 8).unsafe_bitcast[UInt64]().unsafe_load()
+            ^ second.unsafe_offset(down + 8).unsafe_bitcast[UInt64]().unsafe_load()
+        )
+        if high != 0:
+            return at + 8 + Int(count_trailing_zeros(high)) // 8
+        at += 16
+        down += 16
 
 
 @always_inline
@@ -1618,7 +1693,85 @@ def best_source(fronts: DiagonalFronts, score: Int, diagonal: Int, columns: Int,
     return (best, move)
 
 
-def diagonal_transition(profile: Profile, budget: Int, mut fronts: DiagonalFronts) -> Probe:
+@always_inline
+def step_budget(columns: Int, step_tenths: Int, estimate: Int) -> Int:
+    """How many diagonal steps cost what a band over `columns` columns would, at a projected distance.
+
+    A band's column costs a fixed part plus a part growing with the distance, its band taller; in
+    steps that is `step_tenths / 10 + estimate / EDITS_PER_STEP` a column.
+    """
+    return columns * step_tenths // 10 + columns * estimate // EDITS_PER_STEP
+
+
+@no_inline
+def step_front[
+    measure: Bool
+](
+    previous: MutPointer[Int32, MutUntrackedOrigin],
+    current: MutPointer[Int32, MutUntrackedOrigin],
+    low: Int,
+    high: Int,
+    columns: Int,
+    rows: Int,
+    first: ImmPointer[UInt8, _],
+    second: ImmPointer[UInt8, _],
+) -> Int:
+    """One score's front from the last: every diagonal `low ..= high` of `current`, both indexed by diagonal.
+
+    A function of its own, so its handful of values stay in registers. With `measure`, returns
+    the furthest anti-diagonal, column plus row, any diagonal reached; otherwise zero.
+    """
+    comptime Lanes = SIMD[DType.int32, FRONT_LANES]
+    # Every diagonal's start, eight at a time: one more edit after the previous front on the same
+    # diagonal or either neighbour, each only where that edit stays inside the matrix. The previous
+    # front's padding reads as unreached, far below any column.
+    var lane_diagonals = Lanes()
+    comptime for lane in range(FRONT_LANES):
+        lane_diagonals[lane] = Int32(lane)
+    var column_limit = Lanes(Int32(columns))
+    var row_limit = Lanes(Int32(rows))
+    var unreached = Lanes(UNREACHED_OFFSET)
+    var diagonal = low
+    while diagonal <= high:
+        var diagonals = lane_diagonals + Int32(diagonal)
+        var same = previous.unsafe_offset(diagonal).unsafe_load[width=FRONT_LANES]()
+        var below = previous.unsafe_offset(diagonal - 1).unsafe_load[width=FRONT_LANES]()
+        var above = previous.unsafe_offset(diagonal + 1).unsafe_load[width=FRONT_LANES]()
+        var substituted = (same.lt(column_limit) & (same - diagonals).lt(row_limit)).select(same + 1, unreached)
+        # A base of the first sequence against a gap, from the diagonal below.
+        var deleted = below.lt(column_limit).select(below + 1, unreached)
+        # A base of the second sequence against a gap, from the diagonal above.
+        var inserted = (above - diagonals).le(row_limit).select(above, unreached)
+        current.unsafe_offset(diagonal).unsafe_store(max(substituted, max(deleted, inserted)))
+        diagonal += FRONT_LANES
+    for index in range(FRONT_PADDING):
+        current[unsafe_offset=high + 1 + index] = UNREACHED_OFFSET
+
+    # Then each slides over its matches, eight bases at a time; the sentinels stop it at the edge.
+    var furthest = 0
+    for diagonal in range(low, high + 1):
+        var column = Int(current[unsafe_offset=diagonal])
+        if column < 0:
+            continue
+        var lag = second.unsafe_offset(-diagonal)
+        var mismatches = (
+            first.unsafe_offset(column).unsafe_bitcast[UInt64]().unsafe_load()
+            ^ lag.unsafe_offset(column).unsafe_bitcast[UInt64]().unsafe_load()
+        )
+        while mismatches == 0:
+            column += 8
+            mismatches = (
+                first.unsafe_offset(column).unsafe_bitcast[UInt64]().unsafe_load()
+                ^ lag.unsafe_offset(column).unsafe_bitcast[UInt64]().unsafe_load()
+            )
+        column += Int(count_trailing_zeros(mismatches)) >> 3
+        current[unsafe_offset=diagonal] = Int32(column)
+        comptime if measure:
+            furthest = max(furthest, 2 * column - diagonal)
+    return furthest
+
+
+def diagonal_transition(profile: Profile, step_tenths: Int, mut fronts: DiagonalFronts) -> Probe:
     """The edit distance by diagonal transition, as WFA computes it, while it stays cheaper than a band.
 
     Score `s` reaches, on every diagonal, the furthest cell some path of `s` edits reaches; matches
@@ -1641,66 +1794,214 @@ def diagonal_transition(profile: Profile, budget: Int, mut fronts: DiagonalFront
     fronts.lows.clear()
     fronts.highs.clear()
 
-    var start = extend(first, second, 0, 0, columns, rows)
+    var start = slide_forward(first, second, 0, 0)
     fronts.starts.append(0)
     fronts.lows.append(0)
     fronts.highs.append(0)
+    for _ in range(FRONT_PADDING):
+        fronts.offsets.append(UNREACHED_OFFSET)
     fronts.offsets.append(Int32(start))
+    for _ in range(FRONT_PADDING):
+        fronts.offsets.append(UNREACHED_OFFSET)
     if target == 0 and start == columns:
         return Probe(0, 0, 0)
     var score = 0
     while score < PROBE_CEILING:
         score += 1
         var previous_low = fronts.lows[score - 1]
-        var previous_high = fronts.highs[score - 1]
         var previous_start = fronts.starts[score - 1]
         var low = max(-score, -rows)
         var high = min(score, columns)
+        var count = high - low + 1
         var row_start = len(fronts.offsets)
         fronts.starts.append(row_start)
         fronts.lows.append(low)
         fronts.highs.append(high)
-        fronts.offsets.resize(unsafe_uninit_length=row_start + high - low + 1)
+        # Room for the front, its padding, and a last vector's spill past the end.
+        fronts.offsets.resize(unsafe_uninit_length=row_start + count + 2 * FRONT_PADDING + FRONT_LANES)
         var offsets = fronts.offsets.unsafe_ptr()
-        # The previous front, indexed by diagonal, and the new one being written.
-        var previous = offsets.unsafe_offset(previous_start - previous_low)
-        var current = offsets.unsafe_offset(row_start - low)
-        # The furthest anti-diagonal, column plus row, any front reached.
-        var furthest = 0
-        for diagonal in range(low, high + 1):
-            # Each source only where its edit stays inside the matrix, and only where the previous
-            # front has that diagonal; a missing one reads as unreached, far below any column.
-            var same = (
-                Int(previous[unsafe_offset=diagonal]) if diagonal >= previous_low and diagonal <= previous_high else -1
-            )
-            var below = (
-                Int(previous[unsafe_offset=diagonal - 1]) if diagonal - 1 >= previous_low
-                and diagonal - 1 <= previous_high else -1
-            )
-            var above = (
-                Int(previous[unsafe_offset=diagonal + 1]) if diagonal + 1 >= previous_low
-                and diagonal + 1 <= previous_high else -1
-            )
-            var best = same + 1 if same >= 0 and same < columns and same - diagonal < rows else -1
-            # A base of the first sequence against a gap, from the diagonal below.
-            best = max(best, below + 1 if below >= 0 and below < columns else -1)
-            # A base of the second sequence against a gap, from the diagonal above.
-            best = max(best, above if above >= 0 and above - diagonal - 1 < rows else -1)
-            if best < 0:
-                current[unsafe_offset=diagonal] = UNREACHED_OFFSET
-                continue
-            var column = extend(first, second, best, best - diagonal, columns, rows)
-            current[unsafe_offset=diagonal] = Int32(column)
-            furthest = max(furthest, 2 * column - diagonal)
-            if diagonal == target and column == columns:
-                return Probe(score, score, score - 1)
-        if score >= PROBE_START:
+        for index in range(FRONT_PADDING):
+            offsets[unsafe_offset=row_start + index] = UNREACHED_OFFSET
+        # The previous front and the new one, both indexed by diagonal.
+        var previous = offsets.unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(
+            previous_start + FRONT_PADDING - previous_low
+        )
+        var current = offsets.unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(row_start + FRONT_PADDING - low)
+
+        # The projection is checked every `PROBE_STRIDE` scores, so most fronts skip measuring it.
+        var checking = score >= PROBE_START and score % PROBE_STRIDE == 0
+        var furthest: Int
+        if checking:
+            furthest = step_front[True](previous, current, low, high, columns, rows, first, second)
+        else:
+            furthest = step_front[False](previous, current, low, high, columns, rows, first, second)
+        if target >= low and target <= high and Int(current[unsafe_offset=target]) == columns:
+            fronts.offsets.resize(unsafe_uninit_length=row_start + count + 2 * FRONT_PADDING)
+            return Probe(score, score, score - 1)
+        fronts.offsets.resize(unsafe_uninit_length=row_start + count + 2 * FRONT_PADDING)
+        if checking:
             var estimate = score * (columns + rows) // max(furthest, 1)
             # What is left to search, about `estimate² - score²` diagonals, against what a band
             # would cost; the work already done is spent either way.
-            if estimate * estimate - score * score > budget:
+            if estimate * estimate - score * score > step_budget(columns, step_tenths, estimate):
                 return Probe(-1, max(estimate, score + 1), score)
     return Probe(-1, PROBE_CEILING + 1, PROBE_CEILING)
+
+
+def reversed_codes(codes: List[UInt8], count: Int, sentinel: UInt8) -> List[UInt8]:
+    """The first `count` codes back to front, with `CODE_PADDING` sentinels after them."""
+    var flipped = List[UInt8](capacity=count + CODE_PADDING)
+    flipped.resize(unsafe_uninit_length=count)
+    var source = codes.unsafe_ptr()
+    var target = flipped.unsafe_ptr()
+    comptime CHUNK = 16
+    var index = 0
+    while index + CHUNK <= count:
+        target.unsafe_offset(index).unsafe_store(
+            source.unsafe_offset(count - CHUNK - index).unsafe_load[width=CHUNK]().reversed()
+        )
+        index += CHUNK
+    while index < count:
+        target[unsafe_offset=index] = source[unsafe_offset=count - 1 - index]
+        index += 1
+    for _ in range(CODE_PADDING):
+        flipped.append(sentinel)
+    return flipped^
+
+
+struct FrontPair(Movable):
+    """One direction's two latest fronts, alternating, each indexed by diagonal from `OFFSET`."""
+
+    var buffers: List[Int32]
+    var width: Int
+    var low: Int
+    var high: Int
+    var score: Int
+    var parity: Int
+    var furthest: Int
+
+    def __init__(out self, limit: Int):
+        self.width = 2 * (limit + FRONT_PADDING) + FRONT_LANES + 1
+        # Every front writes its own diagonals and the padding either side before the next reads it,
+        # so only the first front's surroundings need setting.
+        self.buffers = List[Int32](capacity=2 * self.width)
+        self.buffers.resize(unsafe_uninit_length=2 * self.width)
+        self.low = 0
+        self.high = 0
+        self.score = 0
+        self.parity = 0
+        self.furthest = 0
+        var first = self.front(0)
+        for diagonal in range(-FRONT_PADDING, FRONT_PADDING + 1):
+            first[unsafe_offset=diagonal] = UNREACHED_OFFSET
+
+    @always_inline
+    def front(mut self, which: Int) -> MutPointer[Int32, MutUntrackedOrigin]:
+        """Front `which` of the two, as a pointer indexed by diagonal."""
+        return (
+            self.buffers.unsafe_ptr()
+            .unsafe_origin_cast[MutUntrackedOrigin]()
+            .unsafe_offset(which * self.width + self.width // 2)
+        )
+
+
+def two_ended_distance(profile: Profile, step_tenths: Int) -> Probe:
+    """The edit distance by diagonal transition from both ends at once, as BiWFA scores, while cheap.
+
+    One front grows from the start and one from the end, over the reversed sequences, a score at a
+    time each in turn, and the distance is the first total score at which they overlap: on some
+    diagonal the forward front reaches at least as far as the backward one comes back. An overlap
+    joins a real path from the start to one to the end, so the total is at least the distance; and
+    every cost level an optimal path passes splits it in two whose halves the fronts have reached
+    by the time their scores add up to the distance, edit costs never falling along a diagonal. So
+    the first overlap is exact, after about half the diagonals of one front grown alone, keeping
+    only the last two fronts each way.
+
+    It stops as `diagonal_transition` does, once the search still to do passes the budget (see
+    `step_budget`), projecting the distance from both fronts' progress.
+    """
+    var columns = profile.columns
+    var rows = profile.rows
+    var target = columns - rows
+    var first = profile.column_codes.unsafe_ptr()
+    var second = profile.row_codes.unsafe_ptr()
+    var first_back = reversed_codes(profile.column_codes, columns, FIRST_SENTINEL)
+    var second_back = reversed_codes(profile.row_codes, rows, SECOND_SENTINEL)
+    var first_reversed = first_back.unsafe_ptr()
+    var second_reversed = second_back.unsafe_ptr()
+    # No side goes past the score at which the budget alone would stop the search, nor the ceiling.
+    var limit = PROBE_CEILING // 2 + 1
+    var ahead = FrontPair(limit)
+    var behind = FrontPair(limit)
+    ahead.front(0)[unsafe_offset=0] = Int32(slide_forward(first, second, 0, 0))
+    behind.front(0)[unsafe_offset=0] = Int32(slide_forward(first_reversed, second_reversed, 0, 0))
+
+    @always_inline
+    def overlapping(mut ahead: FrontPair, mut behind: FrontPair) {imm target, imm columns} -> Bool:
+        """Whether some diagonal's forward front reaches past where its backward front comes back to."""
+        var forward = ahead.front(ahead.parity)
+        var backward = behind.front(behind.parity)
+        var low = max(ahead.low, target - behind.high)
+        var high = min(ahead.high, target - behind.low)
+        # An unreached diagonal holds a value far below zero, so the sum alone rules it out.
+        var needed = SIMD[DType.int32, FRONT_LANES](Int32(columns))
+        var diagonal = low
+        while diagonal + FRONT_LANES - 1 <= high:
+            var reached = forward.unsafe_offset(diagonal).unsafe_load[width=FRONT_LANES]()
+            var back = (
+                backward.unsafe_offset(target - diagonal - FRONT_LANES + 1).unsafe_load[width=FRONT_LANES]().reversed()
+            )
+            if (reached + back).ge(needed).reduce_or():
+                return True
+            diagonal += FRONT_LANES
+        while diagonal <= high:
+            if Int(forward[unsafe_offset=diagonal]) + Int(backward[unsafe_offset=target - diagonal]) >= columns:
+                return True
+            diagonal += 1
+        return False
+
+    @always_inline
+    def advance(
+        mut fronts: FrontPair, codes: ImmPointer[UInt8, _], others: ImmPointer[UInt8, _], measure: Bool
+    ) {imm columns, imm rows}:
+        """One more score for one direction's front."""
+        var previous = fronts.front(fronts.parity)
+        var current = fronts.front(1 - fronts.parity)
+        fronts.score += 1
+        var low = max(-fronts.score, -rows)
+        var high = min(fronts.score, columns)
+        for index in range(1, FRONT_PADDING + 1):
+            current[unsafe_offset=low - index] = UNREACHED_OFFSET
+        if measure:
+            fronts.furthest = step_front[True](previous, current, low, high, columns, rows, codes, others)
+        else:
+            _ = step_front[False](previous, current, low, high, columns, rows, codes, others)
+        fronts.low = low
+        fronts.high = high
+        fronts.parity = 1 - fronts.parity
+
+    if overlapping(ahead, behind):
+        return Probe(0, 0, 0)
+    var total = 0
+    while ahead.score < limit and behind.score < limit:
+        total += 1
+        # Each side measures its progress on its step just before a check, every `PROBE_STRIDE`, from
+        # when each has taken `PROBE_START` edits, so the projection has as many to go on as one front's.
+        var checking = total >= 2 * PROBE_START and total % PROBE_STRIDE == 0
+        var measuring = total + 1 >= 2 * PROBE_START and (total + 1) % PROBE_STRIDE == 0
+        if total % 2 == 1:
+            advance(ahead, first, second, checking or measuring)
+        else:
+            advance(behind, first_reversed, second_reversed, checking or measuring)
+        if overlapping(ahead, behind):
+            return Probe(total, total, total - 1)
+        if checking:
+            var reached = max(ahead.furthest + behind.furthest, 1)
+            var estimate = total * (columns + rows) // reached
+            # What is left, about half of `estimate² - total²` diagonals, against what a band costs.
+            if (estimate * estimate - total * total) // 2 > step_budget(columns, step_tenths, estimate):
+                return Probe(-1, max(estimate, total + 1), total)
+    return Probe(-1, 2 * limit + 1, total)
 
 
 def trace_diagonals(profile: Profile, fronts: DiagonalFronts, distance: Int, mut moves: List[UInt8]):
@@ -1897,10 +2198,14 @@ def edit_distance(first: String, second: String, threads: Optional[Int] = None) 
     if forward.columns >= MEET_COLUMNS or forward.columns * forward.rows >= PARALLEL_CELLS:
         # A system call, so only a pair long enough to use more than one thread asks.
         workers = max(threads.or_else(hardware_threads()), 1)
-    var fronts = DiagonalFronts()
-    var probe = diagonal_transition(forward, PROBE_BUDGET * forward.columns // 2, fronts)
+    var probe = two_ended_distance(forward, STEP_TENTHS_DISTANCE)
     if probe.distance >= 0:
         return probe.distance
+    # The band's bounds and the seeds' gate are tuned on one front's projection from its first
+    # `PROBE_START` edits, so that is the projection handed on; the floor is the search's own.
+    var fronts = DiagonalFronts()
+    var projected = diagonal_transition(forward, PROJECTION_ONLY, fronts)
+    probe = Probe(-1, projected.estimate, max(probe.floor, projected.floor))
     var seeded = probe.estimate >= SEED_EDITS and probe.estimate * SEED_DIVERGENCE <= forward.columns
     var forward_heuristic = SeedHeuristic(forward) if seeded else SeedHeuristic(forward.columns, forward.rows)
     # A band narrowed by many chained seeds gains less from a second thread than that thread's half,
@@ -2360,7 +2665,7 @@ def edit_alignment(
             forward_moves.append(LEFT)
     else:
         var fronts = DiagonalFronts()
-        var probe = diagonal_transition(forward, PROBE_ALIGNMENT_BUDGET * columns // 2, fronts)
+        var probe = diagonal_transition(forward, STEP_TENTHS_ALIGNMENT, fronts)
         if probe.distance >= 0:
             trace_diagonals(forward, fronts, probe.distance, forward_moves)
             return gapped_rows(first, second, forward_moves, columns, rows, backward_moves, probe.distance)

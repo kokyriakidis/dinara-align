@@ -33,12 +33,17 @@ RESULTS = CACHE / "results"
 
 RIVALS = {
     "hyalite": ("https://github.com/Psy-Fer/hyalite", "0189bcbfaf9e2fa57c7fb07ad7356e02c1d259f1"),
+    "pa-bench": ("https://github.com/pairwise-alignment/pa-bench", "af7a50d0c3aa9518a141c6e1511c2126ab416848"),
     "astar-pairwise-aligner": (
         "https://github.com/RagnarGrootKoerkamp/astar-pairwise-aligner",
         "bf2e14e0cbc3a9a03600dcda0641d7f89e401e63",
     ),
 }
 """Each rival's repository and the commit its numbers were taken at."""
+
+APPROXIMATE = {"wfa-adaptive"}
+"""Tools that may return a cost above the optimum: left out of the agreement check, and a time whose
+answer was not optimal is starred."""
 
 DNA = "ACGT"
 
@@ -204,7 +209,8 @@ def report(rows: list[list[str]]) -> bool:
 
     answers = defaultdict(set)
     for tool, workload, _task, _device, _seconds, answer in rows:
-        answers[workload].add(answer)
+        if tool not in APPROXIMATE:
+            answers[workload].add(answer)
     disagreeing = sorted(workload for workload, seen in answers.items() if len(seen) > 1)
 
     columns = []
@@ -214,11 +220,14 @@ def report(rows: list[list[str]]) -> bool:
             columns.append(column)
     cells = {}
     order = []
-    for tool, workload, task, device, seconds, _answer in rows:
+    for tool, workload, task, device, seconds, answer in rows:
         key = (workload, task)
         if key not in order:
             order.append(key)
-        cells[key, f"{tool} ({device})" if tool == "dinara-align" else tool] = duration(float(seconds))
+        cell = duration(float(seconds))
+        if tool in APPROXIMATE and answers[workload] and answer not in answers[workload]:
+            cell += " *"
+        cells[key, f"{tool} ({device})" if tool == "dinara-align" else tool] = cell
 
     lines = [
         "| workload | task | " + " | ".join(columns) + " | agree |",
@@ -261,6 +270,12 @@ def main() -> None:
     else:
         fetch("astar-pairwise-aligner")
         rows += run(cargo_runner("astarpa", nightly), "A*PA", options.repeat)
+
+    if shutil.which("cargo"):
+        fetch("pa-bench")
+        rows += run(cargo_runner("pa-wrapper", dict(os.environ)), "Edlib and WFA2-lib", options.repeat)
+    else:
+        print("skipping Edlib and WFA2-lib: no `cargo` on PATH", file=sys.stderr)
 
     sys.exit(0 if report(rows) else 1)
 
