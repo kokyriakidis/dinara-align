@@ -1894,13 +1894,15 @@ def edit_distance(first: String, second: String, threads: Optional[Int] = None) 
     var probe = diagonal_transition(forward, PROBE_BUDGET * forward.columns // 2, fronts)
     if probe.distance >= 0:
         return probe.distance
-    var meet = workers > 1 and forward.columns >= MEET_COLUMNS
+    var seeded = probe.estimate >= SEED_EDITS and probe.estimate * SEED_DIVERGENCE <= forward.columns
+    # A seeded band is narrow enough that a second thread's half, with its own heuristic to build and
+    # a weaker start, costs more than it saves.
+    var meet = workers > 1 and forward.columns >= MEET_COLUMNS and not seeded
     var backward = Profile(first, second, reverse=True) if meet else Profile(String(), String())
     var forward_trail = Trail()
     var backward_trail = Trail()
     var forward_edge = Edge()
     var backward_edge = Edge()
-    var seeded = probe.estimate >= SEED_EDITS and probe.estimate * SEED_DIVERGENCE <= forward.columns
     var forward_heuristic = SeedHeuristic(forward) if seeded else SeedHeuristic(forward.columns, forward.rows)
     var backward_heuristic = SeedHeuristic(backward) if seeded and meet else SeedHeuristic(
         backward.columns, backward.rows
@@ -2356,13 +2358,14 @@ def edit_alignment(
             trace_diagonals(forward, fronts, probe.distance, forward_moves)
             return gapped_rows(first, second, forward_moves, columns, rows, backward_moves, probe.distance)
         # Asking for the thread count is a system call, so only a pair long enough to split asks.
-        var meet = columns >= MEET_COLUMNS and max(threads.or_else(hardware_threads()), 1) > 1
+        var seeded = probe.estimate >= SEED_EDITS and probe.estimate * SEED_DIVERGENCE <= columns
+        # A seeded band is narrow enough that a second thread's half costs more than it saves.
+        var meet = not seeded and columns >= MEET_COLUMNS and max(threads.or_else(hardware_threads()), 1) > 1
         var backward = Profile(first, second, reverse=True) if meet else Profile(String(), String())
         var forward_trail = Trail(columns)
         var backward_trail = Trail(columns)
         var forward_edge = Edge()
         var backward_edge = Edge()
-        var seeded = probe.estimate >= SEED_EDITS and probe.estimate * SEED_DIVERGENCE <= columns
         var forward_heuristic = SeedHeuristic(forward) if seeded else SeedHeuristic(columns, rows)
         var backward_heuristic = SeedHeuristic(backward) if seeded and meet else SeedHeuristic(
             backward.columns, backward.rows
