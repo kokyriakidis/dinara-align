@@ -43,6 +43,7 @@ from std.atomic import Atomic
 from std.bit import byte_swap, count_leading_zeros, count_trailing_zeros, pop_count
 from std.math import ceildiv, sqrt
 from std.sys import inlined_assembly
+from std.sys.info import CompilationTarget
 from std.time import perf_counter_ns
 
 from max.algorithm import parallelize
@@ -158,12 +159,18 @@ def opaque[width: Int](value: SIMD[DType.uint64, width]) -> SIMD[DType.uint64, w
     """`value`, unchanged, hidden from the optimizer so it cannot fold it back into a longer chain.
 
     Only up to four lanes: eight are bound by how many vector operations issue, not by the chain,
-    and there the folded form is the cheaper one.
+    and there the folded form is the cheaper one. Two lanes sit in a vector register, which the
+    constraint names per target: `w` for NEON, `x` for SSE; elsewhere the value goes through as is.
     """
     comptime if width == 1:
         return inlined_assembly["", SIMD[DType.uint64, width], constraints="=r,0", has_side_effect=False](value)
     elif width == 2:
-        return inlined_assembly["", SIMD[DType.uint64, width], constraints="=w,0", has_side_effect=False](value)
+        comptime if CompilationTarget.has_neon():
+            return inlined_assembly["", SIMD[DType.uint64, width], constraints="=w,0", has_side_effect=False](value)
+        elif CompilationTarget.is_x86():
+            return inlined_assembly["", SIMD[DType.uint64, width], constraints="=x,0", has_side_effect=False](value)
+        else:
+            return value
     elif width > 4:
         return value
     else:
