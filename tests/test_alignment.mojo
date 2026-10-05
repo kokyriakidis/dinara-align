@@ -25,7 +25,9 @@ from dinara_align import (
     alignments,
     colorize,
     edit_alignment,
+    edit_alignments,
     edit_distance,
+    edit_distances,
     levenshtein_alignment,
     needleman_wunsch_gotoh_alignment,
     needleman_wunsch_gotoh_score,
@@ -583,6 +585,47 @@ def test_edit_alignment_is_an_optimal_alignment() raises:
                 )
                 # One thread takes the single-direction path, so both paths are held to the same answer.
                 assert_equal(Int(edit_alignment(pair[0], pair[1], 1).score), Int(aligned.score))
+
+
+def test_edit_batches_match_single_pairs() raises:
+    """A batch spread over threads answers every pair as the single call does, in order.
+
+    Empty pairs, short and long ones, close and divergent, and one long enough for seeds, on one
+    thread and on several; every alignment rebuilds both inputs. A bad base or sides of different
+    lengths are refused, as a serial loop would refuse them.
+    """
+    seed(17)
+    var firsts = List[String]()
+    var seconds = List[String]()
+    firsts.append(String())
+    seconds.append(String())
+    firsts.append(String("ACGT"))
+    seconds.append(String())
+    for length in [1, 100, 700, 3000, 6000, 20000]:
+        for rate in [0.0, 0.05, 0.15, 0.3]:
+            var first = random_sequence(length, length, DNA_ALPHABET)
+            firsts.append(first)
+            seconds.append(mutate(first, rate))
+    for threads in [1, 8]:
+        var distances = edit_distances(firsts, seconds, threads)
+        var aligned = edit_alignments(firsts, seconds, threads)
+        assert_equal(len(distances), len(firsts))
+        assert_equal(len(aligned), len(firsts))
+        for index in range(len(firsts)):
+            var expected = edit_distance(firsts[index], seconds[index])
+            assert_equal(distances[index], expected)
+            assert_equal(Int(aligned[index].score), expected)
+            assert_equal(aligned[index].first_gapped.replace("-", ""), firsts[index])
+            assert_equal(aligned[index].second_gapped.replace("-", ""), seconds[index])
+    var bad_firsts: List[String] = ["ACGT", "ACGT", "ACGN"]
+    var bad_seconds: List[String] = ["ACGA", "ACG", "ACGT"]
+    with assert_raises():
+        _ = edit_distances(bad_firsts, bad_seconds, 8)
+    with assert_raises():
+        _ = edit_alignments(bad_firsts, bad_seconds, 8)
+    var short: List[String] = ["ACGT"]
+    with assert_raises():
+        _ = edit_distances(bad_firsts, short)
 
 
 def test_seeded_bands_are_exact() raises:
