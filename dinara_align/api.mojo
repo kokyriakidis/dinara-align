@@ -188,9 +188,16 @@ def paired_length(firsts: List[String], seconds: List[String]) raises AlignmentE
 
 
 def global_linear(
-    first: ImmSpan[Scalar[SymbolDType], _], second: ImmSpan[Scalar[SymbolDType], _], scoring: Scoring
+    first: ImmSpan[Scalar[SymbolDType], _],
+    second: ImmSpan[Scalar[SymbolDType], _],
+    scoring: Scoring,
+    vectorized: Bool = True,
 ) raises -> AlignmentResult:
-    """Global alignment in linear space, splitting rows and joining halves Myers-Miller style."""
+    """Global alignment in linear space, splitting rows and joining halves Myers-Miller style.
+
+    `vectorized` lets a uniform table's sweeps run sixteen cells at a time, which computes the same
+    rows; off, every sweep runs cell by cell, as a reference to check it against.
+    """
     var path_columns = List[Int32](length=len(first) + 1, fill=Int32(0))
     var path_layers = List[Layer](length=len(first) + 1, fill=Layer.ALIGNING)
     serial_hirschberg(
@@ -206,6 +213,7 @@ def global_linear(
         DEFAULT_LEAF_CELLS,
         path_columns,
         path_layers,
+        uniform_table(scoring.substitutions, scoring.alphabet_size()) if vectorized else None,
     )
     var score = score_path(
         first,
@@ -264,6 +272,7 @@ def local_linear(
             DEFAULT_LEAF_CELLS,
             core_columns,
             core_layers,
+            uniform_table(scoring.substitutions, scoring.alphabet_size()),
         )
         for index in range(first_row, last_row + 1):
             path_columns[index] = core_columns[index]
