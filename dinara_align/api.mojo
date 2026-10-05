@@ -48,7 +48,7 @@ from .common import (
 )
 from .errors import AlignmentError, ErrorKind
 from .gap_affine import wavefront_penalties, wavefront_score
-from .vector_score import uniform_table, vector_align, vector_score
+from .vector_score import optimal_band, uniform_table, vector_align, vector_score
 
 from max.algorithm import parallelize
 
@@ -289,6 +289,30 @@ def local_linear(
 # region Routing
 
 
+def host_score[
+    mode: AlignmentMode
+](first: ImmSpan[Scalar[SymbolDType], _], second: ImmSpan[Scalar[SymbolDType], _], scoring: Scoring) -> Int32:
+    """The optimal score on the host: by wavefront for a global one under a table of one match and
+    one mismatch score while it is cheaper (see `gap_affine`), else by full sweep, sixteen cells at a
+    time under such a table (see `vector_score`)."""
+    var codes_first = List[UInt8](first)
+    var codes_second = List[UInt8](second)
+    comptime if mode == AlignmentMode.GLOBAL:
+        # A table of one match and one mismatch score has a wavefront, whose work grows with the
+        # score rather than the matrix; it hands back a pair a full sweep would serve sooner.
+        var penalties = wavefront_penalties(
+            scoring.substitutions, scoring.alphabet_size(), Int(scoring.gaps.open), Int(scoring.gaps.extend)
+        )
+        if penalties:
+            var found = wavefront_score(codes_first, codes_second, penalties.value())
+            if found:
+                return Int32(found.value())
+    var table = uniform_table(scoring.substitutions, scoring.alphabet_size())
+    if table:
+        return vector_score[mode](codes_first, codes_second, table.value()[0], table.value()[1], scoring.gaps)
+    return serial_score[mode](codes_first, codes_second, scoring.substitutions, scoring.alphabet_size(), scoring.gaps)
+
+
 def align_on_host[
     mode: AlignmentMode
 ](
@@ -299,15 +323,41 @@ def align_on_host[
 ) raises -> AlignmentResult:
     """One pair on the host, stored while its matrix fits the budget and linear once it does not.
 
-    Stored under a table of one match and one mismatch score, the matrix is swept sixteen cells at a
-    time, the same cells and so the same alignment (see `vector_align`).
+    Under a table of one match and one mismatch score the matrix is swept sixteen cells at a time,
+    the same cells and so the same alignment (see `vector_align`); and a global alignment stores only
+    the band of diagonals every optimal path stays on, which its score bounds (see `optimal_band`),
+    so its memory grows with the length times the divergence rather than the matrix. Past the budget
+    the alignment recurses in linear space.
     """
+    var table = uniform_table(scoring.substitutions, scoring.alphabet_size())
+    comptime if mode == AlignmentMode.GLOBAL:
+        if table and len(first) > 0 and len(second) > 0:
+            var reward = table.value()[0]
+            var mismatch = table.value()[1]
+            var codes_first = List[UInt8](first)
+            var codes_second = List[UInt8](second)
+            var best = Int(host_score[mode](first, second, scoring))
+            var band = optimal_band(len(first), len(second), reward, mismatch, scoring.gaps, best)
+            var width = min(band[1], len(second)) - max(band[0], -len(first)) + 1
+            if (len(first) + 1) * width <= stored_budget:
+                return vector_align[mode](
+                    codes_first,
+                    codes_second,
+                    reward,
+                    mismatch,
+                    scoring.gaps,
+                    scoring.substitutions,
+                    scoring.alphabet_size(),
+                    scoring.alphabet,
+                    band[0],
+                    band[1],
+                )
+            return global_linear(first, second, scoring)
     if len(first) * len(second) > stored_budget:
         comptime if mode == AlignmentMode.LOCAL:
             return local_linear(first, second, scoring)
         else:
             return global_linear(first, second, scoring)
-    var table = uniform_table(scoring.substitutions, scoring.alphabet_size())
     if table:
         var codes_first = List[UInt8](first)
         var codes_second = List[UInt8](second)
@@ -404,22 +454,7 @@ def score[
     var encoded_second = translate(second, scoring.alphabet)
     if resolved.device == Device.GPU:
         return score_on_device[mode](DeviceScope(resolved.gpu_id), encoded_first, encoded_second, scoring)
-    comptime if mode == AlignmentMode.GLOBAL:
-        # A table of one match and one mismatch score has a wavefront, whose work grows with the
-        # score rather than the matrix; it hands back a pair a full sweep would serve sooner.
-        var penalties = wavefront_penalties(
-            scoring.substitutions, scoring.alphabet_size(), Int(scoring.gaps.open), Int(scoring.gaps.extend)
-        )
-        if penalties:
-            var found = wavefront_score(encoded_first, encoded_second, penalties.value())
-            if found:
-                return Int32(found.value())
-    var table = uniform_table(scoring.substitutions, scoring.alphabet_size())
-    if table:
-        return vector_score[mode](encoded_first, encoded_second, table.value()[0], table.value()[1], scoring.gaps)
-    return serial_score[mode](
-        encoded_first, encoded_second, scoring.substitutions, scoring.alphabet_size(), scoring.gaps
-    )
+    return host_score[mode](encoded_first, encoded_second, scoring)
 
 
 def align[

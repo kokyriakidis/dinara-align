@@ -538,17 +538,23 @@ struct RowMajor(CellLayout, TrivialRegisterPassable):
         return row * self.stride + column
 
 
+comptime BAND_PADDING = 2
+"""Cells stored either side of each anti-diagonal's band, reading as unreachable, so a step and the
+traceback read a band's neighbours unchecked."""
+
+
 @fieldwise_init
 struct AntiDiagonalMajor(CellLayout, TrivialRegisterPassable):
-    """Anti-diagonal by anti-diagonal, each from its first row; `starts[d]` is where diagonal `d` begins."""
+    """Anti-diagonal by anti-diagonal, each a band of rows from `lows[d]`, `BAND_PADDING` cells either side;
+    `starts[d]` is where diagonal `d`'s padding begins."""
 
     var starts: MutPointer[Int, MutUntrackedOrigin]
-    var columns: Int
+    var lows: MutPointer[Int, MutUntrackedOrigin]
 
     @always_inline
     def index(self, row: Int, column: Int) -> Int:
         var diagonal = row + column
-        return self.starts[diagonal] + row - max(0, diagonal - self.columns)
+        return self.starts[diagonal] + BAND_PADDING + row - self.lows[diagonal]
 
 
 def reconstruct[

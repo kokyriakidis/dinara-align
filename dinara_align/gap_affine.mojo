@@ -141,10 +141,12 @@ def slide(first: ImmPointer[UInt8, _], second: ImmPointer[UInt8, _], start: Int,
 
 
 struct Fronts(Movable):
-    """The last `slots` costs' three fronts, in rings indexed by cost, each over every diagonal.
+    """The last `slots` costs' three fronts, in rings indexed by cost, each over the diagonals reached.
 
     Diagonal `k` holds the cells whose column minus row is `k`, from `-rows` to `columns`, stored
-    at `k + base`. A slot holds its cost's values on `lows[slot] ..= highs[slot]` and reads as
+    at `k + base`. The buffers cover only the diagonals the fronts have reached, about `2 s / e`
+    of them at cost `s`, and double towards whichever side they outgrow, so the memory grows with
+    the score rather than the sequences. A slot holds its cost's values on `lows[slot] ..= highs[slot]` and reads as
     unreached everywhere else, so a front reads its sources' neighbours unchecked: the diagonals
     the rings have ever been asked for are kept initialized, and a slot reused for a later cost has
     the old cost's diagonals outside the new range cleared.
@@ -162,18 +164,22 @@ struct Fronts(Movable):
     var ready_low: Int
     """The diagonals every slot holds a value for, unreached or not."""
     var ready_high: Int
+    var least: Int
+    """The diagonals a front may ever read: the matrix's and two either side, and a lane group past."""
+    var most: Int
 
     def __init__(out self, slots: Int, columns: Int, rows: Int):
         self.slots = slots
-        # Two diagonals either side of the matrix, which a front reads beside its edge.
-        self.base = rows + 2
-        var width = columns + rows + 5
+        self.least = -rows - 2
+        self.most = columns + LANES + 2
+        var width = 4 * LANES
+        self.base = width // 2
         self.aligned = List[Front](capacity=slots)
         self.opened_first = List[Front](capacity=slots)
         self.opened_second = List[Front](capacity=slots)
         for _ in range(slots):
-            var empty = Front(capacity=width + LANES)
-            empty.resize(unsafe_uninit_length=width + LANES)
+            var empty = Front(capacity=width)
+            empty.resize(unsafe_uninit_length=width)
             self.aligned.append(empty.copy())
             self.opened_first.append(empty.copy())
             self.opened_second.append(empty^)
@@ -184,8 +190,10 @@ struct Fronts(Movable):
 
     def ready(mut self, wanted_low: Int, wanted_high: Int):
         """Makes every slot hold unreached on `low ..= high` wherever it held nothing yet."""
-        var low = max(wanted_low, -self.base)
-        var high = min(wanted_high, len(self.aligned[0]) - 1 - self.base)
+        var low = max(wanted_low, self.least)
+        var high = min(wanted_high, self.most)
+        if low + self.base < 0 or high + self.base >= len(self.aligned[0]):
+            self.grow(low, high)
         if self.ready_low > self.ready_high:
             self.ready_low = low
             self.ready_high = low - 1
@@ -195,6 +203,35 @@ struct Fronts(Movable):
             self.clear(diagonal)
         self.ready_low = min(self.ready_low, low)
         self.ready_high = max(self.ready_high, high)
+
+    def grow(mut self, low: Int, high: Int):
+        """Widens every buffer to cover `low ..= high`, doubling towards the side outgrown, and
+        moves what they hold with it."""
+        var size = len(self.aligned[0])
+        var first = -self.base
+        var last = size - 1 - self.base
+        var new_first = first
+        var new_last = last
+        if low < first:
+            new_first = max(min(low, first - size), self.least)
+        if high > last:
+            new_last = min(max(high, last + size), self.most)
+        var new_size = new_last - new_first + 1
+        var shift = first - new_first
+
+        @always_inline
+        def moved(old: Front) {imm new_size, imm shift, imm size} -> Front:
+            var wider = Front(capacity=new_size)
+            wider.resize(unsafe_uninit_length=new_size)
+            for index in range(size):
+                wider[index + shift] = old[index]
+            return wider^
+
+        for slot in range(self.slots):
+            self.aligned[slot] = moved(self.aligned[slot])
+            self.opened_first[slot] = moved(self.opened_first[slot])
+            self.opened_second[slot] = moved(self.opened_second[slot])
+        self.base = -new_first
 
     @always_inline
     def clear(mut self, diagonal: Int):
@@ -299,9 +336,8 @@ def wavefront_score(
     # Every source a cost reads lies at most this far back, and a slot is reused after as many.
     var slots = max(x, o + e) + 1
     var fronts = Fronts(slots, columns, rows)
-    var base = fronts.base
-
     fronts.ready(-1 - LANES, 1 + LANES)
+    var base = fronts.base
     fronts.claim(0, 0, 0)
     var start = slide(first_pointer, second_pointer, 0, 0)
     fronts.aligned[0][base] = Int32(start)
@@ -342,6 +378,8 @@ def wavefront_score(
             continue
         # The step reads a lane group past `high` and a diagonal either side of the range.
         fronts.ready(low - 1, high + LANES + 1)
+        # Growing moved the buffers, and the diagonals with them.
+        base = fronts.base
         fronts.claim(slot, low, high)
         # A source before the first cost reads the slot it will take, which no cost has written yet.
         var mismatch_slot = from_mismatch if from_mismatch >= 0 else (cost + slots - x) % slots
