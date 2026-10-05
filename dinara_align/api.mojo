@@ -43,9 +43,11 @@ from .common import (
     Placement,
     SubstitutionDType,
     SymbolDType,
+    hardware_threads,
     translate,
     uniform_matrix,
 )
+from .edit_distance import edit_alignment, edit_distance
 from .errors import AlignmentError, ErrorKind
 from .gap_affine import wavefront_penalties, wavefront_score
 from .vector_score import optimal_band, uniform_table, vector_align, vector_score
@@ -619,6 +621,71 @@ def alignments[
         )
         for slot in range(len(batchable)):
             results[batchable[slot]] = aligned[slot].copy()
+    return results^
+
+
+def edit_distances(firsts: List[String], seconds: List[String], threads: Optional[Int] = None) raises -> List[Int]:
+    """Every pair's edit distance, as `edit_distance` gives it, the pairs spread over `threads`
+    threads, every thread this process may use by default.
+
+    The pairs are independent, so each runs on one thread start to finish, in contiguous chunks,
+    several a thread, so one that draws a long pair does not hold up the rest. One thread a pair
+    beats sharing threads out among few long pairs: a pair split over two runs at less than twice
+    the speed. A pair that fails raises, after the rest, the same error a serial loop would have
+    raised first.
+    """
+    var pairs = paired_length(firsts, seconds)
+    var results = List[Int](length=pairs, fill=0)
+    if pairs == 0:
+        return results^
+    var workers = max(threads.or_else(hardware_threads()), 1)
+    var out = results.unsafe_ptr()
+    var failed = List[Bool](length=pairs, fill=False)
+    var flags = failed.unsafe_ptr()
+    var chunks = chunk_count(pairs, workers)
+
+    def distance_range(slot: Int) {imm}:
+        for index in range(pairs * slot // chunks, pairs * (slot + 1) // chunks):
+            try:
+                out[unsafe_offset=index] = edit_distance(firsts[index], seconds[index], 1)
+            except:
+                flags[unsafe_offset=index] = True
+
+    parallelize(distance_range, chunks, workers)
+    for index in range(pairs):
+        if failed[index]:
+            results[index] = edit_distance(firsts[index], seconds[index], 1)
+    return results^
+
+
+def edit_alignments(
+    firsts: List[String], seconds: List[String], threads: Optional[Int] = None
+) raises -> List[AlignmentResult]:
+    """Every pair's edit distance and an optimal alignment, as `edit_alignment` gives them, the pairs
+    spread over threads as `edit_distances` spreads them."""
+    var pairs = paired_length(firsts, seconds)
+    var results = List[AlignmentResult](capacity=pairs)
+    for _ in range(pairs):
+        results.append(AlignmentResult(0, String(), String()))
+    if pairs == 0:
+        return results^
+    var workers = max(threads.or_else(hardware_threads()), 1)
+    var out = results.unsafe_ptr()
+    var failed = List[Bool](length=pairs, fill=False)
+    var flags = failed.unsafe_ptr()
+    var chunks = chunk_count(pairs, workers)
+
+    def alignment_range(slot: Int) {imm}:
+        for index in range(pairs * slot // chunks, pairs * (slot + 1) // chunks):
+            try:
+                out[unsafe_offset=index] = edit_alignment(firsts[index], seconds[index], 1)
+            except:
+                flags[unsafe_offset=index] = True
+
+    parallelize(alignment_range, chunks, workers)
+    for index in range(pairs):
+        if failed[index]:
+            results[index] = edit_alignment(firsts[index], seconds[index], 1)
     return results^
 
 

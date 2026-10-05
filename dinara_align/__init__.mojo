@@ -29,6 +29,8 @@ from .api import (
     Scoring,
     align,
     alignments,
+    edit_alignments,
+    edit_distances,
     levenshtein_alignment,
     needleman_wunsch_gotoh_alignment,
     needleman_wunsch_gotoh_score,
