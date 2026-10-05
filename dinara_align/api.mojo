@@ -47,6 +47,7 @@ from .common import (
     uniform_matrix,
 )
 from .errors import AlignmentError, ErrorKind
+from .gap_affine import wavefront_penalties, wavefront_score
 
 from max.algorithm import parallelize
 
@@ -364,12 +365,26 @@ def score_on_device[
 def score[
     mode: AlignmentMode
 ](first: String, second: String, scoring: Scoring, placement: Optional[Placement] = None) raises -> Int32:
-    """The optimal score alone, in two rows of memory on either device."""
+    """The optimal score alone, in two rows of memory on either device.
+
+    On the host, a global score under a table of one match and one mismatch score runs the
+    wavefront first (see `gap_affine`), and the full sweep only when the wavefront gives up.
+    """
     var resolved = placement.or_else(Placement.default())
     var encoded_first = translate(first, scoring.alphabet)
     var encoded_second = translate(second, scoring.alphabet)
     if resolved.device == Device.GPU:
         return score_on_device[mode](DeviceScope(resolved.gpu_id), encoded_first, encoded_second, scoring)
+    comptime if mode == AlignmentMode.GLOBAL:
+        # A table of one match and one mismatch score has a wavefront, whose work grows with the
+        # score rather than the matrix; it hands back a pair a full sweep would serve sooner.
+        var penalties = wavefront_penalties(
+            scoring.substitutions, scoring.alphabet_size(), Int(scoring.gaps.open), Int(scoring.gaps.extend)
+        )
+        if penalties:
+            var found = wavefront_score(encoded_first, encoded_second, penalties.value())
+            if found:
+                return Int32(found.value())
     return serial_score[mode](
         encoded_first, encoded_second, scoring.substitutions, scoring.alphabet_size(), scoring.gaps
     )
