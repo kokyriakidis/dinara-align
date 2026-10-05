@@ -24,7 +24,10 @@ pairs both aligned, and against the costs A*PA2's published results recorded for
 disagreement fails the run.
 
 The aligners are the evaluation's exact ones: Edlib, BiWFA, A*PA, A*PA2-simple and A*PA2-full, with
-its parameters. Like it, the times here are wall-clock on one thread; dinara-align also runs on all.
+its parameters. Like it, the times here are wall-clock on one thread; dinara-align also runs on all,
+one pair at a time across them, and as a batch, every pair of the sample in one call spread over the
+threads, whose column is the batch's time over its pairs: a throughput, where the others are
+latencies.
 
 The rivals are pinned, so each one's results are kept and reused while its binary, the sample and
 the budget stay the same; only dinara-align's columns run every time, unless `--fresh` asks for all.
@@ -87,6 +90,7 @@ def tools(dataset: str, ours: Path, astarpa: Path, wrapper: Path) -> list[tuple[
     return [
         (dinara("1 thread"), ours, dinara("1 thread")),
         (dinara("8 threads"), ours, dinara("8 threads")),
+        (dinara("batch, 8 threads"), ours, dinara("batch, 8 threads")),
         ("a*pa2-full", astarpa, "a*pa2-full"),
         ("a*pa2-simple", astarpa, "a*pa2-simple"),
         ("a*pa", astarpa, astarpa_settings(dataset)),

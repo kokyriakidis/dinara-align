@@ -19,6 +19,7 @@ from dinara_align import (
     align,
     alignments,
     edit_alignment,
+    edit_alignments,
     edit_distance,
     hardware_threads,
     score,
@@ -196,6 +197,9 @@ def seq_mode() raises:
     traceback, once, as pa-bench times every aligner, until the budget is spent; one row per pair,
     flushed as it finishes, gives its file, its time and its cost, so a run stopped mid-pair still
     reports the pairs before it.
+
+    A batch tool instead aligns each file's pairs in one call across every thread, and gives each
+    pair the batch's wall-clock time shared evenly: a throughput, not one pair's latency.
     """
     var tool = String(argv()[2])
     var threads = 1 if tool.endswith("1 thread)") else hardware_threads()
@@ -204,6 +208,23 @@ def seq_mode() raises:
     var spun = perf_counter_ns()
     while perf_counter_ns() - spun < 50_000_000:
         pass
+    if "batch" in tool:
+        for argument in range(4, len(argv())):
+            var path = String(argv()[argument])
+            var lines = open(path, "r").read().split("\n")
+            var firsts = List[String]()
+            var seconds = List[String]()
+            var index = 0
+            while index + 1 < len(lines):
+                firsts.append(String(lines[index][byte=1:]))
+                seconds.append(String(lines[index + 1][byte=1:]))
+                index += 2
+            var started = perf_counter_ns()
+            var aligned = edit_alignments(firsts, seconds, threads)
+            var share = Float64(perf_counter_ns() - started) / 1e9 / Float64(max(len(firsts), 1))
+            for pair in range(len(aligned)):
+                print(tool, path, share, Int(aligned[pair].score), sep="\t")
+        return
     var spent = 0.0
     for argument in range(4, len(argv())):
         if spent >= budget:
