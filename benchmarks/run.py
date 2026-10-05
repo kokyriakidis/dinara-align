@@ -152,13 +152,26 @@ def cargo_runner(crate: str, environment: dict) -> Path:
 
 
 def mojo_runner() -> Path:
-    """Builds the dinara-align runner against this checkout's sources."""
+    """Builds the dinara-align runner against this checkout's sources, unless it already is.
+
+    A build takes seconds, so the binary is kept while it is newer than every source and the toolchain's
+    lock, and was built with the same command, which a stamp beside it records.
+    """
     binary = CACHE / "bin" / "dinara-align-runner"
     binary.parent.mkdir(parents=True, exist_ok=True)
     accelerator = os.environ.get("MOJO_ACCELERATOR", "").split()
-    subprocess.run(
-        ["mojo", "build", "-I", str(ROOT), str(HERE / "ours.mojo"), "-o", str(binary), *accelerator], check=True
-    )
+    command = ["mojo", "build", "-I", str(ROOT), str(HERE / "ours.mojo"), "-o", str(binary), *accelerator]
+    stamp = binary.with_suffix(".command")
+    sources = [HERE / "ours.mojo", ROOT / "pixi.lock", *(ROOT / "dinara_align").rglob("*.mojo")]
+    if (
+        binary.exists()
+        and stamp.exists()
+        and stamp.read_text() == " ".join(command)
+        and all(source.stat().st_mtime < binary.stat().st_mtime for source in sources)
+    ):
+        return binary
+    subprocess.run(command, check=True)
+    stamp.write_text(" ".join(command))
     return binary
 
 

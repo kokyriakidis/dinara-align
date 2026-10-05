@@ -193,15 +193,16 @@ def seq_mode() raises:
     """A*PA2's evaluation datasets: `seq <tool> <budget seconds> <file>...`, every pair aligned once.
 
     pa-bench's `.seq` files hold pairs as a `>` line and a `<` line. Each pair is aligned with its
-    traceback, once, as pa-bench times every aligner, until the budget is spent; one row per file
-    gives the pairs aligned, their total time, and each one's cost.
+    traceback, once, as pa-bench times every aligner, until the budget is spent; one row per pair,
+    flushed as it finishes, gives its file, its time and its cost, so a run stopped mid-pair still
+    reports the pairs before it.
     """
     var tool = String(argv()[2])
     var threads = 1 if tool.endswith("1 thread)") else hardware_threads()
     var budget = Float64(String(argv()[3]))
     # A short spin first, so the scheduler has moved this process onto a fast core.
     var spun = perf_counter_ns()
-    while perf_counter_ns() - spun < 200_000_000:
+    while perf_counter_ns() - spun < 50_000_000:
         pass
     var spent = 0.0
     for argument in range(4, len(argv())):
@@ -209,21 +210,16 @@ def seq_mode() raises:
             break
         var path = String(argv()[argument])
         var lines = open(path, "r").read().split("\n")
-        var costs = String()
-        var pairs = 0
-        var seconds = 0.0
         var index = 0
-        while index + 1 < len(lines) and spent + seconds < budget:
+        while index + 1 < len(lines) and spent < budget:
             var first = String(lines[index][byte=1:])
             var second = String(lines[index + 1][byte=1:])
             var started = perf_counter_ns()
             var aligned = edit_alignment(first, second, threads)
-            seconds += Float64(perf_counter_ns() - started) / 1e9
-            costs += String(",", Int(aligned.score)) if pairs > 0 else String(Int(aligned.score))
-            pairs += 1
+            var seconds = Float64(perf_counter_ns() - started) / 1e9
+            spent += seconds
+            print(tool, path, seconds, Int(aligned.score), sep="\t", flush=True)
             index += 2
-        spent += seconds
-        print(tool, path, pairs, seconds, costs, sep="\t")
 
 
 def main() raises:
