@@ -97,6 +97,33 @@ fn main() {
     if arguments.first().map(String::as_str) == Some("seq") {
         return seq_mode(&arguments[1..]);
     }
+    if arguments.first().map(String::as_str) == Some("stats") {
+        // `stats <file>`: A*PA2-full's own statistics for each pair, for comparing work, not time.
+        let text = fs::read_to_string(&arguments[1]).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        let mut aligner = AstarPa2Params::full().make_aligner(true);
+        for pair in lines.chunks(2) {
+            let (a, b) = (pair[0][1..].as_bytes(), pair[1][1..].as_bytes());
+            let started = Instant::now();
+            let (cost, _, stats) = aligner.align_with_stats(a, b);
+            println!(
+                "cost {cost} seconds {:.4} tries {} blocks {} incremental {} computed_lanes {} unique_lanes {} t_compute {:.4} t_j_range {:.4} t_fixed {:.4} t_pruning {:.4} t_contours {:.4} t_precomp {:.4}",
+                started.elapsed().as_secs_f64(),
+                stats.f_max_tries,
+                stats.block_stats.num_blocks,
+                stats.block_stats.num_incremental_blocks,
+                stats.block_stats.computed_lanes,
+                stats.block_stats.unique_lanes,
+                stats.block_stats.t_compute.as_secs_f64(),
+                stats.t_j_range.as_secs_f64(),
+                stats.t_fixed_j_range.as_secs_f64(),
+                stats.t_pruning.as_secs_f64(),
+                stats.t_contours_update.as_secs_f64(),
+                stats.t_precomp.as_secs_f64(),
+            );
+        }
+        return;
+    }
     let directory = env::args().nth(1).expect("usage: astarpa-runner <data directory>");
     // A short spin first, so the scheduler has moved this process onto a fast core.
     let started = Instant::now();
