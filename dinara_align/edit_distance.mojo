@@ -987,6 +987,11 @@ comptime SEED_DIVERGENCE = 7
 almost no seed survives local pruning, the heuristic is little more than an edit a seed, and its
 setup is not repaid."""
 
+comptime SEED_COLUMNS = 8192
+"""Columns from which a band prunes with the seeds whatever the projection: its setup is a small share
+of any band this long, and on real reads, whose errors gather at the ends, the projection that gates
+shorter pairs can put a divergence of one edit in ten at one in two."""
+
 comptime CHAINED_SHARE = 32
 """With seeds, the band's first bound starts at the origin's when at least one seed in this many is
 chained there; with fewer, the bound is little more than an edit a seed, and the projection leads."""
@@ -1482,7 +1487,7 @@ struct HalfBand(Movable):
         if first_kept > last_kept:
             self.outcome = Round(-1, end_column, self.threshold, -1)
             return False
-        if self.adapt and not self.check(end_column, first_kept, last_kept, edge):
+        if self.adapt and not self.check(end_column, first_kept, last_kept, edge, heuristic):
             return False
 
         # Move the top down to the word whose top row is at or above the first kept row, carrying the
@@ -1497,12 +1502,15 @@ struct HalfBand(Movable):
         self.floor = edge.score(last_kept)
         return True
 
-    def check(mut self, end_column: Int, first_kept: Int, last_kept: Int, edge: Edge) -> Bool:
+    def check(
+        mut self, end_column: Int, first_kept: Int, last_kept: Int, edge: Edge, mut heuristic: SeedHeuristic
+    ) -> Bool:
         """Re-aims the bound from the band's own climb at a checkpoint; false, with `outcome` set, to
         give the round up.
 
-        At an eighth, a quarter and half of the columns, the least score plus gap to the end down the
-        kept rows has climbed from the gap at the origin about in proportion to the columns crossed,
+        At an eighth, a quarter and half of the columns, the least score plus heuristic down the kept
+        rows, the gap to the end or the seeds still ahead, has climbed from the heuristic at the origin
+        about in proportion to the columns crossed,
         so scaled to the whole width it projects the distance from hundreds of edits rather than the
         diagonal transition's handful: within about a tenth at an eighth, closer further on. The
         bound drops to the projection plus `CHECK_MARGIN` tenths for each checkpoint still ahead,
@@ -1521,12 +1529,13 @@ struct HalfBand(Movable):
         var least = Int.MAX
         var row = first_kept
         while True:
-            least = min(least, edge.score(row) + abs((self.columns - end_column) - (self.rows - row)))
+            least = min(least, edge.score(row) + heuristic.h(end_column, row))
             if row == last_kept:
                 break
             row = min(row + CHECK_ROWS, last_kept)
         var gap = abs(self.difference)
-        var estimate = gap + (least - gap) * self.columns // end_column
+        var origin = heuristic.h(0, 0)
+        var estimate = origin + max(least - origin, 0) * self.columns // end_column
         var margin = estimate * (CHECKPOINTS + 1 - passed) * CHECK_MARGIN // 10
         if self.lower and estimate - margin // 2 > self.threshold:
             self.outcome = Round(-1, end_column, self.threshold, estimate)
@@ -1593,7 +1602,7 @@ def pruned_distance[
     """
     comptime if record:
         trail.clear()
-    var band = HalfBand(profile, threshold, stop_column, adapt and heuristic.seeds == 0, lower, lowest)
+    var band = HalfBand(profile, threshold, stop_column, adapt, lower, lowest)
     for tile in range(band.tiles()):
         if not band.prepare[record](tile, trail, heuristic):
             return band.outcome
@@ -2859,7 +2868,9 @@ def edit_distance(first: String, second: String, threads: Optional[Int] = None) 
     var trusted = trusted_projection(probe, projected)
     probe = Probe(-1, projected.estimate, max(probe.floor, projected.floor))
     # The seeds' gate stays on the first projection, which it is tuned on.
-    var seeded = projected.estimate >= SEED_EDITS and projected.estimate * SEED_DIVERGENCE <= forward.columns
+    var seeded = forward.columns >= SEED_COLUMNS or (
+        projected.estimate >= SEED_EDITS and projected.estimate * SEED_DIVERGENCE <= forward.columns
+    )
     var forward_heuristic = SeedHeuristic(forward) if seeded else SeedHeuristic(forward.columns, forward.rows)
     # A band narrowed by many chained seeds gains less from a second thread than that thread's half,
     # with its own heuristic to build and a weaker start, costs.
@@ -3212,23 +3223,61 @@ def wavefront_segment(
     return first_column + home + finish_offset
 
 
+comptime RECOMPUTE_WORDS = 4
+"""Words a tile's recompute first takes above the point it traces from, doubling while that falls short."""
+
+
 def recomputed_segment(
     profile: Profile, trail: Trail, tile: Int, end_column: Int, end_row: Int, score: Int, mut moves: List[UInt8]
 ) -> Int:
     """Traces a tile back cell by cell, after sweeping it again and keeping every column's differences.
 
-    The fallback for a tile with more edits than the wavefront search is allowed: the tile is
-    recomputed one column at a time from its recorded left edge, its scores are read back from the
-    differences, and each step takes a neighbour whose score plus the step's cost is the current
-    score. Appends the moves right to left and returns the left-edge row.
+    The fallback for a tile with more edits than the wavefront search is allowed. As A*PA2 does, it
+    first recomputes only a window of rows above the point it traces from, `RECOMPUTE_WORDS` words
+    and doubling, rather than the band's whole height (see `window_segment`). Appends the moves
+    right to left and returns the left-edge row.
+    """
+    var top = trail.tops[tile]
+    var end_word = min(max(ceildiv(end_row, WORD_BITS), top + 1), trail.ends[tile])
+    var window = RECOMPUTE_WORDS
+    while True:
+        var first_word = max(top, end_word - window)
+        var left = window_segment(profile, trail, tile, end_column, end_row, score, first_word, end_word, moves)
+        if left >= 0 or first_word == top:
+            return left
+        window *= 2
+
+
+def window_segment(
+    profile: Profile,
+    trail: Trail,
+    tile: Int,
+    end_column: Int,
+    end_row: Int,
+    score: Int,
+    first_word: Int,
+    end_word: Int,
+    mut moves: List[UInt8],
+) -> Int:
+    """`recomputed_segment` over words `[first_word, end_word)` alone, or -1 when they do not hold the path.
+
+    The window's left edge comes from the recorded one, and its top reads `+1` from above, as a
+    band's top does, so every score is a real path's and never below the true one. When the
+    recomputed score at the traced cell is its exact `score`, a path back to the left edge along
+    those scores is optimal; the window falls short when the scores differ, or when the path would
+    leave through its top. Below the band's own top, which is the full recompute, neither can happen.
     """
     var first_column = trail.first_columns[tile]
-    var top = trail.tops[tile]
-    var count = trail.ends[tile] - top
+    var top = first_word
+    var count = end_word - first_word
     var width = end_column - first_column
-    var offset = trail.offsets[tile]
+    var offset = trail.offsets[tile] + first_word - trail.tops[tile]
     var plus = List[UInt64](length=(width + 1) * count, fill=0)
     var minus = List[UInt64](length=(width + 1) * count, fill=0)
+    # The left edge's score at the window's top, carried down from the band's.
+    var anchor = trail.anchors[tile]
+    for word in range(trail.offsets[tile], offset):
+        anchor += word_value(trail.edge_plus[word], trail.edge_minus[word])
     for word in range(count):
         plus[word] = trail.edge_plus[offset + word]
         minus[word] = trail.edge_minus[offset + word]
@@ -3248,10 +3297,10 @@ def recomputed_segment(
             plus[step * count + word] = vertical_plus
             minus[step * count + word] = vertical_minus
 
-    # Scores at each word's top on every column: the band's top scores the anchor plus one per column.
+    # Scores at each word's top on every column: the window's top scores the anchor plus one per column.
     var bases = List[Int](length=(width + 1) * (count + 1), fill=0)
     for step in range(width + 1):
-        var running = trail.anchors[tile] + step
+        var running = anchor + step
         bases[step * (count + 1)] = running
         for word in range(count):
             running += word_value(plus[step * count + word], minus[step * count + word])
@@ -3268,7 +3317,11 @@ def recomputed_segment(
             plus[step * count + word] & kept, minus[step * count + word] & kept
         )
 
+    var whole = first_word == trail.tops[tile]
+    if not whole and score_at(width, end_row) != score:
+        return -1
     var lowest = top * WORD_BITS
+    var start = len(moves)
     var step = width
     var row = end_row
     var current = score
@@ -3287,6 +3340,10 @@ def recomputed_segment(
             current -= 1
             step -= 1
             continue
+        if not whole and row == lowest:
+            # The path leaves through the window's top: a taller window must hold it.
+            moves.resize(start, 0)
+            return -1
         moves.append(UP)
         current -= 1
         row -= 1
@@ -3402,7 +3459,9 @@ def edit_alignment(
         var probe = Probe(-1, projected.estimate, max(meeting.probe.floor, projected.floor))
         # Asking for the thread count is a system call, so only a pair long enough to split asks.
         # The seeds' gate stays on the first projection, which it is tuned on.
-        var seeded = projected.estimate >= SEED_EDITS and projected.estimate * SEED_DIVERGENCE <= columns
+        var seeded = columns >= SEED_COLUMNS or (
+            projected.estimate >= SEED_EDITS and projected.estimate * SEED_DIVERGENCE <= columns
+        )
         var forward_heuristic = SeedHeuristic(forward) if seeded else SeedHeuristic(columns, rows)
         # A band narrowed by many chained seeds gains less from a second thread than its half costs.
         # Asking for the thread count is a system call, so only a pair long enough to split asks.
