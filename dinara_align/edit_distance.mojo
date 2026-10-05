@@ -1030,6 +1030,9 @@ chained there; with fewer, the bound is little more than an edit a seed, and the
 comptime SEED_SLACK = 64
 """With seeds, the band's first bound reaches at least this far past the heuristic at the origin."""
 
+comptime SEED_SCAN_ROWS = 65_536
+"""Rows from which the seeds' matches are looked up on several threads, each a range of rows."""
+
 comptime LOOKAHEAD_SEEDS = 14
 """Seeds a match's local pruning looks ahead, its own included: A*PA2-full's `p`."""
 
@@ -1097,14 +1100,20 @@ struct SeedHeuristic(Movable):
         self.hint = 0
 
     def __init__(
-        out self, profile: Profile, inexact: Bool = False, choose: Bool = False, lookahead: Int = LOOKAHEAD_SEEDS
+        out self,
+        profile: Profile,
+        inexact: Bool = False,
+        choose: Bool = False,
+        lookahead: Int = LOOKAHEAD_SEEDS,
+        workers: Int = 1,
     ):
         """Seeds of the profile's first sequence, matched exactly in its second, or with `inexact`
         within one edit. With `choose`, exact seeds, rebuilt inexact when fewer than
         `INEXACT_CHAINED` percent of them chain from the origin.
 
         With `lookahead`, a match is kept only if a path from its start crosses the next `lookahead`
-        seeds for less than they would cost unmatched (see `worth_keeping`).
+        seeds for less than they would cost unmatched (see `worth_keeping`). The matches are looked up
+        on `workers` threads once the second sequence is long enough (see `SEED_SCAN_ROWS`).
         """
         self.columns = profile.columns
         self.rows = profile.rows
@@ -1119,13 +1128,13 @@ struct SeedHeuristic(Movable):
         self.spill_x = List[Int32]()
         self.spill_y = List[Int32]()
         self.hint = 0
-        self.build(profile, inexact, lookahead)
+        self.build(profile, inexact, lookahead, workers)
         if choose and not inexact and self.seeds > 0:
             var chained = self.seeds - self.h(0, 0)
             if chained * 100 < INEXACT_CHAINED * self.seeds:
-                self.build(profile, True, lookahead)
+                self.build(profile, True, lookahead, workers)
 
-    def build(mut self, profile: Profile, inexact: Bool, lookahead: Int):
+    def build(mut self, profile: Profile, inexact: Bool, lookahead: Int, workers: Int):
         """The seeds, their matches, and the layers, from scratch."""
         self.length = INEXACT_LENGTH if inexact else SEED_LENGTH
         self.cost = 2 if inexact else 1
@@ -1153,10 +1162,11 @@ struct SeedHeuristic(Movable):
         var found_row = List[Int32]()
         var found_end = List[Int32]()
         var found_cost = List[Int32]()
+        var threads = workers if profile.rows >= SEED_SCAN_ROWS else 1
         if inexact:
-            self.inexact_matches(first, second, found_seed, found_row, found_end, found_cost)
+            self.inexact_matches(first, second, found_seed, found_row, found_end, found_cost, threads)
         else:
-            self.exact_matches(first, second, found_seed, found_row)
+            self.exact_matches(first, second, found_seed, found_row, threads)
 
         # Bucketed by seed: a start can dominate another match's end only from a later seed, so taking
         # the seeds last first is an order the layers can be built in, no sort.
@@ -1214,8 +1224,10 @@ struct SeedHeuristic(Movable):
         second: ImmPointer[UInt8, _],
         mut found_seed: List[Int32],
         mut found_row: List[Int32],
+        threads: Int,
     ):
-        """Every exact occurrence of a seed whose chain can still reach the end.
+        """Every exact occurrence of a seed whose chain can still reach the end, the second sequence's
+        rows split among `threads` threads.
 
         Every seed's two-bit code is hashed by open addressing on the multiply's top bits; a slot
         holds its code and the first seed with it in one word, and seeds sharing a code chain on.
@@ -1240,14 +1252,57 @@ struct SeedHeuristic(Movable):
             next[seed] = Int32(held & 0xFFFFFFFF) if held != EMPTY else -1
             slots[unsafe_offset=slot] = (Int64(code) << 32) | Int64(seed)
 
+        var chain = next.unsafe_ptr()
+        if threads <= 1:
+            self.exact_scan(second, slots, chain, bits, 0, self.rows, found_seed, found_row)
+            return
+        var seeds_found = List[List[Int32]](length=threads, fill=List[Int32]())
+        var rows_found = List[List[Int32]](length=threads, fill=List[Int32]())
+
+        def scan(
+            part: Int,
+        ) {imm self, imm second, imm slots, imm chain, imm bits, imm threads, mut seeds_found, mut rows_found}:
+            self.exact_scan(
+                second,
+                slots,
+                chain,
+                bits,
+                self.rows * part // threads,
+                self.rows * (part + 1) // threads,
+                seeds_found[part],
+                rows_found[part],
+            )
+
+        parallelize(scan, threads, threads)
+        for part in range(threads):
+            for value in seeds_found[part]:
+                found_seed.append(value)
+            for value in rows_found[part]:
+                found_row.append(value)
+
+    def exact_scan(
+        self,
+        second: ImmPointer[UInt8, _],
+        slots: ImmPointer[Int64, _],
+        chain: ImmPointer[Int32, _],
+        bits: Int,
+        first_row: Int,
+        end_row: Int,
+        mut found_seed: List[Int32],
+        mut found_row: List[Int32],
+    ):
+        """The exact matches ending in rows `[first_row, end_row)`, the seeds' table read only."""
+        comptime MASK = (1 << (2 * SEED_LENGTH)) - 1
+        comptime EMPTY = Int64(-1)
+        var size = 1 << bits
         # Every window of the second sequence looked up. A match's end, one seed on, is `(x + 1, y + 1)`
         # in transformed coordinates, and must lie at or below and left of the end's.
         var target_x = self.columns - self.rows
         var target_y = self.rows - self.columns
         var code = 0
-        for row in range(self.rows):
+        for row in range(max(first_row - SEED_LENGTH + 1, 0), end_row):
             code = ((code << 2) | Int(second[unsafe_offset=row])) & MASK
-            if row + 1 < SEED_LENGTH:
+            if row + 1 < SEED_LENGTH or row < first_row:
                 continue
             var slot = Int((UInt64(code) * 0x9E3779B97F4A7C15) >> UInt64(64 - bits))
             var held = slots[unsafe_offset=slot]
@@ -1264,7 +1319,7 @@ struct SeedHeuristic(Movable):
                 if column - start_row - potential + 1 <= target_x and start_row - column - potential + 1 <= target_y:
                     found_seed.append(Int32(seed))
                     found_row.append(Int32(start_row))
-                seed = Int(next[seed])
+                seed = Int(chain[unsafe_offset=seed])
 
     def inexact_matches(
         self,
@@ -1274,8 +1329,10 @@ struct SeedHeuristic(Movable):
         mut found_row: List[Int32],
         mut found_end: List[Int32],
         mut found_cost: List[Int32],
+        threads: Int,
     ):
-        """Every occurrence of a seed within one edit whose chain can still reach the end.
+        """Every occurrence of a seed within one edit whose chain can still reach the end, the second
+        sequence's rows split among `threads` threads.
 
         One edit leaves one half of the seed matching exactly, at the window's start or its end. Each
         half's code indexes a table of the seeds with it, and every window of the second sequence is
@@ -1333,8 +1390,105 @@ struct SeedHeuristic(Movable):
                 quarters[row] = UInt8(rolling >> UInt64(2 * INEXACT_LENGTH - 8))
         var window = windows.unsafe_ptr()
         var quarter = quarters.unsafe_ptr()
+        var left_from = left_start.unsafe_ptr()
+        var right_from = right_start.unsafe_ptr()
+        var left_seed = left_seeds.unsafe_ptr()
+        var right_seed = right_seeds.unsafe_ptr()
+        var left_code = left_codes.unsafe_ptr()
+        var right_code = right_codes.unsafe_ptr()
+        var rows = self.rows - HALF + 1
+        if threads <= 1:
+            self.inexact_scan(
+                left_from,
+                right_from,
+                left_seed,
+                right_seed,
+                left_code,
+                right_code,
+                window,
+                quarter,
+                0,
+                rows,
+                found_seed,
+                found_row,
+                found_end,
+                found_cost,
+            )
+            return
+        var seeds_found = List[List[Int32]](length=threads, fill=List[Int32]())
+        var rows_found = List[List[Int32]](length=threads, fill=List[Int32]())
+        var ends_found = List[List[Int32]](length=threads, fill=List[Int32]())
+        var costs_found = List[List[Int32]](length=threads, fill=List[Int32]())
+
+        def scan(
+            part: Int,
+        ) {
+            imm self,
+            imm left_from,
+            imm right_from,
+            imm left_seed,
+            imm right_seed,
+            imm left_code,
+            imm right_code,
+            imm window,
+            imm quarter,
+            imm rows,
+            imm threads,
+            mut seeds_found,
+            mut rows_found,
+            mut ends_found,
+            mut costs_found,
+        }:
+            self.inexact_scan(
+                left_from,
+                right_from,
+                left_seed,
+                right_seed,
+                left_code,
+                right_code,
+                window,
+                quarter,
+                rows * part // threads,
+                rows * (part + 1) // threads,
+                seeds_found[part],
+                rows_found[part],
+                ends_found[part],
+                costs_found[part],
+            )
+
+        parallelize(scan, threads, threads)
+        for part in range(threads):
+            for value in seeds_found[part]:
+                found_seed.append(value)
+            for value in rows_found[part]:
+                found_row.append(value)
+            for value in ends_found[part]:
+                found_end.append(value)
+            for value in costs_found[part]:
+                found_cost.append(value)
+
+    def inexact_scan(
+        self,
+        left_start: ImmPointer[Int32, _],
+        right_start: ImmPointer[Int32, _],
+        left_seeds: ImmPointer[Int32, _],
+        right_seeds: ImmPointer[Int32, _],
+        left_codes: ImmPointer[UInt64, _],
+        right_codes: ImmPointer[UInt64, _],
+        window: ImmPointer[UInt64, _],
+        quarter: ImmPointer[UInt8, _],
+        first_row: Int,
+        end_row: Int,
+        mut found_seed: List[Int32],
+        mut found_row: List[Int32],
+        mut found_end: List[Int32],
+        mut found_cost: List[Int32],
+    ):
+        """The inexact matches found from rows `[first_row, end_row)`, the half tables (each half's
+        bucket bounds, seeds and codes) and the windows read only."""
+        comptime HALF = INEXACT_LENGTH // 2
         var last = self.rows
-        for row in range(self.rows - HALF + 1):
+        for row in range(first_row, end_row):
             # A left half found here leaves the right half within one edit of the bases after it: the
             # seed's third quarter matches at `row + 8`, or its last quarter at `row + 11`, `row + 12`
             # or `row + 13`, as the edit falls after or before the last quarter. A right half ending
@@ -1345,21 +1499,29 @@ struct SeedHeuristic(Movable):
             var at_11 = quarter[unsafe_offset=min(row + 11, last)]
             var at_12 = quarter[unsafe_offset=min(row + 12, last)]
             var at_13 = quarter[unsafe_offset=min(row + 13, last)]
-            for slot in range(Int(left_start[half]), Int(left_start[half + 1])):
-                var code = left_codes[slot]
+            for slot in range(Int(left_start[unsafe_offset=half]), Int(left_start[unsafe_offset=half + 1])):
+                var code = left_codes[unsafe_offset=slot]
                 var fourth = UInt8(code & 0xFF)
                 if UInt8((code >> 8) & 0xFF) != third and fourth != at_11 and fourth != at_12 and fourth != at_13:
                     continue
                 self.try_windows(
-                    code, Int(left_seeds[slot]), row, -1, window, found_seed, found_row, found_end, found_cost
+                    code,
+                    Int(left_seeds[unsafe_offset=slot]),
+                    row,
+                    -1,
+                    window,
+                    found_seed,
+                    found_row,
+                    found_end,
+                    found_cost,
                 )
             var end = row + HALF
             var second_at = quarter[unsafe_offset=max(end - 12, 0)]
             var at_15 = quarter[unsafe_offset=max(end - 15, 0)]
             var at_16 = quarter[unsafe_offset=max(end - 16, 0)]
             var at_17 = quarter[unsafe_offset=max(end - 17, 0)]
-            for slot in range(Int(right_start[half]), Int(right_start[half + 1])):
-                var code = right_codes[slot]
+            for slot in range(Int(right_start[unsafe_offset=half]), Int(right_start[unsafe_offset=half + 1])):
+                var code = right_codes[unsafe_offset=slot]
                 var opening = UInt8(code >> 24)
                 if (
                     UInt8((code >> 16) & 0xFF) != second_at
@@ -1369,7 +1531,15 @@ struct SeedHeuristic(Movable):
                 ):
                     continue
                 self.try_windows(
-                    code, Int(right_seeds[slot]), -1, end, window, found_seed, found_row, found_end, found_cost
+                    code,
+                    Int(right_seeds[unsafe_offset=slot]),
+                    -1,
+                    end,
+                    window,
+                    found_seed,
+                    found_row,
+                    found_end,
+                    found_cost,
                 )
 
     @always_inline
@@ -3236,7 +3406,7 @@ def edit_distance(first: String, second: String, threads: Optional[Int] = None) 
     # rebuilt inexact if they chain poorly (see `SeedHeuristic`).
     var long = forward.columns >= INEXACT_COLUMNS
     var inexact = long and projected.estimate * INEXACT_DIVERGENCE >= forward.columns
-    var forward_heuristic = SeedHeuristic(forward, inexact, choose=long) if seeded else SeedHeuristic(
+    var forward_heuristic = SeedHeuristic(forward, inexact, choose=long, workers=workers) if seeded else SeedHeuristic(
         forward.columns, forward.rows
     )
     inexact = forward_heuristic.cost > 1
@@ -3248,7 +3418,7 @@ def edit_distance(first: String, second: String, threads: Optional[Int] = None) 
     var backward_trail = Trail()
     var forward_edge = Edge()
     var backward_edge = Edge()
-    var backward_heuristic = SeedHeuristic(backward, inexact) if seeded and meet else SeedHeuristic(
+    var backward_heuristic = SeedHeuristic(backward, inexact, workers=workers) if seeded and meet else SeedHeuristic(
         backward.columns, backward.rows
     )
     var outcome = band_doubling[False](
@@ -3862,7 +4032,11 @@ def edit_alignment(
         # rebuilt inexact if they chain poorly (see `SeedHeuristic`).
         var long = columns >= INEXACT_COLUMNS
         var inexact = long and projected.estimate * INEXACT_DIVERGENCE >= columns
-        var forward_heuristic = SeedHeuristic(forward, inexact, choose=long) if seeded else SeedHeuristic(columns, rows)
+        # Asking for the thread count is a system call, so only a pair long enough for seeds asks.
+        var seed_workers = max(threads.or_else(hardware_threads()), 1) if seeded else 1
+        var forward_heuristic = SeedHeuristic(
+            forward, inexact, choose=long, workers=seed_workers
+        ) if seeded else SeedHeuristic(columns, rows)
         inexact = forward_heuristic.cost > 1
         # A band narrowed by many chained seeds gains less from a second thread than its half costs.
         # Asking for the thread count is a system call, so only a pair long enough to split asks.
@@ -3876,9 +4050,9 @@ def edit_alignment(
         var backward_trail = Trail(columns)
         var forward_edge = Edge()
         var backward_edge = Edge()
-        var backward_heuristic = SeedHeuristic(backward, inexact) if seeded and meet else SeedHeuristic(
-            backward.columns, backward.rows
-        )
+        var backward_heuristic = SeedHeuristic(
+            backward, inexact, workers=seed_workers
+        ) if seeded and meet else SeedHeuristic(backward.columns, backward.rows)
         var outcome = band_doubling[True](
             forward,
             backward,
