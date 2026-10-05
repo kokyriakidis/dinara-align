@@ -15,7 +15,21 @@ print(aligned.second_gapped)
 print(aligned.score)
 ```
 
-Ported from AffineGaps by Ash Vardanian, https://github.com/unum-science/AffineGaps, alignment only.
+Unit-cost edit distance has its own bit-parallel path, A*PA2's band doubling with its seed heuristic,
+for one pair or a batch spread over every thread:
+
+```mojo
+from dinara_align import edit_alignment, edit_alignments, edit_distance, edit_distances
+
+var distance = edit_distance("ACGTACGTTTGCA", "ACGTCGTTTTGCA")
+var aligned = edit_alignment("ACGTACGTTTGCA", "ACGTCGTTTTGCA")
+var firsts: List[String] = ["ACGTACGT", "TTGCA"]
+var seconds: List[String] = ["ACGACGT", "TTGGCA"]
+var distances = edit_distances(firsts, seconds)
+```
+
+Ported from AffineGaps by Ash Vardanian, https://github.com/unum-science/AffineGaps, alignment only;
+the edit distance from A*PA by Ragnar Groot Koerkamp and Pesho Ivanov (see NOTICE).
 """
 
 from .alignment import AffineGapCosts, AlignmentMode, AlignmentResult, colorize
