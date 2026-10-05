@@ -29,8 +29,10 @@ one pair at a time across them, and as a batch, every pair of the sample in one 
 threads, whose column is the batch's time over its pairs: a throughput, where the others are
 latencies.
 
-The rivals are pinned, so each one's results are kept and reused while its binary, the sample and
-the budget stay the same; only dinara-align's columns run every time, unless `--fresh` asks for all.
+The rivals are pinned, so each one runs on a sample once and its results are kept for good, while its
+pinned commit and our runner's source stay the same; a smaller budget replays the kept run, a larger
+one reruns it only if it stopped short. Only dinara-align's columns run every time, unless `--fresh`
+asks for all.
 
 A second table gives each tool's peak resident memory over the same run, from the operating system's
 account of the process. Its first row, one 8 bp pair, is what each runner holds before any aligner's
@@ -38,6 +40,7 @@ work; a run stopped mid-pair had reached at least what it shows.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -48,7 +51,7 @@ import zipfile
 from pathlib import Path
 from urllib.request import urlretrieve
 
-from run import CACHE, HERE, RESULTS, cargo_runner, duration, fetch, mojo_runner, nightly_environment
+from run import CACHE, HERE, RESULTS, RIVALS, cargo_runner, duration, fetch, mojo_runner, nightly_environment
 
 DATA = CACHE / "data" / "pa-bench"
 PUBLISHED = CACHE / "astarpa2-evals"
@@ -259,18 +262,77 @@ def run_tool(binary: Path, tool: str, path: Path, budget: float) -> tuple[list[t
     return rows, peak, stopped.is_set()
 
 
+def identity(binary: Path) -> str:
+    """What a rival's results depend on: its pinned commit and our runner's source, not the binary's age.
+
+    A rebuild of unchanged sources keeps every result; moving a pin, or editing the runner, starts afresh.
+    """
+    crate = "astarpa" if "astarpa" in binary.parent.parent.name else "pa-wrapper"
+    rival = "astar-pairwise-aligner" if crate == "astarpa" else "pa-bench"
+    source = (HERE / crate / "src" / "main.rs").read_bytes() + (HERE / crate / "Cargo.lock").read_bytes()
+    return f"{RIVALS[rival][1][:12]}-{hashlib.sha1(source).hexdigest()[:12]}"
+
+
+def replay(
+    rows: list, stopped: bool, budget: float
+) -> tuple[list[tuple[float, int]], bool]:
+    """What a run with a smaller `budget` would have kept of a longer run's pairs: the runner starts a
+    pair while what it has spent is under the budget, and a pair still running a grace past the budget
+    is stopped."""
+    kept, spent = [], 0.0
+    for seconds, cost in rows:
+        if spent >= budget:
+            return kept, False
+        if spent + seconds > budget + GRACE:
+            return kept, True
+        kept.append((seconds, cost))
+        spent += seconds
+    return kept, stopped
+
+
 def measure(
     binary: Path, tool: str, path: Path, budget: float, kept: dict | None
 ) -> tuple[list[tuple[float, int]], int, bool]:
-    """`run_tool`, or a rival's result from an earlier run when `kept` holds one for the same binary,
-    sample and budget: the rivals are pinned, so only dinara-align's columns change between runs."""
+    """`run_tool`, or for a rival what an earlier run of it on the same sample already says.
+
+    The rivals are pinned, so each one is run on a sample once, at the largest budget anyone has asked
+    for, and kept for good (see `identity`): a smaller budget replays that run (see `replay`), and a
+    larger one reuses it if it aligned every pair, running again only if it did not. A rival's peak
+    memory is that of the run kept. dinara-align, `kept` None, runs every time.
+    """
     if kept is None:
         return run_tool(binary, tool, path, budget)
-    key = "\t".join([tool, path.name, f"{budget:g}", str(binary.stat().st_mtime_ns), str(path.stat().st_mtime_ns)])
-    if key not in kept:
-        kept[key] = run_tool(binary, tool, path, budget)
-    rows, peak, stopped = kept[key]
-    return [tuple(row) for row in rows], peak, stopped
+    key = "\t".join([tool, path.name, identity(binary)])
+    entry = kept.get(key)
+    pairs = path.read_bytes().count(b"\n") // 2
+    if entry is not None:
+        whole = len(entry["rows"]) == pairs and not entry["stopped"]
+        if budget <= entry["budget"] or whole:
+            rows, stopped = replay([tuple(row) for row in entry["rows"]], entry["stopped"], budget)
+            return rows, entry["peak"], stopped
+    rows, peak, stopped = run_tool(binary, tool, path, budget)
+    kept[key] = {"budget": budget, "rows": rows, "peak": peak, "stopped": stopped}
+    return rows, peak, stopped
+
+
+def load_kept() -> dict:
+    """The kept rival results, moving any of the old shape, keyed by budget and binary age, to the new."""
+    if not KEPT.exists():
+        return {}
+    kept = json.loads(KEPT.read_text())
+    moved = {}
+    for key, value in kept.items():
+        fields = key.split("\t")
+        if isinstance(value, dict):
+            moved[key] = value
+            continue
+        tool, name, budget = fields[0], fields[1], float(fields[2])
+        runner = HERE / ".cache" / ("target-pa-wrapper" if tool in ("edlib", "biwfa") else "target-astarpa") / "release" / "x"
+        new_key = "\t".join([tool, name, identity(runner)])
+        rows, peak, stopped = value
+        if new_key not in moved or moved[new_key]["budget"] < budget:
+            moved[new_key] = {"budget": budget, "rows": rows, "peak": peak, "stopped": stopped}
+    return moved
 
 
 def megabytes(peak: int, stopped: bool) -> str:
@@ -309,7 +371,7 @@ def main() -> None:
     fetch("astar-pairwise-aligner")
     astarpa = cargo_runner("astarpa", nightly)
 
-    kept = json.loads(KEPT.read_text()) if KEPT.exists() and not options.fresh else {}
+    kept = load_kept() if not options.fresh else {}
 
     def run(binary: Path, tool: str, path: Path) -> tuple[list[tuple[float, int]], int, bool]:
         return measure(binary, tool, path, options.budget, None if binary == ours else kept)
