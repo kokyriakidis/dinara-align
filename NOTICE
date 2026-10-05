@@ -1,0 +1,27 @@
+dinara-align
+Copyright 2026 Konstantinos Kyriakidis
+
+This product includes software derived from AffineGaps
+(https://github.com/unum-science/AffineGaps, v1.0.0, commit
+1fe01e1fa21bf5910d737f7c2a7f586d82da37bc), Copyright Ash Vardanian,
+licensed under the Apache License, Version 2.0.
+
+The files dinara_align/alignment.mojo, dinara_align/common.mojo and
+dinara_align/errors.mojo are generated from AffineGaps' alignment.mojo,
+common.mojo and errors.mojo by scripts/port_from_affinegaps.py, which records
+every modification: the folding, cofolding, protein-scoring, Python-binding and
+command-line code was removed, the sources were migrated to Mojo 1.1, and the device
+specs query gained a branch for Apple GPUs, which Metal answers only in part.
+dinara_align/api.mojo ports the dispatch logic of AffineGaps' affinegaps.mojo
+from Python objects to native Mojo types.
+
+dinara_align/edit_distance.mojo is ported from pa-bitpacking in A*PA
+(https://github.com/RagnarGrootKoerkamp/astar-pairwise-aligner, commit
+bf2e14e0cbc3a9a03600dcda0641d7f89e401e63), by Ragnar Groot Koerkamp and Pesho
+Ivanov, and so remains under the Mozilla Public License, Version 2.0, as its
+header states; the rest of this repository is Apache-2.0.
+
+The agent skills under .claude/skills are copied unmodified from
+https://github.com/modular/skills (commit 0288f88deff5e4d936ed1b84db125f2b9bafc0d1),
+Copyright Modular Inc., licensed under the Apache License, Version 2.0 with
+LLVM Exceptions; see .claude/skills/LICENSE.

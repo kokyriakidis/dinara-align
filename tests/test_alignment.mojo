@@ -1,0 +1,783 @@
+"""
+Tests for the alignment package, run with `pixi run test`.
+
+Self-consistency alone would let two kernels agree while both were wrong, so most properties are
+checked against something that shares no code with the dynamic programming:
+
+- an exhaustive enumerator, which lists every alignment of a short pair and keeps the best;
+- a rescorer, which prices a returned pair of gapped strings under the affine rule directly;
+- DNA answers small enough to derive by hand, pinned here as literals.
+
+Every property runs on the host. The device tests run only where an accelerator answers a real
+alignment, and compare the device to the host pair by pair.
+"""
+
+from std.random import random_float64, random_ui64, seed
+from std.testing import TestSuite, assert_equal, assert_false, assert_raises, assert_true
+
+from dinara_align import (
+    AlignmentMode,
+    AlignmentResult,
+    DNA_ALPHABET,
+    Placement,
+    Scoring,
+    align,
+    alignments,
+    colorize,
+    edit_alignment,
+    edit_alignments,
+    edit_distance,
+    edit_distances,
+    levenshtein_alignment,
+    needleman_wunsch_gotoh_alignment,
+    needleman_wunsch_gotoh_score,
+    score,
+    scores,
+    smith_waterman_gotoh_alignment,
+    smith_waterman_gotoh_score,
+)
+
+comptime GLOBAL = AlignmentMode.GLOBAL
+comptime LOCAL = AlignmentMode.LOCAL
+comptime REPETITIONS = 20
+"""Random draws per randomized test."""
+
+# region Oracles
+
+
+def random_sequence(shortest: Int, longest: Int, alphabet: String) -> String:
+    """One sequence of a random length in `[shortest, longest]` over `alphabet`."""
+    var letters = alphabet.as_bytes()
+    var length = Int(random_ui64(UInt64(shortest), UInt64(longest)))
+    var drawn = List[UInt8](capacity=length)
+    for _ in range(length):
+        drawn.append(letters[Int(random_ui64(0, UInt64(len(letters) - 1)))])
+    return String(unsafe_from_utf8=drawn)
+
+
+def expensive_gap() raises -> Scoring:
+    """Uniform scores with an opening dearer than a mismatch, the regime most tests hold fixed."""
+    return Scoring.uniform(5, -4, -20, -1)
+
+
+def scoring_regimes() raises -> List[Scoring]:
+    """One representative per regime: an expensive gap, a cheap one, unit costs, a free extension, and the DNA default.
+    """
+    var regimes = List[Scoring]()
+    regimes.append(Scoring.uniform(5, -4, -20, -1))
+    regimes.append(Scoring.uniform(2, -1, -2, -1))
+    regimes.append(Scoring.uniform(0, -1, -1, -1))
+    regimes.append(Scoring.uniform(1, -1, -5, 0))
+    regimes.append(Scoring.dna())
+    return regimes^
+
+
+def substitution(scoring: Scoring, left: UInt8, right: UInt8) -> Int:
+    """The table entry for two letters, looked up by position in the alphabet."""
+    var letters = scoring.alphabet.as_bytes()
+    var row = 0
+    var column = 0
+    for index in range(len(letters)):
+        if letters[index] == left:
+            row = index
+        if letters[index] == right:
+            column = index
+    return Int(scoring.substitutions[row * scoring.alphabet_size() + column])
+
+
+def rescore(first_gapped: String, second_gapped: String, scoring: Scoring) -> Int:
+    """Prices a gapped pair under the affine rule, sharing no code with the dynamic programming."""
+    comptime GAP = UInt8(ord("-"))
+    var top = first_gapped.as_bytes()
+    var bottom = second_gapped.as_bytes()
+    var total = 0
+    var in_first = False
+    var in_second = False
+    for column in range(len(top)):
+        if top[column] == GAP and bottom[column] == GAP:
+            continue
+        if top[column] == GAP:
+            total += Int(scoring.gaps.extend) if in_first else Int(scoring.gaps.open)
+            in_first = True
+            in_second = False
+        elif bottom[column] == GAP:
+            total += Int(scoring.gaps.extend) if in_second else Int(scoring.gaps.open)
+            in_first = False
+            in_second = True
+        else:
+            total += substitution(scoring, top[column], bottom[column])
+            in_first = False
+            in_second = False
+    return total
+
+
+def best_extension(
+    first: List[UInt8], second: List[UInt8], i: Int, j: Int, top: List[UInt8], bottom: List[UInt8], scoring: Scoring
+) -> Int:
+    """The best rescored alignment completing `top` and `bottom` from position `(i, j)`."""
+    comptime GAP = UInt8(ord("-"))
+    if i == len(first) and j == len(second):
+        return rescore(String(unsafe_from_utf8=top), String(unsafe_from_utf8=bottom), scoring)
+    var best = Int.MIN
+    if i < len(first) and j < len(second):
+        var t = top.copy()
+        var b = bottom.copy()
+        t.append(first[i])
+        b.append(second[j])
+        best = max(best, best_extension(first, second, i + 1, j + 1, t, b, scoring))
+    if i < len(first):
+        var t = top.copy()
+        var b = bottom.copy()
+        t.append(first[i])
+        b.append(GAP)
+        best = max(best, best_extension(first, second, i + 1, j, t, b, scoring))
+    if j < len(second):
+        var t = top.copy()
+        var b = bottom.copy()
+        t.append(GAP)
+        b.append(second[j])
+        best = max(best, best_extension(first, second, i, j + 1, t, b, scoring))
+    return best
+
+
+def best_enumerated(first: List[UInt8], second: List[UInt8], scoring: Scoring) -> Int:
+    """The best global score over every alignment, by the three-way edit recursion with no table.
+
+    Each alignment is built out in full and rescored, so a recurrence that is self-consistently
+    wrong on every backend at once still disagrees with this.
+    """
+    return best_extension(first, second, 0, 0, List[UInt8](), List[UInt8](), scoring)
+
+
+def slice_bytes(text: List[UInt8], start: Int, stop: Int) -> List[UInt8]:
+    """The bytes in `[start, stop)`."""
+    var piece = List[UInt8](capacity=stop - start)
+    for index in range(start, stop):
+        piece.append(text[index])
+    return piece^
+
+
+def brute_optimum[mode: AlignmentMode](first: String, second: String, scoring: Scoring) -> Int:
+    """Global: the best enumerated alignment. Local: the best over every pair of substrings, or zero."""
+    var top = List[UInt8](first.as_bytes())
+    var bottom = List[UInt8](second.as_bytes())
+    comptime if mode == AlignmentMode.GLOBAL:
+        return best_enumerated(top, bottom, scoring)
+    var best = 0
+    for start in range(len(top)):
+        for stop in range(start + 1, len(top) + 1):
+            for low in range(len(bottom)):
+                for high in range(low + 1, len(bottom) + 1):
+                    best = max(
+                        best, best_enumerated(slice_bytes(top, start, stop), slice_bytes(bottom, low, high), scoring)
+                    )
+    return best
+
+
+def assert_well_formed[
+    mode: AlignmentMode
+](first: String, second: String, produced: AlignmentResult, scoring: Scoring) raises:
+    """Both rows have one length, each rebuilds its input or a piece of it, and they earn their score."""
+    assert_equal(produced.first_gapped.byte_length(), produced.second_gapped.byte_length())
+    var core_first = produced.first_gapped.replace("-", "")
+    var core_second = produced.second_gapped.replace("-", "")
+    comptime if mode == AlignmentMode.GLOBAL:
+        assert_equal(core_first, first)
+        assert_equal(core_second, second)
+    else:
+        assert_true(core_first in first, "a local row is not a substring of its input")
+        assert_true(core_second in second, "a local row is not a substring of its input")
+    assert_equal(rescore(produced.first_gapped, produced.second_gapped, scoring), Int(produced.score))
+
+
+def gpu_available() raises -> Bool:
+    """Whether an accelerator serves a real alignment here, which a successful import does not prove."""
+    var scoring = Scoring.dna()
+    try:
+        _ = score[GLOBAL]("AC", "CA", scoring, Placement.on_gpu(0, 1))
+        return True
+    except:
+        return False
+
+
+# endregion Oracles
+
+# region Known Answers
+
+
+def test_dna_default_is_minimap2() raises:
+    """Match 2, mismatch -4, and minimap2's `-O4 -E2` gap, which charges the first gapped base six."""
+    var dna = Scoring.dna()
+    assert_equal(dna.alphabet, "ACGT")
+    for left in [UInt8(ord("A")), UInt8(ord("C")), UInt8(ord("G")), UInt8(ord("T"))]:
+        for right in [UInt8(ord("A")), UInt8(ord("C")), UInt8(ord("G")), UInt8(ord("T"))]:
+            assert_equal(substitution(dna, left, right), 2 if left == right else -4)
+    assert_equal(Int(dna.gaps.open), -6)
+    assert_equal(Int(dna.gaps.extend), -2)
+
+
+def test_hand_computed_global() raises:
+    """Pairs whose optimum can be worked out on paper, strings included."""
+    var dna = Scoring.dna()
+    var same = needleman_wunsch_gotoh_alignment("ACGTACGT", "ACGTACGT", dna)
+    assert_equal(same.first_gapped, "ACGTACGT")
+    assert_equal(same.score, 16)
+
+    # One substitution costs -4, which beats opening two gaps at -6 each.
+    var substituted = needleman_wunsch_gotoh_alignment("ACGTACGT", "ACGTTCGT", dna)
+    assert_equal(substituted.first_gapped, "ACGTACGT")
+    assert_equal(substituted.second_gapped, "ACGTTCGT")
+    assert_equal(substituted.score, 7 * 2 - 4)
+
+    # A three-base deletion is one run: -6 for its first base and -2 for each of the other two.
+    var deleted = needleman_wunsch_gotoh_alignment("ACGTTGCAGGGCATGACGT", "ACGTTGCACATGACGT", dna)
+    assert_equal(deleted.first_gapped, "ACGTTGCAGGGCATGACGT")
+    assert_equal(deleted.second_gapped, "ACGTTGCA---CATGACGT")
+    assert_equal(deleted.score, 16 * 2 - 6 - 2 * 2)
+    assert_equal(needleman_wunsch_gotoh_score("ACGTTGCAGGGCATGACGT", "ACGTTGCACATGACGT", dna), 22)
+
+    # Against nothing, the whole sequence is one gap run.
+    assert_equal(needleman_wunsch_gotoh_score("AAAA", "", dna), -6 - 3 * 2)
+    assert_equal(needleman_wunsch_gotoh_score("", "", dna), 0)
+
+
+def test_hand_computed_local() raises:
+    """The shared core of two otherwise unrelated sequences, trimmed at both ends."""
+    var aligned = smith_waterman_gotoh_alignment("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC", Scoring.dna())
+    assert_equal(aligned.first_gapped, "ACGTACGT")
+    assert_equal(aligned.second_gapped, "ACGTACGT")
+    assert_equal(aligned.score, 16)
+    assert_equal(smith_waterman_gotoh_score("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC", Scoring.dna()), 16)
+
+
+def test_levenshtein_known_distances() raises:
+    """Edit distances that can be checked by eye, with rows that rebuild both inputs."""
+    var cases: List[Tuple[String, String, Int]] = [
+        ("ACGT", "ACGT", 0),
+        ("ACGT", "AGT", 1),
+        ("ACGT", "", 4),
+        ("", "ACG", 3),
+        ("AAAA", "TTTT", 4),
+        # A rotation by one: every position mismatches, so a deletion and an insertion are cheaper.
+        ("ACGTACGT", "TACGTACG", 2),
+    ]
+    for example in cases:
+        var aligned = levenshtein_alignment(example[0], example[1])
+        assert_equal(Int(aligned.score), example[2])
+        assert_equal(aligned.first_gapped.replace("-", ""), example[0])
+        assert_equal(aligned.second_gapped.replace("-", ""), example[1])
+
+
+# endregion Known Answers
+
+# region Exhaustive Oracle
+
+
+def check_against_enumeration[mode: AlignmentMode]() raises:
+    """Every pair over a two-letter alphabet with combined length at most five."""
+    var scoring = expensive_gap()
+    var words = List[String]()
+    words.append("")
+    var frontier: List[String] = [""]
+    for _ in range(3):
+        var grown = List[String]()
+        for word in frontier:
+            grown.append(word + "A")
+            grown.append(word + "C")
+        words.extend(grown.copy())
+        frontier = grown^
+    for first in words:
+        for second in words:
+            if first.byte_length() + second.byte_length() > 5:
+                continue
+            var expected = brute_optimum[mode](first, second, scoring)
+            assert_equal(Int(score[mode](first, second, scoring, Placement.on_cpu(1))), expected)
+            var produced = align[mode](first, second, scoring, Placement.on_cpu(1))
+            assert_equal(Int(produced.score), expected)
+
+
+def test_global_matches_enumeration() raises:
+    check_against_enumeration[GLOBAL]()
+
+
+def test_local_matches_enumeration() raises:
+    check_against_enumeration[LOCAL]()
+
+
+# endregion Exhaustive Oracle
+
+# region Properties
+
+
+def check_well_formed[mode: AlignmentMode]() raises:
+    """Every path is well formed, realizes its own score, and agrees with the score-only kernel."""
+    seed(1)
+    for scoring in scoring_regimes():
+        for _ in range(REPETITIONS):
+            var first = random_sequence(5, 25, DNA_ALPHABET)
+            var second = random_sequence(5, 25, DNA_ALPHABET)
+            var produced = align[mode](first, second, scoring)
+            assert_well_formed[mode](first, second, produced, scoring)
+            assert_equal(score[mode](first, second, scoring), produced.score)
+
+
+def test_global_output_is_well_formed() raises:
+    check_well_formed[GLOBAL]()
+
+
+def test_local_output_is_well_formed() raises:
+    check_well_formed[LOCAL]()
+
+
+def check_linear_matches_stored[mode: AlignmentMode]() raises:
+    """Both traceback strategies reach the same score, each with a path that earns it.
+
+    Ties may land differently under a divide-and-conquer join, so the strings need not match.
+    """
+    seed(2)
+    for scoring in scoring_regimes():
+        for _ in range(3):
+            var first = random_sequence(140, 260, DNA_ALPHABET)
+            var second = random_sequence(140, 260, DNA_ALPHABET)
+            var stored = align[mode](first, second, scoring, Placement.default(), 10**12)
+            var linear = align[mode](first, second, scoring, Placement.default(), 0)
+            assert_equal(stored.score, linear.score)
+            assert_equal(stored.score, score[mode](first, second, scoring))
+            assert_well_formed[mode](first, second, stored, scoring)
+            assert_well_formed[mode](first, second, linear, scoring)
+
+
+def test_global_linear_matches_stored() raises:
+    check_linear_matches_stored[GLOBAL]()
+
+
+def test_local_linear_matches_stored() raises:
+    check_linear_matches_stored[LOCAL]()
+
+
+def test_linear_space_carries_a_long_pair() raises:
+    """Three thousand by three thousand with no stored matrix at all."""
+    seed(3)
+    var scoring = expensive_gap()
+    var first = random_sequence(3000, 3000, DNA_ALPHABET)
+    var second = random_sequence(3000, 3000, DNA_ALPHABET)
+    assert_well_formed[GLOBAL](first, second, align[GLOBAL](first, second, scoring, Placement.default(), 0), scoring)
+    assert_well_formed[LOCAL](first, second, align[LOCAL](first, second, scoring, Placement.default(), 0), scoring)
+
+
+def test_symmetry() raises:
+    """Swapping the arguments does not change the score."""
+    seed(4)
+    var scoring = expensive_gap()
+    for _ in range(REPETITIONS):
+        var first = random_sequence(5, 25, DNA_ALPHABET)
+        var second = random_sequence(5, 25, DNA_ALPHABET)
+        assert_equal(score[GLOBAL](first, second, scoring), score[GLOBAL](second, first, scoring))
+        assert_equal(score[LOCAL](first, second, scoring), score[LOCAL](second, first, scoring))
+
+
+def test_levenshtein_is_the_unit_cost_limit() raises:
+    """At unit costs the global recurrence is the negated edit distance."""
+    seed(5)
+    var unit = Scoring.edit_distance()
+    for _ in range(REPETITIONS):
+        var first = random_sequence(3, 15, DNA_ALPHABET)
+        var second = random_sequence(3, 15, DNA_ALPHABET)
+        assert_equal(-score[GLOBAL](first, second, unit), levenshtein_alignment(first, second).score)
+
+
+def test_local_never_scores_below_global() raises:
+    """A global path is also a local candidate, and the empty window is always available."""
+    seed(6)
+    var scoring = expensive_gap()
+    for _ in range(REPETITIONS):
+        var first = random_sequence(5, 25, DNA_ALPHABET)
+        var second = random_sequence(5, 25, DNA_ALPHABET)
+        var local = score[LOCAL](first, second, scoring)
+        assert_true(local >= 0)
+        assert_true(local >= score[GLOBAL](first, second, scoring))
+
+
+def test_optimum_falls_as_gaps_get_harsher() raises:
+    """A harsher opening lowers every feasible alignment, so the maximum cannot rise."""
+    seed(7)
+    for _ in range(REPETITIONS):
+        var first = random_sequence(5, 25, DNA_ALPHABET)
+        var second = random_sequence(5, 25, DNA_ALPHABET)
+        var previous = Int32.MAX
+        for opening in [-2, -5, -10, -20, -40]:
+            var current = score[GLOBAL](first, second, Scoring.uniform(5, -4, opening, -1))
+            assert_true(current <= previous, "a harsher gap raised the optimum")
+            previous = current
+
+
+def test_free_extension_ignores_gap_width() raises:
+    """A gap that costs nothing to extend costs the same however wide it is."""
+    seed(8)
+    var free_extension = Scoring.uniform(5, -10, -1, 0, "ACGTN")
+    for _ in range(REPETITIONS):
+        var first = random_sequence(5, 15, "ACGT")
+        var second = random_sequence(5, 15, "ACGT")
+        var bytes = second.as_bytes()
+        var cut = len(bytes) // 2
+        var head = String(unsafe_from_utf8=slice_bytes(List[UInt8](bytes), 0, cut))
+        var tail = String(unsafe_from_utf8=slice_bytes(List[UInt8](bytes), cut, len(bytes)))
+        var reference = score[GLOBAL](first, head + "N" + tail, free_extension)
+        for width in range(2, 6):
+            assert_equal(score[GLOBAL](first, head + "N" * width + tail, free_extension), reference)
+
+
+def test_table_matches_the_uniform_costs_it_spells() raises:
+    """A tabulated diagonal scores exactly what the uniform record scores."""
+    seed(9)
+    var table = List[Int8](length=16, fill=-1)
+    for index in range(4):
+        table[index * 4 + index] = 2
+    var tabulated = Scoring.tabulated("ACGT", table^, -5, -1)
+    var uniform = Scoring.uniform(2, -1, -5, -1, "ACGT")
+    for _ in range(REPETITIONS):
+        var first = random_sequence(10, 40, "ACGT")
+        var second = random_sequence(10, 40, "ACGT")
+        assert_equal(score[GLOBAL](first, second, tabulated), score[GLOBAL](first, second, uniform))
+        assert_equal(score[LOCAL](first, second, tabulated), score[LOCAL](first, second, uniform))
+
+
+def test_batch_matches_single_pairs() raises:
+    """The batched entry points reproduce the single-pair ones, and an empty batch answers empty."""
+    seed(10)
+    var scoring = expensive_gap()
+    var firsts = List[String]()
+    var seconds = List[String]()
+    for _ in range(24):
+        firsts.append(random_sequence(5, 40, DNA_ALPHABET))
+        seconds.append(random_sequence(5, 40, DNA_ALPHABET))
+    var batch_scores = scores[GLOBAL](firsts, seconds, scoring)
+    var batch_alignments = alignments[LOCAL](firsts, seconds, scoring)
+    for index in range(len(firsts)):
+        assert_equal(batch_scores[index], score[GLOBAL](firsts[index], seconds[index], scoring))
+        var single = align[LOCAL](firsts[index], seconds[index], scoring)
+        assert_equal(batch_alignments[index].first_gapped, single.first_gapped)
+        assert_equal(batch_alignments[index].second_gapped, single.second_gapped)
+        assert_equal(batch_alignments[index].score, single.score)
+    assert_equal(len(scores[GLOBAL](List[String](), List[String](), scoring)), 0)
+
+
+def test_bit_parallel_edit_distance_matches_the_full_matrix() raises:
+    """The bit-parallel sweep returns the distance the cell-by-cell traceback reports.
+
+    Lengths straddle a word (63, 64, 65), a four-word block (255, 256, 257) and the eight columns the
+    staggered block needs, so every edge path runs: the triangles, the word left over after the last
+    block, and a last word only partly filled.
+    """
+    seed(12)
+    var lengths: List[Int] = [0, 1, 2, 7, 8, 9, 63, 64, 65, 127, 128, 129, 255, 256, 257, 300, 513]
+    for first_length in lengths:
+        for second_length in lengths:
+            var first = random_sequence(first_length, first_length, DNA_ALPHABET)
+            var second = random_sequence(second_length, second_length, DNA_ALPHABET)
+            assert_equal(edit_distance(first, second), Int(levenshtein_alignment(first, second).score))
+    # Similar pairs too, where long runs of matches carry through whole words.
+    for _ in range(REPETITIONS):
+        var first = random_sequence(500, 900, DNA_ALPHABET)
+        var second = first
+        var bytes = List[UInt8](second.as_bytes())
+        for _ in range(10):
+            bytes[Int(random_ui64(0, UInt64(len(bytes) - 1)))] = UInt8(ord("A"))
+        second = String(unsafe_from_utf8=bytes)
+        assert_equal(edit_distance(first, second), Int(levenshtein_alignment(first, second).score))
+    with assert_raises(contains="ACGT"):
+        _ = edit_distance("ACGT", "ACGN")
+
+
+def test_bit_parallel_tiles_agree_with_one_thread() raises:
+    """The tiled multi-threaded sweep returns what the single-threaded one does.
+
+    Shapes are past the parallel threshold and deliberately ragged: rows that do not fill a block
+    of words, and columns that do not fill a tile, so the leftover row of tiles and the absorbed
+    last column tile both run.
+    """
+    seed(13)
+    var shapes: List[Tuple[Int, Int]] = [(9000, 8100), (8100, 9001), (12345, 6789), (20000, 3300), (4100, 30000)]
+    for shape in shapes:
+        var first = random_sequence(shape[0], shape[0], DNA_ALPHABET)
+        var second = random_sequence(shape[1], shape[1], DNA_ALPHABET)
+        assert_equal(edit_distance(first, second, 8), edit_distance(first, second, 1))
+    var first = random_sequence(9000, 9000, DNA_ALPHABET)
+    var bytes = List[UInt8](first.as_bytes())
+    for _ in range(900):
+        bytes[Int(random_ui64(0, UInt64(len(bytes) - 1)))] = UInt8(ord("G"))
+    var second = String(unsafe_from_utf8=bytes)
+    assert_equal(edit_distance(first, second, 8), Int(levenshtein_alignment(first, second).score))
+
+
+def mutate(text: String, rate: Float64) -> String:
+    """Substitutions, deletions and insertions in equal thirds, at `rate` edits per base."""
+    var letters = String(DNA_ALPHABET).as_bytes()
+    var out = List[UInt8]()
+    for byte in text.as_bytes():
+        var roll = random_float64()
+        if roll < rate / 3:
+            out.append(letters[Int(random_ui64(0, 3))])
+        elif roll < 2 * rate / 3:
+            continue
+        elif roll < rate:
+            out.append(byte)
+            out.append(letters[Int(random_ui64(0, 3))])
+        else:
+            out.append(byte)
+    return String(unsafe_from_utf8=out)
+
+
+def test_bit_parallel_band_doubling_is_exact() raises:
+    """Band doubling with pruning returns the full matrix's distance on pairs it actually narrows.
+
+    Similar pairs at several divergences take the banded rounds; a block cut out of the middle
+    gives a large length difference either way; unrelated pairs exhaust the band and fall back to
+    the whole matrix. Every one is checked against the cell-by-cell distance.
+    """
+    seed(14)
+    for length in [2000, 5000]:
+        for rate in [0.0, 0.001, 0.01, 0.05, 0.2]:
+            var first = random_sequence(length, length, DNA_ALPHABET)
+            var second = mutate(first, rate)
+            var bytes = List[UInt8](first.as_bytes())
+            var cut = String(unsafe_from_utf8=slice_bytes(bytes, 0, length // 3)) + String(
+                unsafe_from_utf8=slice_bytes(bytes, length // 2, length)
+            )
+            var pairs: List[Tuple[String, String]] = [(first, second), (second, first), (first, cut), (cut, first)]
+            for pair in pairs:
+                assert_equal(edit_distance(pair[0], pair[1], 1), Int(levenshtein_alignment(pair[0], pair[1]).score))
+    var unrelated_first = random_sequence(3000, 3000, DNA_ALPHABET)
+    var unrelated_second = random_sequence(2800, 2800, DNA_ALPHABET)
+    assert_equal(
+        edit_distance(unrelated_first, unrelated_second),
+        Int(levenshtein_alignment(unrelated_first, unrelated_second).score),
+    )
+
+
+def test_edit_alignment_is_an_optimal_alignment() raises:
+    """The bit-parallel traceback returns rows that rebuild both inputs and cost exactly the distance.
+
+    Lengths below and above the point where the two halves meet in the middle, divergences from
+    identical to half the bases edited, and a large length difference either way; every distance is
+    the cell-by-cell one, and every pair of rows is rescored independently at unit cost.
+    """
+    seed(15)
+    for length in [0, 1, 64, 65, 700, 3000, 6000]:
+        for rate in [0.0, 0.01, 0.05, 0.2, 0.5]:
+            var first = random_sequence(length, length, DNA_ALPHABET)
+            var second = mutate(first, rate)
+            var pairs: List[Tuple[String, String]] = [(first, second), (second, first)]
+            if length >= 700:
+                var bytes = List[UInt8](first.as_bytes())
+                var cut = String(unsafe_from_utf8=slice_bytes(bytes, 0, length // 3)) + String(
+                    unsafe_from_utf8=slice_bytes(bytes, length // 2, length)
+                )
+                pairs.append((first, cut))
+                pairs.append((cut, first))
+            for pair in pairs:
+                var aligned = edit_alignment(pair[0], pair[1])
+                assert_equal(Int(aligned.score), Int(levenshtein_alignment(pair[0], pair[1]).score))
+                assert_equal(aligned.first_gapped.replace("-", ""), pair[0])
+                assert_equal(aligned.second_gapped.replace("-", ""), pair[1])
+                assert_equal(
+                    rescore(aligned.first_gapped, aligned.second_gapped, Scoring.edit_distance()), -Int(aligned.score)
+                )
+                # One thread takes the single-direction path, so both paths are held to the same answer.
+                assert_equal(Int(edit_alignment(pair[0], pair[1], 1).score), Int(aligned.score))
+
+
+def test_edit_batches_match_single_pairs() raises:
+    """A batch spread over threads answers every pair as the single call does, in order.
+
+    Empty pairs, short and long ones, close and divergent, and one long enough for seeds, on one
+    thread and on several; every alignment rebuilds both inputs. A bad base or sides of different
+    lengths are refused, as a serial loop would refuse them.
+    """
+    seed(17)
+    var firsts = List[String]()
+    var seconds = List[String]()
+    firsts.append(String())
+    seconds.append(String())
+    firsts.append(String("ACGT"))
+    seconds.append(String())
+    for length in [1, 100, 700, 3000, 6000, 20000]:
+        for rate in [0.0, 0.05, 0.15, 0.3]:
+            var first = random_sequence(length, length, DNA_ALPHABET)
+            firsts.append(first)
+            seconds.append(mutate(first, rate))
+    for threads in [1, 8]:
+        var distances = edit_distances(firsts, seconds, threads)
+        var aligned = edit_alignments(firsts, seconds, threads)
+        assert_equal(len(distances), len(firsts))
+        assert_equal(len(aligned), len(firsts))
+        for index in range(len(firsts)):
+            var expected = edit_distance(firsts[index], seconds[index])
+            assert_equal(distances[index], expected)
+            assert_equal(Int(aligned[index].score), expected)
+            assert_equal(aligned[index].first_gapped.replace("-", ""), firsts[index])
+            assert_equal(aligned[index].second_gapped.replace("-", ""), seconds[index])
+    var bad_firsts: List[String] = ["ACGT", "ACGT", "ACGN"]
+    var bad_seconds: List[String] = ["ACGA", "ACG", "ACGT"]
+    with assert_raises():
+        _ = edit_distances(bad_firsts, bad_seconds, 8)
+    with assert_raises():
+        _ = edit_alignments(bad_firsts, bad_seconds, 8)
+    var short: List[String] = ["ACGT"]
+    with assert_raises():
+        _ = edit_distances(bad_firsts, short)
+
+
+def test_striped_bands_match_one_thread() raises:
+    """A long, divergent pair's band split into stripes across threads answers as one thread does.
+
+    From 200 kbp a divergent pair sweeps each tile's words on several threads at once;
+    the distance and the alignment's score must be one thread's, and every alignment is rescored
+    independently and rebuilds both inputs.
+    """
+    seed(18)
+    var unit = Scoring.edit_distance()
+    for rate in [0.1, 0.15, 0.2]:
+        var first = random_sequence(210000, 210000, DNA_ALPHABET)
+        var second = mutate(first, rate)
+        var bytes = List[UInt8](second.as_bytes())
+        var tail = len(bytes) - len(bytes) // 25
+        var burst = String(unsafe_from_utf8=slice_bytes(bytes, 0, tail)) + mutate(
+            String(unsafe_from_utf8=slice_bytes(bytes, tail, len(bytes))), 0.5
+        )
+        var pairs: List[Tuple[String, String]] = [(first, second), (first, burst)]
+        for pair in pairs:
+            var expected = edit_distance(pair[0], pair[1], 1)
+            assert_equal(edit_distance(pair[0], pair[1], 8), expected)
+            var aligned = edit_alignment(pair[0], pair[1], 8)
+            assert_equal(Int(aligned.score), expected)
+            assert_equal(aligned.first_gapped.replace("-", ""), pair[0])
+            assert_equal(aligned.second_gapped.replace("-", ""), pair[1])
+            assert_equal(rescore(aligned.first_gapped, aligned.second_gapped, unit), -expected)
+
+
+def test_seeded_bands_are_exact() raises:
+    """Pairs long enough for the seed heuristic, exact seeds and inexact, keep the exact distance.
+
+    From 16 kbp a band prunes with seeds; once few exact seeds chain, past about one edit in fifteen
+    bases, they are rebuilt to match within one edit. Divergences either side of that, with errors
+    also gathered into a burst at one end as real reads carry them, on one thread and on several;
+    every distance is the global wavefront's at unit costs, which shares no code with the band, and
+    every alignment is rescored independently.
+    """
+    seed(16)
+    var unit = Scoring.edit_distance()
+    for rate in [0.05, 0.1, 0.15, 0.2, 0.3]:
+        var first = random_sequence(20000, 24000, DNA_ALPHABET)
+        var second = mutate(first, rate)
+        var bytes = List[UInt8](second.as_bytes())
+        var tail = len(bytes) - len(bytes) // 20
+        var burst = String(unsafe_from_utf8=slice_bytes(bytes, 0, tail)) + mutate(
+            String(unsafe_from_utf8=slice_bytes(bytes, tail, len(bytes))), 0.5
+        )
+        var pairs: List[Tuple[String, String]] = [(first, second), (second, first), (first, burst)]
+        for pair in pairs:
+            var expected = -Int(score[GLOBAL](pair[0], pair[1], unit))
+            assert_equal(edit_distance(pair[0], pair[1], 1), expected)
+            assert_equal(edit_distance(pair[0], pair[1], 8), expected)
+            for threads in [1, 8]:
+                var aligned = edit_alignment(pair[0], pair[1], threads)
+                assert_equal(Int(aligned.score), expected)
+                assert_equal(aligned.first_gapped.replace("-", ""), pair[0])
+                assert_equal(aligned.second_gapped.replace("-", ""), pair[1])
+                assert_equal(rescore(aligned.first_gapped, aligned.second_gapped, unit), -expected)
+
+
+# endregion Properties
+
+# region Refusals
+
+
+def test_refuses_what_it_cannot_do() raises:
+    """Every contradiction is refused rather than quietly answered."""
+    var dna = Scoring.dna()
+    with assert_raises(contains="outside the alphabet"):
+        _ = score[GLOBAL]("ACGT", "ACGN", dna)
+    with assert_raises(contains="outside the alphabet"):
+        _ = score[GLOBAL]("ACGT", "acgt", dna)
+    with assert_raises(contains="cannot be served"):
+        _ = Scoring.uniform(5, -4, -1, -20)
+    with assert_raises(contains="cannot be served"):
+        _ = Scoring.uniform(5, -4, -1, 1)
+    with assert_raises(contains="cannot be served"):
+        _ = Scoring.uniform(500, -4)
+    with assert_raises(contains="cannot be served"):
+        _ = Scoring.tabulated("AC", List[Int8](length=9, fill=0))
+    with assert_raises(contains="do not"):
+        _ = scores[GLOBAL](["AC", "CA"], ["AC"], dna)
+    with assert_raises(contains="ASCII"):
+        _ = levenshtein_alignment("naïve", "naive")
+
+
+def test_colouring_keeps_the_rows_it_paints() raises:
+    """Painting wraps every column in escapes and changes nothing else; ragged rows are refused."""
+    var painted = colorize("ACGTA", "AC-TT")
+    for row in [painted[0], painted[1]]:
+        var plain = row
+        for escape in ["\x1b[32m", "\x1b[31m", "\x1b[37m", "\x1b[0m"]:
+            plain = plain.replace(escape, "")
+        assert_true(plain == "ACGTA" or plain == "AC-TT")
+    assert_true(painted[0].startswith("\x1b[32mA"), "a match is not painted green")
+    assert_true("\x1b[37m-" in painted[1], "a gap is not painted white")
+    assert_true("\x1b[31mT" in painted[1], "a mismatch is not painted red")
+    with assert_raises(contains="do not"):
+        _ = colorize("ACGTA", "AC")
+
+
+# endregion Refusals
+
+# region Device
+
+
+def test_device_matches_host() raises:
+    """Every device path returns what the host returns, scores and strings alike.
+
+    Covers the banded batch, the tiled sweep for a pair too tall for one block, the linear-space
+    device traceback, and empty sides. Skipped where no accelerator answers.
+    """
+    if not gpu_available():
+        print("    skipped: no accelerator serves a real alignment here")
+        return
+    seed(11)
+    var device = Placement.on_gpu(0, 4)
+    var host = Placement.on_cpu(4)
+    for scoring in scoring_regimes():
+        var firsts = List[String]()
+        var seconds = List[String]()
+        for _ in range(REPETITIONS):
+            firsts.append(random_sequence(5, 60, DNA_ALPHABET))
+            seconds.append(random_sequence(5, 60, DNA_ALPHABET))
+        comptime for mode in [GLOBAL, LOCAL]:
+            var on_device = alignments[mode](firsts, seconds, scoring, device)
+            var device_scores = scores[mode](firsts, seconds, scoring, device)
+            for index in range(len(firsts)):
+                var expected = align[mode](firsts[index], seconds[index], scoring, host)
+                assert_equal(on_device[index].score, expected.score)
+                assert_equal(on_device[index].first_gapped, expected.first_gapped)
+                assert_equal(on_device[index].second_gapped, expected.second_gapped)
+                assert_equal(device_scores[index], expected.score)
+
+    var scoring = expensive_gap()
+    var tall = "A" * 70_000
+    var short = "ACGT" * 4
+    comptime for mode in [GLOBAL, LOCAL]:
+        assert_equal(score[mode](tall, short, scoring, device), score[mode](tall, short, scoring, host))
+        assert_equal(score[mode](tall, "", scoring, device), score[mode](tall, "", scoring, host))
+        assert_equal(score[mode]("", short, scoring, device), score[mode]("", short, scoring, host))
+        var long_first = random_sequence(2000, 2000, DNA_ALPHABET)
+        var long_second = random_sequence(2000, 2000, DNA_ALPHABET)
+        var linear = align[mode](long_first, long_second, scoring, device, 0)
+        assert_well_formed[mode](long_first, long_second, linear, scoring)
+        assert_equal(linear.score, score[mode](long_first, long_second, scoring, host))
+
+
+# endregion Device
+
+
+def main() raises:
+    TestSuite.discover_tests[__functions_in_module()]().run()

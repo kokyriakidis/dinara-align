@@ -1,0 +1,14 @@
+[package]
+name = "pa-generate-runner"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# A*PA2's synthetic datasets, regenerated exactly: the `pa-generate` commit pa-bench locked when the
+# evaluation ran (pa-bench 78c1cf7, March 2024), and `pa_bench.py` copies that commit's `Cargo.lock` here
+# before building, so the random generator resolves to the version that wrote its files.
+[dependencies]
+pa-generate = { git = "https://github.com/pairwise-alignment/pa-generate", rev = "f9dc03b1a563eb833d5e58f8c335c4014c65f372" }
+
+[profile.release]
+opt-level = 3
