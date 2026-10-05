@@ -1054,9 +1054,8 @@ struct SeedHeuristic(Movable):
     scores two less its cost, and the transform is the same in those units. A match scoring two
     starts in two layers, so the layers still nest.
 
-    The heuristic never overestimates the cost to the end. Down a column it drops by at most one a
-    row, as it is consistent, and up a column by at most `cost` (see `climb`), so the band's
-    pruning stays exact and its jumps stay valid. With no seeds it is the plain gap to the end's
+    The heuristic never overestimates the cost to the end, and changes by at most `cost` a row down a
+    column or up it (see `climb`), so the band's pruning stays exact and its jumps stay valid. With no seeds it is the plain gap to the end's
     diagonal, which is what every band used before.
     """
 
@@ -1663,9 +1662,14 @@ struct SeedHeuristic(Movable):
 
     @always_inline
     def climb(self) -> Int:
-        """The most the heuristic drops a row going up a column: one with no seeds or exact ones,
-        `cost` with inexact. A best chain from a row still starts, but for its first match, from
-        the row below: every match moves the transformed point at least one up and one right."""
+        """The most the heuristic changes a row down or up a column: one with no seeds or exact ones,
+        `cost` with inexact. A best chain from a row still starts, but for its first match, from the
+        row above or below, as every match moves the transformed point at least one up and one
+        right; the first match scores at most `cost`.
+
+        Down a column a complete set of matches would hold the drop to one, the heuristic being
+        consistent, but an exact match's one-edit neighbours are left out (see `try_windows`), and
+        without them only this bound holds."""
         return self.cost
 
     def h(mut self, column: Int, row: Int) -> Int:
@@ -1812,18 +1816,18 @@ struct HalfBand(Movable):
         self.anchor += end_column - self.bounds[tile]
         # Read the right edge back as scores and keep, as A*PA2 does, the rows from the first to the
         # last whose score plus heuristic fits the bound. Scores change by at most one per row and the
-        # heuristic by at most one going down, so their sum by at most two, and a row `x` over the
-        # bound rules out the next `ceil(x / 2)` rows below without reading them; going up, the
-        # heuristic may drop by its `climb`, and a row rules out `ceil(x / (1 + climb))` above.
+        # heuristic by at most its `climb` either way, so a row `x` over the bound rules out the next
+        # `ceil(x / (1 + climb))` rows on either side without reading them: half of `x` for exact
+        # seeds or none, a third for inexact.
         edge.capture(self.top, self.end_word, self.anchor, self.frontier, self.rows)
         var first_kept = edge.low_row
         var last_kept = edge.high_row
+        var step = 1 + heuristic.climb()
         while first_kept <= last_kept:
             var over = edge.score(first_kept) + heuristic.h(end_column, first_kept) - self.threshold
             if over <= 0:
                 break
-            first_kept += (over + 1) // 2
-        var step = 1 + heuristic.climb()
+            first_kept += (over + step - 1) // step
         while last_kept >= first_kept:
             var over = edge.score(last_kept) + heuristic.h(end_column, last_kept) - self.threshold
             if over <= 0:
