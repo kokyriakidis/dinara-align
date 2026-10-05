@@ -25,6 +25,7 @@ its parameters. Like it, the times here are wall-clock on one thread; dinara-ali
 import argparse
 import json
 import os
+import random
 import subprocess
 import sys
 import zipfile
@@ -167,16 +168,30 @@ def run_tool(binary: Path, tool: str, files: list[Path], budget: float) -> dict[
     return rows
 
 
-def pair_count(files: list[Path]) -> tuple[int, float]:
-    """A dataset's pairs and their mean length, over both sequences."""
-    pairs = 0
-    letters = 0
+def shuffled(name: str, files: list[Path], published: dict[str, list[int]]) -> tuple[Path, list[int] | None, float]:
+    """A dataset as one file of its pairs in a fixed random order, the published costs in the same
+    order when there are any for every file, and the mean sequence length.
+
+    pa-bench's files often run from close pairs to divergent ones, so a tool stopped by its budget
+    would average the easy end; in one shuffled order every tool's pairs, however many it aligns,
+    are an unbiased sample, and the first pairs of each are the same pairs.
+    """
+    pairs = []
     for file in files:
-        with open(file) as opened:
-            for line in opened:
-                letters += len(line) - 2
-                pairs += line.startswith(">")
-    return pairs, letters / max(2 * pairs, 1)
+        key = f"{file.parent.name}/{file.name}"
+        lines = file.read_text().splitlines()
+        for index in range(0, len(lines) - 1, 2):
+            pairs.append((key, index // 2, lines[index], lines[index + 1]))
+    random.Random(SEED).shuffle(pairs)
+    directory = DATA / "shuffled"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{name}.seq"
+    path.write_text("".join(f"{first}\n{second}\n" for _, _, first, second in pairs))
+    reference = None
+    if all(key in published for key, _, _, _ in pairs):
+        reference = [published[key][index] for key, index, _, _ in pairs]
+    letters = sum(len(first) + len(second) - 2 for _, _, first, second in pairs)
+    return path, reference, letters / max(2 * len(pairs), 1)
 
 
 # endregion Runs
@@ -187,11 +202,14 @@ def main() -> None:
     parser.add_argument("--full", action="store_true", help="add the 3 and 10 Mbp synthetic pairs")
     parser.add_argument("--budget", type=float, default=20.0, help="seconds per tool per dataset (default 20)")
     parser.add_argument("--install-rust", action="store_true", help="install A*PA's nightly under the cache")
+    parser.add_argument("--only", nargs="*", default=[], help="run only datasets whose names contain one of these")
     options = parser.parse_args()
 
     download()
     datasets = [(name, sorted((DATA / name).glob("*.seq"))) for name in REAL]
     datasets += [(file.stem, [file]) for file in generate(LENGTHS + (FULL_LENGTHS if options.full else []))]
+    if options.only:
+        datasets = [(name, files) for name, files in datasets if any(part in name for part in options.only)]
     published = published_costs()
 
     ours = mojo_runner()
@@ -210,7 +228,8 @@ def main() -> None:
     ]
     failed = []
     for name, files in datasets:
-        pairs, mean_length = pair_count(files)
+        path, reference, mean_length = shuffled(name, files, published)
+        pairs = sum(1 for line in open(path) if line.startswith(">"))
         tools = [
             (dinara("1 thread"), ours, dinara("1 thread")),
             (dinara("8 threads"), ours, dinara("8 threads")),
@@ -223,22 +242,20 @@ def main() -> None:
         results = {}
         for column, binary, tool in tools:
             print(f"{name}: {column} ...", file=sys.stderr, flush=True)
-            results[column] = run_tool(binary, tool, files, options.budget)
+            results[column] = run_tool(binary, tool, [path], options.budget)
 
         # Every tool's costs against every other's and the published ones, on the pairs both have.
         agree = True
-        for file in files:
-            key = f"{file.parent.name}/{file.name}"
-            reference = published.get(key)
-            seen = [(column, rows[key][2]) for column, rows in results.items() if key in rows]
-            if reference is not None:
-                seen.append(("published", reference))
-            for index, (column, costs) in enumerate(seen):
-                for other, other_costs in seen[index + 1 :]:
-                    common = min(len(costs), len(other_costs))
-                    if costs[:common] != other_costs[:common]:
-                        agree = False
-                        print(f"DISAGREEMENT on {key}: {column} and {other}", file=sys.stderr)
+        key = f"{path.parent.name}/{path.name}"
+        seen = [(column, rows[key][2]) for column, rows in results.items() if key in rows]
+        if reference is not None:
+            seen.append(("published", reference))
+        for index, (column, costs) in enumerate(seen):
+            for other, other_costs in seen[index + 1 :]:
+                common = min(len(costs), len(other_costs))
+                if costs[:common] != other_costs[:common]:
+                    agree = False
+                    print(f"DISAGREEMENT on {name}: {column} and {other}", file=sys.stderr)
         if not agree:
             failed.append(name)
 
