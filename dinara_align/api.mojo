@@ -624,12 +624,33 @@ def alignments[
     return results^
 
 
+def longest_first(firsts: List[String], seconds: List[String]) -> List[Int]:
+    """The pairs' indices, the longest pair first: dealt out in that order, every chunk of a batch gets
+    its share of the long pairs, and none is left alone at the end holding up the rest."""
+    comptime INDEX_BITS = 25
+    var pairs = len(firsts)
+    var order = List[Int](capacity=pairs)
+    if pairs >= 1 << INDEX_BITS:
+        for index in range(pairs):
+            order.append(index)
+        return order^
+    var keys = List[Int](capacity=pairs)
+    for index in range(pairs):
+        var length = firsts[index].byte_length() + seconds[index].byte_length()
+        keys.append((length << INDEX_BITS) | index)
+    sort(keys)
+    for slot in range(pairs - 1, -1, -1):
+        order.append(keys[slot] & ((1 << INDEX_BITS) - 1))
+    return order^
+
+
 def edit_distances(firsts: List[String], seconds: List[String], threads: Optional[Int] = None) raises -> List[Int]:
     """Every pair's edit distance, as `edit_distance` gives it, the pairs spread over `threads`
     threads, every thread this process may use by default.
 
-    The pairs are independent, so each runs on one thread start to finish, in contiguous chunks,
-    several a thread, so one that draws a long pair does not hold up the rest. One thread a pair
+    The pairs are independent, so each runs on one thread start to finish, in chunks, several a
+    thread, each dealt every so many pairs of the batch taken longest first, so that no thread draws
+    the long pairs and holds up the rest (see `longest_first`). One thread a pair
     beats sharing threads out among few long pairs: a pair split over two runs at less than twice
     the speed. A pair that fails raises, after the rest, the same error a serial loop would have
     raised first.
@@ -643,9 +664,11 @@ def edit_distances(firsts: List[String], seconds: List[String], threads: Optiona
     var failed = List[Bool](length=pairs, fill=False)
     var flags = failed.unsafe_ptr()
     var chunks = chunk_count(pairs, workers)
+    var order = longest_first(firsts, seconds)
 
     def distance_range(slot: Int) {imm}:
-        for index in range(pairs * slot // chunks, pairs * (slot + 1) // chunks):
+        for dealt in range(slot, pairs, chunks):
+            var index = order[dealt]
             try:
                 out[unsafe_offset=index] = edit_distance(firsts[index], seconds[index], 1)
             except:
@@ -674,9 +697,11 @@ def edit_alignments(
     var failed = List[Bool](length=pairs, fill=False)
     var flags = failed.unsafe_ptr()
     var chunks = chunk_count(pairs, workers)
+    var order = longest_first(firsts, seconds)
 
     def alignment_range(slot: Int) {imm}:
-        for index in range(pairs * slot // chunks, pairs * (slot + 1) // chunks):
+        for dealt in range(slot, pairs, chunks):
+            var index = order[dealt]
             try:
                 out[unsafe_offset=index] = edit_alignment(firsts[index], seconds[index], 1)
             except:
