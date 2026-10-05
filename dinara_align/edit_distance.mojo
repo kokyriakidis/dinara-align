@@ -3595,8 +3595,29 @@ comptime RECOMPUTE_WORDS = 4
 """Words a tile's recompute first takes above the point it traces from, doubling while that falls short."""
 
 
+struct Recompute(Movable):
+    """A tile recompute's buffers, kept across tiles so a recompute neither allocates nor zeroes: every
+    slot it reads it has written first."""
+
+    var plus: List[UInt64]
+    var minus: List[UInt64]
+    var bases: List[Int]
+
+    def __init__(out self):
+        self.plus = List[UInt64]()
+        self.minus = List[UInt64]()
+        self.bases = List[Int]()
+
+
 def recomputed_segment(
-    profile: Profile, trail: Trail, tile: Int, end_column: Int, end_row: Int, score: Int, mut moves: List[UInt8]
+    profile: Profile,
+    trail: Trail,
+    tile: Int,
+    end_column: Int,
+    end_row: Int,
+    score: Int,
+    mut buffers: Recompute,
+    mut moves: List[UInt8],
 ) -> Int:
     """Traces a tile back cell by cell, after sweeping it again and keeping every column's differences.
 
@@ -3610,7 +3631,9 @@ def recomputed_segment(
     var window = RECOMPUTE_WORDS
     while True:
         var first_word = max(top, end_word - window)
-        var left = window_segment(profile, trail, tile, end_column, end_row, score, first_word, end_word, moves)
+        var left = window_segment(
+            profile, trail, tile, end_column, end_row, score, first_word, end_word, buffers, moves
+        )
         if left >= 0 or first_word == top:
             return left
         window *= 2
@@ -3625,6 +3648,7 @@ def window_segment(
     score: Int,
     first_word: Int,
     end_word: Int,
+    mut buffers: Recompute,
     mut moves: List[UInt8],
 ) -> Int:
     """`recomputed_segment` over words `[first_word, end_word)` alone, or -1 when they do not hold the path.
@@ -3640,21 +3664,25 @@ def window_segment(
     var count = end_word - first_word
     var width = end_column - first_column
     var offset = trail.offsets[tile] + first_word - trail.tops[tile]
-    var plus = List[UInt64](length=(width + 1) * count, fill=0)
-    var minus = List[UInt64](length=(width + 1) * count, fill=0)
+    buffers.plus.resize(unsafe_uninit_length=(width + 1) * count)
+    buffers.minus.resize(unsafe_uninit_length=(width + 1) * count)
+    buffers.bases.resize(unsafe_uninit_length=(width + 1) * (count + 1))
+    var plus = buffers.plus.unsafe_ptr()
+    var minus = buffers.minus.unsafe_ptr()
+    var bases = buffers.bases.unsafe_ptr()
     # The left edge's score at the window's top, carried down from the band's.
     var anchor = trail.anchors[tile]
     for word in range(trail.offsets[tile], offset):
         anchor += word_value(trail.edge_plus[word], trail.edge_minus[word])
     for word in range(count):
-        plus[word] = trail.edge_plus[offset + word]
-        minus[word] = trail.edge_minus[offset + word]
+        plus[unsafe_offset=word] = trail.edge_plus[offset + word]
+        minus[unsafe_offset=word] = trail.edge_minus[offset + word]
     for step in range(1, width + 1):
         var horizontal_plus = UInt64(1)
         var horizontal_minus = UInt64(0)
         for word in range(count):
-            var vertical_plus = plus[(step - 1) * count + word]
-            var vertical_minus = minus[(step - 1) * count + word]
+            var vertical_plus = plus[unsafe_offset=(step - 1) * count + word]
+            var vertical_minus = minus[unsafe_offset=(step - 1) * count + word]
             advance[1](
                 horizontal_plus,
                 horizontal_minus,
@@ -3662,27 +3690,26 @@ def window_segment(
                 vertical_minus,
                 profile.matches(first_column + step - 1, top + word),
             )
-            plus[step * count + word] = vertical_plus
-            minus[step * count + word] = vertical_minus
+            plus[unsafe_offset=step * count + word] = vertical_plus
+            minus[unsafe_offset=step * count + word] = vertical_minus
 
     # Scores at each word's top on every column: the window's top scores the anchor plus one per column.
-    var bases = List[Int](length=(width + 1) * (count + 1), fill=0)
     for step in range(width + 1):
         var running = anchor + step
-        bases[step * (count + 1)] = running
+        bases[unsafe_offset=step * (count + 1)] = running
         for word in range(count):
-            running += word_value(plus[step * count + word], minus[step * count + word])
-            bases[step * (count + 1) + word + 1] = running
+            running += word_value(plus[unsafe_offset=step * count + word], minus[unsafe_offset=step * count + word])
+            bases[unsafe_offset=step * (count + 1) + word + 1] = running
 
     @always_inline
     def score_at(step: Int, row: Int) {imm bases, imm plus, imm minus, imm count, imm top} -> Int:
         var word = (row - 1) // WORD_BITS - top if row > top * WORD_BITS else 0
         if row == top * WORD_BITS:
-            return bases[step * (count + 1)]
+            return bases[unsafe_offset=step * (count + 1)]
         var bits = row - (top + word) * WORD_BITS
         var kept = ALL_ONES if bits == WORD_BITS else (UInt64(1) << UInt64(bits)) - 1
-        return bases[step * (count + 1) + word] + word_value(
-            plus[step * count + word] & kept, minus[step * count + word] & kept
+        return bases[unsafe_offset=step * (count + 1) + word] + word_value(
+            plus[unsafe_offset=step * count + word] & kept, minus[unsafe_offset=step * count + word] & kept
         )
 
     var whole = first_word == trail.tops[tile]
@@ -3728,6 +3755,7 @@ def trace_back(profile: Profile, trail: Trail, start_column: Int, start_row: Int
     """
     var edge = Edge()
     var fronts = Wavefronts()
+    var buffers = Recompute()
     var column = start_column
     var row = start_row
     var current = score
@@ -3738,7 +3766,7 @@ def trace_back(profile: Profile, trail: Trail, start_column: Int, start_row: Int
         var limit = max(WAVEFRONT_FLOOR, 3 * share)
         var left = wavefront_segment(profile, edge, first_column, column, row, current, limit, fronts, moves)
         if left < 0:
-            left = recomputed_segment(profile, trail, tile, column, row, current, moves)
+            left = recomputed_segment(profile, trail, tile, column, row, current, buffers, moves)
         # Exact, since it plus the segment's cost is the exact score the segment started from.
         current = edge.score(left)
         column = first_column
