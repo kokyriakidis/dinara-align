@@ -628,6 +628,34 @@ def test_edit_batches_match_single_pairs() raises:
         _ = edit_distances(bad_firsts, short)
 
 
+def test_striped_bands_match_one_thread() raises:
+    """A long, divergent pair's band split into stripes across threads answers as one thread does.
+
+    From 200 kbp a divergent pair sweeps each tile's words on several threads at once;
+    the distance and the alignment's score must be one thread's, and every alignment is rescored
+    independently and rebuilds both inputs.
+    """
+    seed(18)
+    var unit = Scoring.edit_distance()
+    for rate in [0.1, 0.15, 0.2]:
+        var first = random_sequence(210000, 210000, DNA_ALPHABET)
+        var second = mutate(first, rate)
+        var bytes = List[UInt8](second.as_bytes())
+        var tail = len(bytes) - len(bytes) // 25
+        var burst = String(unsafe_from_utf8=slice_bytes(bytes, 0, tail)) + mutate(
+            String(unsafe_from_utf8=slice_bytes(bytes, tail, len(bytes))), 0.5
+        )
+        var pairs: List[Tuple[String, String]] = [(first, second), (first, burst)]
+        for pair in pairs:
+            var expected = edit_distance(pair[0], pair[1], 1)
+            assert_equal(edit_distance(pair[0], pair[1], 8), expected)
+            var aligned = edit_alignment(pair[0], pair[1], 8)
+            assert_equal(Int(aligned.score), expected)
+            assert_equal(aligned.first_gapped.replace("-", ""), pair[0])
+            assert_equal(aligned.second_gapped.replace("-", ""), pair[1])
+            assert_equal(rescore(aligned.first_gapped, aligned.second_gapped, unit), -expected)
+
+
 def test_seeded_bands_are_exact() raises:
     """Pairs long enough for the seed heuristic, exact seeds and inexact, keep the exact distance.
 
