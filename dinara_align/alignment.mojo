@@ -756,6 +756,123 @@ def sweep_bands[
         final_deletes[column] = bands.deletes_above[column]
 
 
+comptime SWEEP_LANES = 16
+"""Cells the vectorized linear-space sweep computes at once."""
+
+comptime VECTOR_SWEEP_ROWS = 2 * SWEEP_LANES
+"""Rows from which a sweep under a uniform table runs by anti-diagonal: fewer leave its lanes idle."""
+
+
+def vector_sweep_bands[
+    half: SweepHalf
+](
+    first: ImmSpan[Scalar[SymbolDType], _],
+    second: ImmSpan[Scalar[SymbolDType], _],
+    first_from: Int,
+    first_to: Int,
+    second_from: Int,
+    second_to: Int,
+    entering_run: GapRun,
+    reward: Int,
+    mismatch: Int,
+    scoring: AffineGapCosts,
+    final_scores: MutSpan[Int32, _],
+    final_deletes: MutSpan[Int32, _],
+):
+    """`sweep_bands` under a table of one match and one mismatch score, sixteen cells at a time.
+
+    The same recurrence and borders, swept by anti-diagonal with each diagonal's cells by row, as
+    `vector_score` sweeps; the last row's cell of each diagonal is taken as the diagonal passes it.
+    """
+    comptime Lanes = SIMD[DType.int32, SWEEP_LANES]
+    comptime reversed_order = half == SweepHalf.REVERSE
+    var rows = first_to - first_from
+    var columns = second_to - second_from
+    var open = scoring.open
+    var extend = scoring.extend
+    # Row `i` reads letter `i` of this half's rows; the columns are stored back to front, so a
+    # diagonal's letters load contiguously.
+    var letters = List[UInt8](length=rows + 1 + SWEEP_LANES, fill=0xFE)
+    for row in range(1, rows + 1):
+        letters[row] = UInt8(first[first_to - row] if reversed_order else first[first_from + row - 1])
+    var others = List[UInt8](length=columns + SWEEP_LANES, fill=0xFF)
+    for index in range(columns):
+        var column = columns - index
+        others[index] = UInt8(second[second_to - column] if reversed_order else second[second_from + column - 1])
+
+    @always_inline
+    def top_score(column: Int) {imm open, imm extend} -> Int32:
+        return 0 if column == 0 else open + Int32(column - 1) * extend
+
+    @always_inline
+    def left_score(row: Int) {imm open, imm extend, imm entering_run} -> Int32:
+        if entering_run == GapRun.EXTENDS:
+            return Int32(row) * extend
+        return open + Int32(row - 1) * extend
+
+    var size = rows + 1 + SWEEP_LANES
+    var two_back = List[Int32](length=size, fill=0)
+    var one_back = List[Int32](length=size, fill=0)
+    var current = List[Int32](length=size, fill=0)
+    var deletes_back = List[Int32](length=size, fill=0)
+    var deletes = List[Int32](length=size, fill=0)
+    var inserts_back = List[Int32](length=size, fill=0)
+    var inserts = List[Int32](length=size, fill=0)
+    # Diagonal zero is the corner, whose deletion layer reads as the top row's do.
+    two_back[0] = 0
+    # Diagonal one: the border cells beside the corner.
+    one_back[0] = top_score(1)
+    deletes_back[0] = one_back[0] + open + extend
+    one_back[1] = left_score(1)
+    deletes_back[1] = one_back[1]
+    inserts_back[1] = one_back[1] + open + extend
+    if rows == 1:
+        final_scores[0] = one_back[1]
+        final_deletes[0] = deletes_back[1]
+
+    var opening = Lanes(open)
+    var extension = Lanes(extend)
+    var matched = Lanes(Int32(reward))
+    var mismatched = Lanes(Int32(mismatch))
+    for diagonal in range(2, rows + columns + 1):
+        var low = max(1, diagonal - columns)
+        var high = min(rows, diagonal - 1)
+        var lag = columns - diagonal
+        var row = low
+        while row <= high:
+            var above = one_back.unsafe_ptr().unsafe_offset(row - 1).unsafe_load[width=SWEEP_LANES]()
+            var above_delete = deletes_back.unsafe_ptr().unsafe_offset(row - 1).unsafe_load[width=SWEEP_LANES]()
+            var left = one_back.unsafe_ptr().unsafe_offset(row).unsafe_load[width=SWEEP_LANES]()
+            var left_insert = inserts_back.unsafe_ptr().unsafe_offset(row).unsafe_load[width=SWEEP_LANES]()
+            var above_left = two_back.unsafe_ptr().unsafe_offset(row - 1).unsafe_load[width=SWEEP_LANES]()
+            var mine = letters.unsafe_ptr().unsafe_offset(row).unsafe_load[width=SWEEP_LANES]()
+            var theirs = others.unsafe_ptr().unsafe_offset(lag + row).unsafe_load[width=SWEEP_LANES]()
+            var substitution = mine.eq(theirs).select(matched, mismatched)
+            var deletion = max(above + opening, above_delete + extension)
+            var insertion = max(left + opening, left_insert + extension)
+            var score = max(above_left + substitution, max(deletion, insertion))
+            current.unsafe_ptr().unsafe_offset(row).unsafe_store(score)
+            deletes.unsafe_ptr().unsafe_offset(row).unsafe_store(deletion)
+            inserts.unsafe_ptr().unsafe_offset(row).unsafe_store(insertion)
+            row += SWEEP_LANES
+        # The border cells of this diagonal, written after the lanes that may have run over them.
+        if diagonal <= columns:
+            current[0] = top_score(diagonal)
+            deletes[0] = current[0] + open + extend
+        if diagonal <= rows:
+            current[diagonal] = left_score(diagonal)
+            deletes[diagonal] = current[diagonal]
+            inserts[diagonal] = current[diagonal] + open + extend
+        # The last row's cell on this diagonal, its column `diagonal - rows`.
+        if diagonal >= rows:
+            final_scores[diagonal - rows] = current[rows]
+            final_deletes[diagonal - rows] = deletes[rows]
+        swap(two_back, one_back)
+        swap(one_back, current)
+        swap(deletes_back, deletes)
+        swap(inserts_back, inserts)
+
+
 def solve_rectangle(
     first: ImmSpan[Scalar[SymbolDType], _],
     second: ImmSpan[Scalar[SymbolDType], _],
@@ -937,8 +1054,12 @@ def serial_hirschberg(
     leaf_cells: Int,
     path_columns: MutSpan[Int32, _],
     path_layers: MutSpan[Layer, _],
+    uniform: Optional[Tuple[Int, Int]] = None,
 ) raises:
     """Linear-space traceback: split on rows, join the two halves, recurse without recursion.
+
+    Under a `uniform` table of one match and one mismatch score, the sweeps of halves tall enough
+    run sixteen cells at a time (see `vector_sweep_bands`), computing the same rows.
 
     A substitution step advances `i + j` by two and can skip an anti-diagonal entirely, while the
     row index advances by exactly zero or one per step, so the cut has to be a row. The two halves
@@ -978,36 +1099,67 @@ def serial_hirschberg(
             continue
 
         var split = (first_from + first_to) // 2
-        sweep_bands[SweepHalf.FORWARD](
-            first,
-            second,
-            first_from,
-            split,
-            second_from,
-            second_to,
-            top,
-            substitutions,
-            alphabet_size,
-            scoring,
-            bands,
-            forward_scores,
-            forward_deletes,
-        )
-        sweep_bands[SweepHalf.REVERSE](
-            first,
-            second,
-            split,
-            first_to,
-            second_from,
-            second_to,
-            bottom,
-            substitutions,
-            alphabet_size,
-            scoring,
-            bands,
-            reverse_scores,
-            reverse_deletes,
-        )
+        if uniform and first_to - split >= VECTOR_SWEEP_ROWS:
+            var table = uniform.value()
+            vector_sweep_bands[SweepHalf.FORWARD](
+                first,
+                second,
+                first_from,
+                split,
+                second_from,
+                second_to,
+                top,
+                table[0],
+                table[1],
+                scoring,
+                forward_scores,
+                forward_deletes,
+            )
+            vector_sweep_bands[SweepHalf.REVERSE](
+                first,
+                second,
+                split,
+                first_to,
+                second_from,
+                second_to,
+                bottom,
+                table[0],
+                table[1],
+                scoring,
+                reverse_scores,
+                reverse_deletes,
+            )
+        else:
+            sweep_bands[SweepHalf.FORWARD](
+                first,
+                second,
+                first_from,
+                split,
+                second_from,
+                second_to,
+                top,
+                substitutions,
+                alphabet_size,
+                scoring,
+                bands,
+                forward_scores,
+                forward_deletes,
+            )
+            sweep_bands[SweepHalf.REVERSE](
+                first,
+                second,
+                split,
+                first_to,
+                second_from,
+                second_to,
+                bottom,
+                substitutions,
+                alphabet_size,
+                scoring,
+                bands,
+                reverse_scores,
+                reverse_deletes,
+            )
 
         var join = best_crossing(forward_scores, forward_deletes, reverse_scores, reverse_deletes, width, scoring)
         var best_plain = join.plain
