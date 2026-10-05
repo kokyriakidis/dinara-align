@@ -78,6 +78,26 @@ vector steps, and narrow enough that a long pair still yields more tiles per dia
 comptime PARALLEL_CELLS = 64_000_000
 """Cells below which one thread finishes before a fork would pay for itself."""
 
+comptime STRIPED_MIN_COLUMNS = 200_000
+"""Columns from which a divergent pair's band splits into stripes across threads: a striped round's
+check-in, barriers and wider tiles cost a 100 kbp pair at one edit in seven a fifth more, and save a
+300 kbp one a third."""
+
+comptime MAX_STRIPES = 8
+"""The most threads one round's tiles are split among: past the eight of an M2, four fast and four
+slow, a pipeline of stripes runs only as fast as its slowest."""
+
+comptime STRIPED_COLUMNS = 1024
+"""Columns of a band tile swept on several threads: four times `BAND_COLUMNS`, so the threads meet a
+quarter as often, for a band a little taller, as the pruning between tiles runs a quarter as often."""
+
+comptime STRIPE_CHUNK = 128
+"""Columns a stripe sweeps before handing them to the stripe below: wide enough that each chunk's
+stagger triangles cost little beside it, narrow enough that the stripes below start soon."""
+
+comptime COUNTER_SPACING = 16
+"""Words between two threads' counters, so no two share a cache line."""
+
 comptime BAND_COLUMNS = 256
 """
 Columns of one band tile, A*PA2's block width. A tile computes every word its columns reach, so a
@@ -1891,6 +1911,8 @@ struct HalfBand(Movable):
     """The least a checkpoint may lower the bound to."""
     var checkpoint: Int
     """Checkpoints passed."""
+    var stripes: Int
+    """Threads a tile's words are split among, one stripe each (see `striped_distance`)."""
 
     def __init__(
         out self,
@@ -1900,6 +1922,7 @@ struct HalfBand(Movable):
         adapt: Bool = False,
         lower: Bool = True,
         lowest: Int = 0,
+        stripes: Int = 1,
     ):
         self.columns = profile.columns
         self.rows = profile.rows
@@ -1910,10 +1933,15 @@ struct HalfBand(Movable):
         self.stop_column = stop_column
         # One tile's width of horizontal edge, since each tile starts again from `+1` above (see
         # `Sweep.shifted`); the last tile may absorb a sliver of up to `2 * LANES` more columns.
-        self.frontier = Frontier(BAND_COLUMNS + 2 * LANES, self.words)
+        self.stripes = stripes
+        var tile_width = STRIPED_COLUMNS if stripes > 1 else BAND_COLUMNS
+        self.frontier = Frontier(tile_width + 2 * LANES, self.words)
         profile.build_planes()
         self.sweep = self.frontier.sweep(profile)
-        self.bounds = tile_bounds(stop_column, NARROW_COLUMNS if threshold < NARROW_BAND else BAND_COLUMNS)
+        self.bounds = tile_bounds(
+            stop_column,
+            STRIPED_COLUMNS if stripes > 1 else (NARROW_COLUMNS if threshold < NARROW_BAND else BAND_COLUMNS),
+        )
         self.top = 0
         self.end_word = 0
         self.anchor = 0
@@ -2087,8 +2115,10 @@ def pruned_distance[
     adapt: Bool = False,
     lower: Bool = True,
     lowest: Int = 0,
+    stripes: Int = 1,
 ) -> Round:
-    """One round of band doubling with A*PA2-simple's pruning, on one thread.
+    """One round of band doubling with A*PA2-simple's pruning, on one thread, or with `stripes` above
+    one split among that many (see `striped_distance`).
 
     Only cells a path of cost at most `threshold` could cross are computed. Ukkonen's band bounds
     them, gap from the start plus gap to the end within the bound, and pruning narrows it further:
@@ -2119,6 +2149,10 @@ def pruned_distance[
     With `adapt`, a round over the whole width without seeds re-aims its bound as it goes (see
     `HalfBand.check`), and a distance is exact only within the bound it ends on.
     """
+    if stripes > 1:
+        return striped_distance[record](
+            profile, threshold, stop_column, trail, edge, heuristic, adapt, lower, lowest, stripes
+        )
     comptime if record:
         trail.clear()
     var band = HalfBand(profile, threshold, stop_column, adapt, lower, lowest)
@@ -2128,6 +2162,154 @@ def pruned_distance[
         band.tile_sweep(tile).words(band.top, band.end_word, band.first_column(tile), band.end_column(tile))
         if not band.finish(tile, edge, heuristic):
             return band.outcome
+    return band.result(edge)
+
+
+def spin_barrier(counters: MutPointer[Int64, _], arrived: Int, generation: Int, threads: Int, mut seen: Int):
+    """Waits until all `threads` threads have reached the barrier for the `seen + 1`-th time.
+
+    `arrived` and `generation` index two counters: the last thread to arrive resets the count and
+    moves the generation on, which releases the rest, who spin on it rather than sleep, since a
+    tile takes microseconds.
+    """
+    seen += 1
+    if Int(Atomic.fetch_add(counters.unsafe_offset(arrived), Int64(1))) == threads - 1:
+        Atomic.store(counters.unsafe_offset(arrived), Int64(0))
+        Atomic.store(counters.unsafe_offset(generation), Int64(seen))
+        return
+    while Int(Atomic.load(counters.unsafe_offset(generation))) < seen:
+        pass
+
+
+def stripe_start(count: Int, stripe: Int, stripes: Int) -> Int:
+    """The first of `count` words that stripe `stripe` of `stripes` takes, a multiple of `LANES` from
+    the top, so every stripe but the last takes the vector path whole."""
+    if stripe >= stripes:
+        return count
+    return min(count, ceildiv(count * stripe // stripes, LANES) * LANES)
+
+
+def striped_distance[
+    record: Bool
+](
+    mut profile: Profile,
+    threshold: Int,
+    stop_column: Int,
+    mut trail: Trail,
+    mut edge: Edge,
+    mut heuristic: SeedHeuristic,
+    adapt: Bool,
+    lower: Bool,
+    lowest: Int,
+    stripes: Int,
+) -> Round:
+    """`pruned_distance`'s round with each tile's words split among `stripes` threads.
+
+    The tiles still go one after another, since each tile's pruning sets the next one's rows, but a
+    tile's words are cut into stripes, one a thread, swept as a pipeline: a stripe sweeps a chunk of
+    `STRIPE_CHUNK` columns once the stripe above has swept it, reading the horizontal differences
+    that stripe left there and leaving its own in their place for the stripe below. Each stripe owns
+    its words' vertical differences, so no two threads write the same word. Between tiles every
+    thread waits while the first prunes the tile and readies the next, exactly as one thread would,
+    so the round computes the same cells and finds the same distance.
+
+    A tile too short to split in two vector groups a stripe is swept by the first thread alone.
+
+    The threads spin rather than sleep, which is only safe among threads that are all running, and
+    a fork does not promise that every task starts at once. So each task checks in first, and the
+    first waits up to `CHECK_IN_NANOSECONDS` for the rest before closing the team: the stripes go
+    to whoever checked in, a task arriving after that leaves at once, and a team of one sweeps every
+    tile alone.
+    """
+    comptime if record:
+        trail.clear()
+    var band = HalfBand(profile, threshold, stop_column, adapt, lower, lowest, stripes)
+    var tiles = band.tiles()
+    if tiles == 0 or not band.prepare[record](0, trail, heuristic):
+        return band.outcome
+    # Each thread's chunk count, then the barrier's two counters and the stop flag, a line apart.
+    var counters = List[Int64](length=(stripes + 3) * COUNTER_SPACING, fill=0)
+    var shared = counters.unsafe_ptr()
+    var arrived = stripes * COUNTER_SPACING
+    var generation = (stripes + 1) * COUNTER_SPACING
+    var stopped = (stripes + 2) * COUNTER_SPACING
+    var present = Atomic[Int64](0)
+    var team = Atomic[Int64](0)
+
+    def stripe(
+        task: Int,
+    ) {
+        mut band,
+        mut trail,
+        mut edge,
+        mut heuristic,
+        mut present,
+        mut team,
+        imm shared,
+        imm stripes,
+        imm tiles,
+        imm arrived,
+        imm generation,
+        imm stopped,
+    }:
+        var index = Int(present.fetch_add(1))
+        if index >= Int(ALONE):
+            return
+        if index == 0:
+            var waited_from = perf_counter_ns()
+            while True:
+                var count = present.load()
+                if Int(count) >= stripes or Int(perf_counter_ns() - waited_from) > CHECK_IN_NANOSECONDS:
+                    var expected = count
+                    if present.compare_exchange(expected, count + ALONE):
+                        _ = team.fetch_add(count)
+                        break
+        else:
+            while team.load() == 0:
+                pass
+        var members = Int(team.load())
+        var seen = 0
+        var swept = 0
+        for tile in range(tiles):
+            var first_column = band.first_column(tile)
+            var end_column = band.end_column(tile)
+            var count = band.end_word - band.top
+            var sweep = band.tile_sweep(tile)
+            if count < 2 * LANES * members:
+                if index == 0:
+                    sweep.words(band.top, band.end_word, first_column, end_column)
+            else:
+                var low = band.top + stripe_start(count, index, members)
+                var high = band.top + stripe_start(count, index + 1, members)
+                var chunks = ceildiv(end_column - first_column, STRIPE_CHUNK)
+                for chunk in range(chunks):
+                    var target = Int64(swept + chunk + 1)
+                    if index > 0:
+                        while Atomic.load(shared.unsafe_offset((index - 1) * COUNTER_SPACING)) < target:
+                            pass
+                    if low < high:
+                        sweep.words(
+                            low,
+                            high,
+                            first_column + chunk * STRIPE_CHUNK,
+                            min(first_column + (chunk + 1) * STRIPE_CHUNK, end_column),
+                        )
+                    Atomic.store(shared.unsafe_offset(index * COUNTER_SPACING), target)
+                swept += chunks
+            spin_barrier(shared, arrived, generation, members, seen)
+            if index == 0:
+                var going = band.finish(tile, edge, heuristic)
+                if going and tile + 1 < tiles:
+                    going = band.prepare[record](tile + 1, trail, heuristic)
+                if not going:
+                    Atomic.store(shared.unsafe_offset(stopped), Int64(1))
+            spin_barrier(shared, arrived, generation, members, seen)
+            if Atomic.load(shared.unsafe_offset(stopped)) != 0:
+                return
+
+    parallelize(stripe, stripes, stripes)
+    if counters[stopped] != 0:
+        return band.outcome
     return band.result(edge)
 
 
@@ -3208,6 +3390,7 @@ def band_doubling[
     mut forward_heuristic: SeedHeuristic,
     mut backward_heuristic: SeedHeuristic,
     trusted: Bool = True,
+    stripes: Int = 1,
 ) -> Outcome:
     """Band doubling, from the start alone or from both ends at once to meet in the middle.
 
@@ -3308,6 +3491,7 @@ def band_doubling[
                 first_round,
                 first_round,
                 0 if first_round else last_bound + max((last_bound - origin) // 4, SEED_SLACK),
+                stripes,
             )
         first_round = False
 
@@ -3413,6 +3597,14 @@ def edit_distance(first: String, second: String, threads: Optional[Int] = None) 
     # A band narrowed by many chained seeds gains less from a second thread than that thread's half,
     # with its own heuristic to build and a weaker start, costs.
     var meet = workers > 1 and forward.columns >= MEET_COLUMNS and not forward_heuristic.chains_well()
+    # A long, divergent pair, whose seeds match within one edit or chain poorly, sweeps a tall band,
+    # which splits into stripes across the threads (see `striped_distance`) far better than into two
+    # halves; a narrow band does not.
+    var divergent = forward_heuristic.cost > 1 or not forward_heuristic.chains_well()
+    var striped = forward.columns >= STRIPED_MIN_COLUMNS and divergent
+    var stripes = min(workers, MAX_STRIPES) if workers > 1 and striped else 1
+    if stripes > 1:
+        meet = False
     var backward = Profile(first, second, reverse=True) if meet else Profile(String(), String())
     var forward_trail = Trail()
     var backward_trail = Trail()
@@ -3434,6 +3626,7 @@ def edit_distance(first: String, second: String, threads: Optional[Int] = None) 
         forward_heuristic,
         backward_heuristic,
         trusted,
+        stripes,
     )
     if outcome.distance >= 0:
         return outcome.distance
@@ -4045,6 +4238,12 @@ def edit_alignment(
             and columns >= MEET_COLUMNS
             and max(threads.or_else(hardware_threads()), 1) > 1
         )
+        # A long, divergent pair's tall band splits into stripes across the threads, as in `edit_distance`.
+        var divergent = forward_heuristic.cost > 1 or not forward_heuristic.chains_well()
+        var striped = columns >= STRIPED_MIN_COLUMNS and divergent
+        var stripes = min(seed_workers, MAX_STRIPES) if seed_workers > 1 and striped else 1
+        if stripes > 1:
+            meet = False
         var backward = Profile(first, second, reverse=True) if meet else Profile(String(), String())
         var forward_trail = Trail(columns)
         var backward_trail = Trail(columns)
@@ -4066,6 +4265,7 @@ def edit_alignment(
             forward_heuristic,
             backward_heuristic,
             trusted,
+            stripes,
         )
         distance = outcome.distance
         if meet:
