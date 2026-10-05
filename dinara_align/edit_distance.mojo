@@ -1365,10 +1365,22 @@ struct HalfBand(Movable):
     """Set once the round has pruned every row, the reason it stopped."""
     var adapt: Bool
     """Whether the round re-aims its bound at checkpoints (see `check`)."""
+    var lower: Bool
+    """Whether a checkpoint may give the round up as well as lower its bound."""
+    var lowest: Int
+    """The least a checkpoint may lower the bound to."""
     var checkpoint: Int
     """Checkpoints passed."""
 
-    def __init__(out self, mut profile: Profile, threshold: Int, stop_column: Int, adapt: Bool = False):
+    def __init__(
+        out self,
+        mut profile: Profile,
+        threshold: Int,
+        stop_column: Int,
+        adapt: Bool = False,
+        lower: Bool = True,
+        lowest: Int = 0,
+    ):
         self.columns = profile.columns
         self.rows = profile.rows
         self.words = profile.words
@@ -1389,6 +1401,8 @@ struct HalfBand(Movable):
         self.floor = 0
         self.outcome = Round(-1, -1, threshold, -1)
         self.adapt = adapt and stop_column == self.columns
+        self.lower = lower
+        self.lowest = lowest
         self.checkpoint = 0
 
     def tiles(self) -> Int:
@@ -1514,10 +1528,10 @@ struct HalfBand(Movable):
         var gap = abs(self.difference)
         var estimate = gap + (least - gap) * self.columns // end_column
         var margin = estimate * (CHECKPOINTS + 1 - passed) * CHECK_MARGIN // 10
-        if estimate - margin // 2 > self.threshold:
+        if self.lower and estimate - margin // 2 > self.threshold:
             self.outcome = Round(-1, end_column, self.threshold, estimate)
             return False
-        var aim = estimate + margin + PROBE_MARGIN
+        var aim = max(estimate + margin + PROBE_MARGIN, self.lowest)
         if aim < self.threshold:
             self.threshold = aim
             self.extra = (aim - gap) // 2
@@ -1543,6 +1557,8 @@ def pruned_distance[
     mut edge: Edge,
     mut heuristic: SeedHeuristic,
     adapt: Bool = False,
+    lower: Bool = True,
+    lowest: Int = 0,
 ) -> Round:
     """One round of band doubling with A*PA2-simple's pruning, on one thread.
 
@@ -1577,7 +1593,7 @@ def pruned_distance[
     """
     comptime if record:
         trail.clear()
-    var band = HalfBand(profile, threshold, stop_column, adapt and heuristic.seeds == 0)
+    var band = HalfBand(profile, threshold, stop_column, adapt and heuristic.seeds == 0, lower, lowest)
     for tile in range(band.tiles()):
         if not band.prepare[record](tile, trail, heuristic):
             return band.outcome
@@ -1642,6 +1658,17 @@ alignment's search runs one front while what it has left costs less than startin
 comptime NO_DIAGONAL = Int.MIN
 """No diagonal: the fronts have not met."""
 
+comptime GIVE_UP_SHARE = 24
+"""A diagonal transition gives up on its projection only once it has spent at least one part in this
+many of what the cheapest band could cost, the band whose bound is the score already searched, since
+the distance is at least that.
+
+The projection from a front's first edits assumes them spread along the pair. Real reads and genomes
+gather theirs at the ends, a primer or a poly-A tail apart, and a projection from those alone can run
+hundreds of times over a distance of a few dozen; giving up on it hands a pair the search would finish
+in microseconds to a band over the whole matrix. Spending this share first bounds what a search that
+was going to give up anyway wastes to it, of a band's cost."""
+
 comptime PROBE_SPREAD = 1.5
 """Spreads of a projection's noise the search allows for before it gives up (see `noisy_budget`)."""
 
@@ -1652,10 +1679,10 @@ comptime EDITS_PER_STEP = 83
 """A band's column grows about 1.3 ns, a step, per this many edits of projected distance, its band
 growing taller with the distance."""
 
-comptime UNSEEDED_EDITS_PER_STEP = 55
+comptime UNSEEDED_EDITS_PER_STEP = 83
 """`EDITS_PER_STEP` for a distance whose band runs without seeds over more than `SHORT_COLUMNS`
-columns: its first bound guessed from the projection alone, it sweeps taller bands and more rounds,
-nearly twice the cost of a seeded one."""
+columns. Measured since the band re-aims its bound at checkpoints, it costs what a seeded one does
+per edit, about a step a column per 80 to 100 edits."""
 
 comptime PROBE_MARGIN = 16
 """How far past the projected distance the band's first bound reaches, on top of an eighth of it."""
@@ -2002,8 +2029,11 @@ def diagonal_transition(
             ):
                 return Probe(-1, max(estimate, score + 1), score)
             # What is left to search, about `estimate² - score²` diagonals, against what a band
-            # would cost; the work already done is spent either way.
-            if estimate * estimate - score * score > noisy_budget(step_budget(columns, step_tenths, estimate), score):
+            # would cost; the work already done is spent either way. Only once the search has spent
+            # its share of the cheapest band there could be (see `GIVE_UP_SHARE`).
+            if estimate * estimate - score * score > noisy_budget(
+                step_budget(columns, step_tenths, estimate), score
+            ) and score * score * GIVE_UP_SHARE >= step_budget(columns, step_tenths, score):
                 return Probe(-1, max(estimate, score + 1), score)
     return Probe(-1, ceiling + 1, ceiling)
 
@@ -2326,6 +2356,29 @@ def two_ended(
     return Meeting(Probe(-1, 2 * limit + 1, total), 0, 0, 0, 0)
 
 
+comptime DOUBLING_START = 256
+"""How far past the distance already ruled out an untrusted band's first bound reaches: A*PA2's own
+first step past the heuristic at the origin."""
+
+comptime AGREEMENT = 3
+"""Two projections agree when neither exceeds the other by more than one part in this many."""
+
+
+def trusted_projection(search: Probe, projected: Probe) -> Bool:
+    """Whether one front's projection from its first edits agrees with the search's from many more.
+
+    On pairs whose errors spread along them, as mutated sequences' do, the two land within a few
+    percent of each other and of the distance, and the band aims straight at them. Real reads gather
+    errors at their ends, a primer or a tail, and there the two disagree several times over; neither
+    is then worth aiming at.
+    """
+    if search.floor < 2 * PROBE_START or search.estimate <= search.floor:
+        return True
+    var first = projected.estimate
+    var later = search.estimate
+    return first * AGREEMENT <= later * (AGREEMENT + 1) and later * AGREEMENT <= first * (AGREEMENT + 1)
+
+
 def two_ended_gives_up(
     total: Int, reached: Int, columns: Int, rows: Int, step_tenths: Int, unseeded_edits_per_step: Int
 ) -> Int:
@@ -2337,6 +2390,8 @@ def two_ended_gives_up(
     var per_step = EDITS_PER_STEP if seeded or columns <= SHORT_COLUMNS else unseeded_edits_per_step
     if (estimate * estimate - total * total) * TWO_ENDED_PERCENT // 100 > step_budget(
         columns, step_tenths, estimate, per_step
+    ) and total * total * TWO_ENDED_PERCENT // 100 * GIVE_UP_SHARE >= step_budget(
+        columns, step_tenths, total, per_step
     ):
         return max(estimate, total + 1)
     return -1
@@ -2624,8 +2679,14 @@ def band_doubling[
     mut backward_edge: Edge,
     mut forward_heuristic: SeedHeuristic,
     mut backward_heuristic: SeedHeuristic,
+    trusted: Bool = True,
 ) -> Outcome:
     """Band doubling, from the start alone or from both ends at once to meet in the middle.
+
+    An untrusted projection (see `trusted_projection`) neither aims the first bound nor sets the
+    next: the first starts `DOUBLING_START` past the distance already ruled out, by the floor or the
+    heuristic at the origin, and each next one at
+    most doubles, as A*PA2's band doubling grows, whatever a failed round projected.
 
     Each round sweeps the band for one bound. Meeting in the middle, one thread sweeps forward to
     the middle column while another sweeps the reversed sequences forward to the same column, which
@@ -2652,6 +2713,9 @@ def band_doubling[
     # sixth of it on a close pair, where the projection from a few edits strays further.
     var origin = forward_heuristic.h(0, 0)
     var threshold = max(gap, probe.floor + 1, aimed + PROBE_MARGIN)
+    if not trusted:
+        # As A*PA2 starts: a step past what is known, the heuristic at the origin or the floor.
+        threshold = min(threshold, max(gap, probe.floor + 1, origin) + DOUBLING_START)
     if forward_heuristic.seeds > 0:
         if forward_heuristic.chains_well():
             # Matches survive: the origin's bound lies within a few percent of the distance on a
@@ -2663,9 +2727,12 @@ def band_doubling[
         # pair's distance: the projection leads, the bound only floors it.
         threshold = max(threshold, gap, probe.floor + 1, origin + SEED_SLACK)
     var best = Int.MAX
-    # Only the first round re-aims: a later one aims from what a whole round learned, and re-aiming
-    # it again could fall short the same way every round.
-    var adapt = True
+    # Every round re-aims at checkpoints, a later one never below a quarter past the last bound, so a
+    # lowered round that falls short still leaves the next one higher. Only the first may give itself
+    # up there: on reads whose errors gather at an end, a later round given up on its own climb would
+    # jump past a bound that was enough.
+    var first_round = True
+    var last_bound = 0
     while True:
         if 2 * (threshold + BAND_COLUMNS) >= rows:
             if give_up_wide:
@@ -2704,9 +2771,17 @@ def band_doubling[
             parallelize(half, 2, 2)
         else:
             forward_round = pruned_distance[record](
-                forward, threshold, columns, forward_trail, forward_edge, forward_heuristic, adapt
+                forward,
+                threshold,
+                columns,
+                forward_trail,
+                forward_edge,
+                forward_heuristic,
+                True,
+                first_round,
+                0 if first_round else last_bound + last_bound // 4,
             )
-        adapt = False
+        first_round = False
 
         var found = -1
         var meeting_row = rows
@@ -2726,7 +2801,9 @@ def band_doubling[
         if found >= 0 and found <= bound:
             return Outcome(found, middle, meeting_row)
 
-        var next = 2 * threshold
+        # Grown from the bound the round ended on, which a checkpoint may have lowered: from the one it
+        # started on, a round lowered and then failed would jump back to a bound it already knew was loose.
+        var next = 2 * bound
         if found >= 0:
             # Still the cost of a real alignment, so it caps every later bound.
             best = min(best, found)
@@ -2743,10 +2820,15 @@ def band_doubling[
             if meet and backward_round.reached < columns - middle and backward_round.reached > 0:
                 estimate = min(estimate, origin + (threshold - origin) * columns // backward_round.reached)
             if estimate != Int.MAX:
-                next = max(threshold + threshold // 4, estimate + estimate // 8 + PROBE_MARGIN)
+                next = max(bound + bound // 4, estimate + estimate // 8 + PROBE_MARGIN)
                 if forward_heuristic.seeds > 0:
                     # The origin's bound is certain; only the climb above it is estimated.
-                    next = max(threshold + SEED_SLACK, estimate + (estimate - origin) // 4 + PROBE_MARGIN)
+                    next = max(bound + SEED_SLACK, estimate + (estimate - origin) // 4 + PROBE_MARGIN)
+        last_bound = bound
+        if not trusted:
+            # A round's estimate comes from where it stopped, which errors gathered at an end can
+            # set as far off as the first projection: at most doubling instead.
+            next = min(next, 2 * bound)
         threshold = min(next, best)
 
 
@@ -2771,11 +2853,13 @@ def edit_distance(first: String, second: String, threads: Optional[Int] = None) 
     if probe.distance >= 0:
         return probe.distance
     # The band's bounds and the seeds' gate are tuned on one front's projection from its first
-    # `PROBE_START` edits, so that is the projection handed on; the floor is the search's own.
+    # `PROBE_START` edits, so that is the projection handed on, unless the search went far further.
     var fronts = DiagonalFronts()
     var projected = diagonal_transition(forward, PROJECTION_ONLY, fronts)
+    var trusted = trusted_projection(probe, projected)
     probe = Probe(-1, projected.estimate, max(probe.floor, projected.floor))
-    var seeded = probe.estimate >= SEED_EDITS and probe.estimate * SEED_DIVERGENCE <= forward.columns
+    # The seeds' gate stays on the first projection, which it is tuned on.
+    var seeded = projected.estimate >= SEED_EDITS and projected.estimate * SEED_DIVERGENCE <= forward.columns
     var forward_heuristic = SeedHeuristic(forward) if seeded else SeedHeuristic(forward.columns, forward.rows)
     # A band narrowed by many chained seeds gains less from a second thread than that thread's half,
     # with its own heuristic to build and a weaker start, costs.
@@ -2800,6 +2884,7 @@ def edit_distance(first: String, second: String, threads: Optional[Int] = None) 
         backward_edge,
         forward_heuristic,
         backward_heuristic,
+        trusted,
     )
     if outcome.distance >= 0:
         return outcome.distance
@@ -3310,12 +3395,14 @@ def edit_alignment(
                 first, second, forward_moves, middle_column, middle_row, backward_moves, meeting.probe.distance
             )
         # The band's bounds and the seeds' gate are tuned on one front's projection from its first
-        # `PROBE_START` edits, so that is the projection handed on; the floor is the search's own.
+        # `PROBE_START` edits, so that is the projection handed on, unless the search went far further.
         var fronts = DiagonalFronts()
         var projected = diagonal_transition(forward, PROJECTION_ONLY, fronts)
+        var trusted = trusted_projection(meeting.probe, projected)
         var probe = Probe(-1, projected.estimate, max(meeting.probe.floor, projected.floor))
         # Asking for the thread count is a system call, so only a pair long enough to split asks.
-        var seeded = probe.estimate >= SEED_EDITS and probe.estimate * SEED_DIVERGENCE <= columns
+        # The seeds' gate stays on the first projection, which it is tuned on.
+        var seeded = projected.estimate >= SEED_EDITS and projected.estimate * SEED_DIVERGENCE <= columns
         var forward_heuristic = SeedHeuristic(forward) if seeded else SeedHeuristic(columns, rows)
         # A band narrowed by many chained seeds gains less from a second thread than its half costs.
         # Asking for the thread count is a system call, so only a pair long enough to split asks.
@@ -3344,6 +3431,7 @@ def edit_alignment(
             backward_edge,
             forward_heuristic,
             backward_heuristic,
+            trusted,
         )
         distance = outcome.distance
         if meet:
