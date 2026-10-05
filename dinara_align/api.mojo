@@ -52,6 +52,8 @@ from .errors import AlignmentError, ErrorKind
 from .gap_affine import wavefront_penalties, wavefront_score
 from .vector_score import optimal_band, uniform_table, vector_align, vector_score
 
+from std.atomic import Atomic
+
 from max.algorithm import parallelize
 
 comptime STORED_MATRIX_BUDGET = 6_000_000
@@ -625,8 +627,9 @@ def alignments[
 
 
 def longest_first(firsts: List[String], seconds: List[String]) -> List[Int]:
-    """The pairs' indices, the longest pair first: dealt out in that order, every chunk of a batch gets
-    its share of the long pairs, and none is left alone at the end holding up the rest."""
+    """The pairs' indices, the longest pair first: taken in that order by whichever thread is free, the
+    long pairs start first and the short ones fill in around them, so none is left alone at the end
+    holding up the rest."""
     comptime INDEX_BITS = 25
     var pairs = len(firsts)
     var order = List[Int](capacity=pairs)
@@ -648,9 +651,9 @@ def edit_distances(firsts: List[String], seconds: List[String], threads: Optiona
     """Every pair's edit distance, as `edit_distance` gives it, the pairs spread over `threads`
     threads, every thread this process may use by default.
 
-    The pairs are independent, so each runs on one thread start to finish, in chunks, several a
-    thread, each dealt every so many pairs of the batch taken longest first, so that no thread draws
-    the long pairs and holds up the rest (see `longest_first`). One thread a pair
+    The pairs are independent, so each runs on one thread start to finish, each thread taking the
+    next pair of the batch, longest first, as soon as it is free (see `longest_first`). One thread a
+    pair
     beats sharing threads out among few long pairs: a pair split over two runs at less than twice
     the speed. A pair that fails raises, after the rest, the same error a serial loop would have
     raised first.
@@ -663,18 +666,23 @@ def edit_distances(firsts: List[String], seconds: List[String], threads: Optiona
     var out = results.unsafe_ptr()
     var failed = List[Bool](length=pairs, fill=False)
     var flags = failed.unsafe_ptr()
-    var chunks = chunk_count(pairs, workers)
     var order = longest_first(firsts, seconds)
+    var taken = Atomic[Int64](0)
 
-    def distance_range(slot: Int) {imm}:
-        for dealt in range(slot, pairs, chunks):
+    def distance_worker(
+        worker: Int,
+    ) {mut taken, imm order, imm firsts, imm seconds, imm out, imm flags, imm pairs}:
+        while True:
+            var dealt = Int(taken.fetch_add(1))
+            if dealt >= pairs:
+                return
             var index = order[dealt]
             try:
                 out[unsafe_offset=index] = edit_distance(firsts[index], seconds[index], 1)
             except:
                 flags[unsafe_offset=index] = True
 
-    parallelize(distance_range, chunks, workers)
+    parallelize(distance_worker, min(workers, pairs), min(workers, pairs))
     for index in range(pairs):
         if failed[index]:
             results[index] = edit_distance(firsts[index], seconds[index], 1)
@@ -696,18 +704,23 @@ def edit_alignments(
     var out = results.unsafe_ptr()
     var failed = List[Bool](length=pairs, fill=False)
     var flags = failed.unsafe_ptr()
-    var chunks = chunk_count(pairs, workers)
     var order = longest_first(firsts, seconds)
+    var taken = Atomic[Int64](0)
 
-    def alignment_range(slot: Int) {imm}:
-        for dealt in range(slot, pairs, chunks):
+    def alignment_worker(
+        worker: Int,
+    ) {mut taken, imm order, imm firsts, imm seconds, imm out, imm flags, imm pairs}:
+        while True:
+            var dealt = Int(taken.fetch_add(1))
+            if dealt >= pairs:
+                return
             var index = order[dealt]
             try:
                 out[unsafe_offset=index] = edit_alignment(firsts[index], seconds[index], 1)
             except:
                 flags[unsafe_offset=index] = True
 
-    parallelize(alignment_range, chunks, workers)
+    parallelize(alignment_worker, min(workers, pairs), min(workers, pairs))
     for index in range(pairs):
         if failed[index]:
             results[index] = edit_alignment(firsts[index], seconds[index], 1)
