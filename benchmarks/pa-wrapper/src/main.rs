@@ -42,7 +42,55 @@ fn measure(mut run: impl FnMut() -> i64) -> (f64, i64) {
     (best, value)
 }
 
+/// A*PA2's evaluation datasets: `seq <tool> <budget seconds> <file>...`, every pair aligned once.
+///
+/// pa-bench's `.seq` files hold pairs as a `>` line and a `<` line. Each pair is aligned with its
+/// traceback, once, as pa-bench times every aligner, until the budget is spent; one row per file
+/// gives the pairs aligned, their total time, and each one's cost. `biwfa` is the evaluation's WFA2-lib,
+/// its lowest-memory mode; WFA's keep-every-front mode would want gigabytes on its longest pairs.
+fn seq_mode(arguments: &[String]) {
+    let tool = arguments[0].as_str();
+    let budget: f64 = arguments[1].parse().unwrap();
+    let started = Instant::now();
+    while started.elapsed().as_millis() < 200 {
+        std::hint::black_box(0);
+    }
+    let params = match tool {
+        "edlib" => AlignerParams::Edlib(EdlibParams),
+        "biwfa" => AlignerParams::Wfa(WfaParams { memory_model: MemoryModel::MemoryUltraLow, heuristic: Heuristic::None }),
+        other => panic!("unknown tool {other}"),
+    };
+    let mut spent = 0.0;
+    for path in &arguments[2..] {
+        if spent >= budget {
+            break;
+        }
+        let text = fs::read_to_string(path).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        let longest = lines.iter().map(|line| line.len()).max().unwrap_or(1);
+        let (mut aligner, _exact) = params.build_aligner(CostModel::unit(), true, longest);
+        let (mut pairs, mut seconds, mut costs) = (0, 0.0, Vec::new());
+        for pair in lines.chunks(2) {
+            if pair.len() < 2 || spent + seconds >= budget {
+                break;
+            }
+            let (a, b) = (pair[0][1..].as_bytes(), pair[1][1..].as_bytes());
+            let started = Instant::now();
+            let cost = aligner.align(a, b).0;
+            seconds += started.elapsed().as_secs_f64();
+            costs.push(cost.to_string());
+            pairs += 1;
+        }
+        spent += seconds;
+        println!("{tool}\t{path}\t{pairs}\t{seconds}\t{}", costs.join(","));
+    }
+}
+
 fn main() {
+    let arguments: Vec<String> = env::args().skip(1).collect();
+    if arguments.first().map(String::as_str) == Some("seq") {
+        return seq_mode(&arguments[1..]);
+    }
     let directory = env::args().nth(1).expect("usage: pa-wrapper-runner <data directory>");
     // A short spin first, so the scheduler has moved this process onto a fast core.
     let started = Instant::now();

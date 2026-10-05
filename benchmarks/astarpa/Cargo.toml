@@ -9,6 +9,7 @@ publish = false
 [dependencies]
 astarpa = { path = "../.cache/astar-pairwise-aligner/astarpa" }
 astarpa2 = { path = "../.cache/astar-pairwise-aligner/astarpa2" }
+pa-heuristic = { path = "../.cache/astar-pairwise-aligner/pa-heuristic" }
 
 [profile.release]
 opt-level = 3
