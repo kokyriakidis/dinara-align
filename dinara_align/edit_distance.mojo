@@ -992,6 +992,14 @@ comptime SEED_COLUMNS = 16_384
 of any band this long, and on real reads, whose errors gather at the ends, the projection that gates
 shorter pairs can put a divergence of one edit in ten at one in two."""
 
+comptime SEEDED_GROWTH = 4
+"""How many times a seeded band's margin over the heuristic at the origin grows after a round that
+died early."""
+
+comptime SEEDED_TRUST_SHARE = 8
+"""A seeded round must cross one part in this many of the columns before its death projects the next
+bound."""
+
 comptime CHAINED_SHARE = 32
 """With seeds, the band's first bound starts at the origin's when at least one seed in this many is
 chained there; with fewer, the bound is little more than an edit a seed, and the projection leads."""
@@ -2786,7 +2794,7 @@ def band_doubling[
                 forward_trail,
                 forward_edge,
                 forward_heuristic,
-                True,
+                first_round,
                 first_round,
                 0 if first_round else last_bound + max((last_bound - origin) // 4, SEED_SLACK),
             )
@@ -2834,6 +2842,12 @@ def band_doubling[
                     # The origin's bound is certain; only the climb above it is estimated.
                     next = max(bound + SEED_SLACK, estimate + (estimate - origin) // 2 + PROBE_MARGIN)
         last_bound = bound
+        if found < 0 and forward_heuristic.seeds > 0 and forward_round.reached * SEEDED_TRUST_SHARE < middle:
+            # A seeded round that died within its first columns projects from those alone, which on
+            # real reads hold their errors gathered at the start: its margin over the origin's bound
+            # grows `SEEDED_GROWTH` times instead, as A*PA2's grows, until a round gets far enough in
+            # for its death to say where the distance lies.
+            next = origin + SEEDED_GROWTH * max(bound - origin, SEED_SLACK)
         if not trusted:
             # A round's estimate comes from where it stopped, which errors gathered at an end can
             # set as far off as the first projection: at most doubling instead.
