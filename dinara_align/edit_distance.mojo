@@ -987,7 +987,7 @@ comptime SEED_DIVERGENCE = 7
 almost no seed survives local pruning, the heuristic is little more than an edit a seed, and its
 setup is not repaid."""
 
-comptime SEED_COLUMNS = 8192
+comptime SEED_COLUMNS = 16_384
 """Columns from which a band prunes with the seeds whatever the projection: its setup is a small share
 of any band this long, and on real reads, whose errors gather at the ends, the projection that gates
 shorter pairs can put a divergence of one edit in ten at one in two."""
@@ -2736,8 +2736,8 @@ def band_doubling[
         # pair's distance: the projection leads, the bound only floors it.
         threshold = max(threshold, gap, probe.floor + 1, origin + SEED_SLACK)
     var best = Int.MAX
-    # Every round re-aims at checkpoints, a later one never below a quarter past the last bound, so a
-    # lowered round that falls short still leaves the next one higher. Only the first may give itself
+    # Every round re-aims at checkpoints, a later one never below a quarter of the last bound's climb
+    # above the origin's past it, so a lowered round that falls short still leaves the next one higher. Only the first may give itself
     # up there: on reads whose errors gather at an end, a later round given up on its own climb would
     # jump past a bound that was enough.
     var first_round = True
@@ -2788,7 +2788,7 @@ def band_doubling[
                 forward_heuristic,
                 True,
                 first_round,
-                0 if first_round else last_bound + last_bound // 4,
+                0 if first_round else last_bound + max((last_bound - origin) // 4, SEED_SLACK),
             )
         first_round = False
 
@@ -2832,7 +2832,7 @@ def band_doubling[
                 next = max(bound + bound // 4, estimate + estimate // 8 + PROBE_MARGIN)
                 if forward_heuristic.seeds > 0:
                     # The origin's bound is certain; only the climb above it is estimated.
-                    next = max(bound + SEED_SLACK, estimate + (estimate - origin) // 4 + PROBE_MARGIN)
+                    next = max(bound + SEED_SLACK, estimate + (estimate - origin) // 2 + PROBE_MARGIN)
         last_bound = bound
         if not trusted:
             # A round's estimate comes from where it stopped, which errors gathered at an end can
