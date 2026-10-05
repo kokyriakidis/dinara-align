@@ -28,5 +28,7 @@ format = "mojo format -l 120 dinara_align tests"
 bench = "python3 benchmarks/run.py"
 # Times dinara-align head to head with A*PA2's evaluation, on its datasets; see `benchmarks/pa_bench.py`.
 bench-astarpa2 = "python3 benchmarks/pa_bench.py"
+# Measures the results tables of benchmarks/README.md: `collect`, then `tables`.
+results-astarpa2 = "python3 benchmarks/pa_results.py"
 # Regenerates the ported kernels from an AffineGaps checkout: `pixi run port /path/to/AffineGaps`.
 port = "python3 scripts/port_from_affinegaps.py"
