@@ -505,7 +505,7 @@ def serial_align[
         scores,
         deletes,
         inserts,
-        stride,
+        RowMajor(stride),
         first,
         second,
         substitutions,
@@ -520,11 +520,44 @@ def serial_align[
     return AlignmentResult(final_score, reconstruction[0], reconstruction[1])
 
 
-def reconstruct(
+trait CellLayout(ImplicitlyCopyable):
+    """Where cell `(row, column)` of a stored matrix sits in its three flat layers."""
+
+    def index(self, row: Int, column: Int) -> Int:
+        ...
+
+
+@fieldwise_init
+struct RowMajor(CellLayout, TrivialRegisterPassable):
+    """Row by row, `stride` cells to a row."""
+
+    var stride: Int
+
+    @always_inline
+    def index(self, row: Int, column: Int) -> Int:
+        return row * self.stride + column
+
+
+@fieldwise_init
+struct AntiDiagonalMajor(CellLayout, TrivialRegisterPassable):
+    """Anti-diagonal by anti-diagonal, each from its first row; `starts[d]` is where diagonal `d` begins."""
+
+    var starts: MutPointer[Int, MutUntrackedOrigin]
+    var columns: Int
+
+    @always_inline
+    def index(self, row: Int, column: Int) -> Int:
+        var diagonal = row + column
+        return self.starts[diagonal] + row - max(0, diagonal - self.columns)
+
+
+def reconstruct[
+    Layout: CellLayout
+](
     scores: ImmSpan[Int32, _],
     deletes: ImmSpan[Int32, _],
     inserts: ImmSpan[Int32, _],
-    stride: Int,
+    layout: Layout,
     first: ImmSpan[Scalar[SymbolDType], _],
     second: ImmSpan[Scalar[SymbolDType], _],
     substitutions: ImmSpan[Scalar[SubstitutionDType], _],
@@ -551,15 +584,18 @@ def reconstruct(
     var state = Layer.ALIGNING
 
     while row > 0 and column > 0:
-        var here = row * stride + column
+        var here = layout.index(row, column)
+        var above = layout.index(row - 1, column)
+        var left = layout.index(row, column - 1)
+        var above_left = layout.index(row - 1, column - 1)
         var substitution = Int32(substitutions[Int(first[row - 1]) * alphabet_size + Int(second[column - 1])])
         # `mode` is a runtime argument here, and only the local walk below reads `reach`, so the flag is always computed
         # and always gated at the point of use.
         var decision = decide[AlignmentMode.LOCAL](
             Cell(scores[here], deletes[here], inserts[here]),
-            scores[here - stride - 1] + substitution,
-            Cell(scores[here - stride], deletes[here - stride], inserts[here - stride]),
-            Cell(scores[here - 1], deletes[here - 1], inserts[here - 1]),
+            scores[above_left] + substitution,
+            Cell(scores[above], deletes[above], inserts[above]),
+            Cell(scores[left], deletes[left], inserts[left]),
             scoring,
         )
         if mode == AlignmentMode.LOCAL and state == Layer.ALIGNING:

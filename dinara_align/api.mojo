@@ -48,7 +48,7 @@ from .common import (
 )
 from .errors import AlignmentError, ErrorKind
 from .gap_affine import wavefront_penalties, wavefront_score
-from .vector_score import uniform_table, vector_score
+from .vector_score import uniform_table, vector_align, vector_score
 
 from max.algorithm import parallelize
 
@@ -288,12 +288,30 @@ def align_on_host[
     scoring: Scoring,
     stored_budget: Int,
 ) raises -> AlignmentResult:
-    """One pair on the host, stored while its matrix fits the budget and linear once it does not."""
+    """One pair on the host, stored while its matrix fits the budget and linear once it does not.
+
+    Stored under a table of one match and one mismatch score, the matrix is swept sixteen cells at a
+    time, the same cells and so the same alignment (see `vector_align`).
+    """
     if len(first) * len(second) > stored_budget:
         comptime if mode == AlignmentMode.LOCAL:
             return local_linear(first, second, scoring)
         else:
             return global_linear(first, second, scoring)
+    var table = uniform_table(scoring.substitutions, scoring.alphabet_size())
+    if table:
+        var codes_first = List[UInt8](first)
+        var codes_second = List[UInt8](second)
+        return vector_align[mode](
+            codes_first,
+            codes_second,
+            table.value()[0],
+            table.value()[1],
+            scoring.gaps,
+            scoring.substitutions,
+            scoring.alphabet_size(),
+            scoring.alphabet,
+        )
     return serial_align[mode](
         first, second, scoring.substitutions, scoring.alphabet_size(), scoring.gaps, scoring.alphabet
     )
