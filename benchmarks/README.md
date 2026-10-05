@@ -126,22 +126,22 @@ Measured as above, dinara-align's columns the fastest of three warm runs; a coun
 | dataset | pairs | mean length | dinara-align (bit-parallel, 1 thread) | dinara-align (bit-parallel, 8 threads) | dinara-align (bit-parallel, batch, 8 threads) | a*pa2-full | a*pa2-simple | a*pa | edlib | biwfa | agree |
 | :-- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | :-: |
 | ont-1k | 1221 of 12477 | 0.818 kbp | 27 µs | 27 µs | 7 µs | 64 µs | 40 µs | 498 µs | 71 µs | 27 µs | ✓ |
-| ont-10k | 277 of 5000 | 3.6 kbp | 150 µs | 145 µs | 40 µs | 293 µs | 205 µs | 8.54 ms | 705 µs | 367 µs | ✓ |
-| ont-50k | 104 of 10000 | 9.52 kbp | 677 µs | 667 µs | 184 µs | 999 µs | 958 µs | 93 ms (54/104) | 4.62 ms | 3.49 ms | ✓ |
-| ont-500k | 4 of 50 | 638 kbp | 141 ms | 131 ms | 97.3 ms | 280 ms | 805 ms | > 5 s | > 5 s | > 5 s | ✓ |
-| ont-500k-genvar | 4 of 48 | 659 kbp | 202 ms | 181 ms | 86.9 ms | 269 ms | 627 ms | > 5 s | 4.63 s (1/4) | 4.18 s (1/4) | ✓ |
-| sars-cov-2 | 33 of 10000 | 29.6 kbp | 237 µs | 245 µs | 110 µs | 1.39 ms | 700 µs | 3.42 ms | 6.95 ms | 460 µs | ✓ |
-| Uniform-t10000000-n3000-e0.05 | 333 of 3333 | 3 kbp | 31 µs | 40 µs | 10 µs | 149 µs | 65 µs | 177 µs | 344 µs | 51 µs | ✓ |
-| Uniform-t10000000-n10000-e0.05 | 99 of 1000 | 10 kbp | 198 µs | 193 µs | 58 µs | 581 µs | 298 µs | 569 µs | 1.92 ms | 290 µs | ✓ |
-| Uniform-t10000000-n30000-e0.05 | 33 of 333 | 30 kbp | 907 µs | 908 µs | 281 µs | 1.53 ms | 1.86 ms | 1.61 ms | 11.7 ms | 2.49 ms | ✓ |
-| Uniform-t10000000-n100000-e0.05 | 10 of 100 | 100 kbp | 2.96 ms | 2.84 ms | 1.01 ms | 5 ms | 18 ms | 6.85 ms | 107 ms | 32.6 ms | ✓ |
-| Uniform-t10000000-n300000-e0.05 | 4 of 33 | 300 kbp | 12.5 ms | 11 ms | 3.77 ms | 16.3 ms | 90 ms | 19.1 ms | 627 ms | 245 ms | ✓ |
-| Uniform-t10000000-n1000000-e0.05 | 4 of 10 | 1e+03 kbp | 41.2 ms | 36.3 ms | 12.4 ms | 75 ms | 1.03 s | 69.9 ms | > 5 s | 2.43 s (2/4) | ✓ |
-| Uniform-t10000000-n3000-e0.15 | 333 of 3333 | 3 kbp | 81 µs | 94 µs | 22 µs | 166 µs | 135 µs | 1.08 ms | 423 µs | 190 µs | ✓ |
-| Uniform-t10000000-n10000-e0.15 | 99 of 1000 | 10 kbp | 350 µs | 301 µs | 97 µs | 800 µs | 757 µs | 4.06 ms | 3.35 ms | 1.9 ms | ✓ |
-| Uniform-t10000000-n30000-e0.15 | 33 of 333 | 30 kbp | 2.1 ms | 1.85 ms | 614 µs | 3.75 ms | 2.62 ms | 14.2 ms | 19.3 ms | 15.8 ms | ✓ |
-| Uniform-t10000000-n100000-e0.15 | 9 of 100 | 100 kbp | 8.87 ms | 8.56 ms | 3.21 ms | 14.5 ms | 27.2 ms | 53.1 ms | 199 ms | 196 ms | ✓ |
-| Uniform-t10000000-n300000-e0.15 | 4 of 33 | 300 kbp | 46.1 ms | 43.8 ms | 13.2 ms | 134 ms | 345 ms | 224 ms | 2.11 s (2/4) | 1.72 s (3/4) | ✓ |
-| Uniform-t10000000-n1000000-e0.15 | 4 of 10 | 1e+03 kbp | 385 ms | 374 ms | 105 ms | 1.75 s (3/4) | 1.85 s (3/4) | 951 ms | > 5 s | > 5 s | ✓ |
+| ont-10k | 277 of 5000 | 3.6 kbp | 153 µs | 146 µs | 42 µs | 293 µs | 205 µs | 8.54 ms | 705 µs | 367 µs | ✓ |
+| ont-50k | 104 of 10000 | 9.52 kbp | 685 µs | 677 µs | 184 µs | 999 µs | 958 µs | 93 ms (54/104) | 4.62 ms | 3.49 ms | ✓ |
+| ont-500k | 4 of 50 | 638 kbp | 140 ms | 104 ms | 100 ms | 280 ms | 805 ms | > 5 s | > 5 s | > 5 s | ✓ |
+| ont-500k-genvar | 4 of 48 | 659 kbp | 204 ms | 143 ms | 87.2 ms | 269 ms | 627 ms | > 5 s | 4.63 s (1/4) | 4.18 s (1/4) | ✓ |
+| sars-cov-2 | 33 of 10000 | 29.6 kbp | 236 µs | 246 µs | 106 µs | 1.39 ms | 700 µs | 3.42 ms | 6.95 ms | 460 µs | ✓ |
+| Uniform-t10000000-n3000-e0.05 | 333 of 3333 | 3 kbp | 33 µs | 40 µs | 10 µs | 149 µs | 65 µs | 177 µs | 344 µs | 51 µs | ✓ |
+| Uniform-t10000000-n10000-e0.05 | 99 of 1000 | 10 kbp | 203 µs | 202 µs | 59 µs | 581 µs | 298 µs | 569 µs | 1.92 ms | 290 µs | ✓ |
+| Uniform-t10000000-n30000-e0.05 | 33 of 333 | 30 kbp | 908 µs | 922 µs | 277 µs | 1.53 ms | 1.86 ms | 1.61 ms | 11.7 ms | 2.49 ms | ✓ |
+| Uniform-t10000000-n100000-e0.05 | 10 of 100 | 100 kbp | 3.01 ms | 2.87 ms | 1.01 ms | 5 ms | 18 ms | 6.85 ms | 107 ms | 32.6 ms | ✓ |
+| Uniform-t10000000-n300000-e0.05 | 4 of 33 | 300 kbp | 12.6 ms | 11.1 ms | 3.7 ms | 16.3 ms | 90 ms | 19.1 ms | 627 ms | 245 ms | ✓ |
+| Uniform-t10000000-n1000000-e0.05 | 4 of 10 | 1e+03 kbp | 41.6 ms | 36.6 ms | 12.2 ms | 75 ms | 1.03 s | 69.9 ms | > 5 s | 2.43 s (2/4) | ✓ |
+| Uniform-t10000000-n3000-e0.15 | 333 of 3333 | 3 kbp | 84 µs | 96 µs | 22 µs | 166 µs | 135 µs | 1.08 ms | 423 µs | 190 µs | ✓ |
+| Uniform-t10000000-n10000-e0.15 | 99 of 1000 | 10 kbp | 352 µs | 305 µs | 98 µs | 800 µs | 757 µs | 4.06 ms | 3.35 ms | 1.9 ms | ✓ |
+| Uniform-t10000000-n30000-e0.15 | 33 of 333 | 30 kbp | 2.1 ms | 1.86 ms | 612 µs | 3.75 ms | 2.62 ms | 14.2 ms | 19.3 ms | 15.8 ms | ✓ |
+| Uniform-t10000000-n100000-e0.15 | 9 of 100 | 100 kbp | 9.06 ms | 8.63 ms | 3.17 ms | 14.5 ms | 27.2 ms | 53.1 ms | 199 ms | 196 ms | ✓ |
+| Uniform-t10000000-n300000-e0.15 | 4 of 33 | 300 kbp | 46.2 ms | 31.6 ms | 13.2 ms | 134 ms | 345 ms | 224 ms | 2.11 s (2/4) | 1.72 s (3/4) | ✓ |
+| Uniform-t10000000-n1000000-e0.15 | 4 of 10 | 1e+03 kbp | 385 ms | 190 ms | 104 ms | 1.75 s (3/4) | 1.85 s (3/4) | 951 ms | > 5 s | > 5 s | ✓ |
 
-Four long reads are few: on all 50 ont-500k reads dinara-align took 7.5 s on one thread and 6.4 s on eight, and A\*PA2-full 8.4 s, and on all 48 ont-500k-genvar reads 11.8 s against A\*PA2-full's 11.6 s, A\*PA2-full the faster on 31 of them, most of them between 4 and 8% divergent.
+Four long reads are few: on all 50 ont-500k reads dinara-align took 7.5 s on one thread and 6.5 s on eight, and A\*PA2-full 8.4 s; on all 48 ont-500k-genvar reads 11.8 s on one thread, level with A\*PA2-full's 11.6 s (A\*PA2-full the faster on 31 of them, most between 4 and 8% divergent), and 8.4 s on eight, where pairs from 200 kbp whose seeds match within one edit or chain poorly sweep their bands in stripes across the threads.
