@@ -39,9 +39,11 @@ Unit costs only: a substitution, an insertion and a deletion each cost one, so t
 distance `levenshtein_alignment` returns, without the alignment.
 """
 
+from std.atomic import Atomic
 from std.bit import byte_swap, count_leading_zeros, count_trailing_zeros, pop_count
 from std.math import ceildiv, sqrt
 from std.sys import inlined_assembly
+from std.time import perf_counter_ns
 
 from max.algorithm import parallelize
 
@@ -1615,6 +1617,24 @@ distance's."""
 comptime TWO_ENDED_PERCENT = 57
 """The two-ended search's cost per square edit of distance, in percent of one front's step."""
 
+comptime LOCKSTEP_SCORE = 128
+"""The score each direction of the two-ended search reaches before a second thread may take one of
+them: a front of this many diagonals takes a few times a spin barrier's round trip."""
+
+comptime LOCKSTEP_SETUP = 30_000
+"""What starting the second thread costs, in one front's steps of about a nanosecond: a fork and join
+of two tasks, with room for one waking from sleep and for a projection that ran high, as one from a
+couple of hundred edits can by a fifth."""
+
+comptime CHECK_IN_NANOSECONDS = 100_000
+"""How long the first of the lockstep's two tasks waits for the second before going on alone."""
+
+comptime ALONE = Int64(1 << 20)
+"""Marks the lockstep claimed by one task alone; past any count of arrivals."""
+
+comptime BARRIER_STEPS = 150
+"""What the lockstep's spin barrier costs a score, in one front's steps."""
+
 comptime TWO_ENDED_SETUP = 600
 """What setting up the two-ended search's second front and histories costs, in one front's steps: an
 alignment's search runs one front while what it has left costs less than starting from both ends."""
@@ -2009,18 +2029,24 @@ def reversed_codes(codes: List[UInt8], count: Int, sentinel: UInt8) -> List[UInt
     return flipped^
 
 
+comptime FRONT_RING = 3
+"""Fronts a direction keeps in turn: the latest, the one before, which an overlap check reads, and the
+next, which a second thread may already be growing while the first checks the other two."""
+
+
 struct FrontPair(Movable):
-    """One direction's two latest fronts, alternating, each indexed by diagonal from `OFFSET`."""
+    """One direction's latest fronts, in a ring of `FRONT_RING`, each indexed by diagonal."""
 
     var buffers: List[Int32]
     var width: Int
     var low: Int
     var high: Int
     var previous_low: Int
-    """The previous front's diagonals, which the other buffer still holds."""
+    """The previous front's diagonals, which the ring still holds."""
     var previous_high: Int
     var score: Int
-    var parity: Int
+    var slot: Int
+    """Which of the ring holds the latest front."""
     var furthest: Int
     var history: DiagonalFronts
     """Every front so far, when `record`, laid out as `diagonal_transition` keeps them, for a traceback."""
@@ -2030,14 +2056,14 @@ struct FrontPair(Movable):
         self.width = 2 * (limit + FRONT_PADDING) + FRONT_LANES + 1
         # Every front writes its own diagonals and the padding either side before the next reads it,
         # so only the first front's surroundings need setting.
-        self.buffers = List[Int32](capacity=2 * self.width)
-        self.buffers.resize(unsafe_uninit_length=2 * self.width)
+        self.buffers = List[Int32](capacity=FRONT_RING * self.width)
+        self.buffers.resize(unsafe_uninit_length=FRONT_RING * self.width)
         self.low = 0
         self.high = 0
         self.previous_low = 0
         self.previous_high = -1
         self.score = 0
-        self.parity = 0
+        self.slot = 0
         self.furthest = 0
         self.history = DiagonalFronts(reserve=record)
         self.record = record
@@ -2049,7 +2075,7 @@ struct FrontPair(Movable):
         """Copies the latest front, with its padding, onto the history, when recording."""
         if not self.record:
             return
-        var source = self.front(self.parity)
+        var source = self.front(self.slot)
         var start = len(self.history.offsets)
         self.history.starts.append(start)
         self.history.lows.append(self.low)
@@ -2061,13 +2087,109 @@ struct FrontPair(Movable):
             target[unsafe_offset=index] = source[unsafe_offset=self.low - FRONT_PADDING + index]
 
     @always_inline
-    def front(mut self, which: Int) -> MutPointer[Int32, MutUntrackedOrigin]:
-        """Front `which` of the two, as a pointer indexed by diagonal."""
+    def previous(self) -> Int:
+        """The ring slot of the front before the latest."""
+        return self.slot - 1 if self.slot > 0 else FRONT_RING - 1
+
+    @always_inline
+    def state(self) -> FrontState:
+        """What another thread needs to read this direction's two latest fronts."""
+        return FrontState(
+            self.slot,
+            self.low,
+            self.high,
+            self.previous(),
+            self.previous_low,
+            self.previous_high,
+            self.score,
+            self.furthest,
+        )
+
+    @always_inline
+    def advance(
+        mut self, codes: ImmPointer[UInt8, _], others: ImmPointer[UInt8, _], measure: Bool, columns: Int, rows: Int
+    ):
+        """One more score: the next front in the ring, grown from the latest."""
+        var previous = self.front(self.slot)
+        var next = self.slot + 1 if self.slot + 1 < FRONT_RING else 0
+        var current = self.front(next)
+        self.score += 1
+        var low = max(-self.score, -rows)
+        var high = min(self.score, columns)
+        for index in range(1, FRONT_PADDING + 1):
+            current[unsafe_offset=low - index] = UNREACHED_OFFSET
+        if measure:
+            self.furthest = step_front[True](previous, current, low, high, columns, rows, codes, others)
+        else:
+            _ = step_front[False](previous, current, low, high, columns, rows, codes, others)
+        self.previous_low = self.low
+        self.previous_high = self.high
+        self.low = low
+        self.high = high
+        self.slot = next
+        self.keep()
+
+    @always_inline
+    def front(self, which: Int) -> MutPointer[Int32, MutUntrackedOrigin]:
+        """Front `which` of the ring, as a pointer indexed by diagonal.
+
+        Writable from a shared reference: in the lockstep each thread writes only its own fronts, and
+        reads the other's only where their owner no longer writes (see `lockstep`).
+        """
         return (
             self.buffers.unsafe_ptr()
+            .unsafe_mut_cast[True]()
             .unsafe_origin_cast[MutUntrackedOrigin]()
             .unsafe_offset(which * self.width + self.width // 2)
         )
+
+
+@fieldwise_init
+struct FrontState(ImplicitlyCopyable, TrivialRegisterPassable):
+    """A direction's two latest fronts as one moment saw them: their ring slots and diagonals, its
+    score and its progress, so a thread can check them while their owner grows the next."""
+
+    var slot: Int
+    var low: Int
+    var high: Int
+    var previous_slot: Int
+    var previous_low: Int
+    var previous_high: Int
+    var score: Int
+    var furthest: Int
+
+
+@always_inline
+def overlap(
+    forward: MutPointer[Int32, MutUntrackedOrigin],
+    forward_low: Int,
+    forward_high: Int,
+    backward: MutPointer[Int32, MutUntrackedOrigin],
+    back_low: Int,
+    back_high: Int,
+    target: Int,
+    columns: Int,
+) -> Int:
+    """A diagonal whose forward front reaches past where the backward front comes back to, or
+    `NO_DIAGONAL`; the backward front's diagonal `target - k` mirrors the forward's `k`."""
+    var low = max(forward_low, target - back_high)
+    var high = min(forward_high, target - back_low)
+    # An unreached diagonal holds a value far below zero, so the sum alone rules it out.
+    var needed = SIMD[DType.int32, FRONT_LANES](Int32(columns))
+    var diagonal = low
+    while diagonal + FRONT_LANES - 1 <= high:
+        var reached = forward.unsafe_offset(diagonal).unsafe_load[width=FRONT_LANES]()
+        var back = (
+            backward.unsafe_offset(target - diagonal - FRONT_LANES + 1).unsafe_load[width=FRONT_LANES]().reversed()
+        )
+        if (reached + back).ge(needed).reduce_or():
+            break
+        diagonal += FRONT_LANES
+    while diagonal <= high:
+        if Int(forward[unsafe_offset=diagonal]) + Int(backward[unsafe_offset=target - diagonal]) >= columns:
+            return diagonal
+        diagonal += 1
+    return NO_DIAGONAL
 
 
 @fieldwise_init
@@ -2082,13 +2204,15 @@ struct Meeting(ImplicitlyCopyable, TrivialRegisterPassable):
     var backward_score: Int
 
 
-def two_ended_distance(profile: Profile, step_tenths: Int) -> Probe:
+def two_ended_distance(profile: Profile, step_tenths: Int, workers: Int = 1) -> Probe:
     """The edit distance by `two_ended`, keeping no history."""
     var first_back = reversed_codes(profile.column_codes, profile.columns, FIRST_SENTINEL)
     var second_back = reversed_codes(profile.row_codes, profile.rows, SECOND_SENTINEL)
     var ahead = FrontPair(PROBE_CEILING // 2 + 1)
     var behind = FrontPair(PROBE_CEILING // 2 + 1)
-    return two_ended(profile, first_back, second_back, step_tenths, ahead, behind, UNSEEDED_EDITS_PER_STEP).probe
+    return two_ended(
+        profile, first_back, second_back, step_tenths, ahead, behind, UNSEEDED_EDITS_PER_STEP, workers
+    ).probe
 
 
 def two_ended(
@@ -2099,6 +2223,7 @@ def two_ended(
     mut ahead: FrontPair,
     mut behind: FrontPair,
     unseeded_edits_per_step: Int = EDITS_PER_STEP,
+    workers: Int = 1,
 ) -> Meeting:
     """The edit distance by diagonal transition from both ends at once, as BiWFA scores, while cheap.
 
@@ -2113,7 +2238,9 @@ def two_ended(
 
     It stops as `diagonal_transition` does, once the search still to do passes the budget (see
     `step_budget`), projecting the distance from both fronts' progress; against a band the seeds
-    would not narrow, at `unseeded_edits_per_step`.
+    would not narrow, at `unseeded_edits_per_step`. With more than one worker, once both fronts
+    reach `LOCKSTEP_SCORE` the two directions go on in parallel (see `lockstep`); `workers` of zero
+    means every thread this process may use, asked for only then.
     """
     var columns = profile.columns
     var rows = profile.rows
@@ -2129,64 +2256,35 @@ def two_ended(
     behind.keep()
 
     @always_inline
-    def overlapping(mut ahead: FrontPair, mut behind: FrontPair, earlier: Bool) {imm target, imm columns} -> Int:
-        """A diagonal whose forward front reaches past where its backward front comes back to, or
-        `NO_DIAGONAL`; with `earlier`, against the backward front of one score less."""
-        var forward = ahead.front(ahead.parity)
-        var backward = behind.front(1 - behind.parity if earlier else behind.parity)
-        var back_low = behind.previous_low if earlier else behind.low
-        var back_high = behind.previous_high if earlier else behind.high
-        var low = max(ahead.low, target - back_high)
-        var high = min(ahead.high, target - back_low)
-        # An unreached diagonal holds a value far below zero, so the sum alone rules it out.
-        var needed = SIMD[DType.int32, FRONT_LANES](Int32(columns))
-        var diagonal = low
-        while diagonal + FRONT_LANES - 1 <= high:
-            var reached = forward.unsafe_offset(diagonal).unsafe_load[width=FRONT_LANES]()
-            var back = (
-                backward.unsafe_offset(target - diagonal - FRONT_LANES + 1).unsafe_load[width=FRONT_LANES]().reversed()
-            )
-            if (reached + back).ge(needed).reduce_or():
-                break
-            diagonal += FRONT_LANES
-        while diagonal <= high:
-            if Int(forward[unsafe_offset=diagonal]) + Int(backward[unsafe_offset=target - diagonal]) >= columns:
-                return diagonal
-            diagonal += 1
-        return NO_DIAGONAL
+    def overlapping(
+        ahead: FrontPair, back: FrontState, forward_earlier: Bool, backward_earlier: Bool, backward_buffers: FrontPair
+    ) {imm target, imm columns} -> Int:
+        """`overlap` of the forward front, or the one before it, and the backward front `back` saw,
+        or the one before it."""
+        return overlap(
+            ahead.front(ahead.previous() if forward_earlier else ahead.slot),
+            ahead.previous_low if forward_earlier else ahead.low,
+            ahead.previous_high if forward_earlier else ahead.high,
+            backward_buffers.front(back.previous_slot if backward_earlier else back.slot),
+            back.previous_low if backward_earlier else back.low,
+            back.previous_high if backward_earlier else back.high,
+            target,
+            columns,
+        )
 
     @always_inline
-    def advance(
-        mut fronts: FrontPair, codes: ImmPointer[UInt8, _], others: ImmPointer[UInt8, _], measure: Bool
-    ) {imm columns, imm rows}:
-        """One more score for one direction's front."""
-        var previous = fronts.front(fronts.parity)
-        var current = fronts.front(1 - fronts.parity)
-        fronts.score += 1
-        var low = max(-fronts.score, -rows)
-        var high = min(fronts.score, columns)
-        for index in range(1, FRONT_PADDING + 1):
-            current[unsafe_offset=low - index] = UNREACHED_OFFSET
-        if measure:
-            fronts.furthest = step_front[True](previous, current, low, high, columns, rows, codes, others)
-        else:
-            _ = step_front[False](previous, current, low, high, columns, rows, codes, others)
-        fronts.previous_low = fronts.low
-        fronts.previous_high = fronts.high
-        fronts.low = low
-        fronts.high = high
-        fronts.parity = 1 - fronts.parity
-        fronts.keep()
+    def met(
+        ahead: FrontPair, back: FrontState, diagonal: Int, forward_earlier: Bool, backward_earlier: Bool
+    ) -> Meeting:
+        var column = Int(ahead.front(ahead.previous() if forward_earlier else ahead.slot)[unsafe_offset=diagonal])
+        var forward_score = ahead.score - 1 if forward_earlier else ahead.score
+        var backward_score = back.score - 1 if backward_earlier else back.score
+        var total = forward_score + backward_score
+        return Meeting(Probe(total, total, total - 1), diagonal, column, forward_score, backward_score)
 
-    @always_inline
-    def met(mut ahead: FrontPair, mut behind: FrontPair, diagonal: Int, total: Int, earlier: Bool) -> Meeting:
-        var column = Int(ahead.front(ahead.parity)[unsafe_offset=diagonal])
-        var backward_score = behind.score - 1 if earlier else behind.score
-        return Meeting(Probe(total, total, total - 1), diagonal, column, ahead.score, backward_score)
-
-    var meeting = overlapping(ahead, behind, False)
+    var meeting = overlapping(ahead, behind.state(), False, False, behind)
     if meeting != NO_DIAGONAL:
-        return met(ahead, behind, meeting, 0, False)
+        return met(ahead, behind.state(), meeting, False, False)
     var total = 0
     while ahead.score < limit and behind.score < limit:
         total += 1
@@ -2195,30 +2293,222 @@ def two_ended(
         var checking = total >= 2 * PROBE_START and total % PROBE_STRIDE == 0
         var measuring = total + 1 >= 2 * PROBE_START and (total + 1) % PROBE_STRIDE == 0
         if total % 2 == 1:
-            advance(ahead, first, second, checking or measuring)
+            ahead.advance(first, second, checking or measuring, columns, rows)
         else:
-            advance(behind, first_reversed, second_reversed, checking or measuring)
+            behind.advance(first_reversed, second_reversed, checking or measuring, columns, rows)
         # Checked after the backward front's steps alone: a first overlap one score sooner is found
-        # then, against the backward front's previous score, which its other buffer still holds.
+        # then, against the backward front's previous score, which the ring still holds.
         if total % 2 == 0:
-            meeting = overlapping(ahead, behind, False)
+            var back = behind.state()
+            meeting = overlapping(ahead, back, False, False, behind)
             if meeting != NO_DIAGONAL:
-                var sooner = overlapping(ahead, behind, True)
+                var sooner = overlapping(ahead, back, False, True, behind)
                 if sooner != NO_DIAGONAL:
-                    return met(ahead, behind, sooner, total - 1, True)
-                return met(ahead, behind, meeting, total, False)
+                    return met(ahead, back, sooner, False, True)
+                return met(ahead, back, meeting, False, False)
         if checking:
-            var reached = max(ahead.furthest + behind.furthest, 1)
-            var estimate = total * (columns + rows) // reached
-            # What is left, about half of `estimate² - total²` diagonals, against what a band costs.
-            # Both fronts' steps, about 0.57 ns per square edit with the overlap check, in one-front steps.
-            var seeded = estimate >= SEED_EDITS and estimate * SEED_DIVERGENCE <= columns
-            var per_step = EDITS_PER_STEP if seeded or columns <= SHORT_COLUMNS else unseeded_edits_per_step
-            if (estimate * estimate - total * total) * TWO_ENDED_PERCENT // 100 > step_budget(
-                columns, step_tenths, estimate, per_step
-            ):
-                return Meeting(Probe(-1, max(estimate, total + 1), total), 0, 0, 0, 0)
+            var estimate = two_ended_gives_up(
+                total, ahead.furthest + behind.furthest, columns, rows, step_tenths, unseeded_edits_per_step
+            )
+            if estimate >= 0:
+                return Meeting(Probe(-1, estimate, total), 0, 0, 0, 0)
+            # Both fronts stand at the same score after a check; a second thread takes one of them
+            # once half the steps projected to be left outweigh its start and a barrier a score.
+            if workers != 1 and total >= 2 * LOCKSTEP_SCORE:
+                var projected = total * (columns + rows) // max(ahead.furthest + behind.furthest, 1)
+                var saved = (projected * projected - total * total) * TWO_ENDED_PERCENT // 200
+                # Asking for the thread count is a system call, so only a search this far along asks.
+                var available = workers if workers > 0 else max(hardware_threads(), 1)
+                if available > 1 and saved > LOCKSTEP_SETUP + (projected - total) // 2 * BARRIER_STEPS:
+                    return lockstep(
+                        profile, first_back, second_back, ahead, behind, limit, step_tenths, unseeded_edits_per_step
+                    )
     return Meeting(Probe(-1, 2 * limit + 1, total), 0, 0, 0, 0)
+
+
+def two_ended_gives_up(
+    total: Int, reached: Int, columns: Int, rows: Int, step_tenths: Int, unseeded_edits_per_step: Int
+) -> Int:
+    """The two-ended search's projected distance once what is left of it passes the budget, or -1."""
+    var estimate = total * (columns + rows) // max(reached, 1)
+    # What is left, about half of `estimate² - total²` diagonals, against what a band costs.
+    # Both fronts' steps, about 0.57 ns per square edit with the overlap check, in one-front steps.
+    var seeded = estimate >= SEED_EDITS and estimate * SEED_DIVERGENCE <= columns
+    var per_step = EDITS_PER_STEP if seeded or columns <= SHORT_COLUMNS else unseeded_edits_per_step
+    if (estimate * estimate - total * total) * TWO_ENDED_PERCENT // 100 > step_budget(
+        columns, step_tenths, estimate, per_step
+    ):
+        return max(estimate, total + 1)
+    return -1
+
+
+def lockstep(
+    profile: Profile,
+    first_back: List[UInt8],
+    second_back: List[UInt8],
+    mut ahead: FrontPair,
+    mut behind: FrontPair,
+    limit: Int,
+    step_tenths: Int,
+    unseeded_edits_per_step: Int,
+) -> Meeting:
+    """`two_ended` from equal scores on, with one thread a direction, a score at a time each.
+
+    After both have grown the fronts of score `s`, the first thread checks the totals `2s - 1`, one
+    front of each pair against the other's previous, then `2s`, in that order, so the first overlap
+    is still the least total; the second thread meanwhile grows its next front into the third slot
+    of its ring, having published where its two latest lie (see `FrontState`). One spin barrier a
+    score: a few dozen nanoseconds, against the hundreds a front of a few hundred diagonals takes.
+
+    The runtime may run the two tasks one after the other, and a task spinning for a partner that
+    starts only once it returns would never return. So each checks in first: the first to arrive
+    waits `CHECK_IN_NANOSECONDS` for the other, and if none comes, claims the search and finishes it
+    alone, both directions in turn, while the late task finds it claimed and returns.
+    """
+    var columns = profile.columns
+    var rows = profile.rows
+    var first = profile.column_codes.unsafe_ptr()
+    var second = profile.row_codes.unsafe_ptr()
+    var first_reversed = first_back.unsafe_ptr()
+    var second_reversed = second_back.unsafe_ptr()
+    var target = columns - rows
+    var arrived = Atomic[Int64](0)
+    var generation = Atomic[Int64](0)
+    var done = Atomic[Int64](0)
+    var present = Atomic[Int64](0)
+    var start = ahead.score
+    # What a search that ran out of scores reports; any other end overwrites it.
+    var outcome = Meeting(Probe(-1, 2 * limit + 1, 2 * (limit - 1)), 0, 0, 0, 0)
+    # The backward direction's latest state, one record per score parity, so publishing the next
+    # never overwrites the one being checked.
+    var published = List[FrontState](length=2, fill=behind.state())
+
+    @always_inline
+    def wait(mut arrived: Atomic[Int64], mut generation: Atomic[Int64]):
+        var seen = generation.load()
+        if arrived.fetch_add(1) == 1:
+            arrived.store(0)
+            _ = generation.fetch_add(1)
+        else:
+            while generation.load() == seen:
+                pass
+
+    def side(
+        index: Int,
+    ) {
+        mut ahead,
+        mut behind,
+        mut arrived,
+        mut generation,
+        mut done,
+        mut present,
+        mut outcome,
+        mut published,
+        imm start,
+        imm limit,
+        imm columns,
+        imm rows,
+        imm target,
+        imm step_tenths,
+        imm unseeded_edits_per_step,
+        imm first,
+        imm second,
+        imm first_reversed,
+        imm second_reversed,
+    }:
+        @always_inline
+        def settled(
+            score: Int, back: FrontState, checking: Bool
+        ) {
+            mut outcome,
+            imm ahead,
+            imm behind,
+            imm target,
+            imm columns,
+            imm rows,
+            imm step_tenths,
+            imm unseeded_edits_per_step,
+        } -> Bool:
+            """Checks the totals `2 score - 1` then `2 score`, and the budget; true once the search ends."""
+            for earlier in range(3):
+                # Either front against the other's previous first, then both latest.
+                var forward_earlier = earlier == 1
+                var backward_earlier = earlier == 0
+                var diagonal = overlap(
+                    ahead.front(ahead.previous() if forward_earlier else ahead.slot),
+                    ahead.previous_low if forward_earlier else ahead.low,
+                    ahead.previous_high if forward_earlier else ahead.high,
+                    behind.front(back.previous_slot if backward_earlier else back.slot),
+                    back.previous_low if backward_earlier else back.low,
+                    back.previous_high if backward_earlier else back.high,
+                    target,
+                    columns,
+                )
+                if diagonal != NO_DIAGONAL:
+                    var column = Int(
+                        ahead.front(ahead.previous() if forward_earlier else ahead.slot)[unsafe_offset=diagonal]
+                    )
+                    var forward_score = ahead.score - 1 if forward_earlier else ahead.score
+                    var backward_score = back.score - 1 if backward_earlier else back.score
+                    var total = forward_score + backward_score
+                    outcome = Meeting(Probe(total, total, total - 1), diagonal, column, forward_score, backward_score)
+                    return True
+            if checking:
+                var estimate = two_ended_gives_up(
+                    2 * score, ahead.furthest + back.furthest, columns, rows, step_tenths, unseeded_edits_per_step
+                )
+                if estimate >= 0:
+                    outcome = Meeting(Probe(-1, estimate, 2 * score), 0, 0, 0, 0)
+                    return True
+            return False
+
+        var arrival = present.fetch_add(1)
+        if arrival >= ALONE:
+            return
+        if arrival == 0:
+            var waited_from = perf_counter_ns()
+            while present.load() == 1:
+                if Int(perf_counter_ns() - waited_from) > CHECK_IN_NANOSECONDS:
+                    var expected = Int64(1)
+                    if present.compare_exchange(expected, ALONE):
+                        break
+            if present.load() >= ALONE:
+                # No partner came: both directions on this thread, in turn.
+                var score = start
+                while score + 1 < limit:
+                    score += 1
+                    var checking = (2 * score) % PROBE_STRIDE == 0
+                    ahead.advance(first, second, checking, columns, rows)
+                    behind.advance(first_reversed, second_reversed, checking, columns, rows)
+                    if settled(score, behind.state(), checking):
+                        return
+                return
+        var score = start
+        while score + 1 < limit:
+            score += 1
+            var checking = (2 * score) % PROBE_STRIDE == 0
+            if index == 1:
+                behind.advance(first_reversed, second_reversed, checking, columns, rows)
+                published[score % 2] = behind.state()
+                wait(arrived, generation)
+                # The first thread decides a score's end only after that score's barrier, so an end
+                # at this very score may already show; this thread then grows one more front and
+                # meets it at the next barrier, where it waits, and an earlier end lets it go.
+                var ended = Int(done.load())
+                if ended != 0 and ended < score:
+                    return
+                continue
+            ahead.advance(first, second, checking, columns, rows)
+            wait(arrived, generation)
+            if settled(score, published[score % 2], checking):
+                done.store(Int64(score))
+                # The other thread is growing its next front, if there is a next, and waits there.
+                if score + 1 < limit:
+                    wait(arrived, generation)
+                return
+
+    parallelize(side, 2, 2)
+    return outcome
 
 
 def trace_from(
@@ -2477,7 +2767,7 @@ def edit_distance(first: String, second: String, threads: Optional[Int] = None) 
     if forward.columns >= MEET_COLUMNS or forward.columns * forward.rows >= PARALLEL_CELLS:
         # A system call, so only a pair long enough to use more than one thread asks.
         workers = max(threads.or_else(hardware_threads()), 1)
-    var probe = two_ended_distance(forward, STEP_TENTHS_DISTANCE)
+    var probe = two_ended_distance(forward, STEP_TENTHS_DISTANCE, workers)
     if probe.distance >= 0:
         return probe.distance
     # The band's bounds and the seeds' gate are tuned on one front's projection from its first
@@ -2988,7 +3278,10 @@ def edit_alignment(
         var second_back = reversed_codes(forward.row_codes, rows, SECOND_SENTINEL)
         var ahead = FrontPair(PROBE_CEILING // 2 + 1, record=True)
         var behind = FrontPair(PROBE_CEILING // 2 + 1, record=True)
-        var meeting = two_ended(forward, first_back, second_back, STEP_TENTHS_ALIGNMENT, ahead, behind)
+        var workers = max(threads.or_else(0), 0) if columns >= MEET_COLUMNS else 1
+        var meeting = two_ended(
+            forward, first_back, second_back, STEP_TENTHS_ALIGNMENT, ahead, behind, EDITS_PER_STEP, workers
+        )
         if meeting.probe.distance >= 0:
             var middle_column = meeting.column
             var middle_row = meeting.column - meeting.diagonal
