@@ -48,6 +48,7 @@ from .common import (
 )
 from .errors import AlignmentError, ErrorKind
 from .gap_affine import wavefront_penalties, wavefront_score
+from .vector_score import uniform_table, vector_score
 
 from max.algorithm import parallelize
 
@@ -368,7 +369,8 @@ def score[
     """The optimal score alone, in two rows of memory on either device.
 
     On the host, a global score under a table of one match and one mismatch score runs the
-    wavefront first (see `gap_affine`), and the full sweep only when the wavefront gives up.
+    wavefront first (see `gap_affine`), and the full sweep only when the wavefront gives up; under
+    such a table the sweep runs sixteen cells at a time (see `vector_score`).
     """
     var resolved = placement.or_else(Placement.default())
     var encoded_first = translate(first, scoring.alphabet)
@@ -385,6 +387,9 @@ def score[
             var found = wavefront_score(encoded_first, encoded_second, penalties.value())
             if found:
                 return Int32(found.value())
+    var table = uniform_table(scoring.substitutions, scoring.alphabet_size())
+    if table:
+        return vector_score[mode](encoded_first, encoded_second, table.value()[0], table.value()[1], scoring.gaps)
     return serial_score[mode](
         encoded_first, encoded_second, scoring.substitutions, scoring.alphabet_size(), scoring.gaps
     )
