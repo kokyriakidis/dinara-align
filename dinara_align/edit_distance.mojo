@@ -977,6 +977,29 @@ comptime SEED_LENGTH = 12
 """Bases per seed: A*PA2-full's `k`, long enough that a random match is rare, short enough that most
 seeds of a moderately divergent pair still match exactly."""
 
+comptime INEXACT_LENGTH = 16
+"""Bases per seed when seeds may match with one edit: A*PA's inexact seeds, long enough that a random
+one-edit match is still rare, each seed then charging two edits to a path that matches it nowhere."""
+
+comptime INEXACT_COLUMNS = 65_536
+"""Columns from which the seeds may match with one edit. Their setup grows with the length and the band
+they save with its square: on real reads of 16 to 70 kbp exact seeds win however divergent the pair,
+and from about 100 kbp, and on uniform errors of one in seven, inexact ones do."""
+
+comptime INEXACT_DIVERGENCE = 10
+"""Columns per projected edit at or below which the seeds may match with one edit: past about one edit
+in ten bases most exact seeds are broken, while most still match within one edit."""
+
+comptime INEXACT_CHAINED = 40
+"""Percent of the exact seeds chained from the origin below which the seeds are rebuilt to match within
+one edit: about one edit in fifteen bases on real reads, whose errors gather, and one in fifteen to
+twenty on uniform ones. Above it the exact seeds' bound already lies within a tenth or so of the
+distance and inexact seeds narrow the band by less than their setup costs."""
+
+comptime HALF_BITS = INEXACT_LENGTH
+"""Bits in half an inexact seed's two-bit code: a one-edit match matches one half exactly, so each half
+indexes a table of this many bits."""
+
 comptime SEED_EDITS = 1500
 """Projected edits from which a band prunes with the seed heuristic. Its setup costs about ten
 nanoseconds a column; what it saves grows with the distance, the band otherwise sweeping rows in
@@ -1011,7 +1034,7 @@ comptime LOOKAHEAD_SEEDS = 14
 """Seeds a match's local pruning looks ahead, its own included: A*PA2-full's `p`."""
 
 comptime LAYER_SLOTS = 8
-"""Starts a layer holds in place before the rest spill into a shared list."""
+"""Starts a layer holds in place before the rest spill into a chain of its own."""
 
 
 struct SeedHeuristic(Movable):
@@ -1026,20 +1049,33 @@ struct SeedHeuristic(Movable):
     query, answered from layers of match starts, layer `v` holding the starts from which `v` matches
     chain (see `score`).
 
-    The heuristic never overestimates the cost to the end and changes by at most one per row, so the
-    band's pruning stays exact and its jumps stay valid. With no seeds it is the plain gap to the
-    end's diagonal, which is what every band used before.
+    With inexact seeds, as A*PA's `r = 2`, seeds are `INEXACT_LENGTH` bases, a match may cost one
+    edit, and a seed matched nowhere costs a path two: the potential counts two a seed, a match
+    scores two less its cost, and the transform is the same in those units. A match scoring two
+    starts in two layers, so the layers still nest.
+
+    The heuristic never overestimates the cost to the end. Down a column it drops by at most one a
+    row, as it is consistent, and up a column by at most `cost` (see `climb`), so the band's
+    pruning stays exact and its jumps stay valid. With no seeds it is the plain gap to the end's
+    diagonal, which is what every band used before.
     """
 
     var columns: Int
     var rows: Int
+    var length: Int
+    """Bases per seed."""
+    var cost: Int
+    """What a path pays crossing a seed it matches nowhere: one for exact seeds, two for inexact."""
     var seeds: Int
     var slot_x: List[Int32]
     """Per layer, `LAYER_SLOTS` slots for the transformed starts of the matches from which that many
     matches chain; a layer rarely holds more than three, and any past the slots spill over."""
     var slot_y: List[Int32]
     var counts: List[Int32]
-    var spill_layer: List[Int32]
+    var spill_head: List[Int32]
+    """Per layer, the last of its spilled starts, -1 for none; each spilled start links to the one
+    spilled before it in `spill_next`."""
+    var spill_next: List[Int32]
     var spill_x: List[Int32]
     var spill_y: List[Int32]
     var hint: Int
@@ -1049,41 +1085,144 @@ struct SeedHeuristic(Movable):
         """No seeds: the gap heuristic."""
         self.columns = columns
         self.rows = rows
+        self.length = SEED_LENGTH
+        self.cost = 1
         self.seeds = 0
         self.slot_x = List[Int32]()
         self.slot_y = List[Int32]()
         self.counts = List[Int32]()
-        self.spill_layer = List[Int32]()
+        self.spill_head = List[Int32]()
+        self.spill_next = List[Int32]()
         self.spill_x = List[Int32]()
         self.spill_y = List[Int32]()
         self.hint = 0
 
-    def __init__(out self, profile: Profile, lookahead: Int = LOOKAHEAD_SEEDS):
-        """Seeds of the profile's first sequence, matched exactly in its second.
+    def __init__(
+        out self, profile: Profile, inexact: Bool = False, choose: Bool = False, lookahead: Int = LOOKAHEAD_SEEDS
+    ):
+        """Seeds of the profile's first sequence, matched exactly in its second, or with `inexact`
+        within one edit. With `choose`, exact seeds, rebuilt inexact when fewer than
+        `INEXACT_CHAINED` percent of them chain from the origin.
 
-        With `lookahead`, a match is kept only if a path from its end crosses the next `lookahead`
+        With `lookahead`, a match is kept only if a path from its start crosses the next `lookahead`
         seeds for less than they would cost unmatched (see `worth_keeping`).
         """
         self.columns = profile.columns
         self.rows = profile.rows
-        self.seeds = profile.columns // SEED_LENGTH
-        self.slot_x = List[Int32](capacity=LAYER_SLOTS * (self.seeds + 1))
-        self.slot_y = List[Int32](capacity=LAYER_SLOTS * (self.seeds + 1))
-        self.counts = List[Int32](capacity=self.seeds + 1)
-        self.spill_layer = List[Int32]()
+        self.length = SEED_LENGTH
+        self.cost = 1
+        self.seeds = 0
+        self.slot_x = List[Int32]()
+        self.slot_y = List[Int32]()
+        self.counts = List[Int32]()
+        self.spill_head = List[Int32]()
+        self.spill_next = List[Int32]()
         self.spill_x = List[Int32]()
         self.spill_y = List[Int32]()
         self.hint = 0
-        self.add_sentinel()
-        if self.seeds == 0 or profile.rows < SEED_LENGTH:
-            return
+        self.build(profile, inexact, lookahead)
+        if choose and not inexact and self.seeds > 0:
+            var chained = self.seeds - self.h(0, 0)
+            if chained * 100 < INEXACT_CHAINED * self.seeds:
+                self.build(profile, True, lookahead)
 
-        # Every seed's two-bit code, hashed by open addressing on the multiply's top bits; a slot
-        # holds its code and the first seed with it in one word, and seeds sharing a code chain on.
-        comptime MASK = (1 << (2 * SEED_LENGTH)) - 1
-        comptime EMPTY = Int64(-1)
+    def build(mut self, profile: Profile, inexact: Bool, lookahead: Int):
+        """The seeds, their matches, and the layers, from scratch."""
+        self.length = INEXACT_LENGTH if inexact else SEED_LENGTH
+        self.cost = 2 if inexact else 1
+        self.seeds = profile.columns // self.length
+        self.slot_x.clear()
+        self.slot_y.clear()
+        self.counts.clear()
+        self.spill_head.clear()
+        self.spill_next.clear()
+        self.spill_x.clear()
+        self.spill_y.clear()
+        self.slot_x.reserve(LAYER_SLOTS * (self.seeds + 1))
+        self.slot_y.reserve(LAYER_SLOTS * (self.seeds + 1))
+        self.counts.reserve(self.seeds + 1)
+        self.spill_head.reserve(self.seeds + 1)
+        self.hint = 0
+        self.add_sentinel()
+        if self.seeds == 0 or profile.rows < self.length + 1:
+            return
         var first = profile.column_codes.unsafe_ptr()
         var second = profile.row_codes.unsafe_ptr()
+        # Each match a seed and its start row, and for inexact seeds its end row and cost; an exact
+        # match ends a seed's length further down, at no cost.
+        var found_seed = List[Int32]()
+        var found_row = List[Int32]()
+        var found_end = List[Int32]()
+        var found_cost = List[Int32]()
+        if inexact:
+            self.inexact_matches(first, second, found_seed, found_row, found_end, found_cost)
+        else:
+            self.exact_matches(first, second, found_seed, found_row)
+
+        # Bucketed by seed: a start can dominate another match's end only from a later seed, so taking
+        # the seeds last first is an order the layers can be built in, no sort.
+        var firsts = List[Int32](length=self.seeds + 1, fill=0)
+        for index in range(len(found_seed)):
+            firsts[Int(found_seed[index]) + 1] += 1
+        for seed in range(self.seeds):
+            firsts[seed + 1] += firsts[seed]
+        var rows_by_seed = List[Int32](length=len(found_seed), fill=0)
+        var ends_by_seed = List[Int32](length=len(found_end), fill=0)
+        var costs_by_seed = List[Int32](length=len(found_cost), fill=0)
+        var filled = firsts.copy()
+        for index in range(len(found_seed)):
+            var seed = Int(found_seed[index])
+            var slot = Int(filled[seed])
+            rows_by_seed[slot] = found_row[index]
+            if inexact:
+                ends_by_seed[slot] = found_end[index]
+                costs_by_seed[slot] = found_cost[index]
+            filled[seed] += 1
+
+        # A match starts `cost` less its own cost layers above the best its end can chain on to. Right
+        # to left on every diagonal, as the seeds go last first, so local pruning sees the matches
+        # kept after it.
+        var leftmost = List[Int32](length=self.columns + self.rows + 1, fill=Int32.MAX)
+        var fronts = List[Int](length=4 * self.cost * LOOKAHEAD_SEEDS + 3, fill=0)
+        var spare = List[Int](length=4 * self.cost * LOOKAHEAD_SEEDS + 3, fill=0)
+        for seed in range(self.seeds - 1, -1, -1):
+            var column = seed * self.length
+            var potential = self.potential(column)
+            var end_potential = potential - self.cost
+            for slot in range(Int(firsts[seed]), Int(firsts[seed + 1])):
+                var start_row = Int(rows_by_seed[slot])
+                var end_row = Int(ends_by_seed[slot]) if inexact else start_row + SEED_LENGTH
+                var match_cost = Int(costs_by_seed[slot]) if inexact else 0
+                if lookahead > 0 and not self.worth_keeping(
+                    first, second, seed, start_row, end_row, match_cost, lookahead, leftmost, fronts, spare
+                ):
+                    continue
+                leftmost[column - start_row + self.rows] = Int32(column)
+                var x = column - start_row - potential
+                var y = start_row - column - potential
+                var end_x = column + self.length - end_row - end_potential
+                var end_y = end_row - column - self.length - end_potential
+                var score = self.cost - match_cost
+                var layer = self.score(end_x, end_y) + score
+                while layer >= len(self.counts):
+                    self.add_layer()
+                for below in range(score):
+                    self.add_point(layer - below, x, y)
+
+    def exact_matches(
+        self,
+        first: ImmPointer[UInt8, _],
+        second: ImmPointer[UInt8, _],
+        mut found_seed: List[Int32],
+        mut found_row: List[Int32],
+    ):
+        """Every exact occurrence of a seed whose chain can still reach the end.
+
+        Every seed's two-bit code is hashed by open addressing on the multiply's top bits; a slot
+        holds its code and the first seed with it in one word, and seeds sharing a code chain on.
+        """
+        comptime MASK = (1 << (2 * SEED_LENGTH)) - 1
+        comptime EMPTY = Int64(-1)
         var bits = 1
         while (1 << bits) < 2 * self.seeds:
             bits += 1
@@ -1102,13 +1241,10 @@ struct SeedHeuristic(Movable):
             next[seed] = Int32(held & 0xFFFFFFFF) if held != EMPTY else -1
             slots[unsafe_offset=slot] = (Int64(code) << 32) | Int64(seed)
 
-        # Every window of the second sequence looked up. Each match whose chain can still reach the
-        # end is kept, bucketed by seed: a start can dominate another match's end only from a later
-        # seed, so taking the seeds last first is an order the layers can be built in, no sort.
+        # Every window of the second sequence looked up. A match's end, one seed on, is `(x + 1, y + 1)`
+        # in transformed coordinates, and must lie at or below and left of the end's.
         var target_x = self.columns - self.rows
         var target_y = self.rows - self.columns
-        var found_seed = List[Int32]()
-        var found_row = List[Int32]()
         var code = 0
         for row in range(self.rows):
             code = ((code << 2) | Int(second[unsafe_offset=row])) & MASK
@@ -1126,44 +1262,228 @@ struct SeedHeuristic(Movable):
             while seed >= 0:
                 var column = seed * SEED_LENGTH
                 var potential = self.seeds - seed
-                # The match's end, one seed on, is `(x + 1, y + 1)` in transformed coordinates.
                 if column - start_row - potential + 1 <= target_x and start_row - column - potential + 1 <= target_y:
                     found_seed.append(Int32(seed))
                     found_row.append(Int32(start_row))
                 seed = Int(next[seed])
-        var firsts = List[Int32](length=self.seeds + 1, fill=0)
-        for index in range(len(found_seed)):
-            firsts[Int(found_seed[index]) + 1] += 1
-        for seed in range(self.seeds):
-            firsts[seed + 1] += firsts[seed]
-        var rows_by_seed = List[Int32](length=len(found_seed), fill=0)
-        var filled = firsts.copy()
-        for index in range(len(found_seed)):
-            var seed = Int(found_seed[index])
-            rows_by_seed[Int(filled[seed])] = found_row[index]
-            filled[seed] += 1
 
-        # A match starts one layer above the best its end can chain on to. Right to left on every
-        # diagonal, as the seeds go last first, so local pruning sees the matches kept after it.
-        var leftmost = List[Int32](length=self.columns + self.rows + 1, fill=Int32.MAX)
-        var fronts = List[Int](length=4 * LOOKAHEAD_SEEDS + 3, fill=0)
-        var spare = List[Int](length=4 * LOOKAHEAD_SEEDS + 3, fill=0)
-        for seed in range(self.seeds - 1, -1, -1):
-            var column = seed * SEED_LENGTH
-            var potential = self.seeds - seed
-            for index in range(Int(firsts[seed]), Int(firsts[seed + 1])):
-                var start_row = Int(rows_by_seed[index])
-                if lookahead > 0 and not self.worth_keeping(
-                    first, second, seed, start_row, lookahead, leftmost, fronts, spare
+    def inexact_matches(
+        self,
+        first: ImmPointer[UInt8, _],
+        second: ImmPointer[UInt8, _],
+        mut found_seed: List[Int32],
+        mut found_row: List[Int32],
+        mut found_end: List[Int32],
+        mut found_cost: List[Int32],
+    ):
+        """Every occurrence of a seed within one edit whose chain can still reach the end.
+
+        One edit leaves one half of the seed matching exactly, at the window's start or its end. Each
+        half's code indexes a table of the seeds with it, and every window of the second sequence is
+        looked up as either half: a left half found at a row tries the windows starting there, one
+        base shorter, as long, or one longer than the seed; a right half found tries those ending
+        where it ends. A window both halves find is taken from the left half alone.
+        """
+        comptime HALF = INEXACT_LENGTH // 2
+        comptime HALF_MASK = (1 << HALF_BITS) - 1
+        comptime BUCKETS = 1 << HALF_BITS
+        # The quarters below are a code's top, second, third and bottom bytes.
+        comptime assert INEXACT_LENGTH == 16, "an inexact seed's quarters are its code's bytes"
+        var codes = List[UInt64](length=self.seeds, fill=0)
+        # Each half's seeds bucketed by its code, contiguous, the codes beside them.
+        var left_start = List[Int32](length=BUCKETS + 1, fill=0)
+        var right_start = List[Int32](length=BUCKETS + 1, fill=0)
+        for seed in range(self.seeds):
+            var code = UInt64(0)
+            for offset in range(INEXACT_LENGTH):
+                code = (code << 2) | UInt64(first[unsafe_offset=seed * INEXACT_LENGTH + offset])
+            codes[seed] = code
+            left_start[Int(code >> UInt64(HALF_BITS)) + 1] += 1
+            right_start[(Int(code) & HALF_MASK) + 1] += 1
+        for bucket in range(BUCKETS):
+            left_start[bucket + 1] += left_start[bucket]
+            right_start[bucket + 1] += right_start[bucket]
+        var left_seeds = List[Int32](length=self.seeds, fill=0)
+        var left_codes = List[UInt64](length=self.seeds, fill=0)
+        var right_seeds = List[Int32](length=self.seeds, fill=0)
+        var right_codes = List[UInt64](length=self.seeds, fill=0)
+        var left_fill = left_start.copy()
+        var right_fill = right_start.copy()
+        for seed in range(self.seeds):
+            var code = codes[seed]
+            var left = Int(left_fill[Int(code >> UInt64(HALF_BITS))])
+            left_seeds[left] = Int32(seed)
+            left_codes[left] = code
+            left_fill[Int(code >> UInt64(HALF_BITS))] += 1
+            var right = Int(right_fill[Int(code) & HALF_MASK])
+            right_seeds[right] = Int32(seed)
+            right_codes[right] = code
+            right_fill[Int(code) & HALF_MASK] += 1
+
+        # Every window of `INEXACT_LENGTH` bases of the second sequence as one code, the first base in
+        # the high bits, and its first four bases alone; past the end, the bases read as zero, and no
+        # window reaching there is tried.
+        var windows = List[UInt64](length=self.rows + 1, fill=0)
+        var quarters = List[UInt8](length=self.rows + 1, fill=0)
+        var rolling = UInt64(0)
+        for row in range(self.rows + INEXACT_LENGTH - 1, -1, -1):
+            var base = UInt64(second[unsafe_offset=row]) if row < self.rows else UInt64(0)
+            rolling = (rolling >> 2) | (base << UInt64(2 * INEXACT_LENGTH - 2))
+            if row <= self.rows:
+                windows[row] = rolling
+                quarters[row] = UInt8(rolling >> UInt64(2 * INEXACT_LENGTH - 8))
+        var window = windows.unsafe_ptr()
+        var quarter = quarters.unsafe_ptr()
+        var last = self.rows
+        for row in range(self.rows - HALF + 1):
+            # A left half found here leaves the right half within one edit of the bases after it: the
+            # seed's third quarter matches at `row + 8`, or its last quarter at `row + 11`, `row + 12`
+            # or `row + 13`, as the edit falls after or before the last quarter. A right half ending
+            # at `end` likewise puts the second quarter at `end - 12` or the first at `end - 15`,
+            # `end - 16` or `end - 17`. Most chance lookups miss all four.
+            var half = Int(window[unsafe_offset=row] >> UInt64(HALF_BITS))
+            var third = quarter[unsafe_offset=min(row + 8, last)]
+            var at_11 = quarter[unsafe_offset=min(row + 11, last)]
+            var at_12 = quarter[unsafe_offset=min(row + 12, last)]
+            var at_13 = quarter[unsafe_offset=min(row + 13, last)]
+            for slot in range(Int(left_start[half]), Int(left_start[half + 1])):
+                var code = left_codes[slot]
+                var fourth = UInt8(code & 0xFF)
+                if UInt8((code >> 8) & 0xFF) != third and fourth != at_11 and fourth != at_12 and fourth != at_13:
+                    continue
+                self.try_windows(
+                    code, Int(left_seeds[slot]), row, -1, window, found_seed, found_row, found_end, found_cost
+                )
+            var end = row + HALF
+            var second_at = quarter[unsafe_offset=max(end - 12, 0)]
+            var at_15 = quarter[unsafe_offset=max(end - 15, 0)]
+            var at_16 = quarter[unsafe_offset=max(end - 16, 0)]
+            var at_17 = quarter[unsafe_offset=max(end - 17, 0)]
+            for slot in range(Int(right_start[half]), Int(right_start[half + 1])):
+                var code = right_codes[slot]
+                var opening = UInt8(code >> 24)
+                if (
+                    UInt8((code >> 16) & 0xFF) != second_at
+                    and opening != at_15
+                    and opening != at_16
+                    and opening != at_17
                 ):
                     continue
-                leftmost[column - start_row + self.rows] = Int32(column)
-                var x = column - start_row - potential
-                var y = start_row - column - potential
-                var layer = self.score(x + 1, y + 1) + 1
-                if layer == len(self.counts):
-                    self.add_layer()
-                self.add_point(layer, x, y)
+                self.try_windows(
+                    code, Int(right_seeds[slot]), -1, end, window, found_seed, found_row, found_end, found_cost
+                )
+
+    @always_inline
+    def try_windows(
+        self,
+        code: UInt64,
+        seed: Int,
+        start: Int,
+        end: Int,
+        window: ImmPointer[UInt64, _],
+        mut found_seed: List[Int32],
+        mut found_row: List[Int32],
+        mut found_end: List[Int32],
+        mut found_cost: List[Int32],
+    ):
+        """The windows within one edit of a seed that start at `start`, or end at `end` when `start`
+        is -1: one base shorter than the seed, as long, and one longer.
+
+        Two codes of equal length agree base by base where their XOR has neither bit of a pair set;
+        the leading agreeing bases are the common prefix, the trailing ones the common suffix. A
+        window one base shorter is the seed less one base when the two cover it between them, and
+        one longer is the seed plus one base when they cover the seed.
+
+        An exact match's windows one base shorter or longer, sharing its start or its end, are left
+        out: a path crossing the seed along one costs at least one edit there, and taking the exact
+        match in its place moves the chain's gaps by one edit at most, so the heuristic stays a
+        lower bound without them.
+        """
+        comptime K = INEXACT_LENGTH
+        comptime PAIRS = UInt64(0x5555555555555555)
+        var exact = False
+        for step in range(3):
+            # As long as the seed first, so an exact match is known before its neighbours.
+            var extra = 0 if step == 0 else (-1 if step == 1 else 1)
+            if exact and extra != 0:
+                return
+            var size = K + extra
+            var low = start if start >= 0 else end - size
+            var high = low + size
+            if low < 0 or high > self.rows:
+                continue
+            # A window whose left half matches too is the left half's lookup's to take.
+            var taken = start < 0 and (window[unsafe_offset=low] >> UInt64(HALF_BITS)) == (code >> UInt64(HALF_BITS))
+            var cost = 1
+            if extra == 0:
+                var mismatched = window[unsafe_offset=low] ^ code
+                var bases = Int(pop_count((mismatched | (mismatched >> 1)) & PAIRS))
+                exact = bases == 0
+                if bases > 1 or taken:
+                    continue
+                cost = bases
+            elif taken:
+                continue
+            elif extra == -1:
+                # The window's bases, `K - 1` of them, against the seed's first and last `K - 1`.
+                var shorter = window[unsafe_offset=low] >> 2
+                var prefix = self.agreeing_prefix(shorter, code >> 2, K - 1)
+                var suffix = self.agreeing_suffix(shorter, code & ((UInt64(1) << UInt64(2 * K - 2)) - 1), K - 1)
+                if prefix + suffix < K - 1:
+                    continue
+            else:
+                # The window's first and last `K` bases against the seed.
+                var head = window[unsafe_offset=low]
+                var tail = window[unsafe_offset=low + 1]
+                var prefix = self.agreeing_prefix(head, code, K)
+                var suffix = self.agreeing_suffix(tail, code, K)
+                if prefix + suffix < K:
+                    continue
+            self.add_match(seed, low, high, cost, found_seed, found_row, found_end, found_cost)
+
+    @always_inline
+    def agreeing_prefix(self, first: UInt64, second: UInt64, bases: Int) -> Int:
+        """Leading bases two codes of `bases` bases share."""
+        comptime PAIRS = UInt64(0x5555555555555555)
+        var mismatched = first ^ second
+        var differing = (mismatched | (mismatched >> 1)) & PAIRS
+        if differing == 0:
+            return bases
+        return (Int(count_leading_zeros(differing)) - (64 - 2 * bases)) // 2
+
+    @always_inline
+    def agreeing_suffix(self, first: UInt64, second: UInt64, bases: Int) -> Int:
+        """Trailing bases two codes of `bases` bases share."""
+        comptime PAIRS = UInt64(0x5555555555555555)
+        var mismatched = first ^ second
+        var differing = (mismatched | (mismatched >> 1)) & PAIRS
+        if differing == 0:
+            return bases
+        return Int(count_trailing_zeros(differing)) // 2
+
+    @always_inline
+    def add_match(
+        self,
+        seed: Int,
+        start_row: Int,
+        end_row: Int,
+        cost: Int,
+        mut found_seed: List[Int32],
+        mut found_row: List[Int32],
+        mut found_end: List[Int32],
+        mut found_cost: List[Int32],
+    ):
+        """Keeps an inexact match whose end can still reach the end: in transformed coordinates, its
+        end lies at or below and left of the end's."""
+        var column = seed * self.length
+        var end_potential = self.potential(column) - self.cost
+        var end_x = column + self.length - end_row - end_potential
+        var end_y = end_row - column - self.length - end_potential
+        if end_x <= self.columns - self.rows and end_y <= self.rows - self.columns:
+            found_seed.append(Int32(seed))
+            found_row.append(Int32(start_row))
+            found_end.append(Int32(end_row))
+            found_cost.append(Int32(cost))
 
     def worth_keeping(
         self,
@@ -1171,6 +1491,8 @@ struct SeedHeuristic(Movable):
         second: ImmPointer[UInt8, _],
         seed: Int,
         start_row: Int,
+        end_row: Int,
+        match_cost: Int,
         lookahead: Int,
         leftmost: List[Int32],
         mut fronts: List[Int],
@@ -1179,30 +1501,30 @@ struct SeedHeuristic(Movable):
         """A*PA's local pruning: whether a match can lower the cost of some path, so dropping it would not.
 
         A match only helps a path that goes on to cross the next seeds for fewer edits than the
-        seeds it crosses. A diagonal transition from the match's end, over the next `lookahead`
-        seeds counting its own, looks for such a path: the match stays if a front reaches past the
-        last of them, or slides into a match already kept on its diagonal, which then continues it.
+        seeds it crosses would cost unmatched. A diagonal transition from the match's end, starting
+        at the match's own cost, over the next `lookahead` seeds counting its own, looks for such a
+        path: the match stays if a front reaches past the last of them, or slides into a match
+        already kept on its diagonal, which then continues it.
         A front whose edits already equal the seeds crossed can no longer gain, and is dropped. Every
         match an optimal path's chain relies on passes, so the heuristic stays a lower bound.
         """
-        var start_column = seed * SEED_LENGTH
-        var start_potential = self.seeds - seed
+        var start_column = seed * self.length
+        var start_potential = self.potential(start_column)
         var last = min(seed + lookahead - 1, self.seeds - 1)
-        var end_column = (last + 1) * SEED_LENGTH
+        var end_column = (last + 1) * self.length
         var reach = start_potential - self.potential(end_column)
-        var end_row = start_row + SEED_LENGTH
-        var origin = (start_column + SEED_LENGTH) - end_row
+        var origin = (start_column + self.length) - end_row
         # Front `d` is the diagonal `origin + d - reach`, at `fronts[d]`, its furthest column.
         var low = reach
         var high = reach + 1
-        fronts[reach] = start_column + SEED_LENGTH
+        fronts[reach] = start_column + self.length
         fronts[reach] = extend(first, second, fronts[reach], end_row, self.columns, self.rows)
         if fronts[reach] >= end_column:
             return True
         var kept = Int(leftmost[origin + self.rows])
         if kept <= fronts[reach]:
             return True
-        for cost in range(1, reach):
+        for cost in range(match_cost + 1, reach):
             # One more edit: from the same diagonal, or from either neighbour.
             for d in range(low - 1, high + 1):
                 var best = -1
@@ -1245,6 +1567,7 @@ struct SeedHeuristic(Movable):
             self.slot_x.append(0)
             self.slot_y.append(0)
         self.counts.append(0)
+        self.spill_head.append(-1)
 
     def add_point(mut self, layer: Int, x: Int, y: Int):
         var count = Int(self.counts[layer])
@@ -1253,7 +1576,8 @@ struct SeedHeuristic(Movable):
             self.slot_y[layer * LAYER_SLOTS + count] = Int32(y)
             self.counts[layer] = Int32(count + 1)
         else:
-            self.spill_layer.append(Int32(layer))
+            self.spill_next.append(self.spill_head[layer])
+            self.spill_head[layer] = Int32(len(self.spill_x))
             self.spill_x.append(Int32(x))
             self.spill_y.append(Int32(y))
 
@@ -1272,13 +1596,11 @@ struct SeedHeuristic(Movable):
             if x <= Int(xs[unsafe_offset=index]) and y <= Int(ys[unsafe_offset=index]):
                 return True
         if count == LAYER_SLOTS:
-            for index in range(len(self.spill_layer)):
-                if (
-                    Int(self.spill_layer[index]) == layer
-                    and x <= Int(self.spill_x[index])
-                    and y <= Int(self.spill_y[index])
-                ):
+            var index = Int(self.spill_head[layer])
+            while index >= 0:
+                if x <= Int(self.spill_x[index]) and y <= Int(self.spill_y[index]):
                     return True
+                index = Int(self.spill_next[index])
         return False
 
     def score(mut self, x: Int, y: Int) -> Int:
@@ -1328,12 +1650,23 @@ struct SeedHeuristic(Movable):
         there lies close to the distance, rather than at little more than an edit a seed."""
         if self.seeds == 0:
             return False
-        return (self.seeds - self.h(0, 0)) * CHAINED_SHARE >= self.seeds
+        var whole = self.potential(0)
+        return (whole - self.h(0, 0)) * CHAINED_SHARE >= whole
 
     @always_inline
     def potential(self, column: Int) -> Int:
-        """Seeds starting at or after `column`."""
-        return self.seeds - min(self.seeds, ceildiv(column, SEED_LENGTH))
+        """What the seeds starting at or after `column` cost a path matching none of them."""
+        # Each length its own constant divisor: the band asks for this at every row it prunes.
+        if self.cost == 1:
+            return self.seeds - min(self.seeds, ceildiv(column, SEED_LENGTH))
+        return 2 * (self.seeds - min(self.seeds, ceildiv(column, INEXACT_LENGTH)))
+
+    @always_inline
+    def climb(self) -> Int:
+        """The most the heuristic drops a row going up a column: one with no seeds or exact ones,
+        `cost` with inexact. A best chain from a row still starts, but for its first match, from
+        the row below: every match moves the transformed point at least one up and one right."""
+        return self.cost
 
     def h(mut self, column: Int, row: Int) -> Int:
         """A lower bound on the cost from `(column, row)` to the end."""
@@ -1447,14 +1780,16 @@ struct HalfBand(Movable):
         if heuristic.seeds > 0:
             # The seeds bound the bottom tighter, as A*PA2 bounds a block's: a row `k` past the
             # diagonal from the deepest kept cell costs at least `floor + k` to reach, so it is in
-            # reach only while that plus the heuristic there fits the bound. Both change by at most
-            # one a row, so a row `x` over rules out the next `ceil(x / 2)` above it unread.
+            # reach only while that plus the heuristic there fits the bound. Going up, the first drops
+            # by one a row and the heuristic by at most its `climb`, so a row `x` over rules out the
+            # next `ceil(x / (1 + climb))` above it unread.
             var diagonal_row = self.deepest + width
+            var step = 1 + heuristic.climb()
             while reach_row > diagonal_row:
                 var over = self.floor + (reach_row - diagonal_row) + heuristic.h(end_column, reach_row) - self.threshold
                 if over <= 0:
                     break
-                reach_row = max(reach_row - (over + 1) // 2, diagonal_row)
+                reach_row = max(reach_row - (over + step - 1) // step, diagonal_row)
         var reach = (reach_row - 1) // WORD_BITS + 1
         # Exactly the words the band reaches: `words` has a kernel for every count. The bottom never
         # rises, which would leave words behind whose differences the next tile still reads.
@@ -1476,9 +1811,10 @@ struct HalfBand(Movable):
         var end_column = self.bounds[tile + 1]
         self.anchor += end_column - self.bounds[tile]
         # Read the right edge back as scores and keep, as A*PA2 does, the rows from the first to the
-        # last whose score plus gap to the end fits the bound. Both scores and gaps change by at most
-        # one per row, so their sum by at most two, and a row `x` over the bound rules out the next
-        # `ceil(x / 2)` rows without reading them.
+        # last whose score plus heuristic fits the bound. Scores change by at most one per row and the
+        # heuristic by at most one going down, so their sum by at most two, and a row `x` over the
+        # bound rules out the next `ceil(x / 2)` rows below without reading them; going up, the
+        # heuristic may drop by its `climb`, and a row rules out `ceil(x / (1 + climb))` above.
         edge.capture(self.top, self.end_word, self.anchor, self.frontier, self.rows)
         var first_kept = edge.low_row
         var last_kept = edge.high_row
@@ -1487,11 +1823,12 @@ struct HalfBand(Movable):
             if over <= 0:
                 break
             first_kept += (over + 1) // 2
+        var step = 1 + heuristic.climb()
         while last_kept >= first_kept:
             var over = edge.score(last_kept) + heuristic.h(end_column, last_kept) - self.threshold
             if over <= 0:
                 break
-            last_kept -= (over + 1) // 2
+            last_kept -= (over + step - 1) // step
         if first_kept > last_kept:
             self.outcome = Round(-1, end_column, self.threshold, -1)
             return False
@@ -2832,7 +3169,13 @@ def band_doubling[
             if forward_round.estimate >= 0:
                 # A checkpoint gave the round up, with its own projection.
                 estimate = forward_round.estimate
-            elif forward_round.reached < middle and forward_round.reached > 0:
+            elif forward_round.reached > 0 and (
+                forward_round.reached < middle
+                or (not meet and forward_round.reached == middle and forward_heuristic.seeds > 0)
+            ):
+                # A seeded round that crossed every column and still missed the end climbed past the
+                # bound in its last tile: the bound itself is the projection, and the retry aims its
+                # margin past it rather than doubling a bound that may be nearly enough.
                 estimate = min(estimate, origin + (bound - origin) * columns // forward_round.reached)
             if meet and backward_round.reached < columns - middle and backward_round.reached > 0:
                 estimate = min(estimate, origin + (threshold - origin) * columns // backward_round.reached)
@@ -2885,7 +3228,14 @@ def edit_distance(first: String, second: String, threads: Optional[Int] = None) 
     var seeded = forward.columns >= SEED_COLUMNS or (
         projected.estimate >= SEED_EDITS and projected.estimate * SEED_DIVERGENCE <= forward.columns
     )
-    var forward_heuristic = SeedHeuristic(forward) if seeded else SeedHeuristic(forward.columns, forward.rows)
+    # Long pairs only: inexact seeds when the projection already says they pay, else exact ones
+    # rebuilt inexact if they chain poorly (see `SeedHeuristic`).
+    var long = forward.columns >= INEXACT_COLUMNS
+    var inexact = long and projected.estimate * INEXACT_DIVERGENCE >= forward.columns
+    var forward_heuristic = SeedHeuristic(forward, inexact, choose=long) if seeded else SeedHeuristic(
+        forward.columns, forward.rows
+    )
+    inexact = forward_heuristic.cost > 1
     # A band narrowed by many chained seeds gains less from a second thread than that thread's half,
     # with its own heuristic to build and a weaker start, costs.
     var meet = workers > 1 and forward.columns >= MEET_COLUMNS and not forward_heuristic.chains_well()
@@ -2894,7 +3244,7 @@ def edit_distance(first: String, second: String, threads: Optional[Int] = None) 
     var backward_trail = Trail()
     var forward_edge = Edge()
     var backward_edge = Edge()
-    var backward_heuristic = SeedHeuristic(backward) if seeded and meet else SeedHeuristic(
+    var backward_heuristic = SeedHeuristic(backward, inexact) if seeded and meet else SeedHeuristic(
         backward.columns, backward.rows
     )
     var outcome = band_doubling[False](
@@ -3476,7 +3826,12 @@ def edit_alignment(
         var seeded = columns >= SEED_COLUMNS or (
             projected.estimate >= SEED_EDITS and projected.estimate * SEED_DIVERGENCE <= columns
         )
-        var forward_heuristic = SeedHeuristic(forward) if seeded else SeedHeuristic(columns, rows)
+        # Long pairs only: inexact seeds when the projection already says they pay, else exact ones
+        # rebuilt inexact if they chain poorly (see `SeedHeuristic`).
+        var long = columns >= INEXACT_COLUMNS
+        var inexact = long and projected.estimate * INEXACT_DIVERGENCE >= columns
+        var forward_heuristic = SeedHeuristic(forward, inexact, choose=long) if seeded else SeedHeuristic(columns, rows)
+        inexact = forward_heuristic.cost > 1
         # A band narrowed by many chained seeds gains less from a second thread than its half costs.
         # Asking for the thread count is a system call, so only a pair long enough to split asks.
         var meet = (
@@ -3489,7 +3844,7 @@ def edit_alignment(
         var backward_trail = Trail(columns)
         var forward_edge = Edge()
         var backward_edge = Edge()
-        var backward_heuristic = SeedHeuristic(backward) if seeded and meet else SeedHeuristic(
+        var backward_heuristic = SeedHeuristic(backward, inexact) if seeded and meet else SeedHeuristic(
             backward.columns, backward.rows
         )
         var outcome = band_doubling[True](

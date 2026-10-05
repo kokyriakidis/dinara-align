@@ -585,6 +585,38 @@ def test_edit_alignment_is_an_optimal_alignment() raises:
                 assert_equal(Int(edit_alignment(pair[0], pair[1], 1).score), Int(aligned.score))
 
 
+def test_seeded_bands_are_exact() raises:
+    """Pairs long enough for the seed heuristic, exact seeds and inexact, keep the exact distance.
+
+    From 16 kbp a band prunes with seeds; once few exact seeds chain, past about one edit in fifteen
+    bases, they are rebuilt to match within one edit. Divergences either side of that, with errors
+    also gathered into a burst at one end as real reads carry them, on one thread and on several;
+    every distance is the global wavefront's at unit costs, which shares no code with the band, and
+    every alignment is rescored independently.
+    """
+    seed(16)
+    var unit = Scoring.edit_distance()
+    for rate in [0.05, 0.1, 0.15, 0.2, 0.3]:
+        var first = random_sequence(20000, 24000, DNA_ALPHABET)
+        var second = mutate(first, rate)
+        var bytes = List[UInt8](second.as_bytes())
+        var tail = len(bytes) - len(bytes) // 20
+        var burst = String(unsafe_from_utf8=slice_bytes(bytes, 0, tail)) + mutate(
+            String(unsafe_from_utf8=slice_bytes(bytes, tail, len(bytes))), 0.5
+        )
+        var pairs: List[Tuple[String, String]] = [(first, second), (second, first), (first, burst)]
+        for pair in pairs:
+            var expected = -Int(score[GLOBAL](pair[0], pair[1], unit))
+            assert_equal(edit_distance(pair[0], pair[1], 1), expected)
+            assert_equal(edit_distance(pair[0], pair[1], 8), expected)
+            for threads in [1, 8]:
+                var aligned = edit_alignment(pair[0], pair[1], threads)
+                assert_equal(Int(aligned.score), expected)
+                assert_equal(aligned.first_gapped.replace("-", ""), pair[0])
+                assert_equal(aligned.second_gapped.replace("-", ""), pair[1])
+                assert_equal(rescore(aligned.first_gapped, aligned.second_gapped, unit), -expected)
+
+
 # endregion Properties
 
 # region Refusals
