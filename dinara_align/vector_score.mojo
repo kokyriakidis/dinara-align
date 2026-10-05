@@ -9,7 +9,15 @@ forward and the second backward, so the second is stored reversed and both load 
 uniform table turns each substitution into one comparison.
 """
 
-from .alignment import AffineGapCosts, AlignmentMode, AlignmentResult, AntiDiagonalMajor, reconstruct, serial_align
+from .alignment import (
+    AffineGapCosts,
+    AlignmentMode,
+    AlignmentResult,
+    AntiDiagonalMajor,
+    BAND_PADDING,
+    reconstruct,
+    serial_align,
+)
 
 comptime WIDTH = 16
 """Cells a step computes at once."""
@@ -134,13 +142,18 @@ def vector_align[
     substitutions: List[Scalar[DType.int8]],
     alphabet_size: Int,
     alphabet: String,
+    low_diagonal: Int = Int.MIN,
+    high_diagonal: Int = Int.MAX,
 ) -> AlignmentResult:
     """`serial_align`'s alignment under a uniform table, its three layers swept sixteen cells at a time.
 
-    The layers hold the same values at every cell, borders included, so `reconstruct` walks the same
-    path; they are only stored anti-diagonal by anti-diagonal, each diagonal's cells contiguous by
-    row, so a step loads its neighbours from the two diagonals before as vectors (see
-    `AntiDiagonalMajor`). A local alignment starts where `serial_align`'s row-major scan first meets
+    Only the cells on diagonals `low_diagonal ..= high_diagonal`, column minus row, are computed and
+    stored, the rest reading as unreachable; given a band holding every optimal path (see
+    `optimal_band`), those cells hold the same values as `serial_align`'s, so `reconstruct` walks the
+    same path, in memory that grows with the band rather than the matrix. They are stored
+    anti-diagonal by anti-diagonal, each diagonal's band contiguous by row, so a step loads its
+    neighbours from the two diagonals before as vectors (see `AntiDiagonalMajor`). A local
+    alignment takes the whole matrix, and starts where `serial_align`'s row-major scan first meets
     the best score: the cell earliest by row, then column, among those holding it.
     """
     var rows = len(first)
@@ -149,6 +162,8 @@ def vector_align[
         return serial_align[mode](first, second, substitutions, alphabet_size, gaps, alphabet)
     var open = gaps.open
     var extend = gaps.extend
+    var low_band = max(low_diagonal, -rows)
+    var high_band = min(high_diagonal, columns)
 
     @always_inline
     def border(length: Int) {imm open, imm extend} -> Int32:
@@ -158,11 +173,18 @@ def vector_align[
             return 0
         return open + Int32(length - 1) * extend
 
+    # Diagonal `d`'s cells lie on rows `lows[d] ..= highs[d]`: inside the matrix, and with
+    # `column - row` inside the band, column being `d - row`.
     var diagonals = rows + columns + 1
+    var lows = List[Int](length=diagonals, fill=0)
+    var highs = List[Int](length=diagonals, fill=0)
     var starts = List[Int](length=diagonals + 1, fill=0)
     for diagonal in range(diagonals):
-        var length = min(rows, diagonal) - max(0, diagonal - columns) + 1
-        starts[diagonal + 1] = starts[diagonal] + length
+        var low = max(0, diagonal - columns, -((high_band - diagonal) // 2))
+        var high = min(rows, diagonal, (diagonal - low_band) // 2)
+        lows[diagonal] = low
+        highs[diagonal] = high
+        starts[diagonal + 1] = starts[diagonal] + max(high - low + 1, 0) + 2 * BAND_PADDING
     var cells = starts[diagonals]
     var scores = List[Int32](unsafe_uninit_length=cells + WIDTH)
     var deletes = List[Int32](unsafe_uninit_length=cells + WIDTH)
@@ -177,9 +199,20 @@ def vector_align[
     var score_cells = scores.unsafe_ptr()
     var delete_cells = deletes.unsafe_ptr()
     var insert_cells = inserts.unsafe_ptr()
-    score_cells[0] = 0
-    delete_cells[0] = 0
-    insert_cells[0] = 0
+
+    @always_inline
+    def unreachable(index: Int) {imm score_cells, imm delete_cells, imm insert_cells}:
+        score_cells[unsafe_offset=index] = UNREACHABLE
+        delete_cells[unsafe_offset=index] = UNREACHABLE
+        insert_cells[unsafe_offset=index] = UNREACHABLE
+
+    # Diagonal zero: the origin, which every band holds.
+    for index in range(BAND_PADDING):
+        unreachable(index)
+        unreachable(BAND_PADDING + 1 + index)
+    score_cells[BAND_PADDING] = 0
+    delete_cells[BAND_PADDING] = 0
+    insert_cells[BAND_PADDING] = 0
     var opening = Lanes(open)
     var extension = Lanes(extend)
     var matched = Lanes(Int32(reward))
@@ -192,13 +225,16 @@ def vector_align[
     var best_row = 0
     var best_column = 0
     for diagonal in range(1, diagonals):
-        var first_row = max(0, diagonal - columns)
-        var here = starts[diagonal] - first_row
+        var first_row = lows[diagonal]
+        var last_row = highs[diagonal]
         # Diagonal `d`'s cell on row `i` sits at `here + i`; its neighbours on the two before likewise.
-        var one_back = starts[diagonal - 1] - max(0, diagonal - 1 - columns)
-        var two_back = starts[diagonal - 2] - max(0, diagonal - 2 - columns) if diagonal >= 2 else 0
-        var low = max(1, diagonal - columns)
-        var high = min(rows, diagonal - 1)
+        var here = starts[diagonal] + BAND_PADDING - first_row
+        var one_back = starts[diagonal - 1] + BAND_PADDING - lows[diagonal - 1]
+        var two_back = starts[diagonal - 2] + BAND_PADDING - lows[diagonal - 2] if diagonal >= 2 else 0
+        for index in range(BAND_PADDING):
+            unreachable(starts[diagonal] + index)
+        var low = max(1, first_row)
+        var high = min(last_row, diagonal - 1)
         var lag = columns - diagonal
         var row = low
         while row <= high:
@@ -236,22 +272,27 @@ def vector_align[
             delete_cells.unsafe_offset(here + row).unsafe_store(deletion)
             insert_cells.unsafe_offset(here + row).unsafe_store(insertion)
             row += WIDTH
-        # The border cells, written after the lanes that may have run over the last of them.
-        if diagonal <= columns:
+        # The border cells inside the band, then the padding after it, which the lanes may have run over.
+        if first_row == 0:
             score_cells[here] = border(diagonal)
             delete_cells[here] = score_cells[here] + open + extend
             insert_cells[here] = 0
-        if diagonal <= rows:
+        if last_row == diagonal:
             score_cells[here + diagonal] = border(diagonal)
             delete_cells[here + diagonal] = 0
             insert_cells[here + diagonal] = score_cells[here + diagonal] + open + extend
+        for index in range(BAND_PADDING):
+            unreachable(here + last_row + 1 + index)
 
     var start_row = rows
     var start_column = columns
     comptime if mode == AlignmentMode.LOCAL:
         start_row = best_row
         start_column = best_column
-    var layout = AntiDiagonalMajor(starts.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](), columns)
+    var layout = AntiDiagonalMajor(
+        starts.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+        lows.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
+    )
     var reconstruction = reconstruct(
         scores,
         deletes,
@@ -268,6 +309,30 @@ def vector_align[
         mode,
     )
     var final_score = scores[layout.index(start_row, start_column)]
-    # The layout reads `starts` through a pointer, so the list must outlive every use of it.
+    # The layout reads `starts` and `lows` through pointers, so both must outlive every use of it.
     _ = len(starts)
+    _ = len(lows)
     return AlignmentResult(final_score, reconstruction[0], reconstruction[1])
+
+
+comptime UNREACHABLE = Int32(-(1 << 28))
+"""A cell outside the band: far enough below any score that a few gap costs keep it there."""
+
+
+def optimal_band(
+    rows: Int, columns: Int, reward: Int, mismatch: Int, gaps: AffineGapCosts, score: Int
+) -> Tuple[Int, Int]:
+    """The diagonals, column minus row, every optimal global alignment of score `score` stays on.
+
+    For a global alignment the reward folds into penalties (see `gap_affine`): one of `n` and `m`
+    letters scoring `score` costs `a (n + m) - 2 score`, each gapped letter `2 e + a` of it. A path
+    reaching diagonal `t` past the start's 0 and the end's `m - n` spends at least the letters the
+    detour takes in gaps, `|m - n|` plus twice the detour, so an optimal one never strays further
+    than its cost allows. Every gap costs `2 e + a`; with nothing to spend on gaps the band is the
+    two diagonals and the run between them.
+    """
+    var difference = columns - rows
+    var per_gap = 2 * Int(-gaps.extend) + reward
+    var cost = reward * (rows + columns) - 2 * score
+    var reach = max(0, (cost - per_gap * abs(difference)) // (2 * per_gap)) if per_gap > 0 else rows + columns
+    return (min(0, difference) - reach, max(0, difference) + reach)
