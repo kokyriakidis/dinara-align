@@ -50,8 +50,9 @@ comptime CHECK_STRIDE = 64
 comptime CHECK_START = 128
 """The cost from which the search judges its projection, so it has a few edits to go on."""
 
-comptime CELLS_PER_STEP = 2
-"""Dynamic-programming cells one diagonal step of the three fronts costs about as much as."""
+comptime CELLS_PER_STEP = 4
+"""Cells of the vectorized full sweep (see `vector_score`) one diagonal step of the three fronts
+costs about as much as: about 1.5 against 0.4 ns."""
 
 
 @fieldwise_init
