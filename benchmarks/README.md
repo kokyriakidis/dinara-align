@@ -108,7 +108,7 @@ A dash marks a task the tool does not offer, or a workload it is not run on.
 - **Long, divergent pairs match seeds within one edit**, as A\*PA's `r = 2` does. Past about one edit in fifteen bases most exact 12-base seeds are broken and the bound at the origin falls far short: 8,277 for a distance of 12,196 on a 100 kbp pair at 15%. Seeds of 16 bases that may match with one edit, charging two edits where they match nowhere, put it at 11,304. Each match is found by the half of it that matches exactly, a check on its quarters turns most chance lookups away, and an exact match's one-edit neighbours are left out, which keeps the bound a lower bound. They are used from 64 kbp, where the band they save outgrows their setup, when the projection says one edit in ten bases or under 40% of the exact seeds chain: the 100 kbp alignment at 15% drops from 12.4 to 8.2 ms.
 - **Global affine scores run a wavefront.** Under a table of one match and one mismatch score, as `Scoring.dna()` is, the match reward folds away for a global alignment (Eizenga and Lindquist), and WFA's three-layer wavefront then searches by cost: 430 ms against hyalite's 20.3 s at 100 kbp, 126 µs against 1.24 ms at 1 kbp. A pair whose projected wavefront would cost more than a full sweep is handed to the sweep, which runs sixteen cells at a time by anti-diagonal and also serves local scores: 39 ms against hyalite's 181 to 198 ms on a 10 kbp pair at 30% divergence or unrelated.
 - **Affine alignments sweep the whole matrix sixteen cells at a time**, by anti-diagonal under the same uniform table, with the same values in every cell as the cell-by-cell recurrence and so the same gapped strings the GPU returns. A pair up to six million cells stores its three layers and walks them back; a larger one splits on rows in linear space, Myers and Miller's way, its sweeps vectorized alike: 217 µs against hyalite's 4.02 ms at 1 kbp, 8.96 against 84.4 s at 100 kbp. The GPU still leads on the 10 and 100 kbp alignments.
-- **The other rivals run on one CPU thread.** dinara-align's CPU batches spread their pairs over every thread, one pair a thread, which the reads rows show; the single affine pairs run on one. The bit-parallel all-threads column sweeps a long unseeded pair from both ends at once, one direction per thread, and runs the two-ended diagonal transition's fronts on two threads once they are long: 432 against one thread's 634 µs scoring 100 kbp at 1%.
+- **The other rivals run on one CPU thread.** dinara-align's CPU batches spread their pairs over every thread, one pair a thread, which the reads rows show; the single affine pairs, and every edit-distance pair, run on one.
 - **dinara-align's GPU times include the overheads a caller pays**: opening the device context on every call, copying sequences over, and copying results back. That is why a single short pair is slower on the GPU than on the CPU.
 - **hyalite's traceback budget is 1 GiB.** It keeps the whole matrix when it fits and switches to a checkpointed sweep above that, as the 100 kbp pairs do. dinara-align switches to its linear-space recursion above six million cells on the host and one million on the device.
 - **A\*PA answers only edit distance**, and its time depends on how similar the sequences are, as does the bit-parallel path's and now dinara-align's global affine score; the affine alignments and hyalite's columns do not.
@@ -116,39 +116,39 @@ A dash marks a task the tool does not offer, or a workload it is not run on.
 
 ## A\*PA2's Evaluation
 
-`pa_bench.py` runs the exact aligners of A\*PA2's evaluation, with its parameters, on its own datasets: Oxford Nanopore reads and SARS-CoV-2 genomes from pa-bench's release, and the uniform-error pairs pa-generate regenerates exactly from the evaluation's seed and lock.
+`pa_bench.py` runs the exact aligners of A\*PA2's evaluation, with its parameters, and WFA beside BiWFA, on its own datasets: Oxford Nanopore reads and SARS-CoV-2 genomes from pa-bench's release, and the uniform-error pairs pa-generate regenerates exactly from the evaluation's seed and lock.
 Each dataset is a fixed shuffled sample of about 2 Mbp and at least four pairs, the same for every tool; each tool aligns its pairs with traceback, once each, as pa-bench times them, within a budget of five seconds, and every cost is checked against every other tool's and against the costs A\*PA2's published results recorded.
 The rivals are pinned, so their results are kept and reused until `--fresh`; a second table gives each tool's peak resident memory.
 dinara-align also runs as a batch on all eight threads, `edit_alignments` over the whole sample, one pair a thread, whose column is the batch's wall-clock time over its pairs, a throughput where the others are each one pair's latency.
 
-Measured as above, dinara-align's columns the fastest of three warm runs; a count marks a tool its budget stopped partway, and more than the budget one that finished no pair:
+Measured as above, dinara-align's columns the fastest of three warm runs; a count marks a tool its budget, or WFA's 8 GiB cap, stopped partway, and more than the budget one that finished no pair:
 
-| dataset | pairs | mean length | dinara-align (bit-parallel, 1 thread) | dinara-align (bit-parallel, batch, 8 threads) | a*pa2-full | a*pa2-simple | a*pa | edlib | biwfa | agree |
-| :-- | --: | --: | --: | --: | --: | --: | --: | --: | --: | :-: |
-| ont-1k | 1221 of 12477 | 0.818 kbp | 26 µs | 9 µs | 64 µs | 40 µs | 389 µs | 73 µs | 28 µs | ✓ |
-| ont-10k | 277 of 5000 | 3.6 kbp | 153 µs | 41 µs | 293 µs | 209 µs | 8.8 ms | 708 µs | 369 µs | ✓ |
-| ont-50k | 104 of 10000 | 9.52 kbp | 664 µs | 180 µs | 1.01 ms | 890 µs | 118 ms (43/104) | 4.8 ms | 3.5 ms | ✓ |
-| ont-500k | 4 of 50 | 638 kbp | 134 ms | 93.9 ms | 280 ms | 805 ms | > 5 s | > 5 s | > 5 s | ✓ |
-| ont-500k-genvar | 4 of 48 | 659 kbp | 183 ms | 84.4 ms | 269 ms | 627 ms | > 5 s | 4.63 s (1/4) | 4.18 s (1/4) | ✓ |
-| sars-cov-2 | 33 of 10000 | 29.6 kbp | 235 µs | 107 µs | 1.38 ms | 705 µs | 4.12 ms | 6.97 ms | 464 µs | ✓ |
-| Uniform-t10000000-n3000-e0.05 | 333 of 3333 | 3 kbp | 39 µs | 10 µs | 150 µs | 66 µs | 178 µs | 346 µs | 51 µs | ✓ |
-| Uniform-t10000000-n10000-e0.05 | 99 of 1000 | 10 kbp | 203 µs | 61 µs | 582 µs | 306 µs | 546 µs | 1.96 ms | 295 µs | ✓ |
-| Uniform-t10000000-n30000-e0.05 | 33 of 333 | 30 kbp | 880 µs | 268 µs | 1.53 ms | 1.85 ms | 1.61 ms | 11.7 ms | 2.3 ms | ✓ |
-| Uniform-t10000000-n100000-e0.05 | 10 of 100 | 100 kbp | 2.87 ms | 979 µs | 4.96 ms | 17.6 ms | 6.51 ms | 103 ms | 24.6 ms | ✓ |
-| Uniform-t10000000-n300000-e0.05 | 4 of 33 | 300 kbp | 12.3 ms | 3.63 ms | 17.3 ms | 74.5 ms | 18 ms | 619 ms | 235 ms | ✓ |
-| Uniform-t10000000-n1000000-e0.05 | 4 of 10 | 1e+03 kbp | 41.7 ms | 11.8 ms | 71.4 ms | 1.04 s | 73 ms | > 5 s | 2.46 s (2/4) | ✓ |
-| Uniform-t10000000-n3000-e0.15 | 333 of 3333 | 3 kbp | 83 µs | 22 µs | 170 µs | 135 µs | 999 µs | 411 µs | 192 µs | ✓ |
-| Uniform-t10000000-n10000-e0.15 | 99 of 1000 | 10 kbp | 352 µs | 98 µs | 804 µs | 760 µs | 3.91 ms | 3.38 ms | 1.87 ms | ✓ |
-| Uniform-t10000000-n30000-e0.15 | 33 of 333 | 30 kbp | 2.08 ms | 609 µs | 3.89 ms | 2.63 ms | 14.3 ms | 19.3 ms | 16.4 ms | ✓ |
-| Uniform-t10000000-n100000-e0.15 | 9 of 100 | 100 kbp | 8.53 ms | 3.01 ms | 14.4 ms | 27.3 ms | 52.7 ms | 200 ms | 196 ms | ✓ |
-| Uniform-t10000000-n300000-e0.15 | 4 of 33 | 300 kbp | 45.1 ms | 12.6 ms | 134 ms | 348 ms | 227 ms | 2.1 s (2/4) | 1.64 s (3/4) | ✓ |
-| Uniform-t10000000-n1000000-e0.15 | 4 of 10 | 1e+03 kbp | 384 ms | 105 ms | 1.56 s (3/4) | 1.61 s (3/4) | 949 ms | > 5 s | > 5 s | ✓ |
+| dataset | pairs | mean length | dinara-align (bit-parallel, 1 thread) | dinara-align (bit-parallel, batch, 8 threads) | a*pa2-full | a*pa2-simple | a*pa | edlib | biwfa | wfa | agree |
+| :-- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | :-: |
+| ont-1k | 1221 of 12477 | 0.818 kbp | 23 µs | 8 µs | 64 µs | 40 µs | 389 µs | 70 µs | 27 µs | 21 µs | ✓ |
+| ont-10k | 277 of 5000 | 3.6 kbp | 149 µs | 43 µs | 293 µs | 209 µs | 8.8 ms | 715 µs | 369 µs | 316 µs | ✓ |
+| ont-50k | 104 of 10000 | 9.52 kbp | 685 µs | 191 µs | 1.01 ms | 890 µs | 118 ms (43/104) | 4.64 ms | 3.51 ms | 3.06 ms | ✓ |
+| ont-500k | 4 of 50 | 638 kbp | 142 ms | 98.4 ms | 280 ms | 805 ms | > 5 s | > 5 s | > 5 s | > 5 s | ✓ |
+| ont-500k-genvar | 4 of 48 | 659 kbp | 184 ms | 83.4 ms | 269 ms | 627 ms | > 5 s | 4.35 s (1/4) | 4.23 s (1/4) | > 5 s | ✓ |
+| sars-cov-2 | 33 of 10000 | 29.6 kbp | 234 µs | 109 µs | 1.38 ms | 705 µs | 4.12 ms | 7.34 ms | 481 µs | 478 µs | ✓ |
+| Uniform-t10000000-n3000-e0.05 | 333 of 3333 | 3 kbp | 37 µs | 10 µs | 150 µs | 66 µs | 178 µs | 349 µs | 49 µs | 41 µs | ✓ |
+| Uniform-t10000000-n10000-e0.05 | 99 of 1000 | 10 kbp | 196 µs | 58 µs | 582 µs | 306 µs | 546 µs | 1.95 ms | 291 µs | 250 µs | ✓ |
+| Uniform-t10000000-n30000-e0.05 | 33 of 333 | 30 kbp | 873 µs | 266 µs | 1.53 ms | 1.85 ms | 1.61 ms | 12.3 ms | 2.31 ms | 2.04 ms | ✓ |
+| Uniform-t10000000-n100000-e0.05 | 10 of 100 | 100 kbp | 2.86 ms | 957 µs | 4.96 ms | 17.6 ms | 6.51 ms | 104 ms | 24.7 ms | 21.7 ms | ✓ |
+| Uniform-t10000000-n300000-e0.05 | 4 of 33 | 300 kbp | 12.1 ms | 3.57 ms | 17.3 ms | 74.5 ms | 18 ms | 617 ms | 234 ms | 203 ms | ✓ |
+| Uniform-t10000000-n1000000-e0.05 | 4 of 10 | 1e+03 kbp | 40.3 ms | 11.7 ms | 71.4 ms | 1.04 s | 73 ms | > 5 s | 2.44 s (2/4) | 2.37 s (2/4) | ✓ |
+| Uniform-t10000000-n3000-e0.15 | 333 of 3333 | 3 kbp | 79 µs | 24 µs | 170 µs | 135 µs | 999 µs | 411 µs | 189 µs | 165 µs | ✓ |
+| Uniform-t10000000-n10000-e0.15 | 99 of 1000 | 10 kbp | 348 µs | 103 µs | 804 µs | 760 µs | 3.91 ms | 3.36 ms | 1.87 ms | 1.57 ms | ✓ |
+| Uniform-t10000000-n30000-e0.15 | 33 of 333 | 30 kbp | 2.06 ms | 591 µs | 3.89 ms | 2.63 ms | 14.3 ms | 19.4 ms | 16 ms | 13.1 ms | ✓ |
+| Uniform-t10000000-n100000-e0.15 | 9 of 100 | 100 kbp | 8.51 ms | 3.04 ms | 14.4 ms | 27.3 ms | 52.7 ms | 200 ms | 197 ms | 145 ms | ✓ |
+| Uniform-t10000000-n300000-e0.15 | 4 of 33 | 300 kbp | 46 ms | 12.6 ms | 134 ms | 348 ms | 227 ms | 2.11 s (2/4) | 1.67 s (3/4) | 1.34 s | ✓ |
+| Uniform-t10000000-n1000000-e0.15 | 4 of 10 | 1e+03 kbp | 381 ms | 104 ms | 1.56 s (3/4) | 1.61 s (3/4) | 949 ms | > 5 s | > 5 s | > 5 s | ✓ |
 
 Four long reads are few: on all 50 ont-500k reads dinara-align took 6.5 s, and A\*PA2-full 8.4 s (the faster on 16 of them); on all 48 ont-500k-genvar reads 10.4 s against A\*PA2-full's 11.5 s (the faster on 21 of them).
 
 ## A\*PA2's Results, Redone
 
-A\*PA2's own results section ([curiouscoding.nl/posts/astarpa2](https://curiouscoding.nl/posts/astarpa2/#results)), redone with dinara-align beside the exact aligners it compares, on a machine set up as A\*PA2's was: its real datasets, its uniform pairs swept over divergence and over length, and in place of its ablation, dinara-align's history on the long reads.
+A\*PA2's own results section ([curiouscoding.nl/posts/astarpa2](https://curiouscoding.nl/posts/astarpa2/#results)), redone with dinara-align beside the exact aligners it compares, and WFA, on a machine set up as A\*PA2's was: its real datasets, its uniform pairs swept over divergence and over length, and in place of its ablation, dinara-align's history on the long reads.
 
 ```bash
 pixi run results-astarpa2 collect   # forty minutes the first time; after that only dinara-align runs, a few minutes
@@ -164,6 +164,7 @@ One thing differs: the jobs ran at normal priority, not A\*PA2's niceness −20,
 
 Each dataset is a fixed shuffled sample, the same pairs for every aligner: about 2 Mbp of sequence and at least four pairs, and 20 Mbp, fifteen reads, of the two 500 kbp read sets.
 Each aligner may spend 20 seconds on a sample; one that has not finished stops there, its numbers covering the pairs it finished, counted beside them, and one that finished none shows a dash.
+WFA, which A\*PA2's evaluation leaves out, is WFA2-lib keeping every front for its traceback, BiWFA's faster but hungrier twin: its memory grows with the square of the distance, so it also stops at 8 GiB, as its budget would stop it.
 Every cost is checked against every other aligner's on the pairs both aligned, and against the costs A\*PA2's published results recorded; a disagreement fails the run, and none occurred.
 The rivals, and dinara-align's older commits, never change, so each is run on a sample once and kept; later runs time today's dinara-align alone.
 The same tables measured on the Apple M2 above, without any of this pinning, close the section.
@@ -172,72 +173,72 @@ The same tables measured on the Apple M2 above, without any of this pinning, clo
 
 Mean time per alignment, median in brackets:
 
-| dataset | pairs | mean length | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA |
-| :-- | --: | --: | --: | --: | --: | --: | --: | --: |
-| ont-1k | 1221 | 0.818 kbp | 38 µs (32 µs) | 91 µs (101 µs) | 57 µs (65 µs) | 604 µs (546 µs) | 136 µs (135 µs) | 45 µs (47 µs) |
-| ont-10k | 277 | 3.6 kbp | 233 µs (149 µs) | 466 µs (309 µs) | 342 µs (231 µs) | 15.2 ms (3.23 ms) | 1.07 ms (582 µs) | 755 µs (283 µs) |
-| ont-50k | 104 | 9.52 kbp | 987 µs (303 µs) | 1.67 ms (603 µs) | 1.56 ms (457 µs) | 187 ms (10.4 ms), 81/104 | 5.85 ms (1.73 ms) | 7.43 ms (872 µs) |
-| ont-500k | 15 | 638 kbp | 141 ms (105 ms) | 283 ms (135 ms) | 1.14 s (792 ms) | — | 4.71 s (2.88 s), 4/15 | 19.7 s (19.7 s), 1/15 |
-| ont-500k-genvar | 15 | 651 kbp | 187 ms (137 ms) | 356 ms (248 ms) | 1.33 s (1.08 s) | — | 4.93 s (4.9 s), 4/15 | 6.34 s (7.53 s), 3/15 |
-| sars-cov-2 | 33 | 29.6 kbp | 395 µs (236 µs) | 2.43 ms (2.52 ms) | 1.15 ms (1.1 ms) | 6.41 ms (2.03 ms) | 8.25 ms (7.87 ms) | 897 µs (446 µs) |
+| dataset | pairs | mean length | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA | WFA |
+| :-- | --: | --: | --: | --: | --: | --: | --: | --: | --: |
+| ont-1k | 1221 | 0.818 kbp | 38 µs (32 µs) | 91 µs (101 µs) | 57 µs (65 µs) | 604 µs (546 µs) | 137 µs (134 µs) | 47 µs (49 µs) | 31 µs (32 µs) |
+| ont-10k | 277 | 3.6 kbp | 233 µs (146 µs) | 466 µs (309 µs) | 342 µs (231 µs) | 15.2 ms (3.23 ms) | 1.08 ms (583 µs) | 889 µs (310 µs) | 610 µs (237 µs) |
+| ont-50k | 104 | 9.52 kbp | 990 µs (291 µs) | 1.67 ms (603 µs) | 1.56 ms (457 µs) | 187 ms (10.4 ms), 81/104 | 5.85 ms (1.72 ms) | 9.11 ms (1 ms) | 6.46 ms (767 µs) |
+| ont-500k | 15 | 638 kbp | 144 ms (108 ms) | 283 ms (135 ms) | 1.14 s (792 ms) | — | 4.71 s (2.88 s), 4/15 | — | — |
+| ont-500k-genvar | 15 | 651 kbp | 191 ms (140 ms) | 356 ms (248 ms) | 1.33 s (1.08 s) | — | 4.94 s (4.91 s), 4/15 | 9.53 s (9.53 s), 2/15 | — |
+| sars-cov-2 | 33 | 29.6 kbp | 384 µs (220 µs) | 2.43 ms (2.52 ms) | 1.15 ms (1.1 ms) | 6.41 ms (2.03 ms) | 8.26 ms (7.86 ms) | 1 ms (454 µs) | 1.05 ms (368 µs) |
 
-- **dinara-align has the lowest mean and the lowest median on every dataset.** On the short reads, the case A\*PA2's post leaves to BiWFA, 38 against BiWFA's 45 µs, median 32 against 47; on ont-10k and ont-50k it takes about two thirds of A\*PA2-simple's time, and on the SARS-CoV-2 genomes 395 against BiWFA's 897 µs.
-- **On the 500 kbp reads it takes about half of A\*PA2-full's time:** 141 against 283 ms on ont-500k and 187 against 356 ms on ont-500k-genvar, medians 105 against 135 and 137 against 248.
-- **Edlib and BiWFA finish only some of the long reads within 20 seconds, and A\*PA none;** their means cover the reads they finished.
+- **dinara-align has the lowest mean on every dataset but the short reads.** There, the case A\*PA2's post leaves to BiWFA, WFA is the fastest, 31 against dinara-align's 38 µs, the medians level at 32, with BiWFA at 47; on ont-10k and ont-50k dinara-align takes about two thirds of A\*PA2-simple's time, and on the SARS-CoV-2 genomes 384 against BiWFA's 1 ms.
+- **On the 500 kbp reads it takes about half of A\*PA2-full's time:** 144 against 283 ms on ont-500k and 191 against 356 ms on ont-500k-genvar, medians 108 against 135 and 140 against 248.
+- **Edlib and BiWFA finish only some of the long reads within 20 seconds, and A\*PA and WFA none;** their means cover the reads they finished.
 
 ### Divergence, 100 kbp pairs
 
 Mean time per alignment, A\*PA with whichever of `r = 1` and `r = 2` was the faster at each divergence:
 
-| divergence | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA |
-| :-- | --: | --: | --: | --: | --: | --: |
-| 0% | 149 µs | 7.45 ms | 2.52 ms | 6.38 ms | 41.9 ms | 605 µs |
-| 1% | 1.65 ms | 9 ms | 5.89 ms | 7.52 ms | 56.9 ms | 3.22 ms |
-| 2% | 5.56 ms | 8.97 ms | 8.82 ms | 8.19 ms | 70.1 ms | 9.97 ms |
-| 3% | 4.92 ms | 9.29 ms | 16.2 ms | 7.84 ms | 93.7 ms | 21.1 ms |
-| 4% | 4.99 ms | 9.31 ms | 14 ms | 9.54 ms | 96.1 ms | 35.8 ms |
-| 5% | 5.39 ms | 9.63 ms | 31.4 ms | 11.9 ms | 140 ms | 54.2 ms |
-| 6% | 5.94 ms | 10.4 ms | 28.4 ms | 17.1 ms | 142 ms | 74 ms |
-| 7% | 6.52 ms | 10.3 ms | 26.5 ms | 36.1 ms | 145 ms | 97.5 ms |
-| 8% | 6.5 ms | 14.7 ms | 24.4 ms | 39.7 ms | 149 ms | 124 ms |
-| 9% | 10.5 ms | 16.4 ms | 22.7 ms | 40.5 ms | 153 ms | 153 ms |
-| 10% | 10.7 ms | 14.2 ms | 58.6 ms | 43.9 ms | 233 ms | 186 ms |
-| 11% | 10.6 ms | 20.6 ms | 56.2 ms | 48.4 ms | 236 ms | 220 ms |
-| 12% | 10.7 ms | 17.6 ms | 54.3 ms | 52.2 ms | 238 ms | 255 ms |
-| 13% | 10.4 ms | 30.5 ms | 52.2 ms | 58.7 ms | 242 ms | 293 ms |
-| 14% | 11.5 ms | 27.9 ms | 50.9 ms | 69.3 ms | 244 ms | 326 ms |
-| 15% | 11.7 ms | 25.4 ms | 49.4 ms | 96.9 ms | 248 ms | 374 ms |
+| divergence | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA | WFA |
+| :-- | --: | --: | --: | --: | --: | --: | --: |
+| 0% | 153 µs | 7.45 ms | 2.52 ms | 6.38 ms | 42.5 ms | 634 µs | 311 µs |
+| 1% | 1.64 ms | 9 ms | 5.89 ms | 7.52 ms | 57.6 ms | 3.44 ms | 3.42 ms |
+| 2% | 5.71 ms | 8.97 ms | 8.82 ms | 8.19 ms | 70.8 ms | 11.2 ms | 9.99 ms |
+| 3% | 4.97 ms | 9.29 ms | 16.2 ms | 7.84 ms | 93.5 ms | 23.7 ms | 19.4 ms |
+| 4% | 4.91 ms | 9.31 ms | 14 ms | 9.54 ms | 96.4 ms | 40.8 ms | 32.1 ms |
+| 5% | 5.43 ms | 9.63 ms | 31.4 ms | 11.9 ms | 140 ms | 62.8 ms | 49.6 ms |
+| 6% | 5.96 ms | 10.4 ms | 28.4 ms | 17.1 ms | 142 ms | 86 ms | 66.1 ms |
+| 7% | 6.62 ms | 10.3 ms | 26.5 ms | 36.1 ms | 146 ms | 114 ms | 87.7 ms |
+| 8% | 6.63 ms | 14.7 ms | 24.4 ms | 39.7 ms | 150 ms | 147 ms | 108 ms |
+| 9% | 10.7 ms | 16.4 ms | 22.7 ms | 40.5 ms | 153 ms | 181 ms | 139 ms |
+| 10% | 11.1 ms | 14.2 ms | 58.6 ms | 43.9 ms | 234 ms | 221 ms | 158 ms |
+| 11% | 10.8 ms | 20.6 ms | 56.2 ms | 48.4 ms | 237 ms | 264 ms | 187 ms |
+| 12% | 11.1 ms | 17.6 ms | 54.3 ms | 52.2 ms | 239 ms | 305 ms | 219 ms |
+| 13% | 10.7 ms | 30.5 ms | 52.2 ms | 58.7 ms | 242 ms | 353 ms | 242 ms |
+| 14% | 11.9 ms | 27.9 ms | 50.9 ms | 69.3 ms | 245 ms | 404 ms | 276 ms |
+| 15% | 12 ms | 25.4 ms | 49.4 ms | 96.9 ms | 249 ms | 455 ms | 310 ms |
 
 - **dinara-align is the fastest at every divergence.**
-- **Near-identical pairs finish in the diagonal transition:** 149 µs against BiWFA's 605 at 0%, 1.65 against 3.22 ms at 1%.
-- **From 2% to 8% the exact seeds' bound lands close to the distance:** dinara-align runs in 4.9 to 6.5 ms, the next aligner, A\*PA at 2 and 3% and A\*PA2-full beyond, in 7.8 to 14.7.
-- **From 9% on, where fewer than a fifth of the exact seeds chain,** dinara-align rebuilds them to match within one edit and stays between 10.4 and 11.7 ms, its narrowest lead 10.7 against A\*PA2-full's 14.2 at 10%, while A\*PA2-full climbs to 25 to 31 ms by 13 to 15%; at 15% A\*PA2-simple takes 49 ms, A\*PA 97, Edlib 248 and BiWFA 374. On the M2, whose band is slower beside its seeds' setup, the rebuild starts at 6% (see the history below).
+- **Near-identical pairs finish in the diagonal transition:** 153 µs against WFA's 311 at 0%, 1.64 against 3.42 ms at 1%.
+- **From 2% to 8% the exact seeds' bound lands close to the distance:** dinara-align runs in 4.9 to 6.6 ms, the next aligner, A\*PA at 2 and 3% and A\*PA2-full beyond, in 7.8 to 14.7.
+- **From 9% on, where fewer than a fifth of the exact seeds chain,** dinara-align rebuilds them to match within one edit and stays between 10.7 and 12.0 ms, its narrowest lead 11.1 against A\*PA2-full's 14.2 at 10%, while A\*PA2-full climbs to 25 to 31 ms by 13 to 15%; at 15% A\*PA2-simple takes 49 ms, A\*PA 97, Edlib 249, WFA 310 and BiWFA 455. On the M2, whose band is slower beside its seeds' setup, the rebuild starts at 6% (see the history below).
 
 ### Length
 
 Mean time per alignment at 5% divergence:
 
-| length | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA |
-| :-- | --: | --: | --: | --: | --: | --: |
-| 3 kbp | 49 µs | 216 µs | 91 µs | 261 µs | 829 µs | 83 µs |
-| 10 kbp | 300 µs | 926 µs | 468 µs | 923 µs | 3.85 ms | 557 µs |
-| 30 kbp | 1.55 ms | 2.86 ms | 3.15 ms | 3.05 ms | 14.3 ms | 4.98 ms |
-| 100 kbp | 5.1 ms | 9.58 ms | 31.4 ms | 12.4 ms | 140 ms | 56.1 ms |
-| 300 kbp | 20.6 ms | 32.5 ms | 135 ms | 39.3 ms | 714 ms | 472 ms |
-| 1 Mbp | 70.2 ms | 152 ms | 1.83 s | 168 ms | 8.16 s (2/4) | 5.28 s (3/4) |
+| length | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA | WFA |
+| :-- | --: | --: | --: | --: | --: | --: | --: |
+| 3 kbp | 50 µs | 216 µs | 91 µs | 261 µs | 834 µs | 92 µs | 58 µs |
+| 10 kbp | 291 µs | 926 µs | 468 µs | 923 µs | 3.86 ms | 615 µs | 444 µs |
+| 30 kbp | 1.53 ms | 2.86 ms | 3.15 ms | 3.05 ms | 14.2 ms | 5.83 ms | 4.44 ms |
+| 100 kbp | 5.1 ms | 9.58 ms | 31.4 ms | 12.4 ms | 139 ms | 62.7 ms | 46.5 ms |
+| 300 kbp | 20.5 ms | 32.5 ms | 135 ms | 39.3 ms | 715 ms | 535 ms | 452 ms |
+| 1 Mbp | 69.9 ms | 152 ms | 1.83 s | 168 ms | 8.18 s (2/4) | 5.96 s (3/4) | 5.56 s (3/4) |
 
 At 15% divergence:
 
-| length | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA |
-| :-- | --: | --: | --: | --: | --: | --: |
-| 3 kbp | 119 µs | 243 µs | 212 µs | 1.52 ms | 883 µs | 377 µs |
-| 10 kbp | 421 µs | 1.2 ms | 1.31 ms | 6.29 ms | 5.69 ms | 3.99 ms |
-| 30 kbp | 2.33 ms | 6.32 ms | 4.62 ms | 22.7 ms | 23.4 ms | 34.6 ms |
-| 100 kbp | 11.8 ms | 26.3 ms | 49.2 ms | 97.5 ms | 248 ms | 375 ms |
-| 300 kbp | 50.7 ms | 237 ms | 624 ms | 453 ms | 2.38 s | 3.37 s |
-| 1 Mbp | 344 ms | 2.76 s | 2.88 s | 2.01 s | 17.7 s (1/4) | — |
+| length | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA | WFA |
+| :-- | --: | --: | --: | --: | --: | --: | --: |
+| 3 kbp | 118 µs | 243 µs | 212 µs | 1.52 ms | 892 µs | 418 µs | 294 µs |
+| 10 kbp | 425 µs | 1.2 ms | 1.31 ms | 6.29 ms | 5.72 ms | 4.87 ms | 3.11 ms |
+| 30 kbp | 2.31 ms | 6.32 ms | 4.62 ms | 22.7 ms | 23.4 ms | 42 ms | 27.4 ms |
+| 100 kbp | 12.1 ms | 26.3 ms | 49.2 ms | 97.5 ms | 249 ms | 453 ms | 312 ms |
+| 300 kbp | 51.9 ms | 237 ms | 624 ms | 453 ms | 2.38 s | 4.04 s | 3.06 s |
+| 1 Mbp | 354 ms | 2.76 s | 2.88 s | 2.01 s | 17.7 s (1/4) | — | — |
 
-- **dinara-align is the fastest at every length and both divergences.** At 5% it aligns a 1 Mbp pair in 70.2 ms against A\*PA2-full's 152 and A\*PA's 168; at 15% in 344 ms against A\*PA's 2.01 s and A\*PA2-full's 2.76 s.
+- **dinara-align is the fastest at every length and both divergences.** At 5% it aligns a 1 Mbp pair in 69.9 ms against A\*PA2-full's 152 and A\*PA's 168; at 15% in 354 ms against A\*PA's 2.01 s and A\*PA2-full's 2.76 s.
 - **At 15% its band still grows faster than the length,** but less than A\*PA2-full's: from 300 kbp to 1 Mbp, 3.3 times the length, dinara-align takes 6.8 times as long and A\*PA2-full 11.6 times, where A\*PA, whose pruning makes its heuristic nearly exact, takes 4.4 times.
 
 ### dinara-align's history on the long reads
@@ -254,85 +255,86 @@ A\*PA2 measures each of its methods by adding them one at a time. dinara-align's
 | `b60ece0` + real-read fixes | 456 ms (160 ms) | 752 ms (499 ms) |
 | `501a6bb` + retries aimed | 162 ms (94.4 ms) | 199 ms (157 ms) |
 | `ef0e73a` + inexact seeds | 181 ms (131 ms) | 244 ms (204 ms) |
-| today | 141 ms (105 ms) | 187 ms (137 ms) |
+| today | 144 ms (108 ms) | 191 ms (140 ms) |
 
 - **On ont-500k the time falls from 1.32 s at the port of A\*PA2-simple's band doubling to 162 ms once the retries are aimed.**
 - **On ont-500k-genvar the commits between the port and `b60ece0` were several times slower,** 4.3 to 8.5 s a read and up to eight reads past the budget: real reads gather their errors at the ends, and the projections those commits aimed by ran many times over the distance, so they swept bands far wider than needed. `b60ece0` trusted a projection only when two of them agreed and otherwise grew the band from what was known, bringing genvar back to 752 ms, and aiming the retries to 199 ms.
 - **Inexact seeds made these reads slower here at first,** 162 to 181 ms and 199 to 244 ms, where on the M2 they made them faster, 171 to 131 and 262 to 197. This machine's seeds' setup ran twice as slow as the M2's while its band, on AVX-512, runs as fast, so inexact seeds paid only on more divergent pairs; the cutoff now follows the vector width, 20% of the exact seeds chained here against the M2's 40%.
-- **A leaner seeds' setup since** (`fc0e5e4`: a branch-free one-edit test, only the seeds whose matches can reach the end, a leaner local pruning) brings both below their best before inexact seeds: 141 ms on ont-500k and 187 ms on ont-500k-genvar.
+- **A leaner seeds' setup since** (`fc0e5e4`: a branch-free one-edit test, only the seeds whose matches can reach the end, a leaner local pruning) brings both below their best before inexact seeds: 144 ms on ont-500k and 191 ms on ont-500k-genvar.
 
 ### Memory
 
 Peak resident memory on the same machine, from `pixi run bench-astarpa2`, on its smaller samples of four pairs a dataset (on Linux each runner runs under GNU time, so that it does not start from the harness's own peak):
 
 - dinara-align starts at 11 MB, the Mojo runtime, where the Rust aligners start at 3 MB, and stays under 20 MB on pairs up to 100 kbp.
-- On the 500 kbp reads it peaks at 68 to 71 MB; A\*PA2-full at 89 MB on ont-500k, more, and at 56 MB on ont-500k-genvar, less.
-- On 1 Mbp pairs at 15% it peaks at 100 MB, against A\*PA2-full's 145 MB and A\*PA2-simple's 98; A\*PA passes 183 MB before its budget stops it.
+- On the 500 kbp reads it peaks at 66 to 69 MB; A\*PA2-full at 89 MB on ont-500k, more, and at 56 MB on ont-500k-genvar, less.
+- On 1 Mbp pairs at 15% it peaks at 106 MB, against A\*PA2-full's 145 MB and A\*PA2-simple's 98; A\*PA passes 183 MB before its budget stops it.
+- WFA, keeping every front, takes 551 MB on 100 kbp pairs at 15%, 4.7 GB on 300 kbp before its budget stops it, and its 8 GiB cap on 1 Mbp.
 
 ### Beyond one thread
 
-All of the above is one thread, as A\*PA2's evaluation measures, and one pair always runs on one thread. dinara-align also aligns batches of pairs across threads, one pair a thread, which the evaluation runs none of the others doing. On this machine's ten cores, from `pixi run bench-astarpa2`, a batch takes 6 µs a read on ont-1k, 34 µs on ont-10k and 74 ms on four ont-500k-genvar reads, against 45 µs, 342 µs and 376 ms for the fastest single-threaded aligner on each.
+All of the above is one thread, as A\*PA2's evaluation measures, and one pair always runs on one thread. dinara-align also aligns batches of pairs across threads, one pair a thread, which the evaluation runs none of the others doing. On this machine's ten cores, from `pixi run bench-astarpa2`, a batch takes 7 µs a read on ont-1k, 37 µs on ont-10k and 76 ms on four ont-500k-genvar reads, against 31 µs, 342 µs and 376 ms for the fastest single-threaded aligner on each.
 
 ### On the Apple M2
 
-The same collection on the M2 above, unpinned, its frequency free, 2 to 6% between repeated runs. The order is mostly the same, with one exception: on 100 kbp pairs at 6 and 7% divergence A\*PA2-full is the faster, 5.25 and 5.0 against 6.3 ms, where the M2's cutoff, 40% of the exact seeds chained, already rebuilds the seeds to match within one edit. Elsewhere dinara-align leads, narrowly on ont-1k, 25 against BiWFA's 28 µs, and inexact seeds speed the long reads up rather than down.
+The same collection on the M2 above, unpinned, its frequency free, 2 to 6% between repeated runs. The order is mostly the same, with one more exception: on 100 kbp pairs at 6 and 7% divergence A\*PA2-full is the faster, 5.25 and 5.0 against 6.8 and 6.2 ms, where the M2's cutoff, 40% of the exact seeds chained, already rebuilds the seeds to match within one edit. WFA again leads on ont-1k, 21 against 27 µs, and inexact seeds speed the long reads up rather than down.
 
 <details>
 <summary>The M2's tables</summary>
 
 Real datasets, mean time per alignment, median in brackets:
 
-| dataset | pairs | mean length | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA |
-| :-- | --: | --: | --: | --: | --: | --: | --: | --: |
-| ont-1k | 1221 | 0.818 kbp | 25 µs (22 µs) | 64 µs (70 µs) | 40 µs (46 µs) | 389 µs (357 µs) | 73 µs (78 µs) | 28 µs (29 µs) |
-| ont-10k | 277 | 3.6 kbp | 151 µs (96 µs) | 293 µs (204 µs) | 209 µs (141 µs) | 8.8 ms (2.02 ms) | 708 µs (372 µs) | 369 µs (151 µs) |
-| ont-50k | 104 | 9.52 kbp | 663 µs (203 µs) | 1.01 ms (397 µs) | 890 µs (278 µs) | 121 ms (5.53 ms) | 4.8 ms (1.24 ms) | 3.5 ms (427 µs) |
-| ont-500k | 15 | 638 kbp | 114 ms (63.7 ms) | 160 ms (75.9 ms) | 635 ms (443 ms) | — | 4.16 s (2.53 s), 4/15 | 2.03 s (891 ms), 10/15 |
-| ont-500k-genvar | 15 | 651 kbp | 169 ms (113 ms) | 199 ms (133 ms) | 745 ms (609 ms) | — | 4.38 s (4.33 s), 4/15 | 2.59 s (2.75 s), 8/15 |
-| sars-cov-2 | 33 | 29.6 kbp | 238 µs (147 µs) | 1.38 ms (1.38 ms) | 705 µs (661 µs) | 4.12 ms (1.1 ms) | 6.97 ms (6.78 ms) | 464 µs (216 µs) |
+| dataset | pairs | mean length | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA | WFA |
+| :-- | --: | --: | --: | --: | --: | --: | --: | --: | --: |
+| ont-1k | 1221 | 0.818 kbp | 27 µs (24 µs) | 64 µs (70 µs) | 40 µs (46 µs) | 389 µs (357 µs) | 70 µs (78 µs) | 27 µs (29 µs) | 21 µs (21 µs) |
+| ont-10k | 277 | 3.6 kbp | 152 µs (95 µs) | 293 µs (204 µs) | 209 µs (141 µs) | 8.8 ms (2.02 ms) | 715 µs (374 µs) | 369 µs (151 µs) | 316 µs (131 µs) |
+| ont-50k | 104 | 9.52 kbp | 663 µs (194 µs) | 1.01 ms (397 µs) | 890 µs (278 µs) | 121 ms (5.53 ms) | 4.64 ms (1.17 ms) | 3.51 ms (423 µs) | 3.06 ms (366 µs) |
+| ont-500k | 15 | 638 kbp | 117 ms (64.1 ms) | 160 ms (75.9 ms) | 635 ms (443 ms) | — | 4.36 s (2.8 s), 4/15 | 2.63 s (1.06 s), 7/15 | — |
+| ont-500k-genvar | 15 | 651 kbp | 196 ms (124 ms) | 199 ms (133 ms) | 745 ms (609 ms) | — | 4.59 s (4.6 s), 4/15 | 2.99 s (2.93 s), 7/15 | — |
+| sars-cov-2 | 33 | 29.6 kbp | 261 µs (154 µs) | 1.38 ms (1.38 ms) | 705 µs (661 µs) | 4.12 ms (1.1 ms) | 7.34 ms (7.3 ms) | 481 µs (266 µs) | 478 µs (208 µs) |
 
 Divergence, 100 kbp pairs:
 
-| divergence | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA |
-| :-- | --: | --: | --: | --: | --: | --: |
-| 0% | 90 µs | 3.83 ms | 1.5 ms | 4.16 ms | 22.5 ms | 344 µs |
-| 1% | 867 µs | 4.57 ms | 3.55 ms | 3.94 ms | 32.3 ms | 1.46 ms |
-| 2% | 3.05 ms | 4.6 ms | 5.13 ms | 4.14 ms | 43.6 ms | 4.93 ms |
-| 3% | 2.66 ms | 4.71 ms | 9.23 ms | 4.44 ms | 64.8 ms | 9.94 ms |
-| 4% | 2.73 ms | 4.87 ms | 9 ms | 5.03 ms | 66.8 ms | 16.2 ms |
-| 5% | 3.07 ms | 5 ms | 17.6 ms | 6.46 ms | 103 ms | 24.6 ms |
-| 6% | 6.3 ms | 5.25 ms | 15.9 ms | 9.85 ms | 105 ms | 35.2 ms |
-| 7% | 6.25 ms | 5 ms | 14.9 ms | 20.2 ms | 108 ms | 49 ms |
-| 8% | 6.36 ms | 7.58 ms | 14 ms | 20.4 ms | 112 ms | 59.7 ms |
-| 9% | 6.4 ms | 9.71 ms | 12.7 ms | 21.2 ms | 115 ms | 74.7 ms |
-| 10% | 6.47 ms | 8.89 ms | 32.8 ms | 23.1 ms | 189 ms | 90.5 ms |
-| 11% | 6.55 ms | 12.1 ms | 31.4 ms | 27.2 ms | 189 ms | 108 ms |
-| 12% | 6.83 ms | 10 ms | 30.4 ms | 28.5 ms | 192 ms | 128 ms |
-| 13% | 6.77 ms | 17 ms | 29.5 ms | 33 ms | 192 ms | 143 ms |
-| 14% | 7.89 ms | 16.1 ms | 28.6 ms | 40.4 ms | 199 ms | 175 ms |
-| 15% | 8.6 ms | 14.4 ms | 27.6 ms | 53.4 ms | 199 ms | 196 ms |
+| divergence | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA | WFA |
+| :-- | --: | --: | --: | --: | --: | --: | --: |
+| 0% | 90 µs | 3.83 ms | 1.5 ms | 4.16 ms | 22.8 ms | 367 µs | 346 µs |
+| 1% | 918 µs | 4.57 ms | 3.55 ms | 3.94 ms | 34 ms | 1.57 ms | 1.69 ms |
+| 2% | 3.52 ms | 4.6 ms | 5.13 ms | 4.14 ms | 46.5 ms | 5.03 ms | 4.92 ms |
+| 3% | 2.71 ms | 4.71 ms | 9.23 ms | 4.44 ms | 64.8 ms | 17.8 ms | 10.2 ms |
+| 4% | 3.06 ms | 4.87 ms | 9 ms | 5.03 ms | 87.8 ms | 17.2 ms | 15.7 ms |
+| 5% | 3.13 ms | 5 ms | 17.6 ms | 6.46 ms | 120 ms | 26.6 ms | 25.9 ms |
+| 6% | 6.8 ms | 5.25 ms | 15.9 ms | 9.85 ms | 116 ms | 36.7 ms | 30.7 ms |
+| 7% | 6.16 ms | 5 ms | 14.9 ms | 20.2 ms | 119 ms | 59.8 ms | 43 ms |
+| 8% | 7.04 ms | 7.58 ms | 14 ms | 20.4 ms | 114 ms | 58.9 ms | 49.8 ms |
+| 9% | 6.34 ms | 9.71 ms | 12.7 ms | 21.2 ms | 116 ms | 74.8 ms | 61.4 ms |
+| 10% | 6.61 ms | 8.89 ms | 32.8 ms | 23.1 ms | 187 ms | 92.4 ms | 76 ms |
+| 11% | 6.49 ms | 12.1 ms | 31.4 ms | 27.2 ms | 188 ms | 108 ms | 85.5 ms |
+| 12% | 6.76 ms | 10 ms | 30.4 ms | 28.5 ms | 190 ms | 126 ms | 98.8 ms |
+| 13% | 6.72 ms | 17 ms | 29.5 ms | 33 ms | 194 ms | 144 ms | 114 ms |
+| 14% | 7.86 ms | 16.1 ms | 28.6 ms | 40.4 ms | 196 ms | 181 ms | 129 ms |
+| 15% | 8.55 ms | 14.4 ms | 27.6 ms | 53.4 ms | 198 ms | 210 ms | 144 ms |
 
 Length at 5% divergence:
 
-| length | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA |
-| :-- | --: | --: | --: | --: | --: | --: |
-| 3 kbp | 32 µs | 150 µs | 66 µs | 178 µs | 346 µs | 51 µs |
-| 10 kbp | 206 µs | 582 µs | 306 µs | 546 µs | 1.96 ms | 295 µs |
-| 30 kbp | 883 µs | 1.53 ms | 1.85 ms | 1.61 ms | 11.7 ms | 2.3 ms |
-| 100 kbp | 2.86 ms | 4.96 ms | 17.6 ms | 6.51 ms | 103 ms | 24.6 ms |
-| 300 kbp | 12.2 ms | 17.3 ms | 74.5 ms | 18 ms | 619 ms | 235 ms |
-| 1 Mbp | 40.5 ms | 71.4 ms | 1.04 s | 73 ms | 7.26 s (2/4) | 2.45 s |
+| length | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA | WFA |
+| :-- | --: | --: | --: | --: | --: | --: | --: |
+| 3 kbp | 38 µs | 150 µs | 66 µs | 178 µs | 349 µs | 49 µs | 41 µs |
+| 10 kbp | 195 µs | 582 µs | 306 µs | 546 µs | 1.95 ms | 291 µs | 250 µs |
+| 30 kbp | 866 µs | 1.53 ms | 1.85 ms | 1.61 ms | 12.3 ms | 2.31 ms | 2.04 ms |
+| 100 kbp | 2.83 ms | 4.96 ms | 17.6 ms | 6.51 ms | 104 ms | 24.7 ms | 21.7 ms |
+| 300 kbp | 12.6 ms | 17.3 ms | 74.5 ms | 18 ms | 617 ms | 234 ms | 203 ms |
+| 1 Mbp | 43.5 ms | 71.4 ms | 1.04 s | 73 ms | 7.27 s (2/4) | 2.45 s | 2.19 s |
 
 Length at 15% divergence:
 
-| length | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA |
-| :-- | --: | --: | --: | --: | --: | --: |
-| 3 kbp | 82 µs | 170 µs | 135 µs | 999 µs | 411 µs | 192 µs |
-| 10 kbp | 362 µs | 804 µs | 760 µs | 3.91 ms | 3.38 ms | 1.87 ms |
-| 30 kbp | 2.1 ms | 3.89 ms | 2.63 ms | 14.3 ms | 19.3 ms | 16.4 ms |
-| 100 kbp | 8.56 ms | 14.4 ms | 27.3 ms | 52.7 ms | 200 ms | 196 ms |
-| 300 kbp | 45.2 ms | 134 ms | 348 ms | 227 ms | 2.1 s | 1.65 s |
-| 1 Mbp | 383 ms | 1.56 s | 1.6 s | 949 ms | 15.7 s (1/4) | 17.3 s (1/4) |
+| length | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA | WFA |
+| :-- | --: | --: | --: | --: | --: | --: | --: |
+| 3 kbp | 80 µs | 170 µs | 135 µs | 999 µs | 411 µs | 189 µs | 165 µs |
+| 10 kbp | 347 µs | 804 µs | 760 µs | 3.91 ms | 3.36 ms | 1.87 ms | 1.57 ms |
+| 30 kbp | 2.06 ms | 3.89 ms | 2.63 ms | 14.3 ms | 19.4 ms | 16 ms | 13.1 ms |
+| 100 kbp | 8.53 ms | 14.4 ms | 27.3 ms | 52.7 ms | 200 ms | 197 ms | 145 ms |
+| 300 kbp | 47.2 ms | 134 ms | 348 ms | 227 ms | 2.11 s | 1.66 s | 1.34 s |
+| 1 Mbp | 388 ms | 1.56 s | 1.6 s | 949 ms | 16.3 s (1/4) | 18 s (1/4) | — |
 
 dinara-align's history:
 
@@ -346,6 +348,6 @@ dinara-align's history:
 | `b60ece0` + real-read fixes | 312 ms (120 ms) | 629 ms (411 ms) |
 | `501a6bb` + retries aimed | 171 ms (63.1 ms) | 262 ms (212 ms) |
 | `ef0e73a` + inexact seeds | 131 ms (87.1 ms) | 197 ms (154 ms) |
-| today | 114 ms (63.7 ms) | 169 ms (113 ms) |
+| today | 117 ms (64.1 ms) | 196 ms (124 ms) |
 
 </details>
