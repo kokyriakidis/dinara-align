@@ -42,7 +42,7 @@ distance `levenshtein_alignment` returns, without the alignment.
 from std.atomic import Atomic
 from std.bit import byte_swap, count_leading_zeros, count_trailing_zeros, pop_count
 from std.math import ceildiv, sqrt
-from std.sys import inlined_assembly
+from std.sys import inlined_assembly, simd_width_of
 from std.sys.info import CompilationTarget
 from std.time import perf_counter_ns
 
@@ -1017,11 +1017,16 @@ comptime INEXACT_DIVERGENCE = 10
 """Columns per projected edit at or below which the seeds may match with one edit: past about one edit
 in ten bases most exact seeds are broken, while most still match within one edit."""
 
-comptime INEXACT_CHAINED = 40
+comptime INEXACT_CHAINED = 40 if simd_width_of[DType.uint64]() <= 2 else (
+    30 if simd_width_of[DType.uint64]() <= 4 else 20
+)
 """Percent of the exact seeds chained from the origin below which the seeds are rebuilt to match within
-one edit: about one edit in fifteen bases on real reads, whose errors gather, and one in fifteen to
-twenty on uniform ones. Above it the exact seeds' bound already lies within a tenth or so of the
-distance and inexact seeds narrow the band by less than their setup costs."""
+one edit. Where that pays depends on the machine: the band is vector work and the seeds' setup scalar,
+memory-bound lookups, so the wider the vectors beside the scalar core, the less the band inexact seeds
+narrow is worth beside the setup they cost. On an M2, two 64-bit lanes to a NEON register, 40 percent,
+about one edit in fifteen bases on real reads; on a Skylake-X at a fixed 3.3 GHz, eight to an AVX-512
+register, its seeds' setup twice as slow as the M2's and its band no slower, 20 percent, short of which
+the long reads ran faster on exact seeds. Four lanes, AVX2, are between the two and unmeasured."""
 
 comptime HALF_BITS = INEXACT_LENGTH
 """Bits in half an inexact seed's two-bit code: a one-edit match matches one half exactly, so each half
