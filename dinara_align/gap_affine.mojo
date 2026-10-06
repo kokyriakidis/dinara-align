@@ -200,55 +200,59 @@ comptime SECOND_OPENED = UInt8(8)
 struct History(Movable):
     """What the traceback needs of every cost's fronts: the alignment front's column on each diagonal
     kept, and a flag of which source won each layer there (see `FROM_FIRST_GAP` and the bits after
-    it). Cost `s` holds diagonals `lows[s] ..= highs[s]`, its columns from `starts[s]` and its flags
-    from `flag_starts[s]`; elsewhere it reads as unreached."""
+    it). Cost `s` holds diagonals `lows[s] ..= highs[s]`, its columns and flags from `starts[s]` of
+    the two lists, which grow together; elsewhere it reads as unreached. The step writes both as it
+    goes (see `begin`), so the fronts are never copied out of the rings."""
 
     var starts: List[Int]
-    var flag_starts: List[Int]
     var lows: List[Int]
     var highs: List[Int]
     var aligned: List[Int32]
     var flags: List[UInt8]
+    var pending_start: Int
+    """Where the cost `begin` made room for starts, and the diagonal it starts at."""
+    var pending_low: Int
 
     def __init__(out self):
         self.starts = List[Int]()
-        self.flag_starts = List[Int]()
         self.lows = List[Int]()
         self.highs = List[Int]()
         self.aligned = List[Int32]()
         self.flags = List[UInt8]()
+        self.pending_start = 0
+        self.pending_low = 0
 
-    def flags_for(mut self, low: Int, high: Int) -> MutPointer[UInt8, MutUntrackedOrigin]:
-        """Room for the next cost's flags on `low ..= high` and a lane group past, indexed by diagonal."""
-        var start = len(self.flags)
-        # The step writes every flag of the range before any is read.
-        self.flags.resize(unsafe_uninit_length=start + high - low + 1 + LANES)
-        return self.flags.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(start - low)
+    def begin(mut self, low: Int, high: Int) -> Tuple[Slot, MutPointer[UInt8, MutUntrackedOrigin]]:
+        """Room for the next cost's columns and flags on `low ..= high` and a lane group past, each
+        indexed by diagonal, which the step fills before `finish` keeps them."""
+        var start = len(self.aligned)
+        var length = start + high - low + 1 + LANES
+        self.aligned.resize(unsafe_uninit_length=length)
+        self.flags.resize(unsafe_uninit_length=length)
+        self.pending_start = start
+        self.pending_low = low
+        return (
+            self.aligned.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(start - low),
+            self.flags.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(start - low),
+        )
 
-    def record(mut self, low: Int, high: Int, flagged_low: Int, flagged_high: Int, aligned: Slot):
-        """The next cost's alignment front on `low ..= high`, none when `low > high`, whose flags
-        `flags_for` placed for `flagged_low ..= flagged_high`."""
-        var flagged_start = len(self.flags) - LANES - (flagged_high - flagged_low + 1)
-        self.starts.append(len(self.aligned))
+    def finish(mut self, low: Int, high: Int):
+        """Keeps the cost `begin` made room for on `low ..= high`, inside that room; none when `low > high`."""
+        var start = self.pending_start
         self.lows.append(low)
         self.highs.append(high)
-        var count = high - low + 1
-        if count <= 0:
-            self.flags.shrink(flagged_start)
-            self.flag_starts.append(flagged_start)
+        if low > high:
+            self.starts.append(start)
+            self.aligned.shrink(start)
+            self.flags.shrink(start)
             return
-        self.flag_starts.append(flagged_start + low - flagged_low)
-        self.flags.shrink(flagged_start + high - flagged_low + 1)
-        var at = len(self.aligned)
-        self.aligned.resize(unsafe_uninit_length=at + count)
-        Span(unsafe_ptr=self.aligned.unsafe_ptr().unsafe_offset(at), length=count).copy_from(
-            Span(unsafe_ptr=aligned.unsafe_offset(low), length=count)
-        )
+        self.starts.append(start + low - self.pending_low)
+        self.aligned.shrink(start + high - self.pending_low + 1)
+        self.flags.shrink(start + high - self.pending_low + 1)
 
     def skip(mut self):
         """The next cost reached nothing."""
         self.starts.append(len(self.aligned))
-        self.flag_starts.append(len(self.flags))
         self.lows.append(1)
         self.highs.append(0)
 
@@ -262,7 +266,7 @@ struct History(Movable):
     @inline(.always)
     def flag(self, cost: Int, diagonal: Int) -> UInt8:
         """The flag of `diagonal` at `cost`, which the traceback reads only where a front reached."""
-        return self.flags[self.flag_starts[cost] + diagonal - self.lows[cost]]
+        return self.flags[self.starts[cost] + diagonal - self.lows[cost]]
 
 
 struct Fronts(Movable):
@@ -379,6 +383,7 @@ def step[
     aligned: Slot,
     opened_first: Slot,
     opened_second: Slot,
+    kept: Slot,
     flags: MutPointer[UInt8, MutUntrackedOrigin],
     first: ImmPointer[UInt8, _],
     second: ImmPointer[UInt8, _],
@@ -388,7 +393,7 @@ def step[
     rows: Int,
 ) -> Int:
     """One cost's three fronts on diagonals `low ..= high`, every pointer indexed by diagonal, and with
-    `record` each diagonal's flag (see `FROM_FIRST_GAP`).
+    `record` each diagonal's alignment column again in `kept` and its flag (see `FROM_FIRST_GAP`).
 
     `mismatched` is the alignment front a mismatch back, `opening` the one an opened gap back, and
     the gap fronts are their own layers an extension back. A letter of the first sequence against
@@ -430,6 +435,8 @@ def step[
                 column = slide(first, second, column, diagonal + lane)
                 front[unsafe_offset=lane] = Int32(column)
                 reach = max(reach, 2 * column - diagonal - lane)
+        comptime if record:
+            kept.unsafe_offset(diagonal).unsafe_store(front.unsafe_load[width=LANES]())
         comptime if record:
             # Worked out in the fronts' own lanes and narrowed once.
             var entry = substituted.ge(gapped).select(
@@ -499,10 +506,8 @@ struct Wavefront(Movable):
             # Nothing at cost zero: the opening gap enters at its own cost (see `advance`). The kept
             # fronts still hold the origin at column zero, where that gap's walk back ends.
             if record:
-                front[unsafe_offset=0] = 0
-                _ = self.history.flags_for(0, 0)
-                self.history.record(0, 0, 0, 0, front)
-                front[unsafe_offset=0] = UNREACHED
+                self.history.begin(0, 0)[0][unsafe_offset=0] = 0
+                self.history.finish(0, 0)
             return
         self.fronts.claim(0, 0, 0)
         var start = slide(self.first.unsafe_ptr(), self.second.unsafe_ptr(), 0, 0)
@@ -516,8 +521,8 @@ struct Wavefront(Movable):
         self.furthest = 2 * start
         if record:
             # The origin's flag is never read: the traceback stops at cost zero.
-            _ = self.history.flags_for(0, 0)
-            self.history.record(0, 0, 0, 0, front)
+            self.history.begin(0, 0)[0][unsafe_offset=0] = Int32(start)
+            self.history.finish(0, 0)
 
     def advance[record: Bool](mut self):
         """Grows the next cost's three fronts from the ring, and with `record` keeps what the traceback
@@ -563,9 +568,13 @@ struct Wavefront(Movable):
         var front = self.fronts.row(slot, ALIGNED)
         var first_gaps = self.fronts.row(slot, FIRST_GAP)
         var second_gaps = self.fronts.row(slot, SECOND_GAP)
+        # Without `record` the step writes neither, and these stand for nothing.
+        var kept = front
         var flags = front.unsafe_bitcast[UInt8]()
         comptime if record:
-            flags = self.history.flags_for(low, high)
+            var room = self.history.begin(low, high)
+            kept = room[0]
+            flags = room[1]
         var reach = step[record](
             self.fronts.row(mismatch_slot, ALIGNED),
             self.fronts.row(opening_slot, ALIGNED),
@@ -574,6 +583,7 @@ struct Wavefront(Movable):
             front,
             first_gaps,
             second_gaps,
+            kept,
             flags,
             self.first.unsafe_ptr(),
             self.second.unsafe_ptr(),
@@ -602,6 +612,8 @@ struct Wavefront(Movable):
                 column = slide(self.first.unsafe_ptr(), self.second.unsafe_ptr(), column, opened)
                 front[unsafe_offset=opened] = Int32(column)
                 reach = max(reach, 2 * column - opened)
+                comptime if record:
+                    kept[unsafe_offset=opened] = Int32(column)
         self.fronts.reach[slot] = reach
         self.furthest = max(self.furthest, reach)
         self.work += high - low + 1
@@ -626,12 +638,12 @@ struct Wavefront(Movable):
             self.fronts.claim(slot, 1, 0)
             self.fronts.reach[slot] = Int.MIN // 2
             comptime if record:
-                self.history.record(1, 0, low, high, front)
+                self.history.finish(1, 0)
             return
         self.fronts.lows[slot] = kept_low
         self.fronts.highs[slot] = kept_high
         comptime if record:
-            self.history.record(kept_low, kept_high, low, high, front)
+            self.history.finish(kept_low, kept_high)
 
     def empty[record: Bool](mut self, slot: Int):
         """Leaves the cost just begun with no diagonal reached."""
