@@ -28,6 +28,15 @@ var seconds: List[String] = ["ACGACGT", "TTGGCA"]
 var distances = edit_distances(firsts, seconds)
 ```
 
+A pattern can also be found inside a text, Edlib's infix mode, or at its start, its prefix mode:
+
+```mojo
+from dinara_align import edit_search, edit_search_alignment
+
+var hit = edit_search("ACGTCG", "TTTTACGTACGTTTTT")  # hit.distance, hit.start, hit.end
+var found = edit_search_alignment("ACGTCG", "TTTTACGTACGTTTTT", prefix=True)
+```
+
 Ported from AffineGaps by Ash Vardanian, https://github.com/unum-science/AffineGaps, alignment only;
 the edit distance from A*PA by Ragnar Groot Koerkamp and Pesho Ivanov (see NOTICE).
 """
@@ -53,6 +62,6 @@ from .api import (
     smith_waterman_gotoh_alignment,
     smith_waterman_gotoh_score,
 )
-from .edit_distance import edit_alignment, edit_distance
+from .edit_distance import EditHit, edit_alignment, edit_distance, edit_search, edit_search_alignment
 from .common import Device, DeviceScope, GpuSpecs, Placement, hardware_threads
 from .errors import AlignmentError, ErrorKind

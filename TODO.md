@@ -27,8 +27,12 @@ stands on each.
   to bases alone. Still open: such a pair runs without seeds, which pack two bits a base, so a long
   divergent pair with an `N` is slower; seeds that skip any window holding a symbol past `ACGT`, and
   a potential that charges nothing for those seeds, would bring them back.
-- [ ] **Semi-global and open-ended alignment.** Only global; Edlib and WFA also align a read anywhere
-  in a reference, or let either end run free.
+- [~] **Semi-global and open-ended alignment.** `edit_search` finds a pattern inside a text, Edlib's
+  infix mode, or at its start, its prefix mode, and `edit_search_alignment` aligns it there, exact.
+  It sweeps the whole matrix, `n * m / 64` word-columns: 10 kbp in 100 kbp in 21 ms on the M2, 100 kbp
+  in 1 Mbp in 2 s. Still open: Edlib's band for it, a bound `k` doubled and only the words some score
+  within `k` can still reach swept (Ukkonen's cutoff), `k * n / 64` and about fourteen times less on
+  the 100 kbp read; and a free end for the pattern too, as WFA's ends-free mode allows.
 - [ ] **Traceback while sweeping, to save memory** (as TALCO does). The band records every tile's left
   edge and traces back after; memory is level with A*PA2-full's.
 - [ ] **A\* on the diagonal transition** at low divergence. dinara-align runs a plain diagonal

@@ -28,6 +28,8 @@ from dinara_align import (
     edit_alignments,
     edit_distance,
     edit_distances,
+    edit_search,
+    edit_search_alignment,
     levenshtein_alignment,
     needleman_wunsch_gotoh_alignment,
     needleman_wunsch_gotoh_score,
@@ -615,6 +617,61 @@ def test_edit_alignment_is_an_optimal_alignment() raises:
                 assert_equal(
                     rescore(aligned.first_gapped, aligned.second_gapped, Scoring.edit_distance()), -Int(aligned.score)
                 )
+
+
+def semi_global_distance(pattern: String, text: String, prefix: Bool) -> Int:
+    """The textbook dynamic program for the pattern against any part of the text, or with `prefix`
+    against a prefix of it: the top row free, or the global border, and the least of the last row."""
+    var p = pattern.as_bytes()
+    var t = text.as_bytes()
+    var previous = List[Int](length=len(t) + 1, fill=0)
+    for j in range(len(t) + 1):
+        previous[j] = j if prefix else 0
+    for i in range(1, len(p) + 1):
+        var current = List[Int](length=len(t) + 1, fill=i)
+        for j in range(1, len(t) + 1):
+            var diagonal = previous[j - 1] + (0 if p[i - 1] == t[j - 1] else 1)
+            current[j] = min(diagonal, min(previous[j] + 1, current[j - 1] + 1))
+        previous = current^
+    var best = previous[0]
+    for value in previous:
+        best = min(best, value)
+    return best
+
+
+def test_edit_search_matches_the_dynamic_program() raises:
+    """A pattern found inside a text, or at its start, at the distance the textbook dynamic program
+    gives, and aligned to the part of the text reported, which the alignment rebuilds.
+
+    Patterns across word boundaries, from empty to longer than the text, planted mutated copies of a
+    piece of the text and unrelated ones, with an `N` among the symbols too.
+    """
+    seed(23)
+    var unit = Scoring.edit_distance("ACGTN")
+    for pattern_length in [0, 1, 63, 64, 65, 129, 300]:
+        for text_length in [0, 1, 200, 700]:
+            for rate in [0.0, 0.05, 0.2]:
+                for prefix in [False, True]:
+                    var text = random_sequence(text_length, text_length, "ACGTN")
+                    var pattern = random_sequence(pattern_length, pattern_length, DNA_ALPHABET)
+                    if 0 < pattern_length <= text_length:
+                        var start = Int(random_ui64(0, UInt64(text_length - pattern_length)))
+                        var bytes = List[UInt8](text.as_bytes())
+                        pattern = mutate(
+                            String(unsafe_from_utf8=slice_bytes(bytes, start, start + pattern_length)), rate
+                        )
+                    var expected = semi_global_distance(pattern, text, prefix)
+                    var hit = edit_search(pattern, text, prefix)
+                    assert_equal(hit.distance, expected)
+                    if prefix:
+                        assert_equal(hit.start, 0)
+                    var found = edit_search_alignment(pattern, text, prefix)
+                    var aligned = found[1].copy()
+                    var part = String(StringSlice(unsafe_from_utf8=text.as_bytes()[hit.start : hit.end]))
+                    assert_equal(Int(aligned.score), expected)
+                    assert_equal(aligned.first_gapped.replace("-", ""), part)
+                    assert_equal(aligned.second_gapped.replace("-", ""), pattern)
+                    assert_equal(rescore(aligned.first_gapped, aligned.second_gapped, unit), -expected)
 
 
 def test_edit_batches_match_single_pairs() raises:

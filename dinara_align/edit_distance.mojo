@@ -3814,3 +3814,119 @@ def gapped_rows(
 
 
 # endregion Traceback
+
+
+# region Semi-global
+
+comptime HIGH_BIT = UInt64(1) << UInt64(WORD_BITS - 1)
+"""A word's last row."""
+
+
+@fieldwise_init
+struct EditHit(ImplicitlyCopyable, Writable):
+    """Where a pattern best matches a text: its edit distance to `text[start:end]`."""
+
+    var distance: Int
+    var start: Int
+    var end: Int
+
+
+def reversed_text(text: String, end: Int) -> String:
+    """The first `end` bytes of `text`, back to front."""
+    var bytes = text.as_bytes()[0:end]
+    var out = List[UInt8](capacity=len(bytes))
+    for index in range(len(bytes) - 1, -1, -1):
+        out.append(bytes[index])
+    return String(unsafe_from_utf8=out)
+
+
+def last_row_scores[free_start: Bool](mut profile: Profile) -> Tuple[Int, Int]:
+    """The least score along the pattern's last row and the first column it falls in, the pattern down
+    the rows, the text across the columns; with `free_start`, the top row is free, a match starting
+    anywhere in the text, else it is the global border.
+
+    Every word but the last goes through the sweep's kernels, which leave the differences out of their
+    bottom row along the frontier; the last word then takes one column at a time, Myers' step as Hyyrö
+    writes it for blocks, its horizontal masks read at the pattern's last row, which seldom ends a word.
+    """
+    var columns = profile.columns
+    var rows = profile.rows
+    if rows == 0:
+        return (0, 0)
+    profile.build_planes()
+    var frontier = Frontier(columns, profile.words)
+    comptime if free_start:
+        for column in range(columns):
+            frontier.horizontal_plus[column] = 0
+    var sweep = frontier.sweep(profile)
+    var last = profile.words - 1
+    if last > 0:
+        sweep.words(profile.extended, 0, last, 0, columns)
+    var bit = UInt64((rows - 1) % WORD_BITS)
+    var vertical_plus = frontier.vertical_plus[last]
+    var vertical_minus = frontier.vertical_minus[last]
+    var row_low = sweep.row_low[unsafe_offset=last]
+    var row_high = sweep.row_high[unsafe_offset=last]
+    var row_extra = sweep.row_extra[unsafe_offset=last] if profile.extended else UInt64(0)
+    var score = rows
+    var best = score
+    var best_column = 0
+    for column in range(columns):
+        var matches = (sweep.column_low[unsafe_offset=column] ^ row_low) & (
+            sweep.column_high[unsafe_offset=column] ^ row_high
+        )
+        if profile.extended:
+            matches &= sweep.column_extra[unsafe_offset=column] ^ row_extra
+        var incoming_plus = frontier.horizontal_plus[column]
+        var incoming_minus = frontier.horizontal_minus[column]
+        var crossing = matches | vertical_minus
+        if incoming_minus != 0:
+            matches |= 1
+        var horizontal = (((matches & vertical_plus) + vertical_plus) ^ vertical_plus) | matches
+        var plus = vertical_minus | ~(horizontal | vertical_plus)
+        var minus = vertical_plus & horizontal
+        score += Int((plus >> bit) & 1) - Int((minus >> bit) & 1)
+        if score < best:
+            best = score
+            best_column = column + 1
+        plus = (plus << 1) | incoming_plus
+        minus = (minus << 1) | incoming_minus
+        vertical_plus = minus | ~(crossing | plus)
+        vertical_minus = plus & crossing
+    return (best, best_column)
+
+
+def edit_search(pattern: String, text: String, prefix: Bool = False) raises AlignmentError -> EditHit:
+    """Where `pattern` best matches inside `text` at unit costs, Edlib's infix mode (HW), or with
+    `prefix` where it best matches a prefix of the text, its prefix mode (SHW): the least edit distance
+    from the pattern to any `text[start:end]`, `start` zero with `prefix`.
+
+    One sweep over the whole matrix finds the distance and the first end reaching it; the same on both
+    reversed, the text cut at that end, finds the latest start reaching it. Symbols as `edit_distance`
+    takes them. The whole matrix is swept, `len(text)` columns of `len(pattern) / 64` words, so this
+    suits a read against a window of reference rather than a genome.
+    """
+    var forward = Profile(text, pattern)
+    var found: Tuple[Int, Int]
+    if prefix:
+        found = last_row_scores[False](forward)
+        return EditHit(found[0], 0, found[1])
+    found = last_row_scores[True](forward)
+    var end = found[1]
+    var backward = Profile(reversed_text(text, end), reversed_text(pattern, pattern.byte_length()))
+    var start_found = last_row_scores[False](backward)
+    return EditHit(found[0], end - start_found[1], end)
+
+
+def edit_search_alignment(
+    pattern: String, text: String, prefix: Bool = False
+) raises AlignmentError -> Tuple[EditHit, AlignmentResult]:
+    """`edit_search`, and an optimal alignment of the text's matched part, `text[start:end]`, first,
+    against the whole pattern, second, as `edit_alignment` gives it."""
+    var hit = edit_search(pattern, text, prefix)
+    var part = String(StringSlice(unsafe_from_utf8=text.as_bytes()[hit.start : hit.end]))
+    var aligned = edit_alignment(part, pattern)
+    return (hit, aligned^)
+
+
+# endregion Semi-global
