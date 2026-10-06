@@ -79,9 +79,15 @@ stands on each.
   edge and traces back after; memory is level with A*PA2-full's.
 - [ ] **A\* on the diagonal transition** at low divergence. dinara-align runs a plain diagonal
   transition first and falls back to the band; it is fast below 2% but uses no heuristic there.
-- [ ] **An upper bound on the distance** to keep bounds from overshooting. Bounds are aimed from
-  projections and checkpoints rather than doubled, but 16% of genvar's band still goes to failed
-  rounds (see above); a bound from a quick approximate alignment is untried.
+- [ ] **An upper bound on the distance** to keep bounds from overshooting. Tried and left
+  (2026-10-06): a beam, a band of 128 to 1024 rows kept around the lowest score down each tile's edge,
+  whose corner is a real alignment's cost. It found the distance itself on most pairs, and one round
+  at exactly the distance would save 16 to 34% of the time on long and mid-length reads on the M2,
+  the failed rounds and the last round's overshoot. But the beam costs about a band round, so it pays
+  only after a failed round and only with seeds; even then, on the Skylake-X it took 5% off ont-500k,
+  added 1.5% to genvar, whose insertions it loses, and nothing elsewhere, while the M2 gained 4 to 12%
+  on seeded sets. Four tuned parts for that was judged not worth it. A cheaper bound, or one that
+  follows large indels, might still be.
 - [ ] **Affine costs with the seed heuristic.** The affine aligners are exact but sweep without a
   heuristic; A*PA2's method for affine costs needs a gap-chaining seed heuristic of its own.
 - [x] **Low divergence (below 2%)** was A*PA2's weak spot against BiWFA; the diagonal transition
