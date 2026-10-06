@@ -33,6 +33,8 @@ searches find keeping only their last few costs, and each piece is aligned the s
 """
 
 from std.bit import count_trailing_zeros
+from std.sys import llvm_intrinsic
+from std.sys.info import CompilationTarget
 
 from .errors import AlignmentError, ErrorKind
 from .traceback import cigar_string, EditPath
@@ -376,6 +378,46 @@ struct Fronts(Movable):
         self.highs[slot] = high
 
 
+comptime GATHERED_SLIDES = CompilationTarget.has_avx512f() and LANES == 8
+"""Whether a lane group's slides start with one gather of each sequence's next eight letters per lane,
+AVX-512's `vpgatherqq` at byte offsets, rather than a scalar compare per lane."""
+
+
+@inline(.always)
+def gathered_words(base: ImmPointer[UInt8, _], offsets: SIMD[DType.int64, LANES]) -> SIMD[DType.uint64, LANES]:
+    """The eight bytes from each of `offsets` past `base`, one AVX-512 gather."""
+    return llvm_intrinsic["llvm.x86.avx512.mask.gather.qpq.512", SIMD[DType.uint64, LANES], has_side_effect=False](
+        SIMD[DType.uint64, LANES](0), base, offsets, SIMD[DType.bool, LANES](fill=True), Int32(1)
+    )
+
+
+@inline(.always)
+def gathered_slides(
+    first: ImmPointer[UInt8, _],
+    second: ImmPointer[UInt8, _],
+    entries: SIMD[DType.int32, LANES],
+    diagonals: SIMD[DType.int32, LANES],
+    columns: Int,
+    rows: Int,
+) -> SIMD[DType.int32, LANES]:
+    """`slide` of every reached lane of a group at once: both sequences' next eight letters gathered per
+    lane and compared, an unreached lane pointed at the two sentinels, which differ at once. A lane
+    whose eight all match, rare off the path, finishes by `slide`."""
+    comptime Wide = SIMD[DType.int64, LANES]
+    var reached = entries.ge(0)
+    var columns_at = entries.cast[DType.int64]()
+    var first_at = reached.select(columns_at, Wide(columns))
+    var second_at = reached.select(columns_at - diagonals.cast[DType.int64](), Wide(rows))
+    var mismatches = gathered_words(first, first_at) ^ gathered_words(second, second_at)
+    var slid = first_at + (count_trailing_zeros(mismatches) >> 3).cast[DType.int64]()
+    var whole = mismatches.eq(0)
+    if whole.reduce_or():
+        comptime for lane in range(LANES):
+            if whole[lane]:
+                slid[lane] = Int64(slide(first, second, Int(slid[lane]), Int(diagonals[lane])))
+    return reached.select(slid.cast[DType.int32](), entries)
+
+
 @inline(.never)
 def step[
     record: Bool
@@ -432,13 +474,18 @@ def step[
         opened_first.unsafe_offset(diagonal).unsafe_store(first_gap)
         opened_second.unsafe_offset(diagonal).unsafe_store(second_gap)
         var front = aligned.unsafe_offset(diagonal)
-        front.unsafe_store(max(substituted, gapped))
-        comptime for lane in range(LANES):
-            var column = Int(front[unsafe_offset=lane])
-            if column >= 0:
-                column = slide(first, second, column, diagonal + lane)
-                front[unsafe_offset=lane] = Int32(column)
-                reach = max(reach, 2 * column - diagonal - lane)
+        comptime if GATHERED_SLIDES:
+            var slid = gathered_slides(first, second, max(substituted, gapped), diagonals, columns, rows)
+            front.unsafe_store(slid)
+            reach = max(reach, Int((slid + slid - diagonals).reduce_max()))
+        else:
+            front.unsafe_store(max(substituted, gapped))
+            comptime for lane in range(LANES):
+                var column = Int(front[unsafe_offset=lane])
+                if column >= 0:
+                    column = slide(first, second, column, diagonal + lane)
+                    front[unsafe_offset=lane] = Int32(column)
+                    reach = max(reach, 2 * column - diagonal - lane)
         comptime if record:
             kept.unsafe_offset(diagonal).unsafe_store(front.unsafe_load[width=LANES]())
         comptime if record:
