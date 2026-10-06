@@ -401,6 +401,7 @@ dependencies = [
 name = "pa-wrapper-runner"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "pa-types",
  "pa-wrapper",
  "rust-wfa2",

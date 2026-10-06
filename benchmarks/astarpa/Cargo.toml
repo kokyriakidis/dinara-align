@@ -7,6 +7,7 @@ publish = false
 # `run.py` clones A*PA here at a pinned commit; nothing of it is vendored into this repository.
 # It needs the nightly named in `rust-toolchain.toml`, which `rustup` selects automatically.
 [dependencies]
+libc = "0.2"
 astarpa = { path = "../.cache/astar-pairwise-aligner/astarpa" }
 astarpa2 = { path = "../.cache/astar-pairwise-aligner/astarpa2" }
 pa-heuristic = { path = "../.cache/astar-pairwise-aligner/pa-heuristic" }

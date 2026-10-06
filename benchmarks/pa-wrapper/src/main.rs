@@ -103,14 +103,26 @@ fn seq_mode(arguments: &[String]) {
                 break;
             }
             let (a, b) = (pair[0][1..].as_bytes(), pair[1][1..].as_bytes());
+            let before = peak_resident();
             let started = Instant::now();
             let cost = aligner.align(a, b).0;
             let seconds = started.elapsed().as_secs_f64();
+            let growth = peak_resident() - before;
             spent += seconds;
             // Rust's stdout flushes by line, piped or not.
-            println!("{tool}\t{path}\t{seconds}\t{cost}");
+            println!("{tool}\t{path}\t{seconds}\t{cost}\t{growth}");
         }
     }
+}
+
+
+/// The process's peak resident memory so far, in bytes: `getrusage` counts kilobytes on Linux and bytes
+/// on macOS. Read before and after each alignment, its growth is A*PA2's memory measure.
+fn peak_resident() -> i64 {
+    let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
+    unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
+    let peak = usage.ru_maxrss as i64;
+    if cfg!(target_os = "macos") { peak } else { peak * 1024 }
 }
 
 fn main() {

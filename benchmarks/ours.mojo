@@ -10,6 +10,8 @@ Prints one tab-separated row per measurement, in the shape `run.py` reads from e
 """
 
 from std.sys import argv
+from std.ffi import external_call
+from std.sys.info import CompilationTarget
 from std.time import perf_counter_ns
 
 from dinara_align import (
@@ -178,6 +180,18 @@ def write_scoring(directory: String, scoring: Scoring) raises:
         out.write(text)
 
 
+def peak_resident() -> Int:
+    """The process's peak resident memory so far, in bytes: `getrusage`'s `ru_maxrss`, after the two
+    16-byte times that open `struct rusage`, counts kilobytes on Linux and bytes on macOS. Read before
+    and after each alignment, its growth is A*PA2's memory measure."""
+    var usage = List[Int64](length=20, fill=0)
+    _ = external_call["getrusage", Int32](Int32(0), usage.unsafe_ptr())
+    var peak = Int(usage[4])
+    comptime if CompilationTarget.is_macos():
+        return peak
+    return peak * 1024
+
+
 def seq_mode() raises:
     """A*PA2's evaluation datasets: `seq <tool> <budget seconds> <file>...`, every pair aligned once.
 
@@ -222,12 +236,14 @@ def seq_mode() raises:
         while index + 1 < len(lines) and spent < budget:
             var first = String(lines[index][byte=1:])
             var second = String(lines[index + 1][byte=1:])
+            var before = peak_resident()
             var started = perf_counter_ns()
             # A CIGAR, as every rival's traceback hands back, rather than the two gapped rows.
             var aligned = edit_cigar(first, second)
             var seconds = Float64(perf_counter_ns() - started) / 1e9
+            var growth = peak_resident() - before
             spent += seconds
-            print(tool, path, seconds, aligned.distance, sep="\t", flush=True)
+            print(tool, path, seconds, aligned.distance, growth, sep="\t", flush=True)
             index += 2
 
 

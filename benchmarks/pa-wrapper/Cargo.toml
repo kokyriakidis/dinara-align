@@ -7,6 +7,7 @@ publish = false
 # `run.py` clones pa-bench here at a pinned commit; its `pa-wrapper` crate builds every aligner A*PA2's
 # evaluation compared against, with the parameters it used. Nothing of it is vendored.
 [dependencies]
+libc = "0.2"
 pa-wrapper = { path = "../.cache/pa-bench/pa-wrapper", default-features = false, features = ["edlib", "wfa", "block_aligner"] }
 pa-types = { git = "https://github.com/pairwise-alignment/pa-types" }
 rust-wfa2 = { git = "https://github.com/pairwise-alignment/rust-wfa2" }

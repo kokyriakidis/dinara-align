@@ -101,6 +101,7 @@ version = "0.1.0"
 dependencies = [
  "astarpa",
  "astarpa2",
+ "libc",
  "pa-heuristic",
 ]
 

@@ -320,8 +320,9 @@ def run_tool(binary: Path, tool: str, path: Path, budget: float) -> tuple[list[t
     rows = []
     for line in output.splitlines():
         fields = line.split("\t")
-        if len(fields) == 4 and fields[0] == tool:
-            rows.append((float(fields[2]), int(fields[3])))
+        # A fifth field, where a runner gives one, is the pair's growth of peak memory, A*PA2's measure.
+        if len(fields) in (4, 5) and fields[0] == tool:
+            rows.append((float(fields[2]), int(fields[3]), int(fields[4]) if len(fields) == 5 else -1))
     return rows, peak, stopped.is_set()
 
 
@@ -343,12 +344,13 @@ def replay(
     pair while what it has spent is under the budget, and a pair still running a grace past the budget
     is stopped."""
     kept, spent = [], 0.0
-    for seconds, cost in rows:
+    for row in rows:
+        seconds = row[0]
         if spent >= budget:
             return kept, False
         if spent + seconds > budget + GRACE:
             return kept, True
-        kept.append((seconds, cost))
+        kept.append(tuple(row))
         spent += seconds
     return kept, stopped
 
@@ -404,6 +406,20 @@ def megabytes(peak: int, stopped: bool) -> str:
     return f"{'≥ ' if stopped else ''}{peak / 2**20:.0f} MB"
 
 
+def growth(rows: list) -> str:
+    """The median and largest growth of peak memory over a tool's pairs, A*PA2's memory table: what
+    aligning a pair added to the most the process had held before it, so the runtime and the input
+    count for nothing, and a pair within an earlier pair's peak counts zero."""
+    grown = sorted(row[2] for row in rows if len(row) > 2 and row[2] >= 0)
+    if not grown:
+        return "—"
+
+    def size(value: int) -> str:
+        return f"{value / 2**20:.1f}" if value < 10 * 2**20 else f"{value / 2**20:.0f}"
+
+    return f"{size(grown[len(grown) // 2])} / {size(grown[-1])} MB"
+
+
 # endregion Runs
 
 
@@ -450,6 +466,7 @@ def main() -> None:
         "| dataset | " + " | ".join(columns) + " |",
         "| :-- | " + " | ".join("--:" for _ in columns) + " |",
     ]
+    growth_lines = memory_lines[:2]
 
     # What each runner holds aligning almost nothing: its runtime, before any aligner's work.
     tiny = DATA / "samples" / "baseline.seq"
@@ -463,16 +480,17 @@ def main() -> None:
     for name, files in datasets:
         path, facts = sample(name, files, bases, published)
         pairs = facts["pairs"]
-        cells, peaks, seen = [], [], []
+        cells, peaks, grown, seen = [], [], [], []
         for column, binary, tool in tools(name, ours, astarpa, wrapper):
             print(f"{name}: {column} ...", file=sys.stderr, flush=True)
             rows, peak, stopped = run(binary, tool, path)
             peaks.append(megabytes(peak, stopped))
-            seen.append((column, [cost for _, cost in rows]))
+            grown.append(growth(rows))
+            seen.append((column, [row[1] for row in rows]))
             if not rows:
                 cells.append(f"> {options.budget:g} s")
                 continue
-            cell = duration(sum(seconds for seconds, _ in rows) / len(rows))
+            cell = duration(sum(row[0] for row in rows) / len(rows))
             cells.append(cell if len(rows) == pairs else f"{cell} ({len(rows)}/{pairs})")
 
         # Every tool's costs against every other's and the published ones, on the pairs both have.
@@ -494,10 +512,18 @@ def main() -> None:
             + f" | {'✓' if agree else '✗'} |"
         )
         memory_lines.append(f"| {name} | " + " | ".join(peaks) + " |")
+        growth_lines.append(f"| {name} | " + " | ".join(grown) + " |")
         print(lines[-1], file=sys.stderr, flush=True)
         KEPT.write_text(json.dumps(kept))
 
-    table = "\n".join(lines) + "\n\nPeak resident memory over the same runs:\n\n" + "\n".join(memory_lines) + "\n"
+    table = (
+        "\n".join(lines)
+        + "\n\nPeak resident memory over the same runs:\n\n"
+        + "\n".join(memory_lines)
+        + "\n\nGrowth of peak memory aligning each pair, median / largest, as A*PA2's Table 10 measures it:\n\n"
+        + "\n".join(growth_lines)
+        + "\n"
+    )
     RESULTS.mkdir(parents=True, exist_ok=True)
     (RESULTS / "astarpa2.md").write_text(table)
     print(table)
