@@ -47,9 +47,13 @@ stands on each.
   table, so nearly every window that matches nothing costs one predictable test: matching took 87 ms
   of the M2's 320 mid-length reads and takes 32. On the Skylake-X, mid-length reads 17% faster, with
   an `N` 14%, 30 kbp pairs 18 to 40%, 100 kbp at 5% 10%, ont-500k 3%.
-- [ ] **The third plane's cost on x86.** A read with one `N` sweeps about 13% slower than without on
-  ont-50k on the Skylake-X. When only one sequence holds symbols past `ACGT` they match nothing, so a
-  per-row or per-column mask could stand in for the third plane.
+- [x] **The cost of an `N`.** ont-50k's reads with one `N` took 12% longer than without on the
+  Skylake-X, and not mostly in the sweep: coding such a pair went byte by byte, five times as slow,
+  and its third plane was built a bit at a time, four times the planes' cost. Both now go sixteen
+  bytes or eight rows at a time, only chunks holding a symbol past `ACGT` byte by byte, and each tile
+  matches on no more planes than its own symbols need (see `Profile.symbols`): two where neither its
+  columns nor any row holds one, the rows' third plane as a mask where only rows do. Reads with an
+  `N` 7 to 9% faster on both machines, 5 to 7% over clean ones on ont-50k on the Skylake-X.
 - [~] **Semi-global and open-ended alignment.** `edit_search` finds a pattern inside a text, Edlib's
   infix mode, or at its start, its prefix mode, and `edit_search_alignment` aligns it there, exact.
   It sweeps a band as Edlib does, a bound doubled and only the rows some score within it can still

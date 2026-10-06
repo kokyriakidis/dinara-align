@@ -191,6 +191,16 @@ def advance[
     vertical_minus = plus & crossing
 
 
+comptime BASES_ONLY = 0
+"""A tile's match test when neither its columns nor any row holds a symbol past `ACGT`: two planes."""
+comptime ROW_SYMBOLS = 1
+"""A tile's match test when rows hold symbols past `ACGT` but its columns none: those rows match no
+column, and the third row plane, stored negated, is all ones but at them, so an AND with it masks
+them out, the full test less a load and an XOR."""
+comptime ALL_SYMBOLS = 2
+"""A tile's match test when its columns hold symbols past `ACGT`: the third plane in full."""
+
+
 struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
     """Pointers to the profile and the frontier, which the caller's lists own and outlive.
 
@@ -260,7 +270,7 @@ struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
         return moved
 
     @inline(.always)
-    def run[extended: Bool](self, word: Int, first_column: Int, end_column: Int):
+    def run[symbols: Int](self, word: Int, first_column: Int, end_column: Int):
         """One word through `[first_column, end_column)`, its vertical differences held in registers.
 
         Only the horizontal edge goes through memory, and each column's is a different address, so
@@ -270,34 +280,38 @@ struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
         var vm = self.vertical_minus[unsafe_offset=word]
         var row_low = self.row_low[unsafe_offset=word]
         var row_high = self.row_high[unsafe_offset=word]
-        var row_extra = self.row_extra[unsafe_offset=word] if extended else UInt64(0)
+        var row_extra = self.row_extra[unsafe_offset=word] if symbols != BASES_ONLY else UInt64(0)
         for column in range(first_column, end_column):
             var hp = self.horizontal_plus[unsafe_offset=column]
             var hm = self.horizontal_minus[unsafe_offset=column]
             var matches = (self.column_low[unsafe_offset=column] ^ row_low) & (
                 self.column_high[unsafe_offset=column] ^ row_high
             )
-            comptime if extended:
+            comptime if symbols == ALL_SYMBOLS:
                 matches &= self.column_extra[unsafe_offset=column] ^ row_extra
+            elif symbols == ROW_SYMBOLS:
+                matches &= row_extra
             advance[1](hp, hm, vp, vm, matches)
             self.horizontal_plus[unsafe_offset=column] = hp
             self.horizontal_minus[unsafe_offset=column] = hm
         self.vertical_plus[unsafe_offset=word] = vp
         self.vertical_minus[unsafe_offset=word] = vm
 
-    def words(self, extended: Bool, first_word: Int, end_word: Int, first_column: Int, end_column: Int):
-        """Words `[first_word, end_word)` through columns `[first_column, end_column)`, matching on the
-        third plane when `extended`, as a profile with symbols past `ACGT` needs (see `words_matching`)."""
-        if extended:
-            self.words_matching[True](first_word, end_word, first_column, end_column)
+    def words(self, symbols: Int, first_word: Int, end_word: Int, first_column: Int, end_column: Int):
+        """Words `[first_word, end_word)` through columns `[first_column, end_column)`, matching as
+        `symbols` says, `BASES_ONLY`, `ROW_SYMBOLS` or `ALL_SYMBOLS` (see `Profile.symbols`)."""
+        if symbols == ALL_SYMBOLS:
+            self.words_matching[ALL_SYMBOLS](first_word, end_word, first_column, end_column)
+        elif symbols == ROW_SYMBOLS:
+            self.words_matching[ROW_SYMBOLS](first_word, end_word, first_column, end_column)
         else:
-            self.words_matching[False](first_word, end_word, first_column, end_column)
+            self.words_matching[BASES_ONLY](first_word, end_word, first_column, end_column)
 
     # Out of line, each kernel its own function: inlined side by side, or chosen per band round, the
     # two slowed the bases' one by 1 to 4%.
     @inline(.never)
-    def words_matching[extended: Bool](self, first_word: Int, end_word: Int, first_column: Int, end_column: Int):
-        """`words`, its match test fixed by `extended`.
+    def words_matching[symbols: Int](self, first_word: Int, end_word: Int, first_column: Int, end_column: Int):
+        """`words`, its match test fixed by `symbols`.
 
         Full groups of `LANES` take the staggered vector sweep when the span is wide enough for it, two
         at a time where `PAIRED_GROUPS`.
@@ -308,65 +322,65 @@ struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
         if end_column - first_column >= 2 * LANES:
             comptime if PAIRED_GROUPS:
                 while word + 2 * LANES <= end_word:
-                    self.pair_block[extended](word, first_column, end_column)
+                    self.pair_block[symbols](word, first_column, end_column)
                     word += 2 * LANES
             while word + LANES <= end_word:
-                self.block[LANES, extended](word, first_column, end_column)
+                self.block[LANES, symbols](word, first_column, end_column)
                 word += LANES
             # Five to seven words left: a narrow vector with the rest in scalar registers in its shadow.
             var left = end_word - word
             if left == 7:
-                self.hybrid_block[NARROW_LANES, 3, extended](word, first_column, end_column)
+                self.hybrid_block[NARROW_LANES, 3, symbols](word, first_column, end_column)
                 word += 7
             elif left == 6:
-                self.hybrid_block[NARROW_LANES, 2, extended](word, first_column, end_column)
+                self.hybrid_block[NARROW_LANES, 2, symbols](word, first_column, end_column)
                 word += 6
             elif left == 5:
-                self.hybrid_block[NARROW_LANES, 1, extended](word, first_column, end_column)
+                self.hybrid_block[NARROW_LANES, 1, symbols](word, first_column, end_column)
                 word += 5
             elif left == 4:
-                self.block[NARROW_LANES, extended](word, first_column, end_column)
+                self.block[NARROW_LANES, symbols](word, first_column, end_column)
                 word += NARROW_LANES
             # Two or three words left run side by side in scalar registers, which beats a vector
             # this narrow: its chain waits two cycles an operation, a scalar one.
             if end_word - word == 3:
-                self.scalar_block[3, extended](word, first_column, end_column)
+                self.scalar_block[3, symbols](word, first_column, end_column)
                 word += 3
             elif end_word - word == 2:
-                self.scalar_block[2, extended](word, first_column, end_column)
+                self.scalar_block[2, symbols](word, first_column, end_column)
                 word += 2
         while word < end_word:
-            self.run[extended](word, first_column, end_column)
+            self.run[symbols](word, first_column, end_column)
             word += 1
 
-    def block[lanes: Int, extended: Bool](self, first_word: Int, first_column: Int, end_column: Int):
+    def block[lanes: Int, symbols: Int](self, first_word: Int, first_column: Int, end_column: Int):
         """`lanes` words through `[first_column, end_column)` in one vector, staggered (see `VectorGroup`)."""
-        var group = VectorGroup[lanes, extended](self, first_word, first_column, end_column)
+        var group = VectorGroup[lanes, symbols](self, first_word, first_column, end_column)
         stagger(group)
         group.finish()
 
-    def pair_block[extended: Bool](self, first_word: Int, first_column: Int, end_column: Int):
+    def pair_block[symbols: Int](self, first_word: Int, first_column: Int, end_column: Int):
         """Two groups of `LANES` words, one under the other, in one loop, the lower a little behind."""
-        var top = VectorGroup[LANES, extended](self, first_word, first_column, end_column)
-        var bottom = VectorGroup[LANES, extended](self, first_word + LANES, first_column, end_column)
+        var top = VectorGroup[LANES, symbols](self, first_word, first_column, end_column)
+        var bottom = VectorGroup[LANES, symbols](self, first_word + LANES, first_column, end_column)
         stagger_pair(top, bottom, LANES + 2)
         top.finish()
         bottom.finish()
 
-    def scalar_block[lanes: Int, extended: Bool](self, first_word: Int, first_column: Int, end_column: Int):
+    def scalar_block[lanes: Int, symbols: Int](self, first_word: Int, first_column: Int, end_column: Int):
         """`lanes` words through `[first_column, end_column)` in scalar registers, staggered (see `ScalarGroup`)."""
-        var group = ScalarGroup[lanes, extended](self, first_word, first_column, end_column)
+        var group = ScalarGroup[lanes, symbols](self, first_word, first_column, end_column)
         stagger(group)
         group.finish()
 
-    def hybrid_block[lanes: Int, below: Int, extended: Bool](self, first_word: Int, first_column: Int, end_column: Int):
+    def hybrid_block[lanes: Int, below: Int, symbols: Int](self, first_word: Int, first_column: Int, end_column: Int):
         """`lanes` words in a vector and the `below` words under them in scalar registers, in one loop.
 
         A narrow vector's chain leaves the integer units idle, so the scalar words run in its
         shadow, a few columns behind so the differences the vector sends down are already stored.
         """
-        var top = VectorGroup[lanes, extended](self, first_word, first_column, end_column)
-        var bottom = ScalarGroup[below, extended](self, first_word + lanes, first_column, end_column)
+        var top = VectorGroup[lanes, symbols](self, first_word, first_column, end_column)
+        var bottom = ScalarGroup[below, symbols](self, first_word + lanes, first_column, end_column)
         stagger_pair(top, bottom, below + 2)
         top.finish()
         bottom.finish()
@@ -400,7 +414,7 @@ trait Staggered(Movable):
         ...
 
 
-struct VectorGroup[lanes: Int, extended: Bool](Staggered, TrivialRegisterPassable):
+struct VectorGroup[lanes: Int, symbols: Int](Staggered, TrivialRegisterPassable):
     """`lanes` words in one SIMD vector: lane `k` holds the `k`-th word from the bottom.
 
     Each lane takes the difference the lane above sent by rotating the lanes, and the top lane
@@ -439,7 +453,7 @@ struct VectorGroup[lanes: Int, extended: Bool](Staggered, TrivialRegisterPassabl
             var word = first_word + Self.lanes - 1 - lane
             self.row_low[lane] = sweep.row_low[unsafe_offset=word]
             self.row_high[lane] = sweep.row_high[unsafe_offset=word]
-            comptime if Self.extended:
+            comptime if Self.symbols != BASES_ONLY:
                 self.row_extra[lane] = sweep.row_extra[unsafe_offset=word]
             self.vertical_plus[lane] = sweep.vertical_plus[unsafe_offset=word]
             self.vertical_minus[lane] = sweep.vertical_minus[unsafe_offset=word]
@@ -469,10 +483,12 @@ struct VectorGroup[lanes: Int, extended: Bool](Staggered, TrivialRegisterPassabl
         var low = self.sweep.column_low.unsafe_offset(offset + 1).unsafe_load[width=Self.lanes]()
         var high = self.sweep.column_high.unsafe_offset(offset + 1).unsafe_load[width=Self.lanes]()
         var matches = (low ^ self.row_low) & (high ^ self.row_high)
-        comptime if Self.extended:
+        comptime if Self.symbols == ALL_SYMBOLS:
             matches &= (
                 self.sweep.column_extra.unsafe_offset(offset + 1).unsafe_load[width=Self.lanes]() ^ self.row_extra
             )
+        elif Self.symbols == ROW_SYMBOLS:
+            matches &= self.row_extra
         comptime if masked:
             var kept_plus = self.vertical_plus
             var kept_minus = self.vertical_minus
@@ -501,7 +517,7 @@ struct VectorGroup[lanes: Int, extended: Bool](Staggered, TrivialRegisterPassabl
             self.sweep.vertical_minus[unsafe_offset=word] = self.vertical_minus[lane]
 
 
-struct ScalarGroup[lanes: Int, extended: Bool](Staggered):
+struct ScalarGroup[lanes: Int, symbols: Int](Staggered):
     """`lanes` words in general-purpose registers, one scalar chain each, staggered as `VectorGroup`.
 
     Each word's difference passes down through a register rather than a rotation, and a scalar
@@ -537,7 +553,7 @@ struct ScalarGroup[lanes: Int, extended: Bool](Staggered):
         comptime for j in range(Self.lanes):
             self.row_low[j] = sweep.row_low[unsafe_offset=first_word + j]
             self.row_high[j] = sweep.row_high[unsafe_offset=first_word + j]
-            comptime if Self.extended:
+            comptime if Self.symbols != BASES_ONLY:
                 self.row_extra[j] = sweep.row_extra[unsafe_offset=first_word + j]
             self.vertical_plus[j] = sweep.vertical_plus[unsafe_offset=first_word + j]
             self.vertical_minus[j] = sweep.vertical_minus[unsafe_offset=first_word + j]
@@ -577,8 +593,10 @@ struct ScalarGroup[lanes: Int, extended: Bool](Staggered):
             var matches = (self.sweep.column_low[unsafe_offset=column] ^ self.row_low[j]) & (
                 self.sweep.column_high[unsafe_offset=column] ^ self.row_high[j]
             )
-            comptime if Self.extended:
+            comptime if Self.symbols == ALL_SYMBOLS:
                 matches &= self.sweep.column_extra[unsafe_offset=column] ^ self.row_extra[j]
+            elif Self.symbols == ROW_SYMBOLS:
+                matches &= self.row_extra[j]
             advance[1](hp, hm, vp, vm, matches)
             comptime if masked:
                 self.vertical_plus[j] = vp if inside else self.vertical_plus[j]
@@ -699,8 +717,12 @@ def all_bases(text: String) -> Bool:
 def symbol_codes(
     first: String, second: String, mut column_codes: List[UInt8], mut row_codes: List[UInt8]
 ) raises AlignmentError:
-    """Both sequences' codes when some byte is not a base: `ACGT` zero to three, every other byte the
-    next free code, in the order the bytes first appear; past four such symbols, three bits run out."""
+    """Recodes the bytes that are not bases, which the bases' codes read as one: each the next free
+    code from four, in the order the bytes first appear; past four such symbols, three bits run out.
+
+    Only the sixteen-byte chunks holding such a byte are gone through byte by byte: coded one byte at
+    a time, a 10 kbp read with one `N` took five times as long to code as without.
+    """
     comptime UNSEEN = Int16(-1)
     var table = List[Int16](length=256, fill=UNSEEN)
     table[ord("A")] = 0
@@ -708,22 +730,45 @@ def symbol_codes(
     table[ord("G")] = 2
     table[ord("T")] = 3
     var next_code = 4
+    recode_symbols(first, column_codes, table, next_code)
+    recode_symbols(second, row_codes, table, next_code)
 
-    @inline(.always)
-    def code(byte: UInt8, mut table: List[Int16], mut next_code: Int) raises AlignmentError -> UInt8:
-        if table[Int(byte)] == UNSEEN:
-            if next_code == 8:
-                raise AlignmentError(
-                    ErrorKind.UNKNOWN_SYMBOL, "bit-parallel edit distance takes ACGT and at most four other symbols"
-                )
-            table[Int(byte)] = Int16(next_code)
-            next_code += 1
-        return UInt8(table[Int(byte)])
 
-    for byte in first.as_bytes():
-        column_codes.append(code(byte, table, next_code))
-    for byte in second.as_bytes():
-        row_codes.append(code(byte, table, next_code))
+def recode_symbols(
+    text: String, mut codes: List[UInt8], mut table: List[Int16], mut next_code: Int
+) raises AlignmentError:
+    """`symbol_codes` for one sequence, `table` and `next_code` carried from the one before."""
+    comptime CHUNK = 16
+    var bytes = text.unsafe_ptr()
+    var out = codes.unsafe_ptr()
+    var length = text.byte_length()
+    var index = 0
+    while index < length:
+        var size = min(CHUNK, length - index)
+        if size == CHUNK:
+            var chunk = bytes.unsafe_offset(index).unsafe_load[width=CHUNK]()
+            var bases = (
+                chunk.eq(UInt8(ord("A")))
+                | chunk.eq(UInt8(ord("C")))
+                | chunk.eq(UInt8(ord("G")))
+                | chunk.eq(UInt8(ord("T")))
+            )
+            if bases.reduce_and():
+                index += CHUNK
+                continue
+        for at in range(index, index + size):
+            var byte = Int(bytes[unsafe_offset=at])
+            if table[byte] >= 0 and table[byte] < 4:
+                continue
+            if table[byte] < 0:
+                if next_code == 8:
+                    raise AlignmentError(
+                        ErrorKind.UNKNOWN_SYMBOL, "bit-parallel edit distance takes ACGT and at most four other symbols"
+                    )
+                table[byte] = Int16(next_code)
+                next_code += 1
+            out[unsafe_offset=at] = UInt8(table[byte])
+        index += size
 
 
 def folded(codes: List[UInt8]) -> List[UInt8]:
@@ -769,6 +814,11 @@ struct Profile(Movable):
     """Whether either sequence holds a symbol past `ACGT`, coded from four up, so a match also needs
     the codes' third bit, `column_extra` and `row_extra`; the seeds, packed two bits a base, read the
     codes folded (see `folded`)."""
+    var row_symbols: Bool
+    """Whether the second sequence holds a symbol past `ACGT`, so that no tile matches on two planes alone."""
+    var column_symbols: List[Int32]
+    """Per column, the columns before it holding a symbol past `ACGT`, one past the last, built with the
+    third plane: a tile whose columns hold none needs no more than `ROW_SYMBOLS` (see `symbols`)."""
     var column_codes: List[UInt8]
     """The first sequence as codes, which the traceback compares base by base."""
     var row_codes: List[UInt8]
@@ -786,19 +836,14 @@ struct Profile(Movable):
         self.row_low = List[UInt64]()
         self.row_high = List[UInt64]()
         self.row_extra = List[UInt64]()
+        self.row_symbols = False
+        self.column_symbols = List[Int32]()
         self.extended = not all_bases(first) or not all_bases(second)
-        if self.extended:
-            self.column_codes = List[UInt8](capacity=self.columns + CODE_PADDING)
-            self.row_codes = List[UInt8](capacity=self.rows + CODE_PADDING)
-            symbol_codes(first, second, self.column_codes, self.row_codes)
-            for _ in range(CODE_PADDING):
-                self.column_codes.append(FIRST_SENTINEL)
-                self.row_codes.append(SECOND_SENTINEL)
-            return
 
-        # Every byte is `A`, `C`, `G` or `T`, whose ASCII bits give the code directly: bit 2 is set
-        # for `G` and `T`, the code's high bit, and bit 1 differs from bit 2 for `C` and `T`, its low
-        # bit. Only the codes are built here; the planes wait for a band (see `build_planes`).
+        # A byte of `A`, `C`, `G` or `T` gives its code from its ASCII bits: bit 2 is set for `G` and
+        # `T`, the code's high bit, and bit 1 differs from bit 2 for `C` and `T`, its low bit. Any
+        # other byte is recoded after (see `symbol_codes`). Only the codes are built here; the planes
+        # wait for a band (see `build_planes`).
         self.column_codes = List[UInt8](capacity=self.columns + CODE_PADDING)
         self.column_codes.resize(unsafe_uninit_length=self.columns)
         var first_bytes = first.unsafe_ptr()
@@ -830,6 +875,8 @@ struct Profile(Movable):
             var byte = second_bytes[unsafe_offset=row]
             row_codes[unsafe_offset=row] = (((byte >> 1) ^ (byte >> 2)) & 1) | ((byte >> 1) & 2)
             row += 1
+        if self.extended:
+            symbol_codes(first, second, self.column_codes, self.row_codes)
         # Past the last base of each, sentinels that match nothing, the two of them distinct, so a
         # match extension stops at the matrix's edge without checking it (see `slide_forward`).
         for _ in range(CODE_PADDING):
@@ -891,12 +938,54 @@ struct Profile(Movable):
         # codes from four up leave the first two planes exact.
         self.column_extra = List[UInt64](length=padded, fill=0)
         self.row_extra = List[UInt64](length=self.words, fill=0)
+        self.column_symbols = List[Int32](length=self.columns + 1, fill=0)
         var extra = self.column_extra.unsafe_ptr().unsafe_offset(COLUMN_PADDING)
-        for index in range(self.columns):
-            extra[unsafe_offset=index] = UInt64(0) - ((column_codes[unsafe_offset=index] >> 2) & 1).cast[DType.uint64]()
-        for index in range(self.rows):
-            var bit = (((row_codes[unsafe_offset=index] >> 2) & 1) ^ 1).cast[DType.uint64]()
-            self.row_extra[index // WORD_BITS] |= bit << UInt64(index % WORD_BITS)
+        var before = self.column_symbols.unsafe_ptr()
+        column = 0
+        while column + CHUNK <= self.columns:
+            var symbols = (column_codes.unsafe_offset(column).unsafe_load[width=CHUNK]() >> 2) & 1
+            extra.unsafe_offset(column).unsafe_store(UInt64(0) - symbols.cast[DType.uint64]())
+            var count = before[unsafe_offset=column]
+            if symbols.reduce_or() == 0:
+                for at in range(column + 1, column + CHUNK + 1):
+                    before[unsafe_offset=at] = count
+            else:
+                for at in range(CHUNK):
+                    count += Int32(symbols[at])
+                    before[unsafe_offset=column + at + 1] = count
+            column += CHUNK
+        while column < self.columns:
+            var symbol = (column_codes[unsafe_offset=column] >> 2) & 1
+            extra[unsafe_offset=column] = UInt64(0) - symbol.cast[DType.uint64]()
+            before[unsafe_offset=column + 1] = before[unsafe_offset=column] + Int32(symbol)
+            column += 1
+        var row_extra = self.row_extra.unsafe_ptr()
+        var seen = UInt64(0)
+        row = 0
+        while row + 8 <= self.rows:
+            var symbols = (row_codes.unsafe_offset(row).unsafe_bitcast[UInt64]().unsafe_load() >> 2) & ONES
+            seen |= symbols
+            row_extra[unsafe_offset=row // WORD_BITS] |= (((symbols * GATHER) >> 56) ^ 0xFF) << UInt64(row % WORD_BITS)
+            row += 8
+        while row < self.rows:
+            var symbol = ((row_codes[unsafe_offset=row] >> 2) & 1).cast[DType.uint64]()
+            seen |= symbol
+            row_extra[unsafe_offset=row // WORD_BITS] |= (symbol ^ 1) << UInt64(row % WORD_BITS)
+            row += 1
+        self.row_symbols = seen != 0
+
+    def symbols(self, first_column: Int, end_column: Int) -> Int:
+        """The match test a sweep of columns `[first_column, end_column)` takes, once the planes are
+        built: the third plane in full only where those columns hold a symbol past `ACGT`, a mask of
+        the rows holding one elsewhere, and two planes alone when neither does.
+
+        A pair with one `N` used to sweep every tile on the third plane.
+        """
+        if not self.extended or first_column == end_column:
+            return BASES_ONLY
+        if self.column_symbols[end_column] != self.column_symbols[first_column]:
+            return ALL_SYMBOLS
+        return ROW_SYMBOLS if self.row_symbols else BASES_ONLY
 
 
 struct Frontier(Movable):
@@ -971,7 +1060,7 @@ def full_distance(mut profile: Profile) -> Int:
     profile.build_planes()
     var frontier = Frontier(profile.columns, profile.words)
     var sweep = frontier.sweep(profile)
-    sweep.words(profile.extended, 0, profile.words, 0, profile.columns)
+    sweep.words(profile.symbols(0, profile.columns), 0, profile.words, 0, profile.columns)
 
     # The top-right corner is `columns`; walking down the right edge adds each vertical difference.
     return profile.columns + frontier.down_right_edge(profile.rows)
@@ -2267,8 +2356,8 @@ def pruned_distance[
     words the band reaches.
 
     With `record`, every tile's left edge goes into `trail` before the tile is swept, for the
-    traceback; without, the trail is untouched. With `extended`, matches take the third plane (see
-    `Profile.extended`). `seeded` says whether `heuristic` has seeds (see `SeedHeuristic.bound`).
+    traceback; without, the trail is untouched. Each tile matches on as many planes as its own symbols
+    need (see `Profile.symbols`). `seeded` says whether `heuristic` has seeds (see `SeedHeuristic.bound`).
 
     With `adapt`, the round re-aims its bound as it goes (see `Band.check`), and a distance is exact
     only within the bound it ends on.
@@ -2280,7 +2369,11 @@ def pruned_distance[
         if not band.prepare[record, seeded](tile, trail, heuristic):
             return band.outcome
         band.tile_sweep(tile).words(
-            profile.extended, band.top, band.end_word, band.first_column(tile), band.end_column(tile)
+            profile.symbols(band.first_column(tile), band.end_column(tile)),
+            band.top,
+            band.end_word,
+            band.first_column(tile),
+            band.end_column(tile),
         )
         if not band.finish[seeded](tile, heuristic):
             return band.outcome
@@ -4106,7 +4199,7 @@ def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int) -> Tuple
             score += word_value(frontier.vertical_plus[last] & through, frontier.vertical_minus[last] & through)
         var fast_end = min(end_word, last)
         if fast_end > 0:
-            sweep.words(profile.extended, 0, fast_end, first_column, end_column)
+            sweep.words(profile.symbols(first_column, end_column), 0, fast_end, first_column, end_column)
         if end_word == words:
             var vertical_plus = frontier.vertical_plus[last]
             var vertical_minus = frontier.vertical_minus[last]

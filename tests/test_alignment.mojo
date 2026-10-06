@@ -496,7 +496,7 @@ def test_bit_parallel_symbols_past_acgt() raises:
     """Bytes past `ACGT` are symbols of their own, each matching only itself, up to four of them.
 
     `N` alone and four extra symbols, short pairs and long ones whose band sweeps with seeds,
-    close and divergent, and pairs where only one side holds them; every distance is the global
+    close and divergent, and pairs where only one side holds them, either side; every distance is the global
     affine alignment's at unit costs over the same alphabet, which shares no code with the sweep,
     and every alignment rebuilds both inputs and rescores to the distance.
     """
@@ -509,7 +509,12 @@ def test_bit_parallel_symbols_past_acgt() raises:
                 var first = random_sequence(length, length, alphabet)
                 var second = mutate(first, rate)
                 var plain = random_sequence(length, length, DNA_ALPHABET)
-                var pairs: List[Tuple[String, String]] = [(first, second), (second, first), (first, plain)]
+                var pairs: List[Tuple[String, String]] = [
+                    (first, second),
+                    (second, first),
+                    (first, plain),
+                    (plain, first),
+                ]
                 # One long pair an alphabet: past `SEED_COLUMNS`, where bases alone would take seeds.
                 if length > SEED_COLUMNS:
                     if rate != 0.05:
@@ -760,7 +765,8 @@ def test_seeded_bands_fold_symbols_past_acgt() raises:
     """Long pairs with `N` among the bases take seeds, and keep the exact distance.
 
     A seed holding an `N` goes uncounted, and the second sequence's `N` read as a base, which only adds
-    matches: scattered `N`, a run of them in both sequences, and `N` on one side only, against bases.
+    matches: scattered `N`, a run of them in both sequences, and `N` on either side only, against bases,
+    so tiles sweep on two planes, on the rows' mask, or on the third plane in full.
     Every distance is the global wavefront's at unit costs over `ACGTN`, which shares no code with the
     band, and every alignment is rescored independently.
     """
@@ -784,6 +790,7 @@ def test_seeded_bands_fold_symbols_past_acgt() raises:
             (second, first),
             (first, sprinkle(second, 0.002, "N")),
             (first, mutate(bases, rate)),
+            (mutate(bases, rate), first),
         ]
         for pair in pairs:
             var expected = -Int(score[GLOBAL](pair[0], pair[1], unit))
