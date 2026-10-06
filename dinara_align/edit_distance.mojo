@@ -3544,7 +3544,7 @@ def edit_alignment(first: String, second: String) raises AlignmentError -> Align
             trace_diagonals(profile, near, close.distance, forward_moves)
             return gapped_rows(first, second, forward_moves, columns, rows, backward_moves, close.distance)
         # Diagonal transition from both ends, keeping every front, while it is cheaper than a band:
-        # where the fronts meet, the path is traced back to the start through the profile fronts
+        # where the fronts meet, the path is traced back to the start through the forward fronts
         # and on to the end through the backward ones.
         var first_back = reversed_codes(profile.column_codes, columns, FIRST_SENTINEL)
         var second_back = reversed_codes(profile.row_codes, rows, SECOND_SENTINEL)
