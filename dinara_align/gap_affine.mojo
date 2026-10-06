@@ -122,7 +122,7 @@ def padded(codes: List[UInt8], sentinel: UInt8) -> List[UInt8]:
     return out^
 
 
-@always_inline
+@inline(.always)
 def slide(first: ImmPointer[UInt8, _], second: ImmPointer[UInt8, _], start: Int, diagonal: Int) -> Int:
     """How far matches carry column `start` of `diagonal`, eight letters at a time, to the sentinels."""
     var column = start
@@ -219,7 +219,7 @@ struct Fronts(Movable):
         var new_size = new_last - new_first + 1
         var shift = first - new_first
 
-        @always_inline
+        @inline(.always)
         def moved(old: Front) {imm new_size, imm shift, imm size} -> Front:
             var wider = Front(capacity=new_size)
             wider.resize(unsafe_uninit_length=new_size)
@@ -233,14 +233,14 @@ struct Fronts(Movable):
             self.opened_second[slot] = moved(self.opened_second[slot])
         self.base = -new_first
 
-    @always_inline
+    @inline(.always)
     def clear(mut self, diagonal: Int):
         for slot in range(self.slots):
             self.aligned[slot][diagonal + self.base] = UNREACHED
             self.opened_first[slot][diagonal + self.base] = UNREACHED
             self.opened_second[slot][diagonal + self.base] = UNREACHED
 
-    @always_inline
+    @inline(.always)
     def unset(mut self, slot: Int, diagonal: Int):
         self.aligned[slot][diagonal + self.base] = UNREACHED
         self.opened_first[slot][diagonal + self.base] = UNREACHED
@@ -262,7 +262,7 @@ struct Fronts(Movable):
         self.highs[slot] = high
 
 
-@no_inline
+@inline(.never)
 def step(
     mismatched: Slot,
     opening: Slot,
@@ -352,7 +352,7 @@ def wavefront_score(
         cost += 1
         var slot = cost % slots
 
-        @always_inline
+        @inline(.always)
         def source(lag: Int) {imm cost, imm slots} -> Int:
             """The slot of the cost `lag` back, or -1 before the first."""
             return (cost - lag) % slots if cost >= lag else -1
@@ -386,7 +386,7 @@ def wavefront_score(
         var opening_slot = from_opening if from_opening >= 0 else (cost + slots - o - e) % slots
         var extension_slot = from_extension if from_extension >= 0 else (cost + slots - e) % slots
 
-        @always_inline
+        @inline(.always)
         def at(mut front: Front) {imm base} -> Slot:
             return front.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(base)
 
@@ -424,7 +424,7 @@ def wavefront_score(
         var first_gaps = at(fronts.opened_first[slot])
         var second_gaps = at(fronts.opened_second[slot])
 
-        @always_inline
+        @inline(.always)
         def dead(diagonal: Int) {imm front, imm first_gaps, imm second_gaps} -> Bool:
             return (
                 front[unsafe_offset=diagonal] < 0

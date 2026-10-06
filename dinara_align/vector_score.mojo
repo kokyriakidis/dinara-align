@@ -47,7 +47,7 @@ def vector_score[
     var open = gaps.open
     var extend = gaps.extend
 
-    @always_inline
+    @inline(.always)
     def border(length: Int) {imm open, imm extend} -> Int32:
         """The score of a gap run of `length` along the global border; the local border is zero."""
         comptime if mode == AlignmentMode.LOCAL:
@@ -165,7 +165,7 @@ def vector_align[
     var low_band = max(low_diagonal, -rows)
     var high_band = min(high_diagonal, columns)
 
-    @always_inline
+    @inline(.always)
     def border(length: Int) {imm open, imm extend} -> Int32:
         comptime if mode == AlignmentMode.LOCAL:
             return 0
@@ -200,7 +200,7 @@ def vector_align[
     var delete_cells = deletes.unsafe_ptr()
     var insert_cells = inserts.unsafe_ptr()
 
-    @always_inline
+    @inline(.always)
     def unreachable(index: Int) {imm score_cells, imm delete_cells, imm insert_cells}:
         score_cells[unsafe_offset=index] = UNREACHABLE
         delete_cells[unsafe_offset=index] = UNREACHABLE
@@ -210,9 +210,9 @@ def vector_align[
     for index in range(BAND_PADDING):
         unreachable(index)
         unreachable(BAND_PADDING + 1 + index)
-    score_cells[BAND_PADDING] = 0
-    delete_cells[BAND_PADDING] = 0
-    insert_cells[BAND_PADDING] = 0
+    score_cells[unsafe_offset=BAND_PADDING] = 0
+    delete_cells[unsafe_offset=BAND_PADDING] = 0
+    insert_cells[unsafe_offset=BAND_PADDING] = 0
     var opening = Lanes(open)
     var extension = Lanes(extend)
     var matched = Lanes(Int32(reward))
@@ -274,13 +274,13 @@ def vector_align[
             row += WIDTH
         # The border cells inside the band, then the padding after it, which the lanes may have run over.
         if first_row == 0:
-            score_cells[here] = border(diagonal)
-            delete_cells[here] = score_cells[here] + open + extend
-            insert_cells[here] = 0
+            score_cells[unsafe_offset=here] = border(diagonal)
+            delete_cells[unsafe_offset=here] = score_cells[unsafe_offset=here] + open + extend
+            insert_cells[unsafe_offset=here] = 0
         if last_row == diagonal:
-            score_cells[here + diagonal] = border(diagonal)
-            delete_cells[here + diagonal] = 0
-            insert_cells[here + diagonal] = score_cells[here + diagonal] + open + extend
+            score_cells[unsafe_offset=here + diagonal] = border(diagonal)
+            delete_cells[unsafe_offset=here + diagonal] = 0
+            insert_cells[unsafe_offset=here + diagonal] = score_cells[unsafe_offset=here + diagonal] + open + extend
         for index in range(BAND_PADDING):
             unreachable(here + last_row + 1 + index)
 

@@ -22,7 +22,7 @@ For score-only work at much higher throughput, see `ashvardanian/StringZilla`, w
 traceback, which is what this module exists to provide.
 """
 
-from std.math import ceildiv
+from std.math import ceildiv, clamp
 from std.memory import stack_allocation
 from std.memory.pointer import AddressSpace
 from std.sys.info import size_of
@@ -218,7 +218,7 @@ struct AlignmentMode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable):
     """Smith-Waterman: the score is clamped at zero and the best cell wins."""
 
 
-@always_inline
+@inline(.always)
 def beats(score: Int32, place: Int64, best: Int32, best_place: Int64) -> Bool:
     """Whether a candidate displaces the incumbent under the local tie rule.
 
@@ -229,7 +229,7 @@ def beats(score: Int32, place: Int64, best: Int32, best_place: Int64) -> Bool:
     return score > best or (score == best and score != 0 and place < best_place)
 
 
-@always_inline
+@inline(.always)
 def gotoh_cell[
     mode: AlignmentMode
 ](
@@ -254,7 +254,7 @@ def gotoh_cell[
     return Cell(score, deletion, insertion)
 
 
-@always_inline
+@inline(.always)
 def source_layer(cell: Cell, replacement: Int32) -> Layer:
     """Which layer the score came from; ties resolve to aligning, then deleting."""
     if cell.score == replacement:
@@ -277,29 +277,29 @@ struct CellDecision(ImplicitlyCopyable, TrivialRegisterPassable):
     """Two bits for the source layer and one for each gap run's state."""
 
     @staticmethod
-    @always_inline
+    @inline(.always)
     def recording(source: Layer, deletion: GapRun, insertion: GapRun, reach: PathReach) -> Self:
         return Self(
             source.identifier | (deletion.identifier << 2) | (insertion.identifier << 3) | (reach.identifier << 7)
         )
 
-    @always_inline
+    @inline(.always)
     def source(self) -> Layer:
         return Layer(self.bits & 0x03)
 
-    @always_inline
+    @inline(.always)
     def deletion(self) -> GapRun:
         return GapRun((self.bits >> 2) & 0x01)
 
-    @always_inline
+    @inline(.always)
     def insertion(self) -> GapRun:
         return GapRun((self.bits >> 3) & 0x01)
 
-    @always_inline
+    @inline(.always)
     def reach(self) -> PathReach:
         return PathReach(self.bits >> 7)
 
-    @always_inline
+    @inline(.always)
     def nibble(self) -> UInt32:
         """The four bits `advance` reads, with a clamped local cell folded into a spare code.
 
@@ -311,7 +311,7 @@ struct CellDecision(ImplicitlyCopyable, TrivialRegisterPassable):
         return (code | 0x03) if self.reach() == PathReach.ENDS_HERE else code
 
     @staticmethod
-    @always_inline
+    @inline(.always)
     def unpacking(code: UInt32) -> Self:
         """Inverse of `nibble`, restoring the flag from the spare source code."""
         var bits = UInt8(code & 0x0F)
@@ -320,7 +320,7 @@ struct CellDecision(ImplicitlyCopyable, TrivialRegisterPassable):
         return Self(bits)
 
 
-@always_inline
+@inline(.always)
 def decide[
     mode: AlignmentMode
 ](cell: Cell, replacement: Int32, above: Cell, left: Cell, scoring: AffineGapCosts) -> CellDecision:
@@ -333,7 +333,7 @@ def decide[
     return CellDecision.recording(source_layer(cell, replacement), deletion_run, insertion_run, reach)
 
 
-@always_inline
+@inline(.always)
 def advance(state: Layer, decision: CellDecision) -> Move:
     """The traceback's transition function, shared by every walk in this file.
 
@@ -533,7 +533,7 @@ struct RowMajor(CellLayout, TrivialRegisterPassable):
 
     var stride: Int
 
-    @always_inline
+    @inline(.always)
     def index(self, row: Int, column: Int) -> Int:
         return row * self.stride + column
 
@@ -551,10 +551,10 @@ struct AntiDiagonalMajor(CellLayout, TrivialRegisterPassable):
     var starts: MutPointer[Int, MutUntrackedOrigin]
     var lows: MutPointer[Int, MutUntrackedOrigin]
 
-    @always_inline
+    @inline(.always)
     def index(self, row: Int, column: Int) -> Int:
         var diagonal = row + column
-        return self.starts[diagonal] + BAND_PADDING + row - self.lows[diagonal]
+        return self.starts[unsafe_offset=diagonal] + BAND_PADDING + row - self.lows[unsafe_offset=diagonal]
 
 
 def reconstruct[
@@ -806,11 +806,11 @@ def vector_sweep_bands[
         var column = columns - index
         others[index] = UInt8(second[second_to - column] if reversed_order else second[second_from + column - 1])
 
-    @always_inline
+    @inline(.always)
     def top_score(column: Int) {imm open, imm extend} -> Int32:
         return 0 if column == 0 else open + Int32(column - 1) * extend
 
-    @always_inline
+    @inline(.always)
     def left_score(row: Int) {imm open, imm extend, imm entering_run} -> Int32:
         if entering_run == GapRun.EXTENDS:
             return Int32(row) * extend
@@ -1339,7 +1339,7 @@ def serial_local_extremum[
 # region GPU Wavefront
 
 
-@always_inline
+@inline(.always)
 def block_argmax(
     scores: Pointer[Scalar[ScoreDType], MutUntrackedOrigin, address_space=AddressSpace.SHARED],
     places: Pointer[Scalar[DType.int64], MutUntrackedOrigin, address_space=AddressSpace.SHARED],
@@ -1523,7 +1523,7 @@ def strip_pair_kernel[
 
     for strip in range(strips):
         var first_column = strip * STRIP_WIDTH + lane * STRIP_COLUMNS
-        var owned = min(max(columns - first_column, 0), STRIP_COLUMNS)
+        var owned = clamp(columns - first_column, 0, STRIP_COLUMNS)
 
         var symbols = Array[Int32, STRIP_COLUMNS](fill=0)
         comptime for column_slot in range(STRIP_COLUMNS):
@@ -1552,7 +1552,7 @@ def strip_pair_kernel[
             var left_score = shuffle_up(edge_score, 1)
             var left_insertion = shuffle_up(edge_insertion, 1)
             if lane == 0:
-                var here = min(max(row, 0), rows)
+                var here = clamp(row, 0, rows)
                 left_score = carry_scores[unsafe_offset=here]
                 left_insertion = carry_insertions[unsafe_offset=here]
             var above_left_score = above_left_carry
@@ -2093,7 +2093,7 @@ def tiled_sweep_kernel[
     var scoring = AffineGapCosts(open, extend)
     var lane = Int(lane_id())
     var first_column = lane * STRIP_COLUMNS
-    var owned = min(max(width_span - first_column, 0), STRIP_COLUMNS)
+    var owned = clamp(width_span - first_column, 0, STRIP_COLUMNS)
     var top_scores = reverse_scores if reversed_order else forward_scores
     var top_deletes = reverse_deletes if reversed_order else forward_deletes
 
@@ -2430,7 +2430,7 @@ struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
         var want = max(target_tiles // max(sweeps_in_level, 1), 1)
         var enough = min(want, wide)
         var fair = ceildiv(self.rows, enough)
-        return min(max(fair, MIN_TILE_HEIGHT), TILE_SIDE)
+        return clamp(fair, MIN_TILE_HEIGHT, TILE_SIDE)
 
     def tile_rows(self, sweeps_in_level: Int, target_tiles: Int) -> Int:
         var height = self.tile_height(sweeps_in_level, target_tiles)
