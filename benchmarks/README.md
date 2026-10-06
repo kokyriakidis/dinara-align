@@ -271,31 +271,31 @@ From `pixi run bench-astarpa2` on the same machine, over its samples of each dat
 | dataset | dinara-align | A\*PA2-full | A\*PA2-simple | A\*PA | Edlib | BiWFA | WFA |
 | :-- | --: | --: | --: | --: | --: | --: | --: |
 | ***Real datasets*** |  |  |  |  |  |  |  |
-| ont-1k | 0.4 MB (17 MB) | 0.3 MB (5 MB) | 0.3 MB (5 MB) | 0.2 MB (6 MB) | 0.5 MB (7 MB) | **0.1 MB** (7 MB) | 0.5 MB (8 MB) |
-| ont-10k | 0.6 MB (18 MB) | 0.7 MB (6 MB) | **0.4 MB** (6 MB) | 20 MB (39 MB) | 0.5 MB (8 MB) | 0.9 MB (8 MB) | 6.1 MB (38 MB) |
-| ont-50k | **0.6 MB** (19 MB) | 1.2 MB (8 MB) | **0.6 MB** (7 MB) | 83 MB (144 MB) † | 0.8 MB (8 MB) | 1.6 MB (9 MB) | 71 MB (187 MB) |
-| ont-500k | **32 MB** (62 MB) | 81 MB (89 MB) | 82 MB (90 MB) † | — | — | — | — |
-| ont-500k-genvar | **28 MB** (68 MB) | 49 MB (57 MB) | 32 MB (55 MB) | — | 4.6 MB (?) † | — | — |
-| sars-cov-2 | **0.6 MB** (18 MB) | 1.9 MB (7 MB) | 0.7 MB (6 MB) | 13 MB (19 MB) | 1.2 MB (8 MB) | 1.5 MB (9 MB) | 15 MB (26 MB) |
+| ont-1k | 0.4 MB (13 MB) | 0.3 MB (5 MB) | 0.3 MB (5 MB) | 0.2 MB (6 MB) | 0.5 MB (7 MB) | **0.1 MB** (7 MB) | 0.5 MB (8 MB) |
+| ont-10k | 1.0 MB (15 MB) | 0.7 MB (6 MB) | **0.4 MB** (6 MB) | 20 MB (39 MB) | 0.5 MB (8 MB) | 0.9 MB (8 MB) | 6.1 MB (38 MB) |
+| ont-50k | 1.9 MB (18 MB) | 1.2 MB (8 MB) | **0.6 MB** (7 MB) | 83 MB (144 MB) † | 0.8 MB (8 MB) | 1.6 MB (9 MB) | 71 MB (187 MB) |
+| ont-500k | **48 MB** (64 MB) | 81 MB (89 MB) | 82 MB (90 MB) † | — | — | — | — |
+| ont-500k-genvar | 41 MB (68 MB) | 49 MB (57 MB) | **32 MB** (55 MB) | — | 4.6 MB (?) † | — | — |
+| sars-cov-2 | 1.2 MB (17 MB) | 1.9 MB (7 MB) | **0.7 MB** (6 MB) | 13 MB (19 MB) | 1.2 MB (8 MB) | 1.5 MB (9 MB) | 15 MB (26 MB) |
 | ***Uniform pairs, 5% divergence*** |  |  |  |  |  |  |  |
-| 3 kbp, 5% | **0.1 MB** (17 MB) | 0.4 MB (5 MB) | 0.3 MB (5 MB) | **0.1 MB** (5 MB) | 0.8 MB (7 MB) | 0.4 MB (7 MB) | 0.6 MB (7 MB) |
-| 10 kbp, 5% | 0.6 MB (17 MB) | 0.6 MB (6 MB) | **0.4 MB** (5 MB) | 0.5 MB (5 MB) | 0.7 MB (7 MB) | 1.3 MB (8 MB) | 2.0 MB (9 MB) |
-| 30 kbp, 5% | 0.8 MB (17 MB) | 1.8 MB (7 MB) | 0.8 MB (6 MB) | 1.2 MB (6 MB) | **0.6 MB** (7 MB) | 1.4 MB (8 MB) | 7.8 MB (42 MB) |
-| 100 kbp, 5% | 1.8 MB (18 MB) | 5.5 MB (11 MB) | 2.5 MB (8 MB) | 4.3 MB (9 MB) | **1.4 MB** (8 MB) | 3.0 MB (10 MB) | 74 MB (100 MB) |
-| 300 kbp, 5% | 4.6 MB (26 MB) | 16 MB (21 MB) | 8.1 MB (13 MB) | 13 MB (20 MB) | **2.4 MB** (9 MB) | 7.8 MB (17 MB) | 648 MB (673 MB) |
-| 1 Mbp, 5% | **17 MB** (59 MB) | 53 MB (65 MB) | 58 MB (69 MB) † | 42 MB (63 MB) | — | — | — |
+| 3 kbp, 5% | 0.4 MB (13 MB) | 0.4 MB (5 MB) | 0.3 MB (5 MB) | **0.1 MB** (5 MB) | 0.8 MB (7 MB) | 0.4 MB (7 MB) | 0.6 MB (7 MB) |
+| 10 kbp, 5% | 1.5 MB (14 MB) | 0.6 MB (6 MB) | **0.4 MB** (5 MB) | 0.5 MB (5 MB) | 0.7 MB (7 MB) | 1.3 MB (8 MB) | 2.0 MB (9 MB) |
+| 30 kbp, 5% | 0.9 MB (14 MB) | 1.8 MB (7 MB) | 0.8 MB (6 MB) | 1.2 MB (6 MB) | **0.6 MB** (7 MB) | 1.4 MB (8 MB) | 7.8 MB (42 MB) |
+| 100 kbp, 5% | 3.3 MB (16 MB) | 5.5 MB (11 MB) | 2.5 MB (8 MB) | 4.3 MB (9 MB) | **1.4 MB** (8 MB) | 3.0 MB (10 MB) | 74 MB (100 MB) |
+| 300 kbp, 5% | 11 MB (26 MB) | 16 MB (21 MB) | 8.1 MB (13 MB) | 13 MB (20 MB) | **2.4 MB** (9 MB) | 7.8 MB (17 MB) | 648 MB (673 MB) |
+| 1 Mbp, 5% | **30 MB** (56 MB) | 53 MB (65 MB) | 58 MB (69 MB) † | 42 MB (63 MB) | — | — | — |
 | ***Uniform pairs, 15% divergence*** |  |  |  |  |  |  |  |
-| 3 kbp, 15% | **0.1 MB** (16 MB) | 0.4 MB (5 MB) | 0.3 MB (5 MB) | 0.6 MB (6 MB) | 0.8 MB (7 MB) | 0.9 MB (7 MB) | 1.5 MB (8 MB) |
-| 10 kbp, 15% | **0.1 MB** (17 MB) | 0.8 MB (6 MB) | 0.4 MB (6 MB) | 2.2 MB (7 MB) | 0.7 MB (7 MB) | 0.9 MB (7 MB) | 6.4 MB (38 MB) |
-| 30 kbp, 15% | **0.5 MB** (17 MB) | 1.8 MB (7 MB) | 0.9 MB (6 MB) | 4.6 MB (10 MB) | 0.9 MB (7 MB) | 2.1 MB (9 MB) | 48 MB (78 MB) |
-| 100 kbp, 15% | **1.4 MB** (18 MB) | 5.8 MB (10 MB) | 3.0 MB (8 MB) | 18 MB (24 MB) | **1.4 MB** (8 MB) | 3.8 MB (11 MB) | 511 MB (551 MB) |
-| 300 kbp, 15% | **6.2 MB** (28 MB) | 21 MB (27 MB) | 19 MB (25 MB) | 38 MB (50 MB) | 2.2 MB (?) † | 8.9 MB (?) † | 4.5 GB (?) † |
-| 1 Mbp, 15% | **38 MB** (76 MB) | 133 MB (145 MB) † | 86 MB (97 MB) † | 149 MB (?) † | — | — | — |
+| 3 kbp, 15% | 0.4 MB (13 MB) | 0.4 MB (5 MB) | **0.3 MB** (5 MB) | 0.6 MB (6 MB) | 0.8 MB (7 MB) | 0.9 MB (7 MB) | 1.5 MB (8 MB) |
+| 10 kbp, 15% | 0.5 MB (13 MB) | 0.8 MB (6 MB) | **0.4 MB** (6 MB) | 2.2 MB (7 MB) | 0.7 MB (7 MB) | 0.9 MB (7 MB) | 6.4 MB (38 MB) |
+| 30 kbp, 15% | 1.1 MB (14 MB) | 1.8 MB (7 MB) | **0.9 MB** (6 MB) | 4.6 MB (10 MB) | **0.9 MB** (7 MB) | 2.1 MB (9 MB) | 48 MB (78 MB) |
+| 100 kbp, 15% | 3.6 MB (17 MB) | 5.8 MB (10 MB) | 3.0 MB (8 MB) | 18 MB (24 MB) | **1.4 MB** (8 MB) | 3.8 MB (11 MB) | 511 MB (551 MB) |
+| 300 kbp, 15% | **13 MB** (29 MB) | 21 MB (27 MB) | 19 MB (25 MB) | 38 MB (50 MB) | 2.2 MB (?) † | 8.9 MB (?) † | 4.5 GB (?) † |
+| 1 Mbp, 15% | **52 MB** (81 MB) | 133 MB (145 MB) † | 86 MB (97 MB) † | 149 MB (?) † | — | — | — |
 | *runtime alone (one 8 bp pair)* | *10 MB* | *3 MB* | *3 MB* | *3 MB* | *5 MB* | *5 MB* | *5 MB* |
 
-- **The memory an alignment adds is what compares aligners**: each runner reads `getrusage` before and after each pair, outside its timer, so the runtime and the sample read in count for nothing. The whole peak counts them, about 16 MB for dinara-align's runner, the Mojo runtime's 10 MB (a Mojo program printing one line peaks at 9.3 MB) and its sample, against 3 to 5 MB for the Rust ones, so on short pairs the brackets show runtimes, not aligners.
-- **On pairs up to 30 kbp every aligner adds under 2 MB**, but WFA, keeping every front, and A\*PA; at 100 kbp dinara-align and Edlib add the least, 1.4 to 1.8 MB, against A\*PA2's 2.5 to 5.8.
-- **On the long reads dinara-align adds the least**: 32 MB on ont-500k against A\*PA2's 81 and 82, 28 MB on ont-500k-genvar against 32 and 49; on 1 Mbp pairs 17 MB at 5% against 42 to 58, and 38 MB at 15% against 86 to 149, A\*PA2's on the two pairs they finished. A\*PA2 reports the same shape on whole datasets: on reads over 500 kbp A\*PA2-full adds 30 MB in median and 82 at most.
+- **The memory an alignment adds is what compares aligners**: each runner reads `getrusage` before and after each pair, outside its timer, so the runtime and the sample read in count for nothing. The whole peak counts them, 13 to 15 MB for dinara-align's runner on short pairs, most of it the Mojo runtime's 10 MB (a Mojo program printing one line peaks at 9.3 MB), against 5 to 8 MB for the Rust ones, so there the brackets show runtimes, not aligners. Each runner reads its sample in one call of the file's size; read through a growing buffer instead, the memory it left behind went to the alignments unseen, and dinara-align's growth on ont-500k measured 32 MB rather than 48.
+- **On pairs up to 30 kbp every aligner adds about 2 MB at most**, but WFA, keeping every front, and A\*PA; at 100 kbp Edlib adds the least, 1.4 MB, dinara-align 3.3 to 3.6 and A\*PA2 2.5 to 5.8.
+- **On the long reads dinara-align adds the least but on ont-500k-genvar**: 48 MB on ont-500k against A\*PA2's 81 and 82, and on 1 Mbp pairs 30 MB at 5% against 42 to 58 and 52 MB at 15% against 86 to 149, A\*PA2's on the two pairs they finished; on ont-500k-genvar 41 MB, between A\*PA2-simple's 32 and A\*PA2-full's 49. A\*PA2 reports the same shape on whole datasets: on reads over 500 kbp A\*PA2-full adds 30 MB in median and 82 at most.
 - **WFA's grows with the square of the distance**, 511 MB at 100 kbp and 4.5 GB at 300 kbp at 15%, where its memory cap stops it.
 
 ### Beyond one thread
