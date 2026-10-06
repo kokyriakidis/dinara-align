@@ -44,6 +44,7 @@ from std.bit import byte_swap, count_leading_zeros, count_trailing_zeros, pop_co
 from std.math import ceildiv, sqrt
 from std.sys import inlined_assembly, simd_width_of
 from std.sys.info import CompilationTarget
+from std.sys.intrinsics import PrefetchOptions, prefetch
 from std.time import perf_counter_ns
 
 from max.algorithm import parallelize
@@ -1032,6 +1033,14 @@ comptime HALF_BITS = INEXACT_LENGTH
 """Bits in half an inexact seed's two-bit code: a one-edit match matches one half exactly, so each half
 indexes a table of this many bits."""
 
+comptime ENTRY_BITS = 32
+"""Bits below an inexact seed's index in its half tables' entries, its two-bit code there: one load
+gives a lookup both."""
+
+comptime SCAN_BATCH = 16
+"""Rows whose half tables' buckets are looked up together before any is searched (see
+`inexact_scan`): enough misses in flight at once to hide most of their wait."""
+
 comptime SEED_EDITS = 1500
 """Projected edits from which a band prunes with the seed heuristic. Its setup costs about ten
 nanoseconds a column; what it saves grows with the distance, the band otherwise sweeping rows in
@@ -1070,6 +1079,91 @@ comptime LOOKAHEAD_SEEDS = 14
 
 comptime LAYER_SLOTS = 8
 """Starts a layer holds in place before the rest spill into a chain of its own."""
+
+
+@always_inline
+def differing(first: UInt64, second: UInt64) -> UInt64:
+    """The bases two two-bit codes disagree on, each as the low bit of its pair."""
+    var mismatched = first ^ second
+    return (mismatched | (mismatched >> 1)) & UInt64(0x5555555555555555)
+
+
+@always_inline
+def covers(prefix: UInt64, suffix: UInt64) -> Bool:
+    """Whether the leading bases one comparison agrees on and the trailing bases another agrees on,
+    both of the same bases, cover all of them between them.
+
+    The leading run reaches past the trailing run's start when every base the first comparison
+    differs on lies below the lowest the second differs on, an unsigned comparison of the first's
+    differing bits against the second's lowest, with no count of leading or trailing zeros.
+    """
+    return suffix == 0 or prefix < (suffix & (0 - suffix))
+
+
+@always_inline
+def ends_within_one_edit(shorter: UInt64, level: UInt64, longer: UInt64, code: UInt64) -> Bool:
+    """`within_one_edit` for the windows ending a seed's length on from `level`'s start, which start
+    at `shorter`, `level` and `longer`, less any whose left half matches the seed's too: that one is
+    the left half's lookup's to take."""
+    var left = code >> UInt64(HALF_BITS)
+    return within_one_edit(
+        shorter >> 2,
+        level,
+        longer,
+        level,
+        code,
+        left != shorter >> UInt64(HALF_BITS),
+        left != level >> UInt64(HALF_BITS),
+        left != longer >> UInt64(HALF_BITS),
+    )
+
+
+@always_inline
+def first_reachable(entries: ImmPointer[UInt64, _], start: Int, end: Int, seed: Int) -> Int:
+    """The first of a bucket's entries, `[start, end)` in seed order, of `seed` or a later seed: a
+    step at a time in a small bucket, by bisection in a large one, a repeat's."""
+    comptime LINEAR = 8
+    var low = start
+    var high = end
+    while high - low > LINEAR:
+        var middle = (low + high) // 2
+        if Int(entries[unsafe_offset=middle] >> UInt64(ENTRY_BITS)) < seed:
+            low = middle + 1
+        else:
+            high = middle
+    while low < high and Int(entries[unsafe_offset=low] >> UInt64(ENTRY_BITS)) < seed:
+        low += 1
+    return low
+
+
+@always_inline
+def within_one_edit(
+    shorter: UInt64,
+    level: UInt64,
+    head: UInt64,
+    tail: UInt64,
+    code: UInt64,
+    shorter_open: Bool = True,
+    level_open: Bool = True,
+    longer_open: Bool = True,
+) -> Bool:
+    """Whether a seed's code is within one edit of any of three windows `try_windows` would keep:
+    `shorter`, one base shorter than the seed, `level`, as long, or the window one longer, whose
+    first and last `INEXACT_LENGTH` bases are `head` and `tail`, each only while open.
+
+    The three tests folded together, with no branch to mispredict: an equal-length window within
+    one substitution differs on at most one base, a shorter one is the seed less a base when the
+    seed's first and last bases but one cover it between them, and a longer one the seed plus a base
+    when its first and last `INEXACT_LENGTH` bases cover the seed. An exact match leaves out the
+    shorter and longer windows, as `try_windows` does.
+    """
+    comptime K = INEXACT_LENGTH
+    comptime SHORTER = (UInt64(1) << UInt64(2 * K - 2)) - 1
+    var whole = differing(level, code)
+    var substituted = (whole & (whole - 1)) == 0
+    var deleted = covers(differing(shorter, code >> 2), differing(shorter, code & SHORTER))
+    var inserted = covers(differing(head, code), differing(tail, code))
+    return (substituted & level_open) | (((deleted & shorter_open) | (inserted & longer_open)) & (whole != 0))
 
 
 struct SeedHeuristic(Movable):
@@ -1225,7 +1319,6 @@ struct SeedHeuristic(Movable):
         # kept after it.
         var leftmost = List[Int32](length=self.columns + self.rows + 1, fill=Int32.MAX)
         var fronts = List[Int](length=4 * self.cost * LOOKAHEAD_SEEDS + 3, fill=0)
-        var spare = List[Int](length=4 * self.cost * LOOKAHEAD_SEEDS + 3, fill=0)
         for seed in range(self.seeds - 1, -1, -1):
             var column = seed * self.length
             var potential = self.potential(column)
@@ -1235,7 +1328,7 @@ struct SeedHeuristic(Movable):
                 var end_row = Int(ends_by_seed[slot]) if inexact else start_row + SEED_LENGTH
                 var match_cost = Int(costs_by_seed[slot]) if inexact else 0
                 if lookahead > 0 and not self.worth_keeping(
-                    first, second, seed, start_row, end_row, match_cost, lookahead, leftmost, fronts, spare
+                    first, second, seed, start_row, end_row, match_cost, lookahead, leftmost, fronts
                 ):
                     continue
                 leftmost[column - start_row + self.rows] = Int32(column)
@@ -1371,14 +1464,16 @@ struct SeedHeuristic(Movable):
         looked up as either half: a left half found at a row tries the windows starting there, one
         base shorter, as long, or one longer than the seed; a right half found tries those ending
         where it ends. A window both halves find is taken from the left half alone.
+
+        Within a bucket the seeds go in order, and only a range of them can be found at any row with
+        their chain reaching the end (see `reachable_seeds`), so each lookup tries that range alone.
         """
         comptime HALF = INEXACT_LENGTH // 2
         comptime HALF_MASK = (1 << HALF_BITS) - 1
         comptime BUCKETS = 1 << HALF_BITS
-        # The quarters below are a code's top, second, third and bottom bytes.
-        comptime assert INEXACT_LENGTH == 16, "an inexact seed's quarters are its code's bytes"
         var codes = List[UInt64](length=self.seeds, fill=0)
-        # Each half's seeds bucketed by its code, contiguous, the codes beside them.
+        # Each half's seeds bucketed by its code, contiguous, in order, each with its code below it in
+        # one word (see `ENTRY_BITS`).
         var left_start = List[Int32](length=BUCKETS + 1, fill=0)
         var right_start = List[Int32](length=BUCKETS + 1, fill=0)
         for seed in range(self.seeds):
@@ -1391,54 +1486,40 @@ struct SeedHeuristic(Movable):
         for bucket in range(BUCKETS):
             left_start[bucket + 1] += left_start[bucket]
             right_start[bucket + 1] += right_start[bucket]
-        var left_seeds = List[Int32](length=self.seeds, fill=0)
-        var left_codes = List[UInt64](length=self.seeds, fill=0)
-        var right_seeds = List[Int32](length=self.seeds, fill=0)
-        var right_codes = List[UInt64](length=self.seeds, fill=0)
+        var left_entries = List[UInt64](length=self.seeds, fill=0)
+        var right_entries = List[UInt64](length=self.seeds, fill=0)
         var left_fill = left_start.copy()
         var right_fill = right_start.copy()
         for seed in range(self.seeds):
             var code = codes[seed]
-            var left = Int(left_fill[Int(code >> UInt64(HALF_BITS))])
-            left_seeds[left] = Int32(seed)
-            left_codes[left] = code
+            var entry = (UInt64(seed) << UInt64(ENTRY_BITS)) | code
+            left_entries[Int(left_fill[Int(code >> UInt64(HALF_BITS))])] = entry
             left_fill[Int(code >> UInt64(HALF_BITS))] += 1
-            var right = Int(right_fill[Int(code) & HALF_MASK])
-            right_seeds[right] = Int32(seed)
-            right_codes[right] = code
+            right_entries[Int(right_fill[Int(code) & HALF_MASK])] = entry
             right_fill[Int(code) & HALF_MASK] += 1
 
         # Every window of `INEXACT_LENGTH` bases of the second sequence as one code, the first base in
-        # the high bits, and its first four bases alone; past the end, the bases read as zero, and no
-        # window reaching there is tried.
+        # the high bits; past the end, the bases read as zero, and no window reaching there is tried.
         var windows = List[UInt64](length=self.rows + 1, fill=0)
-        var quarters = List[UInt8](length=self.rows + 1, fill=0)
         var rolling = UInt64(0)
         for row in range(self.rows + INEXACT_LENGTH - 1, -1, -1):
             var base = UInt64(second[unsafe_offset=row]) if row < self.rows else UInt64(0)
             rolling = (rolling >> 2) | (base << UInt64(2 * INEXACT_LENGTH - 2))
             if row <= self.rows:
                 windows[row] = rolling
-                quarters[row] = UInt8(rolling >> UInt64(2 * INEXACT_LENGTH - 8))
         var window = windows.unsafe_ptr()
-        var quarter = quarters.unsafe_ptr()
         var left_from = left_start.unsafe_ptr()
         var right_from = right_start.unsafe_ptr()
-        var left_seed = left_seeds.unsafe_ptr()
-        var right_seed = right_seeds.unsafe_ptr()
-        var left_code = left_codes.unsafe_ptr()
-        var right_code = right_codes.unsafe_ptr()
+        var left_entry = left_entries.unsafe_ptr()
+        var right_entry = right_entries.unsafe_ptr()
         var rows = self.rows - HALF + 1
         if threads <= 1:
             self.inexact_scan(
                 left_from,
                 right_from,
-                left_seed,
-                right_seed,
-                left_code,
-                right_code,
+                left_entry,
+                right_entry,
                 window,
-                quarter,
                 0,
                 rows,
                 found_seed,
@@ -1458,12 +1539,9 @@ struct SeedHeuristic(Movable):
             imm self,
             imm left_from,
             imm right_from,
-            imm left_seed,
-            imm right_seed,
-            imm left_code,
-            imm right_code,
+            imm left_entry,
+            imm right_entry,
             imm window,
-            imm quarter,
             imm rows,
             imm threads,
             mut seeds_found,
@@ -1474,12 +1552,9 @@ struct SeedHeuristic(Movable):
             self.inexact_scan(
                 left_from,
                 right_from,
-                left_seed,
-                right_seed,
-                left_code,
-                right_code,
+                left_entry,
+                right_entry,
                 window,
-                quarter,
                 rows * part // threads,
                 rows * (part + 1) // threads,
                 seeds_found[part],
@@ -1503,12 +1578,9 @@ struct SeedHeuristic(Movable):
         self,
         left_start: ImmPointer[Int32, _],
         right_start: ImmPointer[Int32, _],
-        left_seeds: ImmPointer[Int32, _],
-        right_seeds: ImmPointer[Int32, _],
-        left_codes: ImmPointer[UInt64, _],
-        right_codes: ImmPointer[UInt64, _],
+        left_entries: ImmPointer[UInt64, _],
+        right_entries: ImmPointer[UInt64, _],
         window: ImmPointer[UInt64, _],
-        quarter: ImmPointer[UInt8, _],
         first_row: Int,
         end_row: Int,
         mut found_seed: List[Int32],
@@ -1517,62 +1589,67 @@ struct SeedHeuristic(Movable):
         mut found_cost: List[Int32],
     ):
         """The inexact matches found from rows `[first_row, end_row)`, the half tables (each half's
-        bucket bounds, seeds and codes) and the windows read only."""
+        bucket bounds and entries) and the windows read only.
+
+        Every seed a half finds is tested against the three windows it could match without a branch
+        (see `within_one_edit`), most failing all three, and only one that passes is tried in full.
+
+        The tables are larger than a core's own cache on some machines, and every lookup goes from
+        a bucket's bounds to its entries, each load a miss waiting on the last. So the rows go in
+        batches of `SCAN_BATCH`: first every row's bounds, the loads independent and overlapping,
+        their entries fetched ahead, and then the tests, the entries on their way or arrived.
+        """
         comptime HALF = INEXACT_LENGTH // 2
-        var last = self.rows
-        for row in range(first_row, end_row):
-            # A left half found here leaves the right half within one edit of the bases after it: the
-            # seed's third quarter matches at `row + 8`, or its last quarter at `row + 11`, `row + 12`
-            # or `row + 13`, as the edit falls after or before the last quarter. A right half ending
-            # at `end` likewise puts the second quarter at `end - 12` or the first at `end - 15`,
-            # `end - 16` or `end - 17`. Most chance lookups miss all four.
-            var half = Int(window[unsafe_offset=row] >> UInt64(HALF_BITS))
-            var third = quarter[unsafe_offset=min(row + 8, last)]
-            var at_11 = quarter[unsafe_offset=min(row + 11, last)]
-            var at_12 = quarter[unsafe_offset=min(row + 12, last)]
-            var at_13 = quarter[unsafe_offset=min(row + 13, last)]
-            for slot in range(Int(left_start[unsafe_offset=half]), Int(left_start[unsafe_offset=half + 1])):
-                var code = left_codes[unsafe_offset=slot]
-                var fourth = UInt8(code & 0xFF)
-                if UInt8((code >> 8) & 0xFF) != third and fourth != at_11 and fourth != at_12 and fourth != at_13:
-                    continue
-                self.try_windows(
-                    code,
-                    Int(left_seeds[unsafe_offset=slot]),
-                    row,
-                    -1,
-                    window,
-                    found_seed,
-                    found_row,
-                    found_end,
-                    found_cost,
-                )
-            var end = row + HALF
-            var second_at = quarter[unsafe_offset=max(end - 12, 0)]
-            var at_15 = quarter[unsafe_offset=max(end - 15, 0)]
-            var at_16 = quarter[unsafe_offset=max(end - 16, 0)]
-            var at_17 = quarter[unsafe_offset=max(end - 17, 0)]
-            for slot in range(Int(right_start[unsafe_offset=half]), Int(right_start[unsafe_offset=half + 1])):
-                var code = right_codes[unsafe_offset=slot]
-                var opening = UInt8(code >> 24)
-                if (
-                    UInt8((code >> 16) & 0xFF) != second_at
-                    and opening != at_15
-                    and opening != at_16
-                    and opening != at_17
+        comptime K = INEXACT_LENGTH
+        comptime CODE = (UInt64(1) << UInt64(ENTRY_BITS)) - 1
+        comptime AHEAD = PrefetchOptions().for_read().high_locality()
+        var batch = List[Int32](length=4 * SCAN_BATCH, fill=0)
+        var bounds = batch.unsafe_ptr()
+        for batch_row in range(first_row, end_row, SCAN_BATCH):
+            var batch_end = min(batch_row + SCAN_BATCH, end_row)
+            for row in range(batch_row, batch_end):
+                var half = Int(window[unsafe_offset=row] >> UInt64(HALF_BITS))
+                var at = 4 * (row - batch_row)
+                bounds[unsafe_offset=at] = left_start[unsafe_offset=half]
+                bounds[unsafe_offset=at + 1] = left_start[unsafe_offset=half + 1]
+                bounds[unsafe_offset=at + 2] = right_start[unsafe_offset=half]
+                bounds[unsafe_offset=at + 3] = right_start[unsafe_offset=half + 1]
+                prefetch[AHEAD](left_entries.unsafe_offset(Int(bounds[unsafe_offset=at])))
+                prefetch[AHEAD](right_entries.unsafe_offset(Int(bounds[unsafe_offset=at + 2])))
+            for row in range(batch_row, batch_end):
+                var at = 4 * (row - batch_row)
+                # A left half found here: the windows start at `row`, one base shorter than the seed,
+                # as long, and one longer, whose last `K` bases start a row on.
+                var head = window[unsafe_offset=row]
+                var tail = window[unsafe_offset=row + 1]
+                var starting = self.reachable_seeds(row + K - 1, row + K + 1)
+                var after = Int(bounds[unsafe_offset=at + 1])
+                for slot in range(
+                    first_reachable(left_entries, Int(bounds[unsafe_offset=at]), after, starting[0]), after
                 ):
-                    continue
-                self.try_windows(
-                    code,
-                    Int(right_seeds[unsafe_offset=slot]),
-                    -1,
-                    end,
-                    window,
-                    found_seed,
-                    found_row,
-                    found_end,
-                    found_cost,
-                )
+                    var seed = Int(left_entries[unsafe_offset=slot] >> UInt64(ENTRY_BITS))
+                    if seed > starting[1]:
+                        break
+                    var code = left_entries[unsafe_offset=slot] & CODE
+                    if within_one_edit(head >> 2, head, head, tail, code):
+                        self.try_windows(code, seed, row, -1, window, found_seed, found_row, found_end, found_cost)
+                # A right half ending at `end`: the windows end there, so start a base later, at the
+                # same row, or a base earlier than the seed's length back.
+                var end = row + HALF
+                var shorter = window[unsafe_offset=max(end - K + 1, 0)]
+                var level = window[unsafe_offset=max(end - K, 0)]
+                var longer = window[unsafe_offset=max(end - K - 1, 0)]
+                var ending = self.reachable_seeds(end, end)
+                after = Int(bounds[unsafe_offset=at + 3])
+                for slot in range(
+                    first_reachable(right_entries, Int(bounds[unsafe_offset=at + 2]), after, ending[0]), after
+                ):
+                    var seed = Int(right_entries[unsafe_offset=slot] >> UInt64(ENTRY_BITS))
+                    if seed > ending[1]:
+                        break
+                    var code = right_entries[unsafe_offset=slot] & CODE
+                    if ends_within_one_edit(shorter, level, longer, code):
+                        self.try_windows(code, seed, -1, end, window, found_seed, found_row, found_end, found_cost)
 
     @always_inline
     def try_windows(
@@ -1601,7 +1678,6 @@ struct SeedHeuristic(Movable):
         lower bound without them.
         """
         comptime K = INEXACT_LENGTH
-        comptime PAIRS = UInt64(0x5555555555555555)
         var exact = False
         for step in range(3):
             # As long as the seed first, so an exact match is known before its neighbours.
@@ -1617,8 +1693,7 @@ struct SeedHeuristic(Movable):
             var taken = start < 0 and (window[unsafe_offset=low] >> UInt64(HALF_BITS)) == (code >> UInt64(HALF_BITS))
             var cost = 1
             if extra == 0:
-                var mismatched = window[unsafe_offset=low] ^ code
-                var bases = Int(pop_count((mismatched | (mismatched >> 1)) & PAIRS))
+                var bases = Int(pop_count(differing(window[unsafe_offset=low], code)))
                 exact = bases == 0
                 if bases > 1 or taken:
                     continue
@@ -1645,22 +1720,34 @@ struct SeedHeuristic(Movable):
     @always_inline
     def agreeing_prefix(self, first: UInt64, second: UInt64, bases: Int) -> Int:
         """Leading bases two codes of `bases` bases share."""
-        comptime PAIRS = UInt64(0x5555555555555555)
-        var mismatched = first ^ second
-        var differing = (mismatched | (mismatched >> 1)) & PAIRS
-        if differing == 0:
+        var bits = differing(first, second)
+        if bits == 0:
             return bases
-        return (Int(count_leading_zeros(differing)) - (64 - 2 * bases)) // 2
+        return (Int(count_leading_zeros(bits)) - (64 - 2 * bases)) // 2
 
     @always_inline
     def agreeing_suffix(self, first: UInt64, second: UInt64, bases: Int) -> Int:
         """Trailing bases two codes of `bases` bases share."""
-        comptime PAIRS = UInt64(0x5555555555555555)
-        var mismatched = first ^ second
-        var differing = (mismatched | (mismatched >> 1)) & PAIRS
-        if differing == 0:
+        var bits = differing(first, second)
+        if bits == 0:
             return bases
-        return Int(count_trailing_zeros(differing)) // 2
+        return Int(count_trailing_zeros(bits)) // 2
+
+    @always_inline
+    def reachable_seeds(self, lowest_end: Int, highest_end: Int) -> Tuple[Int, Int]:
+        """The first and last inexact seed a match ending in rows `[lowest_end, highest_end]` can be
+        of and still pass `add_match`.
+
+        Seed `s` at column `16s` charges the seeds after it `2(S - s - 1)`, so its match ending at row
+        `e` passes when `16s + 16 - e - 2(S - s - 1) <= C - R` and `e - 16s - 16 - 2(S - s - 1) <= R - C`,
+        `S` the seeds, `C` and `R` the columns and rows: `18s <= C - R + e + 2S - 18` and
+        `14s >= e + C - R - 2S - 14`, a range of seeds, here taken at its widest over the ends.
+        """
+        comptime assert INEXACT_LENGTH == 16, "the bounds below are worked out for 16-base seeds"
+        var shift = self.columns - self.rows
+        var first = ceildiv(lowest_end + shift - 2 * self.seeds - 14, 14)
+        var last = (highest_end + shift + 2 * self.seeds - 18) // 18
+        return (max(first, 0), min(last, self.seeds - 1))
 
     @always_inline
     def add_match(
@@ -1697,7 +1784,6 @@ struct SeedHeuristic(Movable):
         lookahead: Int,
         leftmost: List[Int32],
         mut fronts: List[Int],
-        mut spare: List[Int],
     ) -> Bool:
         """A*PA's local pruning: whether a match can lower the cost of some path, so dropping it would not.
 
@@ -1718,48 +1804,51 @@ struct SeedHeuristic(Movable):
         # Front `d` is the diagonal `origin + d - reach`, at `fronts[d]`, its furthest column.
         var low = reach
         var high = reach + 1
-        fronts[reach] = start_column + self.length
-        fronts[reach] = extend(first, second, fronts[reach], end_row, self.columns, self.rows)
-        if fronts[reach] >= end_column:
+        var front = fronts.unsafe_ptr()
+        var reached = extend(first, second, start_column + self.length, end_row, self.columns, self.rows)
+        front[unsafe_offset=reach] = reached
+        if reached >= end_column:
             return True
-        var kept = Int(leftmost[origin + self.rows])
-        if kept <= fronts[reach]:
+        var nearest = leftmost.unsafe_ptr()
+        var kept = Int(nearest[unsafe_offset=origin + self.rows])
+        if kept <= reached:
             return True
+        # Past the live fronts, one on either side reads as unreachable, so every front takes the best
+        # of its three sources with no test of which exist.
+        comptime UNREACHED = -(1 << 40)
         for cost in range(match_cost + 1, reach):
-            # One more edit: from the same diagonal, or from either neighbour.
+            # One more edit: from the same diagonal, or from either neighbour, in place, the front
+            # below's value before this edit carried along.
+            front[unsafe_offset=low - 1] = UNREACHED
+            front[unsafe_offset=high] = UNREACHED
+            front[unsafe_offset=high + 1] = UNREACHED
+            var below = UNREACHED
             for d in range(low - 1, high + 1):
-                var best = -1
-                if d >= low and d < high:
-                    best = fronts[d] + 1
-                if d + 1 >= low and d + 1 < high:
-                    best = max(best, fronts[d + 1])
-                if d - 1 >= low and d - 1 < high:
-                    best = max(best, fronts[d - 1] + 1)
-                spare[d] = min(best, self.columns)
-            for d in range(low - 1, high + 1):
-                fronts[d] = spare[d]
+                var current = front[unsafe_offset=d]
+                front[unsafe_offset=d] = min(max(max(current, below) + 1, front[unsafe_offset=d + 1]), self.columns)
+                below = current
             low -= 1
             high += 1
             # A front whose edits match the seeds it has crossed can no longer gain.
-            while low < high and cost + self.potential(fronts[low]) >= start_potential:
+            while low < high and cost + self.potential(front[unsafe_offset=low]) >= start_potential:
                 low += 1
-            while high > low and cost + self.potential(fronts[high - 1]) >= start_potential:
+            while high > low and cost + self.potential(front[unsafe_offset=high - 1]) >= start_potential:
                 high -= 1
             if low == high:
                 return False
             for d in range(low, high):
                 var diagonal = origin + d - reach
-                var before = fronts[d]
+                var before = front[unsafe_offset=d]
                 var row = before - diagonal
                 if row < 0 or row > self.rows:
                     continue
-                fronts[d] = extend(first, second, before, row, self.columns, self.rows)
-                if fronts[d] >= end_column:
+                var after = extend(first, second, before, row, self.columns, self.rows)
+                front[unsafe_offset=d] = after
+                if after >= end_column:
                     return True
-                var next = Int(
-                    leftmost[diagonal + self.rows]
-                ) if diagonal + self.rows >= 0 and diagonal + self.rows < len(leftmost) else Int(Int32.MAX)
-                if before <= next and next <= fronts[d]:
+                # A point inside the matrix, so its diagonal indexes `leftmost`.
+                var next = Int(nearest[unsafe_offset=diagonal + self.rows])
+                if before <= next and next <= after:
                     return True
         return False
 
