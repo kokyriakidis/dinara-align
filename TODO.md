@@ -82,9 +82,10 @@ stands on each.
   17 MB of sequences and bit planes (1.1 to 13.3 MB on ont-500k, 0.6 at 1 Mbp and 5%, 13 at 1 Mbp and
   15%), and the convergence traces would cost a share of the traceback's 5 to 9% again. The larger
   items: the first sequence's two 64-bit masks a base, 16 bytes, 17 MB at 1 Mbp, which the kernel could
-  expand from the codes at some cost to the sweep; and two free ones, the diagonal transition's kept
-  fronts living on through the band (1 to 3 MB) and the moves copied reversed to write a CIGAR (1 to
-  2 MB).
+  expand from the codes at some cost to the sweep. The peak is set during the band, by the planes,
+  the tile edges and the seeds' layers together: the diagonal transition's fronts are gone by then,
+  as Mojo destroys a value after its last use, and the moves copied reversed to write a CIGAR come
+  after the edges are freed, so writing them in place left the peak where it was.
 - [ ] **A\* on the diagonal transition** at low divergence. dinara-align runs a plain diagonal
   transition first and falls back to the band; it is fast below 2% but uses no heuristic there.
 - [ ] **An upper bound on the distance** to keep bounds from overshooting. Tried and left
