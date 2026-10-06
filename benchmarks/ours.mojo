@@ -248,8 +248,19 @@ def seq_mode() raises:
 
     A batch tool instead aligns each file's pairs in one call across every thread, and gives each
     pair the batch's wall-clock time shared evenly: a throughput, not one pair's latency.
+
+    A tool named `name:x,o,e` aligns at affine costs instead, as WFA counts them: a mismatch `x` and a
+    gap of `k` letters `o + k e`, the global Gotoh alignment at scores `0`, `-x`, `-(o + e)` and `-e`,
+    on one thread; its cost is the score negated.
     """
     var tool = String(argv()[2])
+    var affine = Optional[Scoring]()
+    if ":" in tool:
+        var costs = tool.split(":")[1].split(",")
+        var mismatch = Int(String(costs[0]))
+        var opening = Int(String(costs[1]))
+        var extension = Int(String(costs[2]))
+        affine = Scoring.uniform(0, -mismatch, -(opening + extension), -extension)
     var budget = Float64(String(argv()[3]))
     # A short spin first, so the scheduler has moved this process onto a fast core.
     var spun = perf_counter_ns()
@@ -283,12 +294,16 @@ def seq_mode() raises:
         while spent < budget and pairs.next(first, second):
             var before = peak_resident()
             var started = perf_counter_ns()
-            # A CIGAR, as every rival's traceback hands back, rather than the two gapped rows.
-            var aligned = edit_cigar(first, second)
+            var cost: Int
+            if affine:
+                cost = -Int(align[GLOBAL](first, second, affine.value(), Placement.on_cpu(1)).score)
+            else:
+                # A CIGAR, as every rival's traceback hands back, rather than the two gapped rows.
+                cost = edit_cigar(first, second).distance
             var seconds = Float64(perf_counter_ns() - started) / 1e9
             var growth = peak_resident() - before
             spent += seconds
-            print(tool, path, seconds, aligned.distance, growth, sep="\t", flush=True)
+            print(tool, path, seconds, cost, growth, sep="\t", flush=True)
 
 
 def main() raises:

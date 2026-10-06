@@ -1,13 +1,15 @@
 //! The exact aligners A*PA2's evaluation compared against, on the edit-distance workloads: Edlib, and
 //! WFA2-lib's BiWFA and WFA, each through pa-bench's `pa-wrapper` with the parameters that evaluation
 //! used. Every column of the comparison computes the optimum, so WFA-adaptive and Block Aligner, which
-//! may not, are left out; so is KSW2, as its kernels are SSE only, and TripleAccel, as its quadratic
-//! time makes a 100 kbp pair take minutes.
+//! may not, are left out; so is TripleAccel, as its quadratic time makes a 100 kbp pair take minutes.
+//! KSW2, whose kernels are SSE only, is built on x86-64 for the affine comparison.
 //!
 //! Each aligner runs twice per pair, with traceback and without, as the A*PA runner does, and each
 //! measurement is taken warm and in-process the same way every runner takes its own (see `measure`).
 
 use pa_types::CostModel;
+#[cfg(target_arch = "x86_64")]
+use pa_wrapper::wrappers::ksw2::Ksw2Params;
 use pa_wrapper::{
     wrappers::{
         block_aligner::{BlockAlignerParams, BlockAlignerSize},
@@ -61,8 +63,17 @@ fn measure(mut run: impl FnMut() -> i64) -> (f64, i64) {
 /// alignment than the optimum at its costs, so the harness holds each against an exact one at the
 /// same costs, as the evaluation does: the exact distance, and for Block Aligner `biwfa-affine`,
 /// BiWFA at its affine costs.
+///
+/// A tool named `name:x,o,e` runs at affine costs instead, a mismatch `x` and a gap of `k` letters
+/// `o + k e`, as WFA counts them: `wfa`, `biwfa` and, on x86-64, `ksw2`.
 fn seq_mode(arguments: &[String]) {
-    let tool = arguments[0].as_str();
+    let (tool, affine) = match arguments[0].split_once(':') {
+        Some((name, costs)) => {
+            let costs: Vec<i32> = costs.split(',').map(|cost| cost.parse().unwrap()).collect();
+            (name, Some(CostModel::affine(costs[0], costs[1], costs[2])))
+        }
+        None => (arguments[0].as_str(), None),
+    };
     let budget: f64 = arguments[1].parse().unwrap();
     let started = Instant::now();
     while started.elapsed().as_millis() < 50 {
@@ -82,11 +93,14 @@ fn seq_mode(arguments: &[String]) {
         "biwfa-affine" => {
             AlignerParams::Wfa(WfaParams { memory_model: MemoryModel::MemoryUltraLow, heuristic: Heuristic::None })
         }
+        #[cfg(target_arch = "x86_64")]
+        "ksw2" => AlignerParams::Ksw2(Ksw2Params::default()),
         other => panic!("unknown tool {other}"),
     };
     // Block Aligner takes only affine costs, a gap's opening one more; its exact reference shares them.
-    let costs = match tool {
-        "block-aligner" | "biwfa-affine" => CostModel::affine(1, 1, 1),
+    let costs = match (tool, affine) {
+        (_, Some(costs)) => costs,
+        ("block-aligner" | "biwfa-affine", None) => CostModel::affine(1, 1, 1),
         _ => CostModel::unit(),
     };
     let mut spent = 0.0;
@@ -110,7 +124,7 @@ fn seq_mode(arguments: &[String]) {
             let growth = peak_resident() - before;
             spent += seconds;
             // Rust's stdout flushes by line, piped or not.
-            println!("{tool}\t{path}\t{seconds}\t{cost}\t{growth}");
+            println!("{}\t{path}\t{seconds}\t{cost}\t{growth}", arguments[0]);
         }
     }
 }

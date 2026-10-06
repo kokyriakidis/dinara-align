@@ -298,6 +298,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "ksw2-sys"
+version = "0.1.0"
+source = "git+https://github.com/pairwise-alignment/ksw2-sys#1daf00f7023498c4f7fd225f2a81f74027f71e10"
+dependencies = [
+ "bindgen 0.63.0",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -391,6 +399,8 @@ dependencies = [
  "clap",
  "edlib_rs",
  "itertools 0.10.5",
+ "ksw2-sys",
+ "libc",
  "pa-types",
  "rust-wfa2",
  "serde",

@@ -40,6 +40,7 @@ work; a run stopped mid-pair had reached at least what it shows.
 """
 
 import argparse
+import platform
 import signal
 import hashlib
 import json
@@ -117,6 +118,16 @@ def tools(dataset: str, ours: Path, astarpa: Path, wrapper: Path) -> list[tuple[
         ("biwfa", wrapper, "biwfa"),
         ("wfa", wrapper, "wfa"),
     ]
+
+
+def affine_tools(costs: str, ours: Path, wrapper: Path) -> list[tuple[str, Path, str]]:
+    """The columns at affine costs `x,o,e`, as WFA counts them: the exact aligners that take them, KSW2's
+    SSE kernels on x86-64 alone."""
+    chosen = [(dinara("1 thread"), ours, f"dinara-align:{costs}"), ("wfa", wrapper, f"wfa:{costs}")]
+    chosen.append(("biwfa", wrapper, f"biwfa:{costs}"))
+    if platform.machine().lower() in ("x86_64", "amd64"):
+        chosen.append(("ksw2", wrapper, f"ksw2:{costs}"))
+    return chosen
 
 
 def astarpa_settings(dataset: str) -> str:
@@ -433,6 +444,9 @@ def main() -> None:
     parser.add_argument("--install-rust", action="store_true", help="install A*PA's nightly under the cache")
     parser.add_argument("--only", nargs="*", default=[], help="run only datasets whose names contain one of these")
     parser.add_argument("--fresh", action="store_true", help="run the rivals again rather than reuse their results")
+    parser.add_argument(
+        "--affine", metavar="X,O,E", help="align at affine costs instead, WFA's mismatch, opening and extension"
+    )
     options = parser.parse_args()
     bases = int(options.bases)
 
@@ -457,7 +471,12 @@ def main() -> None:
     def run(binary: Path, tool: str, path: Path) -> tuple[list[tuple[float, int]], int, bool]:
         return measure(binary, tool, path, options.budget, None if binary == ours else kept)
 
-    columns = [column for column, _, _ in tools("", ours, astarpa, wrapper)]
+    def chosen(dataset: str) -> list[tuple[str, Path, str]]:
+        if options.affine:
+            return affine_tools(options.affine, ours, wrapper)
+        return tools(dataset, ours, astarpa, wrapper)
+
+    columns = [column for column, _, _ in chosen("")]
     lines = [
         "| dataset | pairs | mean length | " + " | ".join(columns) + " | agree |",
         "| :-- | --: | --: | " + " | ".join("--:" for _ in columns) + " | :-: |",
@@ -473,7 +492,7 @@ def main() -> None:
     tiny.parent.mkdir(parents=True, exist_ok=True)
     if not tiny.exists():
         tiny.write_text(">ACGTACGT\n<ACGAACGT\n")
-    peaks = [megabytes(*run(binary, tool, tiny)[1:]) for _, binary, tool in tools("ont", ours, astarpa, wrapper)]
+    peaks = [megabytes(*run(binary, tool, tiny)[1:]) for _, binary, tool in chosen("ont")]
     memory_lines.append("| one 8 bp pair | " + " | ".join(peaks) + " |")
 
     failed = []
@@ -481,7 +500,7 @@ def main() -> None:
         path, facts = sample(name, files, bases, published)
         pairs = facts["pairs"]
         cells, peaks, grown, seen = [], [], [], []
-        for column, binary, tool in tools(name, ours, astarpa, wrapper):
+        for column, binary, tool in chosen(name):
             print(f"{name}: {column} ...", file=sys.stderr, flush=True)
             rows, peak, stopped = run(binary, tool, path)
             peaks.append(megabytes(peak, stopped))
@@ -495,7 +514,8 @@ def main() -> None:
 
         # Every tool's costs against every other's and the published ones, on the pairs both have.
         agree = True
-        if facts["reference"] is not None:
+        # The published costs are A*PA2's unit costs.
+        if facts["reference"] is not None and not options.affine:
             seen.append(("published", facts["reference"]))
         for index, (column, costs) in enumerate(seen):
             for other, other_costs in seen[index + 1 :]:
@@ -525,7 +545,8 @@ def main() -> None:
         + "\n"
     )
     RESULTS.mkdir(parents=True, exist_ok=True)
-    (RESULTS / "astarpa2.md").write_text(table)
+    name = f"astarpa2-affine-{options.affine.replace(',', '-')}.md" if options.affine else "astarpa2.md"
+    (RESULTS / name).write_text(table)
     print(table)
     sys.exit(1 if failed else 0)
 
