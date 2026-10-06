@@ -279,7 +279,7 @@ All of the above is one thread, as A\*PA2's evaluation measures, and one pair al
 
 ### On the Apple M2
 
-The same collection on the M2 above, unpinned, its frequency free, 2 to 6% between repeated runs. The order is mostly the same, with one more exception: on 100 kbp pairs at 6 and 7% divergence A\*PA2-full is the faster, 5.25 and 5.0 against 5.75 and 6.12 ms, where the M2's cutoff, 40% of the exact seeds chained, already rebuilds the seeds to match within one edit. On ont-1k dinara-align now leads too, 20 against WFA's 21 µs and the approximate WFA-adaptive's 25, and on every real dataset it is faster than both approximate aligners. Inexact seeds speed the long reads up rather than down.
+The same collection on the M2 above, unpinned, its frequency free, 2 to 6% between repeated runs. The order is mostly the same, with one exception: on 100 kbp pairs at 6 and 7% divergence A\*PA2-full is the faster, 5.25 and 5.0 against 5.75 and 6.12 ms, where the M2's cutoff, 40% of the exact seeds chained, already rebuilds the seeds to match within one edit. On ont-1k dinara-align now leads too, 20 against WFA's 21 µs and the approximate WFA-adaptive's 25, and on every real dataset it is faster than both approximate aligners. Inexact seeds speed the long reads up rather than down.
 
 <details>
 <summary>The M2's tables</summary>
