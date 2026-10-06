@@ -4131,16 +4131,20 @@ def gapped_rows(
 
 
 struct CigarWriter:
-    """A CIGAR string written a run at a time into bytes, a run of the same letter as the last one
-    joining it; each length's digits are written by hand, as formatting one through a `String` took
-    longer than the gapped rows' whole copy on short reads."""
+    """A CIGAR string written a run at a time into bytes reserved once, a run of the same letter as the
+    last one joining it; each length's digits are written by hand, as formatting one through a `String`,
+    or growing the bytes a run at a time, took longer than the gapped rows' whole copy on short reads."""
 
     var text: List[UInt8]
+    var used: Int
     var letter: UInt8
     var length: Int
 
     def __init__(out self, capacity: Int):
+        """Room for `capacity` bytes, which the caller bounds: nothing past it is checked."""
         self.text = List[UInt8](capacity=capacity)
+        self.text.resize(unsafe_uninit_length=capacity)
+        self.used = 0
         self.letter = 0
         self.length = 0
 
@@ -4159,8 +4163,8 @@ struct CigarWriter:
         while power <= self.length:
             digits += 1
             power *= 10
-        var at = len(self.text)
-        self.text.resize(unsafe_uninit_length=at + digits + 1)
+        var at = self.used
+        self.used += digits + 1
         var out = self.text.unsafe_ptr()
         var rest = self.length
         for place in range(digits - 1, -1, -1):
@@ -4171,6 +4175,7 @@ struct CigarWriter:
 
     def finish(var self) -> String:
         self.flush()
+        self.text.resize(self.used, 0)
         return String(unsafe_from_utf8=self.text)
 
 
@@ -4214,7 +4219,13 @@ def cigar_string(first: String, second: String, path: EditPath, extended: Bool) 
 
     var first_bytes = first.unsafe_ptr()
     var second_bytes = second.unsafe_ptr()
-    var writer = CigarWriter(64)
+    # At most two runs an edit and one more, each its length's digits and a letter.
+    var digits = 1
+    var power = 10
+    while power <= max(first.byte_length(), second.byte_length()):
+        digits += 1
+        power *= 10
+    var writer = CigarWriter((digits + 1) * (2 * path.distance + 2))
     var column = 0
     var row = 0
     index = 0
