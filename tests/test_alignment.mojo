@@ -489,25 +489,25 @@ def test_bit_parallel_edit_distance_matches_the_full_matrix() raises:
         _ = edit_distance("ACGT", "ACGN")
 
 
-def test_bit_parallel_tiles_agree_with_one_thread() raises:
-    """The tiled multi-threaded sweep returns what the single-threaded one does.
+def test_bit_parallel_whole_matrix_is_exact() raises:
+    """Unrelated pairs, which no band narrows, are swept whole and keep the exact distance.
 
-    Shapes are past the parallel threshold and deliberately ragged: rows that do not fill a block
-    of words, and columns that do not fill a tile, so the leftover row of tiles and the absorbed
-    last column tile both run.
+    Shapes are deliberately ragged, rows that do not fill a block of words, and each distance is the
+    global affine alignment's at unit costs, which shares no code with the sweep.
     """
     seed(13)
+    var unit = Scoring.edit_distance()
     var shapes: List[Tuple[Int, Int]] = [(9000, 8100), (8100, 9001), (12345, 6789), (20000, 3300), (4100, 30000)]
     for shape in shapes:
         var first = random_sequence(shape[0], shape[0], DNA_ALPHABET)
         var second = random_sequence(shape[1], shape[1], DNA_ALPHABET)
-        assert_equal(edit_distance(first, second, 8), edit_distance(first, second, 1))
+        assert_equal(edit_distance(first, second), -Int(score[GLOBAL](first, second, unit)))
     var first = random_sequence(9000, 9000, DNA_ALPHABET)
     var bytes = List[UInt8](first.as_bytes())
     for _ in range(900):
         bytes[Int(random_ui64(0, UInt64(len(bytes) - 1)))] = UInt8(ord("G"))
     var second = String(unsafe_from_utf8=bytes)
-    assert_equal(edit_distance(first, second, 8), Int(levenshtein_alignment(first, second).score))
+    assert_equal(edit_distance(first, second), Int(levenshtein_alignment(first, second).score))
 
 
 def mutate(text: String, rate: Float64) -> String:
@@ -546,7 +546,7 @@ def test_bit_parallel_band_doubling_is_exact() raises:
             )
             var pairs: List[Tuple[String, String]] = [(first, second), (second, first), (first, cut), (cut, first)]
             for pair in pairs:
-                assert_equal(edit_distance(pair[0], pair[1], 1), Int(levenshtein_alignment(pair[0], pair[1]).score))
+                assert_equal(edit_distance(pair[0], pair[1]), Int(levenshtein_alignment(pair[0], pair[1]).score))
     var unrelated_first = random_sequence(3000, 3000, DNA_ALPHABET)
     var unrelated_second = random_sequence(2800, 2800, DNA_ALPHABET)
     assert_equal(
@@ -558,8 +558,7 @@ def test_bit_parallel_band_doubling_is_exact() raises:
 def test_edit_alignment_is_an_optimal_alignment() raises:
     """The bit-parallel traceback returns rows that rebuild both inputs and cost exactly the distance.
 
-    Lengths below and above the point where the two halves meet in the middle, divergences from
-    identical to half the bases edited, and a large length difference either way; every distance is
+    Lengths from empty to a few kbp, divergences from identical to half the bases edited, and a large length difference either way; every distance is
     the cell-by-cell one, and every pair of rows is rescored independently at unit cost.
     """
     seed(15)
@@ -583,8 +582,6 @@ def test_edit_alignment_is_an_optimal_alignment() raises:
                 assert_equal(
                     rescore(aligned.first_gapped, aligned.second_gapped, Scoring.edit_distance()), -Int(aligned.score)
                 )
-                # One thread takes the single-direction path, so both paths are held to the same answer.
-                assert_equal(Int(edit_alignment(pair[0], pair[1], 1).score), Int(aligned.score))
 
 
 def test_edit_batches_match_single_pairs() raises:
@@ -628,41 +625,12 @@ def test_edit_batches_match_single_pairs() raises:
         _ = edit_distances(bad_firsts, short)
 
 
-def test_striped_bands_match_one_thread() raises:
-    """A long, divergent pair's band split into stripes across threads answers as one thread does.
-
-    From 200 kbp a divergent pair sweeps each tile's words on several threads at once;
-    the distance and the alignment's score must be one thread's, and every alignment is rescored
-    independently and rebuilds both inputs.
-    """
-    seed(18)
-    var unit = Scoring.edit_distance()
-    for rate in [0.1, 0.15, 0.2]:
-        var first = random_sequence(210000, 210000, DNA_ALPHABET)
-        var second = mutate(first, rate)
-        var bytes = List[UInt8](second.as_bytes())
-        var tail = len(bytes) - len(bytes) // 25
-        var burst = String(unsafe_from_utf8=slice_bytes(bytes, 0, tail)) + mutate(
-            String(unsafe_from_utf8=slice_bytes(bytes, tail, len(bytes))), 0.5
-        )
-        var pairs: List[Tuple[String, String]] = [(first, second), (first, burst)]
-        for pair in pairs:
-            var expected = edit_distance(pair[0], pair[1], 1)
-            assert_equal(edit_distance(pair[0], pair[1], 8), expected)
-            var aligned = edit_alignment(pair[0], pair[1], 8)
-            assert_equal(Int(aligned.score), expected)
-            assert_equal(aligned.first_gapped.replace("-", ""), pair[0])
-            assert_equal(aligned.second_gapped.replace("-", ""), pair[1])
-            assert_equal(rescore(aligned.first_gapped, aligned.second_gapped, unit), -expected)
-
-
 def test_seeded_bands_are_exact() raises:
     """Pairs long enough for the seed heuristic, exact seeds and inexact, keep the exact distance.
 
     From 16 kbp a band prunes with seeds; once few exact seeds chain, past about one edit in fifteen
     bases, they are rebuilt to match within one edit. Divergences either side of that, with errors
-    also gathered into a burst at one end as real reads carry them, on one thread and on several;
-    every distance is the global wavefront's at unit costs, which shares no code with the band, and
+    also gathered into a burst at one end as real reads carry them; every distance is the global wavefront's at unit costs, which shares no code with the band, and
     every alignment is rescored independently.
     """
     seed(16)
@@ -678,14 +646,12 @@ def test_seeded_bands_are_exact() raises:
         var pairs: List[Tuple[String, String]] = [(first, second), (second, first), (first, burst)]
         for pair in pairs:
             var expected = -Int(score[GLOBAL](pair[0], pair[1], unit))
-            assert_equal(edit_distance(pair[0], pair[1], 1), expected)
-            assert_equal(edit_distance(pair[0], pair[1], 8), expected)
-            for threads in [1, 8]:
-                var aligned = edit_alignment(pair[0], pair[1], threads)
-                assert_equal(Int(aligned.score), expected)
-                assert_equal(aligned.first_gapped.replace("-", ""), pair[0])
-                assert_equal(aligned.second_gapped.replace("-", ""), pair[1])
-                assert_equal(rescore(aligned.first_gapped, aligned.second_gapped, unit), -expected)
+            assert_equal(edit_distance(pair[0], pair[1]), expected)
+            var aligned = edit_alignment(pair[0], pair[1])
+            assert_equal(Int(aligned.score), expected)
+            assert_equal(aligned.first_gapped.replace("-", ""), pair[0])
+            assert_equal(aligned.second_gapped.replace("-", ""), pair[1])
+            assert_equal(rescore(aligned.first_gapped, aligned.second_gapped, unit), -expected)
 
 
 # endregion Properties

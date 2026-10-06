@@ -24,10 +24,9 @@ pairs both aligned, and against the costs A*PA2's published results recorded for
 disagreement fails the run.
 
 The aligners are the evaluation's exact ones: Edlib, BiWFA, A*PA, A*PA2-simple and A*PA2-full, with
-its parameters. Like it, the times here are wall-clock on one thread; dinara-align also runs on all,
-one pair at a time across them, and as a batch, every pair of the sample in one call spread over the
-threads, whose column is the batch's time over its pairs: a throughput, where the others are
-latencies.
+its parameters. Like it, the times here are wall-clock on one thread; dinara-align also runs as a
+batch, every pair of the sample in one call spread over the threads a pair at a time, whose column is
+the batch's time over its pairs: a throughput, where the others are latencies.
 
 The rivals are pinned, so each one runs on a sample once and its results are kept for good, while its
 pinned commit and our runner's source stay the same; a smaller budget replays the kept run, a larger
@@ -86,7 +85,7 @@ KEPT = CACHE / "pa-bench-rivals.json"
 
 
 THREADS = os.cpu_count() or 1
-"""The threads dinara-align's multi-threaded columns take: every one this machine offers."""
+"""The threads dinara-align's batch column takes: every one this machine offers."""
 
 TIMER = Path("/usr/bin/time")
 """GNU time, which on Linux reports a runner's own peak memory (see `run_tool`)."""
@@ -100,7 +99,6 @@ def tools(dataset: str, ours: Path, astarpa: Path, wrapper: Path) -> list[tuple[
     """Each column's runner and the tool name it is given, as the evaluation ran them on a dataset."""
     return [
         (dinara("1 thread"), ours, dinara("1 thread")),
-        (dinara(f"{THREADS} threads"), ours, dinara(f"{THREADS} threads")),
         (dinara(f"batch, {THREADS} threads"), ours, dinara(f"batch, {THREADS} threads")),
         ("a*pa2-full", astarpa, "a*pa2-full"),
         ("a*pa2-simple", astarpa, "a*pa2-simple"),

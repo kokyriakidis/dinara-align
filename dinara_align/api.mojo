@@ -652,11 +652,8 @@ def edit_distances(firsts: List[String], seconds: List[String], threads: Optiona
     threads, every thread this process may use by default.
 
     The pairs are independent, so each runs on one thread start to finish, each thread taking the
-    next pair of the batch, longest first, as soon as it is free (see `longest_first`). One thread a
-    pair
-    beats sharing threads out among few long pairs: a pair split over two runs at less than twice
-    the speed. A pair that fails raises, after the rest, the same error a serial loop would have
-    raised first.
+    next pair of the batch, longest first, as soon as it is free (see `longest_first`). A pair that
+    fails raises, after the rest, the same error a serial loop would have raised first.
     """
     var pairs = paired_length(firsts, seconds)
     var results = List[Int](length=pairs, fill=0)
@@ -678,14 +675,14 @@ def edit_distances(firsts: List[String], seconds: List[String], threads: Optiona
                 return
             var index = order[dealt]
             try:
-                out[unsafe_offset=index] = edit_distance(firsts[index], seconds[index], 1)
+                out[unsafe_offset=index] = edit_distance(firsts[index], seconds[index])
             except:
                 flags[unsafe_offset=index] = True
 
     parallelize(distance_worker, min(workers, pairs), min(workers, pairs))
     for index in range(pairs):
         if failed[index]:
-            results[index] = edit_distance(firsts[index], seconds[index], 1)
+            results[index] = edit_distance(firsts[index], seconds[index])
     return results^
 
 
@@ -716,14 +713,14 @@ def edit_alignments(
                 return
             var index = order[dealt]
             try:
-                out[unsafe_offset=index] = edit_alignment(firsts[index], seconds[index], 1)
+                out[unsafe_offset=index] = edit_alignment(firsts[index], seconds[index])
             except:
                 flags[unsafe_offset=index] = True
 
     parallelize(alignment_worker, min(workers, pairs), min(workers, pairs))
     for index in range(pairs):
         if failed[index]:
-            results[index] = edit_alignment(firsts[index], seconds[index], 1)
+            results[index] = edit_alignment(firsts[index], seconds[index])
     return results^
 
 

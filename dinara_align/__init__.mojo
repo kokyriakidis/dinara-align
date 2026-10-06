@@ -16,7 +16,7 @@ print(aligned.score)
 ```
 
 Unit-cost edit distance has its own bit-parallel path, A*PA2's band doubling with its seed heuristic,
-for one pair or a batch spread over every thread:
+for one pair on one thread, or a batch spread over every thread a pair at a time:
 
 ```mojo
 from dinara_align import edit_alignment, edit_alignments, edit_distance, edit_distances

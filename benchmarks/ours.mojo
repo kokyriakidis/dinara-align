@@ -78,9 +78,7 @@ comptime ONCE_SECONDS = 0.1
 """A call at least this long is timed once: noise is small next to it."""
 
 
-def call[
-    task: Int
-](data: Pairs, index: Int, scoring: Scoring, placement: Placement, threads: Int) raises -> String:
+def call[task: Int](data: Pairs, index: Int, scoring: Scoring, placement: Placement) raises -> String:
     """Runs one task once and returns its answer as the checksum `run.py` compares."""
     comptime if task == BATCH_SCORE:
         var values = List[Int]()
@@ -97,14 +95,14 @@ def call[
     elif task == PAIR_ALIGNMENT:
         return checksum([Int(align[GLOBAL](data.firsts[index], data.seconds[index], scoring, placement).score)])
     elif task == EDIT_DISTANCE:
-        return checksum([edit_distance(data.firsts[index], data.seconds[index], threads)])
+        return checksum([edit_distance(data.firsts[index], data.seconds[index])])
     else:
-        return checksum([Int(edit_alignment(data.firsts[index], data.seconds[index], threads).score)])
+        return checksum([Int(edit_alignment(data.firsts[index], data.seconds[index]).score)])
 
 
 def measure[
     task: Int
-](data: Pairs, index: Int, scoring: Scoring, placement: Placement, threads: Int) raises -> Tuple[Float64, String]:
+](data: Pairs, index: Int, scoring: Scoring, placement: Placement) raises -> Tuple[Float64, String]:
     """The time of one call, in seconds, and its answer, measured as every runner measures its own.
 
     A first call sizes the batches; a call shorter than `ONCE_SECONDS` is then repeated in `BATCHES`
@@ -112,7 +110,7 @@ def measure[
     anything slowing a batch down comes from outside the aligner. A longer call is timed once.
     """
     var started = perf_counter_ns()
-    var answer = call[task](data, index, scoring, placement, threads)
+    var answer = call[task](data, index, scoring, placement)
     var once = Float64(perf_counter_ns() - started) / 1e9
     if once >= ONCE_SECONDS:
         return (once, answer)
@@ -121,7 +119,7 @@ def measure[
     for _ in range(BATCHES):
         started = perf_counter_ns()
         for _ in range(size):
-            answer = call[task](data, index, scoring, placement, threads)
+            answer = call[task](data, index, scoring, placement)
         best = min(best, Float64(perf_counter_ns() - started) / 1e9 / Float64(size))
     return (best, answer)
 
@@ -141,41 +139,30 @@ def gpu_answers(scoring: Scoring) raises -> Bool:
 
 def run_batch(data: Pairs, scoring: Scoring, device: String, placement: Placement) raises:
     """A whole file as one batch, which is how a caller with many pairs would use the package."""
-    emit("dinara-align", data.names[0], "score", device, measure[BATCH_SCORE](data, 0, scoring, placement, 1))
-    emit("dinara-align", data.names[0], "alignment", device, measure[BATCH_ALIGNMENT](data, 0, scoring, placement, 1))
+    emit("dinara-align", data.names[0], "score", device, measure[BATCH_SCORE](data, 0, scoring, placement))
+    emit("dinara-align", data.names[0], "alignment", device, measure[BATCH_ALIGNMENT](data, 0, scoring, placement))
 
 
 def run_pairs(data: Pairs, scoring: Scoring, device: String, placement: Placement) raises:
     """Each pair as its own workload, so long pairs are timed one at a time."""
     for index in range(len(data.names)):
-        emit("dinara-align", data.names[index], "score", device, measure[PAIR_SCORE](data, index, scoring, placement, 1))
+        emit("dinara-align", data.names[index], "score", device, measure[PAIR_SCORE](data, index, scoring, placement))
         emit(
             "dinara-align",
             data.names[index],
             "alignment",
             device,
-            measure[PAIR_ALIGNMENT](data, index, scoring, placement, 1),
+            measure[PAIR_ALIGNMENT](data, index, scoring, placement),
         )
 
 
 def run_bit_parallel(data: Pairs, scoring: Scoring) raises:
-    """The bit-parallel edit distance and alignment, on one thread and on all of them, each its own column.
-
-    One thread is the like-for-like against A*PA, which never forks; all threads is what a caller gets.
-    """
+    """The bit-parallel edit distance and alignment, one pair on one thread, as A*PA runs them."""
     var placement = Placement.on_cpu(1)
-    var widths: List[Int] = [1, hardware_threads()]
-    for threads in widths:
-        var tool = String("dinara-align (bit-parallel, ", threads, " thread", "" if threads == 1 else "s", ")")
-        for index in range(len(data.names)):
-            emit(tool, data.names[index], "score", "cpu", measure[EDIT_DISTANCE](data, index, scoring, placement, threads))
-            emit(
-                tool,
-                data.names[index],
-                "alignment",
-                "cpu",
-                measure[EDIT_ALIGNMENT](data, index, scoring, placement, threads),
-            )
+    var tool = String("dinara-align (bit-parallel, 1 thread)")
+    for index in range(len(data.names)):
+        emit(tool, data.names[index], "score", "cpu", measure[EDIT_DISTANCE](data, index, scoring, placement))
+        emit(tool, data.names[index], "alignment", "cpu", measure[EDIT_ALIGNMENT](data, index, scoring, placement))
 
 
 def write_scoring(directory: String, scoring: Scoring) raises:
@@ -202,7 +189,6 @@ def seq_mode() raises:
     pair the batch's wall-clock time shared evenly: a throughput, not one pair's latency.
     """
     var tool = String(argv()[2])
-    var threads = 1 if tool.endswith("1 thread)") else hardware_threads()
     var budget = Float64(String(argv()[3]))
     # A short spin first, so the scheduler has moved this process onto a fast core.
     var spun = perf_counter_ns()
@@ -220,7 +206,7 @@ def seq_mode() raises:
                 seconds.append(String(lines[index + 1][byte=1:]))
                 index += 2
             var started = perf_counter_ns()
-            var aligned = edit_alignments(firsts, seconds, threads)
+            var aligned = edit_alignments(firsts, seconds, hardware_threads())
             var share = Float64(perf_counter_ns() - started) / 1e9 / Float64(max(len(firsts), 1))
             for pair in range(len(aligned)):
                 print(tool, path, share, Int(aligned[pair].score), sep="\t")
@@ -236,7 +222,7 @@ def seq_mode() raises:
             var first = String(lines[index][byte=1:])
             var second = String(lines[index + 1][byte=1:])
             var started = perf_counter_ns()
-            var aligned = edit_alignment(first, second, threads)
+            var aligned = edit_alignment(first, second)
             var seconds = Float64(perf_counter_ns() - started) / 1e9
             spent += seconds
             print(tool, path, seconds, Int(aligned.score), sep="\t", flush=True)

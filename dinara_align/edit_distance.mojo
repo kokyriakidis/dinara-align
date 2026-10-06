@@ -30,27 +30,20 @@ stays cheaper than a band would be (see `diagonal_transition`). Near-identical p
 on A*PA2 names as its weak spot, finish there, traceback included; any other pair leaves with a
 projection of its distance, which becomes the band's first bound.
 
-A pair too divergent for a band is swept whole, cut into tiles of `LANES` words by `TILE_COLUMNS`
-columns. A tile needs only the tile above it and the tile to its left, so every tile on one
-anti-diagonal of tiles runs on its own thread; they touch disjoint columns of the horizontal edge
-and disjoint words of the vertical one. A*PA sweeps on one thread.
+A pair too divergent for a band is swept whole. One pair runs on one thread throughout; many pairs
+spread over threads a pair at a time (see `edit_distances` in `api`).
 
 Unit costs only: a substitution, an insertion and a deletion each cost one, so this is the
 distance `levenshtein_alignment` returns, without the alignment.
 """
 
-from std.atomic import Atomic
 from std.bit import byte_swap, count_leading_zeros, count_trailing_zeros, pop_count
 from std.math import ceildiv, sqrt
 from std.sys import inlined_assembly, simd_width_of
 from std.sys.info import CompilationTarget
 from std.sys.intrinsics import PrefetchOptions, prefetch
-from std.time import perf_counter_ns
-
-from max.algorithm import parallelize
 
 from .alignment import AlignmentResult
-from .common import hardware_threads
 from .errors import AlignmentError, ErrorKind
 
 comptime WORD_BITS = 64
@@ -69,36 +62,6 @@ comptime NARROW_LANES = 4
 The smaller group a sweep falls back to below `LANES` words, A*PA2's own width, so a narrow band rounds
 its bottom up to four words rather than eight.
 """
-
-comptime TILE_COLUMNS = 2048
-"""
-Columns of one parallel tile. Each tile repeats the stagger's two triangles, about `LANES * LANES`
-single-word steps, so a tile must be wide enough for those to vanish beside its `LANES * width`
-vector steps, and narrow enough that a long pair still yields more tiles per diagonal than threads.
-"""
-
-comptime PARALLEL_CELLS = 64_000_000
-"""Cells below which one thread finishes before a fork would pay for itself."""
-
-comptime STRIPED_MIN_COLUMNS = 200_000
-"""Columns from which a divergent pair's band splits into stripes across threads: a striped round's
-check-in, barriers and wider tiles cost a 100 kbp pair at one edit in seven a fifth more, and save a
-300 kbp one a third."""
-
-comptime MAX_STRIPES = 8
-"""The most threads one round's tiles are split among: past the eight of an M2, four fast and four
-slow, a pipeline of stripes runs only as fast as its slowest."""
-
-comptime STRIPED_COLUMNS = 1024
-"""Columns of a band tile swept on several threads: four times `BAND_COLUMNS`, so the threads meet a
-quarter as often, for a band a little taller, as the pruning between tiles runs a quarter as often."""
-
-comptime STRIPE_CHUNK = 128
-"""Columns a stripe sweeps before handing them to the stripe below: wide enough that each chunk's
-stagger triangles cost little beside it, narrow enough that the stripes below start soon."""
-
-comptime COUNTER_SPACING = 16
-"""Words between two threads' counters, so no two share a cache line."""
 
 comptime BAND_COLUMNS = 256
 """
@@ -135,9 +98,6 @@ slope is most of the work, and narrower tiles cut it at the cost of more triangl
 
 comptime NARROW_BAND = 1024
 """The bound below which band tiles are `NARROW_COLUMNS` wide rather than `BAND_COLUMNS`."""
-
-comptime MEET_COLUMNS = 2048
-"""Columns below which one direction finishes before a second thread would pay for itself."""
 
 comptime CODE_PADDING = 16
 """Sentinel bytes after each sequence's codes, enough for a sixteen-byte comparison at the last base."""
@@ -248,8 +208,7 @@ struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
     difference per column, in bit zero, along the bottom of the rows done so far, and one word of
     vertical differences per row word, down the right edge of the columns done so far.
 
-    Plain pointers rather than the lists themselves, so tiles on different threads can each write
-    their own disjoint slice of the same frontier.
+    Plain pointers rather than the lists themselves, so a sweep can write the frontier it was handed.
     """
 
     var column_low: MutPointer[UInt64, MutUntrackedOrigin]
@@ -897,35 +856,12 @@ struct Frontier(Movable):
         return total
 
 
-def full_distance(mut profile: Profile, workers: Int) -> Int:
-    """The whole matrix, tiled across `workers` threads once it is large enough to pay for them."""
+def full_distance(mut profile: Profile) -> Int:
+    """The whole matrix."""
     profile.build_planes()
     var frontier = Frontier(profile.columns, profile.words)
     var sweep = frontier.sweep(profile)
-    var words = profile.words
-    if workers == 1 or profile.columns * profile.rows < PARALLEL_CELLS:
-        sweep.words(0, words, 0, profile.columns)
-    else:
-        # Tiles of `LANES` words by a column tile, swept one anti-diagonal of tiles at a time; the
-        # words left over below the last full block form one more row of tiles.
-        var bounds = tile_bounds(profile.columns, TILE_COLUMNS)
-        var column_tiles = len(bounds) - 1
-        var row_tiles = ceildiv(words, LANES)
-        for diagonal in range(row_tiles + column_tiles - 1):
-            var first_row_tile = max(0, diagonal - column_tiles + 1)
-            var last_row_tile = min(diagonal, row_tiles - 1)
-
-            def tile(slot: Int) {imm}:
-                var row_tile = first_row_tile + slot
-                var column_tile = diagonal - row_tile
-                sweep.words(
-                    row_tile * LANES,
-                    min(row_tile * LANES + LANES, words),
-                    bounds[column_tile],
-                    bounds[column_tile + 1],
-                )
-
-            parallelize(tile, last_row_tile - first_row_tile + 1, workers)
+    sweep.words(0, profile.words, 0, profile.columns)
 
     # The top-right corner is `columns`; walking down the right edge adds each vertical difference.
     return profile.columns + frontier.down_from(0, profile.rows)
@@ -1070,9 +1006,6 @@ chained there; with fewer, the bound is little more than an edit a seed, and the
 
 comptime SEED_SLACK = 64
 """With seeds, the band's first bound reaches at least this far past the heuristic at the origin."""
-
-comptime SEED_SCAN_ROWS = 65_536
-"""Rows from which the seeds' matches are looked up on several threads, each a range of rows."""
 
 comptime LOOKAHEAD_SEEDS = 14
 """Seeds a match's local pruning looks ahead, its own included: A*PA2-full's `p`."""
@@ -1231,15 +1164,13 @@ struct SeedHeuristic(Movable):
         inexact: Bool = False,
         choose: Bool = False,
         lookahead: Int = LOOKAHEAD_SEEDS,
-        workers: Int = 1,
     ):
         """Seeds of the profile's first sequence, matched exactly in its second, or with `inexact`
         within one edit. With `choose`, exact seeds, rebuilt inexact when fewer than
         `INEXACT_CHAINED` percent of them chain from the origin.
 
         With `lookahead`, a match is kept only if a path from its start crosses the next `lookahead`
-        seeds for less than they would cost unmatched (see `worth_keeping`). The matches are looked up
-        on `workers` threads once the second sequence is long enough (see `SEED_SCAN_ROWS`).
+        seeds for less than they would cost unmatched (see `worth_keeping`).
         """
         self.columns = profile.columns
         self.rows = profile.rows
@@ -1254,13 +1185,13 @@ struct SeedHeuristic(Movable):
         self.spill_x = List[Int32]()
         self.spill_y = List[Int32]()
         self.hint = 0
-        self.build(profile, inexact, lookahead, workers)
+        self.build(profile, inexact, lookahead)
         if choose and not inexact and self.seeds > 0:
             var chained = self.seeds - self.h(0, 0)
             if chained * 100 < INEXACT_CHAINED * self.seeds:
-                self.build(profile, True, lookahead, workers)
+                self.build(profile, True, lookahead)
 
-    def build(mut self, profile: Profile, inexact: Bool, lookahead: Int, workers: Int):
+    def build(mut self, profile: Profile, inexact: Bool, lookahead: Int):
         """The seeds, their matches, and the layers, from scratch."""
         self.length = INEXACT_LENGTH if inexact else SEED_LENGTH
         self.cost = 2 if inexact else 1
@@ -1288,11 +1219,10 @@ struct SeedHeuristic(Movable):
         var found_row = List[Int32]()
         var found_end = List[Int32]()
         var found_cost = List[Int32]()
-        var threads = workers if profile.rows >= SEED_SCAN_ROWS else 1
         if inexact:
-            self.inexact_matches(first, second, found_seed, found_row, found_end, found_cost, threads)
+            self.inexact_matches(first, second, found_seed, found_row, found_end, found_cost)
         else:
-            self.exact_matches(first, second, found_seed, found_row, threads)
+            self.exact_matches(first, second, found_seed, found_row)
 
         # Bucketed by seed: a start can dominate another match's end only from a later seed, so taking
         # the seeds last first is an order the layers can be built in, no sort.
@@ -1343,16 +1273,16 @@ struct SeedHeuristic(Movable):
                 for below in range(score):
                     self.add_point(layer - below, x, y)
 
+    # Out of line: inlined into `build`, it slows the pruning loop there by a few percent.
+    @no_inline
     def exact_matches(
         self,
         first: ImmPointer[UInt8, _],
         second: ImmPointer[UInt8, _],
         mut found_seed: List[Int32],
         mut found_row: List[Int32],
-        threads: Int,
     ):
-        """Every exact occurrence of a seed whose chain can still reach the end, the second sequence's
-        rows split among `threads` threads.
+        """Every exact occurrence of a seed whose chain can still reach the end.
 
         Every seed's two-bit code is hashed by open addressing on the multiply's top bits; a slot
         holds its code and the first seed with it in one word, and seeds sharing a code chain on.
@@ -1377,33 +1307,7 @@ struct SeedHeuristic(Movable):
             next[seed] = Int32(held & 0xFFFFFFFF) if held != EMPTY else -1
             slots[unsafe_offset=slot] = (Int64(code) << 32) | Int64(seed)
 
-        var chain = next.unsafe_ptr()
-        if threads <= 1:
-            self.exact_scan(second, slots, chain, bits, 0, self.rows, found_seed, found_row)
-            return
-        var seeds_found = List[List[Int32]](length=threads, fill=List[Int32]())
-        var rows_found = List[List[Int32]](length=threads, fill=List[Int32]())
-
-        def scan(
-            part: Int,
-        ) {imm self, imm second, imm slots, imm chain, imm bits, imm threads, mut seeds_found, mut rows_found}:
-            self.exact_scan(
-                second,
-                slots,
-                chain,
-                bits,
-                self.rows * part // threads,
-                self.rows * (part + 1) // threads,
-                seeds_found[part],
-                rows_found[part],
-            )
-
-        parallelize(scan, threads, threads)
-        for part in range(threads):
-            for value in seeds_found[part]:
-                found_seed.append(value)
-            for value in rows_found[part]:
-                found_row.append(value)
+        self.exact_scan(second, slots, next.unsafe_ptr(), bits, 0, self.rows, found_seed, found_row)
 
     def exact_scan(
         self,
@@ -1446,6 +1350,8 @@ struct SeedHeuristic(Movable):
                     found_row.append(Int32(start_row))
                 seed = Int(chain[unsafe_offset=seed])
 
+    # Out of line: inlined into `build`, it slows the pruning loop there by a few percent.
+    @no_inline
     def inexact_matches(
         self,
         first: ImmPointer[UInt8, _],
@@ -1454,10 +1360,8 @@ struct SeedHeuristic(Movable):
         mut found_row: List[Int32],
         mut found_end: List[Int32],
         mut found_cost: List[Int32],
-        threads: Int,
     ):
-        """Every occurrence of a seed within one edit whose chain can still reach the end, the second
-        sequence's rows split among `threads` threads.
+        """Every occurrence of a seed within one edit whose chain can still reach the end.
 
         One edit leaves one half of the seed matching exactly, at the window's start or its end. Each
         half's code indexes a table of the seeds with it, and every window of the second sequence is
@@ -1507,72 +1411,19 @@ struct SeedHeuristic(Movable):
             rolling = (rolling >> 2) | (base << UInt64(2 * INEXACT_LENGTH - 2))
             if row <= self.rows:
                 windows[row] = rolling
-        var window = windows.unsafe_ptr()
-        var left_from = left_start.unsafe_ptr()
-        var right_from = right_start.unsafe_ptr()
-        var left_entry = left_entries.unsafe_ptr()
-        var right_entry = right_entries.unsafe_ptr()
-        var rows = self.rows - HALF + 1
-        if threads <= 1:
-            self.inexact_scan(
-                left_from,
-                right_from,
-                left_entry,
-                right_entry,
-                window,
-                0,
-                rows,
-                found_seed,
-                found_row,
-                found_end,
-                found_cost,
-            )
-            return
-        var seeds_found = List[List[Int32]](length=threads, fill=List[Int32]())
-        var rows_found = List[List[Int32]](length=threads, fill=List[Int32]())
-        var ends_found = List[List[Int32]](length=threads, fill=List[Int32]())
-        var costs_found = List[List[Int32]](length=threads, fill=List[Int32]())
-
-        def scan(
-            part: Int,
-        ) {
-            imm self,
-            imm left_from,
-            imm right_from,
-            imm left_entry,
-            imm right_entry,
-            imm window,
-            imm rows,
-            imm threads,
-            mut seeds_found,
-            mut rows_found,
-            mut ends_found,
-            mut costs_found,
-        }:
-            self.inexact_scan(
-                left_from,
-                right_from,
-                left_entry,
-                right_entry,
-                window,
-                rows * part // threads,
-                rows * (part + 1) // threads,
-                seeds_found[part],
-                rows_found[part],
-                ends_found[part],
-                costs_found[part],
-            )
-
-        parallelize(scan, threads, threads)
-        for part in range(threads):
-            for value in seeds_found[part]:
-                found_seed.append(value)
-            for value in rows_found[part]:
-                found_row.append(value)
-            for value in ends_found[part]:
-                found_end.append(value)
-            for value in costs_found[part]:
-                found_cost.append(value)
+        self.inexact_scan(
+            left_start.unsafe_ptr(),
+            right_start.unsafe_ptr(),
+            left_entries.unsafe_ptr(),
+            right_entries.unsafe_ptr(),
+            windows.unsafe_ptr(),
+            0,
+            self.rows - HALF + 1,
+            found_seed,
+            found_row,
+            found_end,
+            found_cost,
+        )
 
     def inexact_scan(
         self,
@@ -1773,6 +1624,8 @@ struct SeedHeuristic(Movable):
             found_end.append(Int32(end_row))
             found_cost.append(Int32(cost))
 
+    # Out of line: inlined into `build`, it slows the pruning loop there by a few percent.
+    @no_inline
     def worth_keeping(
         self,
         first: ImmPointer[UInt8, _],
@@ -1979,7 +1832,7 @@ struct SeedHeuristic(Movable):
 
 
 struct HalfBand(Movable):
-    """One round of band doubling, advanced a tile at a time, so two rounds can share a loop.
+    """One round of band doubling, advanced a tile at a time.
 
     `pruned_distance` documents the round; this holds its state between tiles: the frontier, the
     band's top and bottom words, the score at the top, and the deepest kept row and its score.
@@ -1994,7 +1847,6 @@ struct HalfBand(Movable):
     var difference: Int
     var extra: Int
     var threshold: Int
-    var stop_column: Int
     var top: Int
     var end_word: Int
     var anchor: Int
@@ -2012,18 +1864,14 @@ struct HalfBand(Movable):
     """The least a checkpoint may lower the bound to."""
     var checkpoint: Int
     """Checkpoints passed."""
-    var stripes: Int
-    """Threads a tile's words are split among, one stripe each (see `striped_distance`)."""
 
     def __init__(
         out self,
         mut profile: Profile,
         threshold: Int,
-        stop_column: Int,
         adapt: Bool = False,
         lower: Bool = True,
         lowest: Int = 0,
-        stripes: Int = 1,
     ):
         self.columns = profile.columns
         self.rows = profile.rows
@@ -2031,25 +1879,19 @@ struct HalfBand(Movable):
         self.difference = self.rows - self.columns
         self.extra = (threshold - abs(self.difference)) // 2
         self.threshold = threshold
-        self.stop_column = stop_column
         # One tile's width of horizontal edge, since each tile starts again from `+1` above (see
         # `Sweep.shifted`); the last tile may absorb a sliver of up to `2 * LANES` more columns.
-        self.stripes = stripes
-        var tile_width = STRIPED_COLUMNS if stripes > 1 else BAND_COLUMNS
-        self.frontier = Frontier(tile_width + 2 * LANES, self.words)
+        self.frontier = Frontier(BAND_COLUMNS + 2 * LANES, self.words)
         profile.build_planes()
         self.sweep = self.frontier.sweep(profile)
-        self.bounds = tile_bounds(
-            stop_column,
-            STRIPED_COLUMNS if stripes > 1 else (NARROW_COLUMNS if threshold < NARROW_BAND else BAND_COLUMNS),
-        )
+        self.bounds = tile_bounds(self.columns, NARROW_COLUMNS if threshold < NARROW_BAND else BAND_COLUMNS)
         self.top = 0
         self.end_word = 0
         self.anchor = 0
         self.deepest = 0
         self.floor = 0
         self.outcome = Round(-1, -1, threshold, -1)
-        self.adapt = adapt and stop_column == self.columns
+        self.adapt = adapt
         self.lower = lower
         self.lowest = lowest
         self.checkpoint = 0
@@ -2197,8 +2039,6 @@ struct HalfBand(Movable):
     def result(mut self, mut edge: Edge) -> Round:
         """What the round found once every tile is swept, with the last edge captured."""
         edge.capture(self.top, self.end_word, self.anchor, self.frontier, self.rows)
-        if self.stop_column < self.columns:
-            return Round(-1, self.stop_column, self.threshold, -1)
         if self.end_word < self.words:
             return Round(-1, self.columns, self.threshold, -1)
         return Round(edge.score(self.rows), self.columns, self.threshold, -1)
@@ -2209,17 +2049,14 @@ def pruned_distance[
 ](
     mut profile: Profile,
     threshold: Int,
-    stop_column: Int,
     mut trail: Trail,
     mut edge: Edge,
     mut heuristic: SeedHeuristic,
     adapt: Bool = False,
     lower: Bool = True,
     lowest: Int = 0,
-    stripes: Int = 1,
 ) -> Round:
-    """One round of band doubling with A*PA2-simple's pruning, on one thread, or with `stripes` above
-    one split among that many (see `striped_distance`).
+    """One round of band doubling with A*PA2-simple's pruning.
 
     Only cells a path of cost at most `threshold` could cross are computed. Ukkonen's band bounds
     them, gap from the start plus gap to the end within the bound, and pruning narrows it further:
@@ -2243,174 +2080,20 @@ def pruned_distance[
     With `record`, every tile's left edge goes into `trail` before the tile is swept, for the
     traceback; without, the trail is untouched.
 
-    The round may stop short at `stop_column`, still pruning against the whole problem's end, and
-    leaves the scores down that column in `edge`; meeting in the middle joins two such half rounds.
-    The distance is reported only when the round runs to the last column.
+    The round leaves the scores down the last column it swept in `edge`.
 
     With `adapt`, a round over the whole width without seeds re-aims its bound as it goes (see
     `HalfBand.check`), and a distance is exact only within the bound it ends on.
     """
-    if stripes > 1:
-        return striped_distance[record](
-            profile, threshold, stop_column, trail, edge, heuristic, adapt, lower, lowest, stripes
-        )
     comptime if record:
         trail.clear()
-    var band = HalfBand(profile, threshold, stop_column, adapt, lower, lowest)
+    var band = HalfBand(profile, threshold, adapt, lower, lowest)
     for tile in range(band.tiles()):
         if not band.prepare[record](tile, trail, heuristic):
             return band.outcome
         band.tile_sweep(tile).words(band.top, band.end_word, band.first_column(tile), band.end_column(tile))
         if not band.finish(tile, edge, heuristic):
             return band.outcome
-    return band.result(edge)
-
-
-def spin_barrier(counters: MutPointer[Int64, _], arrived: Int, generation: Int, threads: Int, mut seen: Int):
-    """Waits until all `threads` threads have reached the barrier for the `seen + 1`-th time.
-
-    `arrived` and `generation` index two counters: the last thread to arrive resets the count and
-    moves the generation on, which releases the rest, who spin on it rather than sleep, since a
-    tile takes microseconds.
-    """
-    seen += 1
-    if Int(Atomic.fetch_add(counters.unsafe_offset(arrived), Int64(1))) == threads - 1:
-        Atomic.store(counters.unsafe_offset(arrived), Int64(0))
-        Atomic.store(counters.unsafe_offset(generation), Int64(seen))
-        return
-    while Int(Atomic.load(counters.unsafe_offset(generation))) < seen:
-        pass
-
-
-def stripe_start(count: Int, stripe: Int, stripes: Int) -> Int:
-    """The first of `count` words that stripe `stripe` of `stripes` takes, a multiple of `LANES` from
-    the top, so every stripe but the last takes the vector path whole."""
-    if stripe >= stripes:
-        return count
-    return min(count, ceildiv(count * stripe // stripes, LANES) * LANES)
-
-
-def striped_distance[
-    record: Bool
-](
-    mut profile: Profile,
-    threshold: Int,
-    stop_column: Int,
-    mut trail: Trail,
-    mut edge: Edge,
-    mut heuristic: SeedHeuristic,
-    adapt: Bool,
-    lower: Bool,
-    lowest: Int,
-    stripes: Int,
-) -> Round:
-    """`pruned_distance`'s round with each tile's words split among `stripes` threads.
-
-    The tiles still go one after another, since each tile's pruning sets the next one's rows, but a
-    tile's words are cut into stripes, one a thread, swept as a pipeline: a stripe sweeps a chunk of
-    `STRIPE_CHUNK` columns once the stripe above has swept it, reading the horizontal differences
-    that stripe left there and leaving its own in their place for the stripe below. Each stripe owns
-    its words' vertical differences, so no two threads write the same word. Between tiles every
-    thread waits while the first prunes the tile and readies the next, exactly as one thread would,
-    so the round computes the same cells and finds the same distance.
-
-    A tile too short to split in two vector groups a stripe is swept by the first thread alone.
-
-    The threads spin rather than sleep, which is only safe among threads that are all running, and
-    a fork does not promise that every task starts at once. So each task checks in first, and the
-    first waits up to `CHECK_IN_NANOSECONDS` for the rest before closing the team: the stripes go
-    to whoever checked in, a task arriving after that leaves at once, and a team of one sweeps every
-    tile alone.
-    """
-    comptime if record:
-        trail.clear()
-    var band = HalfBand(profile, threshold, stop_column, adapt, lower, lowest, stripes)
-    var tiles = band.tiles()
-    if tiles == 0 or not band.prepare[record](0, trail, heuristic):
-        return band.outcome
-    # Each thread's chunk count, then the barrier's two counters and the stop flag, a line apart.
-    var counters = List[Int64](length=(stripes + 3) * COUNTER_SPACING, fill=0)
-    var shared = counters.unsafe_ptr()
-    var arrived = stripes * COUNTER_SPACING
-    var generation = (stripes + 1) * COUNTER_SPACING
-    var stopped = (stripes + 2) * COUNTER_SPACING
-    var present = Atomic[Int64](0)
-    var team = Atomic[Int64](0)
-
-    def stripe(
-        task: Int,
-    ) {
-        mut band,
-        mut trail,
-        mut edge,
-        mut heuristic,
-        mut present,
-        mut team,
-        imm shared,
-        imm stripes,
-        imm tiles,
-        imm arrived,
-        imm generation,
-        imm stopped,
-    }:
-        var index = Int(present.fetch_add(1))
-        if index >= Int(ALONE):
-            return
-        if index == 0:
-            var waited_from = perf_counter_ns()
-            while True:
-                var count = present.load()
-                if Int(count) >= stripes or Int(perf_counter_ns() - waited_from) > CHECK_IN_NANOSECONDS:
-                    var expected = count
-                    if present.compare_exchange(expected, count + ALONE):
-                        _ = team.fetch_add(count)
-                        break
-        else:
-            while team.load() == 0:
-                pass
-        var members = Int(team.load())
-        var seen = 0
-        var swept = 0
-        for tile in range(tiles):
-            var first_column = band.first_column(tile)
-            var end_column = band.end_column(tile)
-            var count = band.end_word - band.top
-            var sweep = band.tile_sweep(tile)
-            if count < 2 * LANES * members:
-                if index == 0:
-                    sweep.words(band.top, band.end_word, first_column, end_column)
-            else:
-                var low = band.top + stripe_start(count, index, members)
-                var high = band.top + stripe_start(count, index + 1, members)
-                var chunks = ceildiv(end_column - first_column, STRIPE_CHUNK)
-                for chunk in range(chunks):
-                    var target = Int64(swept + chunk + 1)
-                    if index > 0:
-                        while Atomic.load(shared.unsafe_offset((index - 1) * COUNTER_SPACING)) < target:
-                            pass
-                    if low < high:
-                        sweep.words(
-                            low,
-                            high,
-                            first_column + chunk * STRIPE_CHUNK,
-                            min(first_column + (chunk + 1) * STRIPE_CHUNK, end_column),
-                        )
-                    Atomic.store(shared.unsafe_offset(index * COUNTER_SPACING), target)
-                swept += chunks
-            spin_barrier(shared, arrived, generation, members, seen)
-            if index == 0:
-                var going = band.finish(tile, edge, heuristic)
-                if going and tile + 1 < tiles:
-                    going = band.prepare[record](tile + 1, trail, heuristic)
-                if not going:
-                    Atomic.store(shared.unsafe_offset(stopped), Int64(1))
-            spin_barrier(shared, arrived, generation, members, seen)
-            if Atomic.load(shared.unsafe_offset(stopped)) != 0:
-                return
-
-    parallelize(stripe, stripes, stripes)
-    if counters[stopped] != 0:
-        return band.outcome
     return band.result(edge)
 
 
@@ -2443,24 +2126,6 @@ distance's."""
 
 comptime TWO_ENDED_PERCENT = 57
 """The two-ended search's cost per square edit of distance, in percent of one front's step."""
-
-comptime LOCKSTEP_SCORE = 128
-"""The score each direction of the two-ended search reaches before a second thread may take one of
-them: a front of this many diagonals takes a few times a spin barrier's round trip."""
-
-comptime LOCKSTEP_SETUP = 30_000
-"""What starting the second thread costs, in one front's steps of about a nanosecond: a fork and join
-of two tasks, with room for one waking from sleep and for a projection that ran high, as one from a
-couple of hundred edits can by a fifth."""
-
-comptime CHECK_IN_NANOSECONDS = 100_000
-"""How long the first of the lockstep's two tasks waits for the second before going on alone."""
-
-comptime ALONE = Int64(1 << 20)
-"""Marks the lockstep claimed by one task alone; past any count of arrivals."""
-
-comptime BARRIER_STEPS = 150
-"""What the lockstep's spin barrier costs a score, in one front's steps."""
 
 comptime TWO_ENDED_SETUP = 600
 """What setting up the two-ended search's second front and histories costs, in one front's steps: an
@@ -2870,9 +2535,9 @@ def reversed_codes(codes: List[UInt8], count: Int, sentinel: UInt8) -> List[UInt
     return flipped^
 
 
-comptime FRONT_RING = 3
-"""Fronts a direction keeps in turn: the latest, the one before, which an overlap check reads, and the
-next, which a second thread may already be growing while the first checks the other two."""
+comptime FRONT_RING = 2
+"""Fronts a direction keeps in turn: the latest, and the one before, which an overlap check reads; the
+next grows over the one before."""
 
 
 struct FrontPair(Movable):
@@ -2934,7 +2599,7 @@ struct FrontPair(Movable):
 
     @always_inline
     def state(self) -> FrontState:
-        """What another thread needs to read this direction's two latest fronts."""
+        """This direction's two latest fronts, as an overlap check reads them."""
         return FrontState(
             self.slot,
             self.low,
@@ -2974,8 +2639,7 @@ struct FrontPair(Movable):
     def front(self, which: Int) -> MutPointer[Int32, MutUntrackedOrigin]:
         """Front `which` of the ring, as a pointer indexed by diagonal.
 
-        Writable from a shared reference: in the lockstep each thread writes only its own fronts, and
-        reads the other's only where their owner no longer writes (see `lockstep`).
+        Writable from a shared reference, so a front grows while the one before it is read.
         """
         return (
             self.buffers.unsafe_ptr()
@@ -2987,8 +2651,7 @@ struct FrontPair(Movable):
 
 @fieldwise_init
 struct FrontState(ImplicitlyCopyable, TrivialRegisterPassable):
-    """A direction's two latest fronts as one moment saw them: their ring slots and diagonals, its
-    score and its progress, so a thread can check them while their owner grows the next."""
+    """A direction's two latest fronts: their ring slots and diagonals, its score and its progress."""
 
     var slot: Int
     var low: Int
@@ -3045,15 +2708,13 @@ struct Meeting(ImplicitlyCopyable, TrivialRegisterPassable):
     var backward_score: Int
 
 
-def two_ended_distance(profile: Profile, step_tenths: Int, workers: Int = 1) -> Probe:
+def two_ended_distance(profile: Profile, step_tenths: Int) -> Probe:
     """The edit distance by `two_ended`, keeping no history."""
     var first_back = reversed_codes(profile.column_codes, profile.columns, FIRST_SENTINEL)
     var second_back = reversed_codes(profile.row_codes, profile.rows, SECOND_SENTINEL)
     var ahead = FrontPair(PROBE_CEILING // 2 + 1)
     var behind = FrontPair(PROBE_CEILING // 2 + 1)
-    return two_ended(
-        profile, first_back, second_back, step_tenths, ahead, behind, UNSEEDED_EDITS_PER_STEP, workers
-    ).probe
+    return two_ended(profile, first_back, second_back, step_tenths, ahead, behind, UNSEEDED_EDITS_PER_STEP).probe
 
 
 def two_ended(
@@ -3064,7 +2725,6 @@ def two_ended(
     mut ahead: FrontPair,
     mut behind: FrontPair,
     unseeded_edits_per_step: Int = EDITS_PER_STEP,
-    workers: Int = 1,
 ) -> Meeting:
     """The edit distance by diagonal transition from both ends at once, as BiWFA scores, while cheap.
 
@@ -3079,9 +2739,7 @@ def two_ended(
 
     It stops as `diagonal_transition` does, once the search still to do passes the budget (see
     `step_budget`), projecting the distance from both fronts' progress; against a band the seeds
-    would not narrow, at `unseeded_edits_per_step`. With more than one worker, once both fronts
-    reach `LOCKSTEP_SCORE` the two directions go on in parallel (see `lockstep`); `workers` of zero
-    means every thread this process may use, asked for only then.
+    would not narrow, at `unseeded_edits_per_step`.
     """
     var columns = profile.columns
     var rows = profile.rows
@@ -3153,17 +2811,6 @@ def two_ended(
             )
             if estimate >= 0:
                 return Meeting(Probe(-1, estimate, total), 0, 0, 0, 0)
-            # Both fronts stand at the same score after a check; a second thread takes one of them
-            # once half the steps projected to be left outweigh its start and a barrier a score.
-            if workers != 1 and total >= 2 * LOCKSTEP_SCORE:
-                var projected = total * (columns + rows) // max(ahead.furthest + behind.furthest, 1)
-                var saved = (projected * projected - total * total) * TWO_ENDED_PERCENT // 200
-                # Asking for the thread count is a system call, so only a search this far along asks.
-                var available = workers if workers > 0 else max(hardware_threads(), 1)
-                if available > 1 and saved > LOCKSTEP_SETUP + (projected - total) // 2 * BARRIER_STEPS:
-                    return lockstep(
-                        profile, first_back, second_back, ahead, behind, limit, step_tenths, unseeded_edits_per_step
-                    )
     return Meeting(Probe(-1, 2 * limit + 1, total), 0, 0, 0, 0)
 
 
@@ -3206,175 +2853,6 @@ def two_ended_gives_up(
     ):
         return max(estimate, total + 1)
     return -1
-
-
-def lockstep(
-    profile: Profile,
-    first_back: List[UInt8],
-    second_back: List[UInt8],
-    mut ahead: FrontPair,
-    mut behind: FrontPair,
-    limit: Int,
-    step_tenths: Int,
-    unseeded_edits_per_step: Int,
-) -> Meeting:
-    """`two_ended` from equal scores on, with one thread a direction, a score at a time each.
-
-    After both have grown the fronts of score `s`, the first thread checks the totals `2s - 1`, one
-    front of each pair against the other's previous, then `2s`, in that order, so the first overlap
-    is still the least total; the second thread meanwhile grows its next front into the third slot
-    of its ring, having published where its two latest lie (see `FrontState`). One spin barrier a
-    score: a few dozen nanoseconds, against the hundreds a front of a few hundred diagonals takes.
-
-    The runtime may run the two tasks one after the other, and a task spinning for a partner that
-    starts only once it returns would never return. So each checks in first: the first to arrive
-    waits `CHECK_IN_NANOSECONDS` for the other, and if none comes, claims the search and finishes it
-    alone, both directions in turn, while the late task finds it claimed and returns.
-    """
-    var columns = profile.columns
-    var rows = profile.rows
-    var first = profile.column_codes.unsafe_ptr()
-    var second = profile.row_codes.unsafe_ptr()
-    var first_reversed = first_back.unsafe_ptr()
-    var second_reversed = second_back.unsafe_ptr()
-    var target = columns - rows
-    var arrived = Atomic[Int64](0)
-    var generation = Atomic[Int64](0)
-    var done = Atomic[Int64](0)
-    var present = Atomic[Int64](0)
-    var start = ahead.score
-    # What a search that ran out of scores reports; any other end overwrites it.
-    var outcome = Meeting(Probe(-1, 2 * limit + 1, 2 * (limit - 1)), 0, 0, 0, 0)
-    # The backward direction's latest state, one record per score parity, so publishing the next
-    # never overwrites the one being checked.
-    var published = List[FrontState](length=2, fill=behind.state())
-
-    @always_inline
-    def wait(mut arrived: Atomic[Int64], mut generation: Atomic[Int64]):
-        var seen = generation.load()
-        if arrived.fetch_add(1) == 1:
-            arrived.store(0)
-            _ = generation.fetch_add(1)
-        else:
-            while generation.load() == seen:
-                pass
-
-    def side(
-        index: Int,
-    ) {
-        mut ahead,
-        mut behind,
-        mut arrived,
-        mut generation,
-        mut done,
-        mut present,
-        mut outcome,
-        mut published,
-        imm start,
-        imm limit,
-        imm columns,
-        imm rows,
-        imm target,
-        imm step_tenths,
-        imm unseeded_edits_per_step,
-        imm first,
-        imm second,
-        imm first_reversed,
-        imm second_reversed,
-    }:
-        @always_inline
-        def settled(
-            score: Int, back: FrontState, checking: Bool
-        ) {
-            mut outcome,
-            imm ahead,
-            imm behind,
-            imm target,
-            imm columns,
-            imm rows,
-            imm step_tenths,
-            imm unseeded_edits_per_step,
-        } -> Bool:
-            """Checks the totals `2 score - 1` then `2 score`, and the budget; true once the search ends."""
-            for earlier in range(3):
-                # Either front against the other's previous first, then both latest.
-                var forward_earlier = earlier == 1
-                var backward_earlier = earlier == 0
-                var diagonal = overlap(
-                    ahead.front(ahead.previous() if forward_earlier else ahead.slot),
-                    ahead.previous_low if forward_earlier else ahead.low,
-                    ahead.previous_high if forward_earlier else ahead.high,
-                    behind.front(back.previous_slot if backward_earlier else back.slot),
-                    back.previous_low if backward_earlier else back.low,
-                    back.previous_high if backward_earlier else back.high,
-                    target,
-                    columns,
-                )
-                if diagonal != NO_DIAGONAL:
-                    var column = Int(
-                        ahead.front(ahead.previous() if forward_earlier else ahead.slot)[unsafe_offset=diagonal]
-                    )
-                    var forward_score = ahead.score - 1 if forward_earlier else ahead.score
-                    var backward_score = back.score - 1 if backward_earlier else back.score
-                    var total = forward_score + backward_score
-                    outcome = Meeting(Probe(total, total, total - 1), diagonal, column, forward_score, backward_score)
-                    return True
-            if checking:
-                var estimate = two_ended_gives_up(
-                    2 * score, ahead.furthest + back.furthest, columns, rows, step_tenths, unseeded_edits_per_step
-                )
-                if estimate >= 0:
-                    outcome = Meeting(Probe(-1, estimate, 2 * score), 0, 0, 0, 0)
-                    return True
-            return False
-
-        var arrival = present.fetch_add(1)
-        if arrival >= ALONE:
-            return
-        if arrival == 0:
-            var waited_from = perf_counter_ns()
-            while present.load() == 1:
-                if Int(perf_counter_ns() - waited_from) > CHECK_IN_NANOSECONDS:
-                    var expected = Int64(1)
-                    if present.compare_exchange(expected, ALONE):
-                        break
-            if present.load() >= ALONE:
-                # No partner came: both directions on this thread, in turn.
-                var score = start
-                while score + 1 < limit:
-                    score += 1
-                    var checking = (2 * score) % PROBE_STRIDE == 0
-                    ahead.advance(first, second, checking, columns, rows)
-                    behind.advance(first_reversed, second_reversed, checking, columns, rows)
-                    if settled(score, behind.state(), checking):
-                        return
-                return
-        var score = start
-        while score + 1 < limit:
-            score += 1
-            var checking = (2 * score) % PROBE_STRIDE == 0
-            if index == 1:
-                behind.advance(first_reversed, second_reversed, checking, columns, rows)
-                published[score % 2] = behind.state()
-                wait(arrived, generation)
-                # The first thread decides a score's end only after that score's barrier, so an end
-                # at this very score may already show; this thread then grows one more front and
-                # meets it at the next barrier, where it waits, and an earlier end lets it go.
-                var ended = Int(done.load())
-                if ended != 0 and ended < score:
-                    return
-                continue
-            ahead.advance(first, second, checking, columns, rows)
-            wait(arrived, generation)
-            if settled(score, published[score % 2], checking):
-                done.store(Int64(score))
-                # The other thread is growing its next front, if there is a next, and waits there.
-                if score + 1 < limit:
-                    wait(arrived, generation)
-                return
-
-    parallelize(side, 2, 2)
-    return outcome
 
 
 def trace_from(
@@ -3464,72 +2942,48 @@ def trace_diagonals(profile: Profile, fronts: DiagonalFronts, distance: Int, mut
 # endregion Diagonal transition
 
 
-@fieldwise_init
-struct Outcome(ImplicitlyCopyable, TrivialRegisterPassable):
-    """Where band doubling ended: the distance, and the cell at which the two halves met."""
-
-    var distance: Int
-    """The edit distance, or -1 when the band grew to the whole matrix and the caller should sweep it."""
-    var middle: Int
-    """The column the forward half stopped at; every column when it ran alone."""
-    var meeting_row: Int
-    """The row of `middle` an optimal path crosses."""
-
-
 def band_doubling[
     record: Bool
 ](
-    mut forward: Profile,
-    mut backward: Profile,
-    meet: Bool,
+    mut profile: Profile,
     give_up_wide: Bool,
     probe: Probe,
-    mut forward_trail: Trail,
-    mut backward_trail: Trail,
-    mut forward_edge: Edge,
-    mut backward_edge: Edge,
-    mut forward_heuristic: SeedHeuristic,
-    mut backward_heuristic: SeedHeuristic,
+    mut trail: Trail,
+    mut edge: Edge,
+    mut heuristic: SeedHeuristic,
     trusted: Bool = True,
-    stripes: Int = 1,
-) -> Outcome:
-    """Band doubling, from the start alone or from both ends at once to meet in the middle.
+) -> Int:
+    """Band doubling: the distance, or -1 once the band would cover the matrix and `give_up_wide`
+    hands it back for a sweep of the whole.
 
     An untrusted projection (see `trusted_projection`) neither aims the first bound nor sets the
     next: the first starts `DOUBLING_START` past the distance already ruled out, by the floor or the
     heuristic at the origin, and each next one at
     most doubles, as A*PA2's band doubling grows, whatever a failed round projected.
 
-    Each round sweeps the band for one bound. Meeting in the middle, one thread sweeps forward to
-    the middle column while another sweeps the reversed sequences forward to the same column, which
-    is the original's suffix swept from its end; the distance is the least, over the middle's rows,
-    of the two scores there. Every computed score is the cost of a real path and the optimal path's
-    are exact (see `pruned_distance`), so that least is exact whenever it is within the bound.
-
-    A failed round leaves either a real alignment's cost, which caps the next bound, or the column
-    at which a half pruned every row, from which the distance is estimated as the bound scaled to the
+    Each round sweeps the band for one bound. A failed round leaves either a real alignment's cost,
+    which caps the next bound, or the column at which it pruned every row, from which the distance is estimated as the bound scaled to the
     whole width; the next bound aims just past the estimate rather than doubling. Once the band would
     cover the matrix, `give_up_wide` hands back to the caller, else the bound is lifted past any path.
 
     The first bound aims just past where the diagonal transition's `probe` projected the distance,
     and above every score it ruled out.
     """
-    var columns = forward.columns
-    var rows = forward.rows
-    var middle = columns // 2 if meet else columns
+    var columns = profile.columns
+    var rows = profile.rows
     var gap = abs(rows - columns)
     var aimed = probe.estimate + probe.estimate // 8
     if columns <= SHORT_COLUMNS:
         aimed = min(probe.estimate * SHORT_AIM // 10, probe.estimate + SHORT_REACH)
     # The heuristic at the origin is a lower bound on the distance. With seeds it lands within about a
     # sixth of it on a close pair, where the projection from a few edits strays further.
-    var origin = forward_heuristic.h(0, 0)
+    var origin = heuristic.h(0, 0)
     var threshold = max(gap, probe.floor + 1, aimed + PROBE_MARGIN)
     if not trusted:
         # As A*PA2 starts: a step past what is known, the heuristic at the origin or the floor.
         threshold = min(threshold, max(gap, probe.floor + 1, origin) + DOUBLING_START)
-    if forward_heuristic.seeds > 0:
-        if forward_heuristic.chains_well():
+    if heuristic.seeds > 0:
+        if heuristic.chains_well():
             # Matches survive: the origin's bound lies within a few percent of the distance on a
             # close pair, closer than any projection, so start just past it. On a more divergent
             # pair the round dies early, a share of the way across proportional to how far the
@@ -3548,71 +3002,25 @@ def band_doubling[
     while True:
         if 2 * (threshold + BAND_COLUMNS) >= rows:
             if give_up_wide:
-                return Outcome(-1, middle, rows)
+                return -1
             threshold = max(threshold, columns + rows)
-        var forward_round = Round(-1, 0, threshold, -1)
-        var backward_round = Round(-1, 0, threshold, -1)
-        if meet:
-
-            def half(
-                index: Int,
-            ) {
-                mut forward,
-                mut backward,
-                mut forward_trail,
-                mut backward_trail,
-                mut forward_edge,
-                mut backward_edge,
-                mut forward_round,
-                mut backward_round,
-                mut forward_heuristic,
-                mut backward_heuristic,
-                imm threshold,
-                imm middle,
-                imm columns,
-            }:
-                if index == 0:
-                    forward_round = pruned_distance[record](
-                        forward, threshold, middle, forward_trail, forward_edge, forward_heuristic
-                    )
-                else:
-                    backward_round = pruned_distance[record](
-                        backward, threshold, columns - middle, backward_trail, backward_edge, backward_heuristic
-                    )
-
-            parallelize(half, 2, 2)
-        else:
-            forward_round = pruned_distance[record](
-                forward,
-                threshold,
-                columns,
-                forward_trail,
-                forward_edge,
-                forward_heuristic,
-                first_round,
-                first_round,
-                0 if first_round else last_bound + max((last_bound - origin) // 4, SEED_SLACK),
-                stripes,
-            )
+        var attempt = pruned_distance[record](
+            profile,
+            threshold,
+            trail,
+            edge,
+            heuristic,
+            first_round,
+            first_round,
+            0 if first_round else last_bound + max((last_bound - origin) // 4, SEED_SLACK),
+        )
         first_round = False
 
-        var found = -1
-        var meeting_row = rows
-        if not meet:
-            found = forward_round.distance
-        elif forward_round.reached == middle and backward_round.reached == columns - middle:
-            # Join at the middle: the forward score at a row plus the backward score at its mirror.
-            var low = max(forward_edge.low_row, rows - backward_edge.high_row)
-            var high = min(forward_edge.high_row, rows - backward_edge.low_row)
-            for row in range(low, high + 1):
-                var total = forward_edge.score(row) + backward_edge.score(rows - row)
-                if found < 0 or total < found:
-                    found = total
-                    meeting_row = row
+        var found = attempt.distance
         # A checkpoint may have lowered the bound, and only a distance within the lowered one is exact.
-        var bound = min(forward_round.bound, backward_round.bound) if meet else forward_round.bound
+        var bound = attempt.bound
         if found >= 0 and found <= bound:
-            return Outcome(found, middle, meeting_row)
+            return found
 
         # Grown from the bound the round ended on, which a checkpoint may have lowered: from the one it
         # started on, a round lowered and then failed would jump back to a bound it already knew was loose.
@@ -3621,30 +3029,25 @@ def band_doubling[
             # Still the cost of a real alignment, so it caps every later bound.
             best = min(best, found)
         else:
-            # A half pruned every row `reached` columns into its sweep, where the best alignment's
+            # The round pruned every row `reached` columns into its sweep, where the best alignment's
             # score plus heuristic had climbed from the heuristic at the origin past the bound;
             # that climb scaled to the whole width estimates the distance.
             var estimate = Int.MAX
-            if forward_round.estimate >= 0:
+            if attempt.estimate >= 0:
                 # A checkpoint gave the round up, with its own projection.
-                estimate = forward_round.estimate
-            elif forward_round.reached > 0 and (
-                forward_round.reached < middle
-                or (not meet and forward_round.reached == middle and forward_heuristic.seeds > 0)
-            ):
+                estimate = attempt.estimate
+            elif attempt.reached > 0 and (attempt.reached < columns or heuristic.seeds > 0):
                 # A seeded round that crossed every column and still missed the end climbed past the
                 # bound in its last tile: the bound itself is the projection, and the retry aims its
                 # margin past it rather than doubling a bound that may be nearly enough.
-                estimate = min(estimate, origin + (bound - origin) * columns // forward_round.reached)
-            if meet and backward_round.reached < columns - middle and backward_round.reached > 0:
-                estimate = min(estimate, origin + (threshold - origin) * columns // backward_round.reached)
+                estimate = min(estimate, origin + (bound - origin) * columns // attempt.reached)
             if estimate != Int.MAX:
                 next = max(bound + bound // 4, estimate + estimate // 8 + PROBE_MARGIN)
-                if forward_heuristic.seeds > 0:
+                if heuristic.seeds > 0:
                     # The origin's bound is certain; only the climb above it is estimated.
                     next = max(bound + SEED_SLACK, estimate + (estimate - origin) // 2 + PROBE_MARGIN)
         last_bound = bound
-        if found < 0 and forward_heuristic.seeds > 0 and forward_round.reached * SEEDED_TRUST_SHARE < middle:
+        if found < 0 and heuristic.seeds > 0 and attempt.reached * SEEDED_TRUST_SHARE < columns:
             # A seeded round that died within its first columns projects from those alone, which on
             # real reads hold their errors gathered at the start: its margin over the origin's bound
             # grows `SEEDED_GROWTH` times instead, as A*PA2's grows, until a round gets far enough in
@@ -3657,24 +3060,19 @@ def band_doubling[
         threshold = min(next, best)
 
 
-def edit_distance(first: String, second: String, threads: Optional[Int] = None) raises AlignmentError -> Int:
+def edit_distance(first: String, second: String) raises AlignmentError -> Int:
     """The global edit distance between two DNA sequences over `ACGT`, by bit-parallel sweep.
 
     Band doubling, as in A*PA2-simple: guess a bound, sweep only the band of cells a path within it
     could cross, and raise the guess until the answer fits under it, which proves it optimal. Close
-    sequences therefore cost far less than the whole matrix. With more than one thread, a long pair
-    is swept from both ends at once and joined in the middle (see `band_doubling`), which A*PA2 does
-    not do. Once the band would cover most of the matrix, the whole matrix is swept instead, tiled
-    across `threads` threads, every thread this process may use by default.
+    sequences therefore cost far less than the whole matrix. Once the band would cover most of the
+    matrix, the whole matrix is swept instead. One thread throughout; `edit_distances` spreads many
+    pairs over threads.
     """
     var forward = Profile(first, second)
     if forward.columns == 0 or forward.rows == 0:
         return forward.columns + forward.rows
-    var workers = 1
-    if forward.columns >= MEET_COLUMNS or forward.columns * forward.rows >= PARALLEL_CELLS:
-        # A system call, so only a pair long enough to use more than one thread asks.
-        workers = max(threads.or_else(hardware_threads()), 1)
-    var probe = two_ended_distance(forward, STEP_TENTHS_DISTANCE, workers)
+    var probe = two_ended_distance(forward, STEP_TENTHS_DISTANCE)
     if probe.distance >= 0:
         return probe.distance
     # The band's bounds and the seeds' gate are tuned on one front's projection from its first
@@ -3691,47 +3089,15 @@ def edit_distance(first: String, second: String, threads: Optional[Int] = None) 
     # rebuilt inexact if they chain poorly (see `SeedHeuristic`).
     var long = forward.columns >= INEXACT_COLUMNS
     var inexact = long and projected.estimate * INEXACT_DIVERGENCE >= forward.columns
-    var forward_heuristic = SeedHeuristic(forward, inexact, choose=long, workers=workers) if seeded else SeedHeuristic(
+    var heuristic = SeedHeuristic(forward, inexact, choose=long) if seeded else SeedHeuristic(
         forward.columns, forward.rows
     )
-    inexact = forward_heuristic.cost > 1
-    # A band narrowed by many chained seeds gains less from a second thread than that thread's half,
-    # with its own heuristic to build and a weaker start, costs.
-    var meet = workers > 1 and forward.columns >= MEET_COLUMNS and not forward_heuristic.chains_well()
-    # A long, divergent pair, whose seeds match within one edit or chain poorly, sweeps a tall band,
-    # which splits into stripes across the threads (see `striped_distance`) far better than into two
-    # halves; a narrow band does not.
-    var divergent = forward_heuristic.cost > 1 or not forward_heuristic.chains_well()
-    var striped = forward.columns >= STRIPED_MIN_COLUMNS and divergent
-    var stripes = min(workers, MAX_STRIPES) if workers > 1 and striped else 1
-    if stripes > 1:
-        meet = False
-    var backward = Profile(first, second, reverse=True) if meet else Profile(String(), String())
-    var forward_trail = Trail()
-    var backward_trail = Trail()
-    var forward_edge = Edge()
-    var backward_edge = Edge()
-    var backward_heuristic = SeedHeuristic(backward, inexact, workers=workers) if seeded and meet else SeedHeuristic(
-        backward.columns, backward.rows
-    )
-    var outcome = band_doubling[False](
-        forward,
-        backward,
-        meet,
-        True,
-        probe,
-        forward_trail,
-        backward_trail,
-        forward_edge,
-        backward_edge,
-        forward_heuristic,
-        backward_heuristic,
-        trusted,
-        stripes,
-    )
-    if outcome.distance >= 0:
-        return outcome.distance
-    return full_distance(forward, workers)
+    var trail = Trail()
+    var edge = Edge()
+    var distance = band_doubling[False](forward, True, probe, trail, edge, heuristic, trusted)
+    if distance >= 0:
+        return distance
+    return full_distance(forward)
 
 
 # region Traceback
@@ -4240,26 +3606,24 @@ def trace_back(profile: Profile, trail: Trail, start_column: Int, start_row: Int
         moves.append(UP)
 
 
-def edit_alignment(
-    first: String, second: String, threads: Optional[Int] = None
-) raises AlignmentError -> AlignmentResult:
+def edit_alignment(first: String, second: String) raises AlignmentError -> AlignmentResult:
     """The global edit distance between two DNA sequences over `ACGT`, and an optimal alignment.
 
     The distance comes from `edit_distance`'s band doubling, recording each tile's left edge in the
     round that succeeds; the alignment is then traced back tile by tile from those edges (see
-    `trace_back`). Meeting in the middle, both halves are traced at once from the cell where they
-    met. The score is the distance, as `levenshtein_alignment` reports it.
+    `trace_back`). Where the two-ended diagonal transition settles the distance, its fronts give the
+    path, traced to the start and on to the end from where they met. The score is the distance, as
+    `levenshtein_alignment` reports it. One thread throughout; `edit_alignments` spreads many pairs
+    over threads.
     """
     var forward = Profile(first, second)
     var columns = forward.columns
     var rows = forward.rows
-    # Moves right to left, from the corner, or from where the halves met, back to the origin.
+    # Moves right to left, from the corner, or from where the fronts met, back to the origin.
     var forward_moves = List[UInt8](capacity=columns + rows)
-    # Moves left to right, from where the halves met to the corner; none without meeting.
+    # Moves left to right, from where the fronts met to the corner; none without meeting.
     var backward_moves = List[UInt8]()
     var distance: Int
-    var middle = columns
-    var meeting_row = rows
     if columns == 0 or rows == 0:
         distance = columns + rows
         for _ in range(rows):
@@ -4280,10 +3644,7 @@ def edit_alignment(
         var second_back = reversed_codes(forward.row_codes, rows, SECOND_SENTINEL)
         var ahead = FrontPair(PROBE_CEILING // 2 + 1, record=True)
         var behind = FrontPair(PROBE_CEILING // 2 + 1, record=True)
-        var workers = max(threads.or_else(0), 0) if columns >= MEET_COLUMNS else 1
-        var meeting = two_ended(
-            forward, first_back, second_back, STEP_TENTHS_ALIGNMENT, ahead, behind, EDITS_PER_STEP, workers
-        )
+        var meeting = two_ended(forward, first_back, second_back, STEP_TENTHS_ALIGNMENT, ahead, behind, EDITS_PER_STEP)
         if meeting.probe.distance >= 0:
             var middle_column = meeting.column
             var middle_row = meeting.column - meeting.diagonal
@@ -4317,7 +3678,6 @@ def edit_alignment(
         var projected = diagonal_transition(forward, PROJECTION_ONLY, fronts)
         var trusted = trusted_projection(meeting.probe, projected)
         var probe = Probe(-1, projected.estimate, max(meeting.probe.floor, projected.floor))
-        # Asking for the thread count is a system call, so only a pair long enough to split asks.
         # The seeds' gate stays on the first projection, which it is tuned on.
         var seeded = columns >= SEED_COLUMNS or (
             projected.estimate >= SEED_EDITS and projected.estimate * SEED_DIVERGENCE <= columns
@@ -4326,84 +3686,12 @@ def edit_alignment(
         # rebuilt inexact if they chain poorly (see `SeedHeuristic`).
         var long = columns >= INEXACT_COLUMNS
         var inexact = long and projected.estimate * INEXACT_DIVERGENCE >= columns
-        # Asking for the thread count is a system call, so only a pair long enough for seeds asks.
-        var seed_workers = max(threads.or_else(hardware_threads()), 1) if seeded else 1
-        var forward_heuristic = SeedHeuristic(
-            forward, inexact, choose=long, workers=seed_workers
-        ) if seeded else SeedHeuristic(columns, rows)
-        inexact = forward_heuristic.cost > 1
-        # A band narrowed by many chained seeds gains less from a second thread than its half costs.
-        # Asking for the thread count is a system call, so only a pair long enough to split asks.
-        var meet = (
-            not forward_heuristic.chains_well()
-            and columns >= MEET_COLUMNS
-            and max(threads.or_else(hardware_threads()), 1) > 1
-        )
-        # A long, divergent pair's tall band splits into stripes across the threads, as in `edit_distance`.
-        var divergent = forward_heuristic.cost > 1 or not forward_heuristic.chains_well()
-        var striped = columns >= STRIPED_MIN_COLUMNS and divergent
-        var stripes = min(seed_workers, MAX_STRIPES) if seed_workers > 1 and striped else 1
-        if stripes > 1:
-            meet = False
-        var backward = Profile(first, second, reverse=True) if meet else Profile(String(), String())
-        var forward_trail = Trail(columns)
-        var backward_trail = Trail(columns)
-        var forward_edge = Edge()
-        var backward_edge = Edge()
-        var backward_heuristic = SeedHeuristic(
-            backward, inexact, workers=seed_workers
-        ) if seeded and meet else SeedHeuristic(backward.columns, backward.rows)
-        var outcome = band_doubling[True](
-            forward,
-            backward,
-            meet,
-            False,
-            probe,
-            forward_trail,
-            backward_trail,
-            forward_edge,
-            backward_edge,
-            forward_heuristic,
-            backward_heuristic,
-            trusted,
-            stripes,
-        )
-        distance = outcome.distance
-        if meet:
-            middle = outcome.middle
-            meeting_row = outcome.meeting_row
-            var forward_score = forward_edge.score(meeting_row)
-            var backward_score = backward_edge.score(rows - meeting_row)
-
-            def trace(
-                index: Int,
-            ) {
-                imm forward,
-                imm backward,
-                imm forward_trail,
-                imm backward_trail,
-                mut forward_moves,
-                mut backward_moves,
-                imm middle,
-                imm meeting_row,
-                imm forward_score,
-                imm backward_score,
-                imm columns,
-                imm rows,
-            }:
-                if index == 0:
-                    trace_back(forward, forward_trail, middle, meeting_row, forward_score, forward_moves)
-                else:
-                    trace_back(
-                        backward, backward_trail, columns - middle, rows - meeting_row, backward_score, backward_moves
-                    )
-
-            parallelize(trace, 2, 2)
-        else:
-            trace_back(forward, forward_trail, columns, rows, distance, forward_moves)
-        # The forward half runs right to left; the backward half, traced on the reversed sequences
-        # right to left, is already the original suffix left to right, move for move.
-    return gapped_rows(first, second, forward_moves, middle, meeting_row, backward_moves, distance)
+        var heuristic = SeedHeuristic(forward, inexact, choose=long) if seeded else SeedHeuristic(columns, rows)
+        var trail = Trail(columns)
+        var edge = Edge()
+        distance = band_doubling[True](forward, False, probe, trail, edge, heuristic, trusted)
+        trace_back(forward, trail, columns, rows, distance, forward_moves)
+    return gapped_rows(first, second, forward_moves, columns, rows, backward_moves, distance)
 
 
 @always_inline
