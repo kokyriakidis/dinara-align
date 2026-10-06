@@ -1027,6 +1027,13 @@ about one edit in fifteen bases on real reads; on a Skylake-X at a fixed 3.3 GHz
 register, its seeds' setup twice as slow as the M2's and its band no slower, 20 percent, short of which
 the long reads ran faster on exact seeds. Four lanes, AVX2, are between the two and unmeasured."""
 
+comptime INEXACT_CHAINED_SPREAD = 20
+"""`INEXACT_CHAINED` for a pair whose two projections agree (see `trusted_projection`), its errors
+spread along it as mutated sequences' are, not gathered at an end as real reads' are. Spread errors
+break fewer exact seeds' chains than gathered ones for the same narrowing of the band, so exact seeds
+still pay down to this share: on the M2, 100 kbp pairs at 6 to 8% aligned in 3.7 to 4.3 ms on exact
+seeds against 5.7 ms rebuilt, where the real reads still wanted `INEXACT_CHAINED`'s 40 percent."""
+
 comptime HALF_BITS = INEXACT_LENGTH
 """Bits in half an inexact seed's two-bit code: a one-edit match matches one half exactly, so each half
 indexes a table of this many bits."""
@@ -1225,10 +1232,11 @@ struct SeedHeuristic(Movable):
         profile: Profile,
         inexact: Bool = False,
         choose: Bool = False,
+        cutoff: Int = INEXACT_CHAINED,
     ):
         """Seeds of the profile's first sequence, matched exactly in its second, or with `inexact`
-        within one edit. With `choose`, exact seeds, rebuilt inexact when fewer than
-        `INEXACT_CHAINED` percent of them chain from the origin.
+        within one edit. With `choose`, exact seeds, rebuilt inexact when fewer than `cutoff` percent of
+        them chain from the origin.
 
         A match is kept only if a path from its start crosses the next `LOOKAHEAD_SEEDS` seeds for
         less than they would cost unmatched (see `worth_keeping`).
@@ -1237,7 +1245,7 @@ struct SeedHeuristic(Movable):
         self.build(profile, inexact)
         if choose and not inexact and self.seeds > 0:
             var chained = self.seeds - self.h(0, 0)
-            if chained * 100 < INEXACT_CHAINED * self.seeds:
+            if chained * 100 < cutoff * self.seeds:
                 self.build(profile, True)
 
     def build(mut self, profile: Profile, inexact: Bool):
@@ -3100,7 +3108,8 @@ def band_start(profile: Profile, search: Probe, mut probe: Probe, mut trusted: B
     # rebuilt inexact if they chain poorly (see `SeedHeuristic`).
     var long = profile.columns >= INEXACT_COLUMNS
     var inexact = long and projected.estimate * INEXACT_DIVERGENCE >= profile.columns
-    return SeedHeuristic(profile, inexact, choose=long)
+    var cutoff = INEXACT_CHAINED_SPREAD if trusted else INEXACT_CHAINED
+    return SeedHeuristic(profile, inexact, choose=long, cutoff=min(cutoff, INEXACT_CHAINED))
 
 
 # region Traceback

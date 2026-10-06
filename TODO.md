@@ -15,9 +15,10 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
   the second sequence instead of the seeds, at more memory.
 - [ ] **Traceback (about 0.9 s).** Retracing the final round's tiles from their recorded left
   edges.
-- [ ] **The M2's two lost rows.** 100 kbp pairs at 6 and 7% divergence lose to A*PA2-full there:
-  the M2's cutoff, 40% of exact seeds chained, rebuilds inexact seeds from 6%, and was tuned when
-  inexact setup cost twice what it does now. A sweep of `INEXACT_CHAINED` on the M2 may win them back.
+- [x] **The M2's two lost rows.** 100 kbp pairs at 6 and 7% divergence lost to A*PA2-full there, the
+  M2's 40% cutoff rebuilding inexact seeds that did not pay on spread errors. A pair whose two
+  projections agree, as spread errors' do, now rebuilds only below 20%: 3.75 and 3.92 ms against
+  A*PA2-full's 5.25 and 5.0, at a cost of 1 to 2.5% on the M2's real long reads, still well ahead.
 
 ## From A*PA2's discussion
 
