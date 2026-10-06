@@ -32,9 +32,17 @@ stands on each.
 
 - [x] **Symbols beyond `ACGT`.** The edit distance takes `ACGT` and up to four other bytes, `N`
   among them, each matching only itself, through a third bit plane its own kernels read, at no cost
-  to bases alone. Still open: such a pair runs without seeds, which pack two bits a base, so a long
-  divergent pair with an `N` is slower; seeds that skip any window holding a symbol past `ACGT`, and
-  a potential that charges nothing for those seeds, would bring them back.
+  to bases alone. Such a pair now takes seeds too: a seed holding an `N` goes uncounted, matching
+  nowhere and charging nothing, and the second sequence reads its `N` as a base for the seeds alone,
+  which only adds matches. With one `N` a read, scattered ones or a 100- or 5000-base run in both,
+  the 500 kbp reads align 2.5 to 3 times faster on the M2 and 1.4 to 1.7 times on the Skylake-X,
+  and 100 kbp pairs up to twice as fast on the M2, at the same costs and bases alone unchanged
+  within noise. Folding the first sequence's `N` too was as fast on short runs but flooded a long
+  run with matches, a run of `A` against a run of `A`, up to 800 times slower.
+- [ ] **Seeds on ont-50k's reads with an `N`, on x86.** There they still cost about 6% over sweeping
+  without seeds (102 against 96 ms the 104 reads), where on the M2 they save 12%: the seeds' setup
+  is slower beside the AVX-512 band, and the extended kernels slow it more. A gate for extended
+  pairs, or checking whether bases alone pay for seeds on reads this short, is untried.
 - [~] **Semi-global and open-ended alignment.** `edit_search` finds a pattern inside a text, Edlib's
   infix mode, or at its start, its prefix mode, and `edit_search_alignment` aligns it there, exact.
   It sweeps a band as Edlib does, a bound doubled and only the rows some score within it can still

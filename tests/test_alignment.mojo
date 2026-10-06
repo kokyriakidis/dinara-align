@@ -494,7 +494,7 @@ def test_bit_parallel_edit_distance_matches_the_full_matrix() raises:
 def test_bit_parallel_symbols_past_acgt() raises:
     """Bytes past `ACGT` are symbols of their own, each matching only itself, up to four of them.
 
-    `N` alone and four extra symbols, short pairs and long ones whose band sweeps without seeds,
+    `N` alone and four extra symbols, short pairs and long ones whose band sweeps with seeds,
     close and divergent, and pairs where only one side holds them; every distance is the global
     affine alignment's at unit costs over the same alphabet, which shares no code with the sweep,
     and every alignment rebuilds both inputs and rescores to the distance.
@@ -734,6 +734,53 @@ def test_seeded_bands_are_exact() raises:
             String(unsafe_from_utf8=slice_bytes(bytes, tail, len(bytes))), 0.5
         )
         var pairs: List[Tuple[String, String]] = [(first, second), (second, first), (first, burst)]
+        for pair in pairs:
+            var expected = -Int(score[GLOBAL](pair[0], pair[1], unit))
+            assert_equal(edit_distance(pair[0], pair[1]), expected)
+            var aligned = edit_alignment(pair[0], pair[1])
+            assert_equal(Int(aligned.score), expected)
+            assert_equal(aligned.first_gapped.replace("-", ""), pair[0])
+            assert_equal(aligned.second_gapped.replace("-", ""), pair[1])
+            assert_equal(rescore(aligned.first_gapped, aligned.second_gapped, unit), -expected)
+
+
+def sprinkle(text: String, rate: Float64, symbol: String) -> String:
+    """`text` with each byte replaced by `symbol` at `rate`."""
+    var out = List[UInt8]()
+    var replacement = symbol.as_bytes()[0]
+    for byte in text.as_bytes():
+        out.append(replacement if random_float64() < rate else byte)
+    return String(unsafe_from_utf8=out)
+
+
+def test_seeded_bands_fold_symbols_past_acgt() raises:
+    """Long pairs with `N` among the bases take seeds, and keep the exact distance.
+
+    A seed holding an `N` goes uncounted, and the second sequence's `N` read as a base, which only adds
+    matches: scattered `N`, a run of them in both sequences, and `N` on one side only, against bases.
+    Every distance is the global wavefront's at unit costs over `ACGTN`, which shares no code with the
+    band, and every alignment is rescored independently.
+    """
+    seed(23)
+    var unit = Scoring.edit_distance("ACGTN")
+    for rate in [0.05, 0.15]:
+        var bases = random_sequence(20000, 24000, DNA_ALPHABET)
+        var bytes = List[UInt8](bases.as_bytes())
+        var run = len(bytes) * 2 // 5
+        var first = sprinkle(
+            String(unsafe_from_utf8=slice_bytes(bytes, 0, run))
+            + String("N") * 300
+            + String(unsafe_from_utf8=slice_bytes(bytes, run + 300, len(bytes))),
+            0.002,
+            "N",
+        )
+        var second = mutate(first, rate)
+        var pairs: List[Tuple[String, String]] = [
+            (first, second),
+            (second, first),
+            (first, sprinkle(second, 0.002, "N")),
+            (first, mutate(bases, rate)),
+        ]
         for pair in pairs:
             var expected = -Int(score[GLOBAL](pair[0], pair[1], unit))
             assert_equal(edit_distance(pair[0], pair[1]), expected)

@@ -41,7 +41,7 @@ from std.bit import count_leading_zeros, count_trailing_zeros, pop_count
 from std.math import ceildiv, clamp, sqrt
 from std.sys import inlined_assembly, simd_width_of
 from std.sys.info import CompilationTarget
-from std.sys.intrinsics import PrefetchOptions, prefetch
+from std.sys.intrinsics import PrefetchOptions, likely, prefetch
 
 from .alignment import AlignmentResult
 from .errors import AlignmentError, ErrorKind
@@ -726,6 +726,32 @@ def symbol_codes(
         row_codes.append(code(byte, table, next_code))
 
 
+def folded(codes: List[UInt8]) -> List[UInt8]:
+    """`codes` with each symbol past `ACGT` read as the base its two low bits name, for the seeds, which
+    pack two bits a base; the sentinels past the end stay.
+
+    Folding never parts two equal symbols, so it never raises an edit distance: a match found in the
+    folded second sequence costs no more than the real one, and every real one is found. It only adds
+    matches, which weaken the bound and never break it. The first sequence's seeds that hold such a
+    symbol go uncounted instead (see `SeedHeuristic.remaining`).
+    """
+    var out = List[UInt8](capacity=len(codes))
+    out.resize(unsafe_uninit_length=len(codes))
+    var source = codes.unsafe_ptr()
+    var target = out.unsafe_ptr()
+    comptime CHUNK = 16
+    var index = 0
+    while index + CHUNK <= len(codes):
+        var chunk = source.unsafe_offset(index).unsafe_load[width=CHUNK]()
+        target.unsafe_offset(index).unsafe_store(chunk.lt(8).select(chunk & 3, chunk))
+        index += CHUNK
+    while index < len(codes):
+        var code = source[unsafe_offset=index]
+        target[unsafe_offset=index] = code & 3 if code < 8 else code
+        index += 1
+    return out^
+
+
 struct Profile(Movable):
     """Both sequences as codes, and once a band needs them, as the bit planes `Sweep` reads; see
     `Sweep` for the encoding."""
@@ -741,7 +767,8 @@ struct Profile(Movable):
     var row_extra: List[UInt64]
     var extended: Bool
     """Whether either sequence holds a symbol past `ACGT`, coded from four up, so a match also needs
-    the codes' third bit, `column_extra` and `row_extra`; the seeds, packed two bits a base, stay out."""
+    the codes' third bit, `column_extra` and `row_extra`; the seeds, packed two bits a base, read the
+    codes folded (see `folded`)."""
     var column_codes: List[UInt8]
     """The first sequence as codes, which the traceback compares base by base."""
     var row_codes: List[UInt8]
@@ -1218,6 +1245,15 @@ struct SeedHeuristic(Movable):
     var cost: Int
     """What a path pays crossing a seed it matches nowhere: one for exact seeds, two for inexact."""
     var seeds: Int
+    var counted: Int
+    """The seeds the potential counts: all of them, but for those holding a symbol past `ACGT`."""
+    var remaining: List[Int32]
+    """Per seed, the counted seeds from it to the end, one past the last; empty when every seed counts.
+
+    A seed holding a symbol past `ACGT`, an `N`, has no matches and costs a path nothing: the heuristic
+    is then the same on the other seeds alone, which bound the cost as all of them do. Matching it with
+    `N` folded into a base instead would flood a run of `N` in both sequences with matches, a run of
+    `A` against a run of `A`."""
     var slot_x: List[Int32]
     """Per layer, `LAYER_SLOTS` slots for the transformed starts of the matches from which that many
     matches chain; a layer rarely holds more than three, and any past the slots spill over."""
@@ -1239,6 +1275,8 @@ struct SeedHeuristic(Movable):
         self.length = SEED_LENGTH
         self.cost = 1
         self.seeds = 0
+        self.counted = 0
+        self.remaining = List[Int32]()
         self.slot_x = List[Int32]()
         self.slot_y = List[Int32]()
         self.counts = List[Int32]()
@@ -1263,17 +1301,45 @@ struct SeedHeuristic(Movable):
         less than they would cost unmatched (see `worth_keeping`).
         """
         self = Self(profile.columns, profile.rows)
-        self.build(profile, inexact)
-        if choose and not inexact and self.seeds > 0:
-            var chained = self.seeds - self.h(0, 0)
-            if chained * 100 < cutoff * self.seeds:
-                self.build(profile, True)
+        if profile.extended:
+            var first = folded(profile.column_codes)
+            var second = folded(profile.row_codes)
+            self.build_choosing(first, second, profile.column_codes, inexact, choose, cutoff)
+        else:
+            self.build_choosing(profile.column_codes, profile.row_codes, List[UInt8](), inexact, choose, cutoff)
 
-    def build(mut self, profile: Profile, inexact: Bool):
-        """The seeds, their matches, and the layers, from scratch."""
+    def build_choosing(
+        mut self,
+        first_codes: List[UInt8],
+        second_codes: List[UInt8],
+        symbols: List[UInt8],
+        inexact: Bool,
+        choose: Bool,
+        cutoff: Int,
+    ):
+        """The seeds of `first_codes` matched in `second_codes`, both two bits a base, rebuilt inexact
+        as `__init__` says; `symbols` as `build` takes them."""
+        self.build(first_codes, second_codes, symbols, inexact)
+        if choose and not inexact and self.seeds > 0:
+            var chained = self.counted - self.h(0, 0)
+            if chained * 100 < cutoff * self.counted:
+                self.build(first_codes, second_codes, symbols, True)
+
+    def build(mut self, first_codes: List[UInt8], second_codes: List[UInt8], symbols: List[UInt8], inexact: Bool):
+        """The seeds, their matches, and the layers, from scratch. `symbols` are the first sequence's
+        own codes when some lie past `ACGT`, folded in `first_codes`, else empty: the seeds holding
+        one go uncounted (see `remaining`)."""
         self.length = INEXACT_LENGTH if inexact else SEED_LENGTH
         self.cost = 2 if inexact else 1
-        self.seeds = profile.columns // self.length
+        self.seeds = self.columns // self.length
+        self.counted = self.seeds
+        self.remaining.clear()
+        if len(symbols) > 0:
+            self.count_seeds(symbols)
+            if self.counted == 0:
+                # No seed left to count: the gap heuristic.
+                self.seeds = 0
+                self.remaining.clear()
         self.slot_x.clear()
         self.slot_y.clear()
         self.counts.clear()
@@ -1287,10 +1353,10 @@ struct SeedHeuristic(Movable):
         self.spill_head.reserve(self.seeds + 1)
         self.hint = 0
         self.add_sentinel()
-        if self.seeds == 0 or profile.rows < self.length + 1:
+        if self.seeds == 0 or self.rows < self.length + 1:
             return
-        var first = profile.column_codes.unsafe_ptr()
-        var second = profile.row_codes.unsafe_ptr()
+        var first = first_codes.unsafe_ptr()
+        var second = second_codes.unsafe_ptr()
         # Each match a seed and its start row, and for inexact seeds its end row and cost; an exact
         # match ends a seed's length further down, at no cost.
         var found_seed = List[Int32]()
@@ -1349,6 +1415,24 @@ struct SeedHeuristic(Movable):
                 for below in range(score):
                     self.add_point(layer - below, x, y)
 
+    def count_seeds(mut self, symbols: List[UInt8]):
+        """`remaining` and `counted`, a seed uncounted when it holds a code past `ACGT`."""
+        self.remaining = List[Int32](length=self.seeds + 1, fill=0)
+        var codes = symbols.unsafe_ptr()
+        for seed in range(self.seeds - 1, -1, -1):
+            var plain = True
+            for offset in range(self.length):
+                if codes[unsafe_offset=seed * self.length + offset] >= 4:
+                    plain = False
+                    break
+            self.remaining[seed] = self.remaining[seed + 1] + Int32(1 if plain else 0)
+        self.counted = Int(self.remaining[0])
+
+    @inline(.always)
+    def is_counted(self, seed: Int) -> Bool:
+        """Whether the potential counts `seed` (see `remaining`)."""
+        return len(self.remaining) == 0 or self.remaining[seed] != self.remaining[seed + 1]
+
     # Out of line: inlined into `build`, it slows the pruning loop there by a few percent.
     @inline(.never)
     def exact_matches(
@@ -1374,6 +1458,8 @@ struct SeedHeuristic(Movable):
         var slots = table.unsafe_ptr()
         var chain = chained.unsafe_ptr()
         for seed in range(self.seeds):
+            if not self.is_counted(seed):
+                continue
             var code = 0
             for offset in range(SEED_LENGTH):
                 code = (code << 2) | Int(first[unsafe_offset=seed * SEED_LENGTH + offset])
@@ -1404,6 +1490,8 @@ struct SeedHeuristic(Movable):
             var seed = Int(held & 0xFFFFFFFF)
             while seed >= 0:
                 var column = seed * SEED_LENGTH
+                # The potential with every seed counted, the most it can be: with some uncounted this
+                # keeps more matches than it must, which only weaken the bound.
                 var potential = self.seeds - seed
                 if column - start_row - potential + 1 <= target_x and start_row - column - potential + 1 <= target_y:
                     found_seed.append(Int32(seed))
@@ -1445,6 +1533,8 @@ struct SeedHeuristic(Movable):
             for offset in range(INEXACT_LENGTH):
                 code = (code << 2) | UInt64(first[unsafe_offset=seed * INEXACT_LENGTH + offset])
             codes[seed] = code
+            if not self.is_counted(seed):
+                continue
             left_start[Int(code >> UInt64(HALF_BITS)) + 1] += 1
             right_start[(Int(code) & HALF_MASK) + 1] += 1
         for bucket in range(BUCKETS):
@@ -1455,6 +1545,8 @@ struct SeedHeuristic(Movable):
         var left_fill = left_start.copy()
         var right_fill = right_start.copy()
         for seed in range(self.seeds):
+            if not self.is_counted(seed):
+                continue
             var code = codes[seed]
             var entry = (UInt64(seed) << UInt64(ENTRY_BITS)) | code
             left_entries[Int(left_fill[Int(code >> UInt64(HALF_BITS))])] = entry
@@ -1650,7 +1742,8 @@ struct SeedHeuristic(Movable):
         Seed `s` at column `16s` charges the seeds after it `2(S - s - 1)`, so its match ending at row
         `e` passes when `16s + 16 - e - 2(S - s - 1) <= C - R` and `e - 16s - 16 - 2(S - s - 1) <= R - C`,
         `S` the seeds, `C` and `R` the columns and rows: `18s <= C - R + e + 2S - 18` and
-        `14s >= e + C - R - 2S - 14`, a range of seeds, here taken at its widest over the ends.
+        `14s >= e + C - R - 2S - 14`, a range of seeds, here taken at its widest over the ends. With
+        seeds uncounted the potential is lower and the range narrower, so this one holds it.
         """
         comptime assert INEXACT_LENGTH == 16, "the bounds below are worked out for 16-base seeds"
         var shift = self.columns - self.rows
@@ -1860,9 +1953,20 @@ struct SeedHeuristic(Movable):
     def potential(self, column: Int) -> Int:
         """What the seeds starting at or after `column` cost a path matching none of them."""
         # Each length its own constant divisor: the band asks for this at every row it prunes.
+        if likely(len(self.remaining) == 0):
+            if self.cost == 1:
+                return self.seeds - min(self.seeds, ceildiv(column, SEED_LENGTH))
+            return 2 * (self.seeds - min(self.seeds, ceildiv(column, INEXACT_LENGTH)))
+        return self.uncounted_potential(column)
+
+    @inline(.always)
+    def uncounted_potential(self, column: Int) -> Int:
+        """`potential` when some seeds go uncounted (see `remaining`), its divisors constant too: a
+        64-bit division by a variable takes tens of cycles on x86."""
+        var counted = self.remaining.unsafe_ptr()
         if self.cost == 1:
-            return self.seeds - min(self.seeds, ceildiv(column, SEED_LENGTH))
-        return 2 * (self.seeds - min(self.seeds, ceildiv(column, INEXACT_LENGTH)))
+            return Int(counted[unsafe_offset=min(self.seeds, ceildiv(column, SEED_LENGTH))])
+        return 2 * Int(counted[unsafe_offset=min(self.seeds, ceildiv(column, INEXACT_LENGTH))])
 
     @inline(.always)
     def climb(self) -> Int:
@@ -3121,9 +3225,7 @@ def band_start(profile: Profile, search: Probe, mut probe: Probe, mut trusted: B
     var seeded = profile.columns >= SEED_COLUMNS or (
         projected.estimate >= SEED_EDITS and projected.estimate * SEED_DIVERGENCE <= profile.columns
     )
-    # Seeds are packed two bits a base, which symbols past `ACGT` do not fit; such a pair sweeps its
-    # band on the gap heuristic, exact still, only less narrowed.
-    if not seeded or profile.extended:
+    if not seeded:
         return SeedHeuristic(profile.columns, profile.rows)
     # Long pairs only: inexact seeds when the projection already says they pay, else exact ones
     # rebuilt inexact if they chain poorly (see `SeedHeuristic`).
