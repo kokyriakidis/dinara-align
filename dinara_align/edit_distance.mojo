@@ -1104,10 +1104,20 @@ comptime SEED_DIVERGENCE = 7
 almost no seed survives local pruning, the heuristic is little more than an edit a seed, and its
 setup is not repaid."""
 
-comptime SEED_COLUMNS = 16_384
+comptime SEED_COLUMNS = 16_384 if not PAIRED_GROUPS else 86_016
 """Columns from which a band prunes with the seeds whatever the projection: its setup is a small share
 of any band this long, and on real reads, whose errors gather at the ends, the projection that gates
-shorter pairs can put a divergence of one edit in ten at one in two."""
+shorter pairs can put a divergence of one edit in ten at one in two.
+
+On AVX-512, whose band sweeps two groups at a time (see `PAIRED_GROUPS`), the band runs fast enough
+beside the seeds' setup that they pay only from between 80 and 90 kbp: below, the Skylake-X aligned
+real reads of 16 to 64 kbp 14% faster without them, uniform 30 kbp pairs at 5% 30% faster, and at
+100 kbp seeds won by 7 to 24%. With AVX2 they broke even on those reads and won from 64 kbp, as on
+the M2, which keeps the shorter gates too (see `SHORT_SEEDS`)."""
+
+comptime SHORT_SEEDS = not PAIRED_GROUPS
+"""Whether a pair shorter than `SEED_COLUMNS` may still take seeds on its projection (see `SEED_EDITS`):
+not on AVX-512, where seeds lost on every such pair tried."""
 
 comptime SEEDED_GROWTH = 4
 """How many times a seeded band's margin over the heuristic at the origin grows after a round that
@@ -1446,13 +1456,22 @@ struct SeedHeuristic(Movable):
 
         Every seed's two-bit code is hashed by open addressing on the multiply's top bits; a slot
         holds its code and the first seed with it in one word, and seeds sharing a code chain on.
+        The table is half full, so a window that matches nothing, nearly every one, would land on a
+        taken slot half the time and probe on; a filter of `FILTER_BITS` a seed, the same multiply's
+        top bits, turns almost all of them away first, on a branch that rarely goes the other way.
         """
         comptime MASK = (1 << (2 * SEED_LENGTH)) - 1
         comptime EMPTY = Int64(-1)
+        comptime FILTER_BITS = 32
         var bits = 1
         while (1 << bits) < 2 * self.seeds:
             bits += 1
         var size = 1 << bits
+        var filter_bits = 6
+        while (1 << filter_bits) < FILTER_BITS * self.seeds:
+            filter_bits += 1
+        var filtered = List[UInt64](length=1 << (filter_bits - 6), fill=0)
+        var filter = filtered.unsafe_ptr()
         var table = List[Int64](length=size, fill=EMPTY)
         var chained = List[Int32](length=self.seeds, fill=-1)
         var slots = table.unsafe_ptr()
@@ -1463,7 +1482,10 @@ struct SeedHeuristic(Movable):
             var code = 0
             for offset in range(SEED_LENGTH):
                 code = (code << 2) | Int(first[unsafe_offset=seed * SEED_LENGTH + offset])
-            var slot = Int((UInt64(code) * 0x9E3779B97F4A7C15) >> UInt64(64 - bits))
+            var hash = UInt64(code) * 0x9E3779B97F4A7C15
+            var bit = Int(hash >> UInt64(64 - filter_bits))
+            filter[unsafe_offset=bit >> 6] |= UInt64(1) << UInt64(bit & 63)
+            var slot = Int(hash >> UInt64(64 - bits))
             while slots[unsafe_offset=slot] != EMPTY and Int(slots[unsafe_offset=slot] >> 32) != code:
                 slot = (slot + 1) & (size - 1)
             var held = slots[unsafe_offset=slot]
@@ -1479,7 +1501,11 @@ struct SeedHeuristic(Movable):
             code = ((code << 2) | Int(second[unsafe_offset=row])) & MASK
             if row + 1 < SEED_LENGTH:
                 continue
-            var slot = Int((UInt64(code) * 0x9E3779B97F4A7C15) >> UInt64(64 - bits))
+            var hash = UInt64(code) * 0x9E3779B97F4A7C15
+            var bit = Int(hash >> UInt64(64 - filter_bits))
+            if (filter[unsafe_offset=bit >> 6] >> UInt64(bit & 63)) & 1 == 0:
+                continue
+            var slot = Int(hash >> UInt64(64 - bits))
             var held = slots[unsafe_offset=slot]
             while held != EMPTY and Int(held >> 32) != code:
                 slot = (slot + 1) & (size - 1)
@@ -3223,7 +3249,7 @@ def band_start(profile: Profile, search: Probe, mut probe: Probe, mut trusted: B
     trusted = trusted_projection(search, projected)
     probe = Probe(-1, projected.estimate, max(search.floor, projected.floor))
     var seeded = profile.columns >= SEED_COLUMNS or (
-        projected.estimate >= SEED_EDITS and projected.estimate * SEED_DIVERGENCE <= profile.columns
+        SHORT_SEEDS and projected.estimate >= SEED_EDITS and projected.estimate * SEED_DIVERGENCE <= profile.columns
     )
     if not seeded:
         return SeedHeuristic(profile.columns, profile.rows)

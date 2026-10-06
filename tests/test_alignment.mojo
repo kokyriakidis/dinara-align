@@ -38,6 +38,7 @@ from dinara_align import (
     smith_waterman_gotoh_alignment,
     smith_waterman_gotoh_score,
 )
+from dinara_align.edit_distance import SEED_COLUMNS
 
 comptime GLOBAL = AlignmentMode.GLOBAL
 comptime LOCAL = AlignmentMode.LOCAL
@@ -503,14 +504,14 @@ def test_bit_parallel_symbols_past_acgt() raises:
     var alphabets: List[String] = ["ACGTN", "ACGTNRYK"]
     for alphabet in alphabets:
         var unit = Scoring.edit_distance(alphabet)
-        for length in [1, 2, 64, 65, 700, 3000, 17000]:
+        for length in [1, 2, 64, 65, 700, 3000, SEED_COLUMNS + 616]:
             for rate in [0.0, 0.05, 0.2]:
                 var first = random_sequence(length, length, alphabet)
                 var second = mutate(first, rate)
                 var plain = random_sequence(length, length, DNA_ALPHABET)
                 var pairs: List[Tuple[String, String]] = [(first, second), (second, first), (first, plain)]
                 # One long pair an alphabet: past `SEED_COLUMNS`, where bases alone would take seeds.
-                if length > 3000:
+                if length > SEED_COLUMNS:
                     if rate != 0.05:
                         continue
                     pairs = [(first, second)]
@@ -718,15 +719,17 @@ def test_edit_batches_match_single_pairs() raises:
 def test_seeded_bands_are_exact() raises:
     """Pairs long enough for the seed heuristic, exact seeds and inexact, keep the exact distance.
 
-    From 16 kbp a band prunes with seeds; once few exact seeds chain, past about one edit in fifteen
-    bases, they are rebuilt to match within one edit. Divergences either side of that, with errors
-    also gathered into a burst at one end as real reads carry them; every distance is the global wavefront's at unit costs, which shares no code with the band, and
-    every alignment is rescored independently.
+    From `SEED_COLUMNS`, 16 kbp but for AVX-512's 86, a band prunes with seeds; once few exact seeds
+    chain, past about one edit in fifteen bases, they are rebuilt to match within one edit.
+    Divergences either side of that, with errors also gathered into a burst at one end as real reads
+    carry them; every distance is the global wavefront's at unit costs, which shares no code with the
+    band, and every alignment is rescored independently.
     """
     seed(16)
     var unit = Scoring.edit_distance()
+    var shortest = max(20000, SEED_COLUMNS + 2000)
     for rate in [0.05, 0.1, 0.15, 0.2, 0.3]:
-        var first = random_sequence(20000, 24000, DNA_ALPHABET)
+        var first = random_sequence(shortest, shortest + 4000, DNA_ALPHABET)
         var second = mutate(first, rate)
         var bytes = List[UInt8](second.as_bytes())
         var tail = len(bytes) - len(bytes) // 20
@@ -763,8 +766,9 @@ def test_seeded_bands_fold_symbols_past_acgt() raises:
     """
     seed(23)
     var unit = Scoring.edit_distance("ACGTN")
+    var shortest = max(20000, SEED_COLUMNS + 2000)
     for rate in [0.05, 0.15]:
-        var bases = random_sequence(20000, 24000, DNA_ALPHABET)
+        var bases = random_sequence(shortest, shortest + 4000, DNA_ALPHABET)
         var bytes = List[UInt8](bases.as_bytes())
         var run = len(bytes) * 2 // 5
         var first = sprinkle(

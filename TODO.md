@@ -39,10 +39,17 @@ stands on each.
   and 100 kbp pairs up to twice as fast on the M2, at the same costs and bases alone unchanged
   within noise. Folding the first sequence's `N` too was as fast on short runs but flooded a long
   run with matches, a run of `A` against a run of `A`, up to 800 times slower.
-- [ ] **Seeds on ont-50k's reads with an `N`, on x86.** There they still cost about 6% over sweeping
-  without seeds (102 against 96 ms the 104 reads), where on the M2 they save 12%: the seeds' setup
-  is slower beside the AVX-512 band, and the extended kernels slow it more. A gate for extended
-  pairs, or checking whether bases alone pay for seeds on reads this short, is untried.
+- [x] **Seeds on ont-50k's reads with an `N`, on x86.** They cost about 6% there, and not for the
+  `N`: on AVX-512 seeds lost on every pair below about 85 kbp, real reads of 16 to 64 kbp aligning
+  18% faster without them and uniform 30 kbp pairs at 5% 38% faster. Seeds now start at 86 kbp on AVX-512 and nowhere
+  shorter on the projection; AVX2 broke even on those reads and the M2 gained 9%, so both keep the
+  16 kbp gate. Exact seeds' matching also checks a filter of 32 bits a seed before its half-full hash
+  table, so nearly every window that matches nothing costs one predictable test: matching took 87 ms
+  of the M2's 320 mid-length reads and takes 32. On the Skylake-X, mid-length reads 17% faster, with
+  an `N` 14%, 30 kbp pairs 18 to 40%, 100 kbp at 5% 10%, ont-500k 3%.
+- [ ] **The third plane's cost on x86.** A read with one `N` sweeps about 13% slower than without on
+  ont-50k on the Skylake-X. When only one sequence holds symbols past `ACGT` they match nothing, so a
+  per-row or per-column mask could stand in for the third plane.
 - [~] **Semi-global and open-ended alignment.** `edit_search` finds a pattern inside a text, Edlib's
   infix mode, or at its start, its prefix mode, and `edit_search_alignment` aligns it there, exact.
   It sweeps a band as Edlib does, a bound doubled and only the rows some score within it can still
