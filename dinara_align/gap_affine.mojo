@@ -405,7 +405,7 @@ def step[
     var column_limit = Lanes(Int32(columns))
     var row_limit = Lanes(Int32(rows))
     var unreached = Lanes(UNREACHED)
-    var reach = Lanes(Int32.MIN // 2)
+    var reach = Int.MIN // 2
     var diagonal = low
     while diagonal <= high:
         var diagonals = lane_diagonals + Int32(diagonal)
@@ -422,13 +422,14 @@ def step[
         var gapped = max(first_gap, second_gap)
         opened_first.unsafe_offset(diagonal).unsafe_store(first_gap)
         opened_second.unsafe_offset(diagonal).unsafe_store(second_gap)
-        var entry = max(substituted, gapped)
+        var front = aligned.unsafe_offset(diagonal)
+        front.unsafe_store(max(substituted, gapped))
         comptime for lane in range(LANES):
-            var column = Int(entry[lane])
+            var column = Int(front[unsafe_offset=lane])
             if column >= 0:
-                entry[lane] = Int32(slide(first, second, column, diagonal + lane))
-        aligned.unsafe_offset(diagonal).unsafe_store(entry)
-        reach = max(reach, entry + entry - diagonals)
+                column = slide(first, second, column, diagonal + lane)
+                front[unsafe_offset=lane] = Int32(column)
+                reach = max(reach, 2 * column - diagonal - lane)
         comptime if record:
             # Worked out in the fronts' own lanes and narrowed once.
             var entry = substituted.ge(gapped).select(
@@ -439,7 +440,7 @@ def step[
             ).select(Lanes(Int32(SECOND_OPENED)), Lanes(0))
             flags.unsafe_offset(diagonal).unsafe_store((entry | opened).cast[DType.uint8]())
         diagonal += LANES
-    return Int(reach.reduce_max())
+    return reach
 
 
 struct Wavefront(Movable):
