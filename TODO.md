@@ -14,10 +14,23 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
   noise (measured best of five beside the owner's jobs). One sixteen-lane group did about as well on
   the long reads but cost up to 2% on short divergent pairs; on the M2 both were slower, so NEON and
   AVX2 keep one group.
-- [ ] **Seed setup (about 2.5 s).** Inexact seeds: the scan of the second sequence (about 1.4 s
-  when forced on every read), local pruning (about 0.8 s) and layer insertion (about 0.4 s).
-  The scan is bound by loop overhead and memory, not one hot spot; going further means indexing
-  the second sequence instead of the seeds, at more memory.
+- [ ] **Seed setup.** Still 34 to 45% of a long pair's time on the Skylake-X and 9 to 32% on the M2
+  (2026-10-06, `197656a`): on genvar 157 ms of inexact matching, 94 of local pruning and 19 of layers
+  in 698; on 100 kbp pairs at 15% 27, 16 and 1 in 104; on ont-500k 64, 69 and 10 in 468.
+  - Inexact matching: the half tables' lookups cost 5.5 ns a row, and the rest is the candidates,
+    0.74 a row on genvar, 17% of them within one edit: about 15 ns a row plus 43 a candidate there,
+    against 3 and 28 on the M2. A chance candidate shares an 8-base half with the window, likely
+    with 41,000 seeds a read over 65,536 halves. Keying on two exact parts, a 12-base prefix and a
+    quarter at the end, would cut them some thirtyfold for about eight hashed lookups a row in place
+    of two direct ones: perhaps 5 to 10% on genvar and divergent 100 kbp pairs, untried.
+  - Tried and left: no local pruning (genvar 21% and ont-500k 72% slower: it repays itself many
+    times), a lookahead of 8 seeds for inexact matches (neutral to 4% slower), and of 6 to 10 for all
+    (mid-length reads up to 6% faster on the M2, ont-500k 17% and 100 kbp at 5% 30% slower), and
+    scan batches of 32 rows (neutral).
+  - Exact matching already checks a 32-bit-a-seed filter before its hash table (87 to 32 ms on the
+    M2's mid-length reads); exact pruning, 600 thousand matches of which 174 thousand are kept, is
+    now the larger half there. Going further than this means indexing the second sequence instead
+    of the seeds, at more memory.
 - [ ] **Traceback (about 0.9 s).** Retracing the final round's tiles from their recorded left
   edges.
 - [x] **The M2's two lost rows.** 100 kbp pairs at 6 and 7% divergence lost to A*PA2-full there, the
@@ -73,5 +86,6 @@ stands on each.
   heuristic; A*PA2's method for affine costs needs a gap-chaining seed heuristic of its own.
 - [x] **Low divergence (below 2%)** was A*PA2's weak spot against BiWFA; the diagonal transition
   before any band now beats BiWFA and WFA there (146 µs against 302 and 605 at 0%, 100 kbp).
-- [~] **The seeds' setup** was A*PA2's other limitation; it is a quarter of the time it was, but still
-  a quarter of a long read's alignment (see above).
+- [~] **The seeds' setup** was A*PA2's other limitation. Exact matching is filtered, seeds holding an
+  `N` are handled, and AVX-512 builds skip seeds below 86 kbp where they do not pay, but it is still a
+  third or more of a long read's alignment on the Skylake-X (see above).
