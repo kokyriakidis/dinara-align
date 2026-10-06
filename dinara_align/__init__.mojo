@@ -19,10 +19,11 @@ Unit-cost edit distance has its own bit-parallel path, A*PA2's band doubling wit
 for one pair on one thread, or a batch spread over every thread a pair at a time:
 
 ```mojo
-from dinara_align import edit_alignment, edit_alignments, edit_distance, edit_distances
+from dinara_align import edit_alignment, edit_alignments, edit_cigar, edit_distance, edit_distances
 
 var distance = edit_distance("ACGTACGTTTGCA", "ACGTCGTTTTGCA")
 var aligned = edit_alignment("ACGTACGTTTGCA", "ACGTCGTTTTGCA")
+var cigar = edit_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA").cigar  # "4=1D5=1I3=", the first the reference
 var firsts: List[String] = ["ACGTACGT", "TTGCA"]
 var seconds: List[String] = ["ACGACGT", "TTGGCA"]
 var distances = edit_distances(firsts, seconds)
@@ -62,6 +63,14 @@ from .api import (
     smith_waterman_gotoh_alignment,
     smith_waterman_gotoh_score,
 )
-from .edit_distance import EditHit, edit_alignment, edit_distance, edit_search, edit_search_alignment
+from .edit_distance import (
+    EditCigar,
+    EditHit,
+    edit_alignment,
+    edit_cigar,
+    edit_distance,
+    edit_search,
+    edit_search_alignment,
+)
 from .common import Device, DeviceScope, GpuSpecs, Placement, hardware_threads
 from .errors import AlignmentError, ErrorKind

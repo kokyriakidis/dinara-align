@@ -26,6 +26,7 @@ from dinara_align import (
     colorize,
     edit_alignment,
     edit_alignments,
+    edit_cigar,
     edit_distance,
     edit_distances,
     edit_search,
@@ -750,6 +751,84 @@ def test_seeded_bands_are_exact() raises:
             assert_equal(aligned.first_gapped.replace("-", ""), pair[0])
             assert_equal(aligned.second_gapped.replace("-", ""), pair[1])
             assert_equal(rescore(aligned.first_gapped, aligned.second_gapped, unit), -expected)
+
+
+def rows_from_cigar(first: String, second: String, cigar: String) raises -> Tuple[String, String, Int]:
+    """The gapped rows a CIGAR spells over its two sequences, and its count of edits; raises on an
+    entry that claims a match between differing bases, or a mismatch between equal ones."""
+    var top = List[UInt8]()
+    var bottom = List[UInt8]()
+    var a = first.as_bytes()
+    var b = second.as_bytes()
+    var column = 0
+    var row = 0
+    var edits = 0
+    var length = 0
+    for byte in cigar.as_bytes():
+        if byte >= UInt8(ord("0")) and byte <= UInt8(ord("9")):
+            length = length * 10 + Int(byte - UInt8(ord("0")))
+            continue
+        assert_true(length > 0)
+        for _ in range(length):
+            if byte == UInt8(ord("D")):
+                top.append(a[column])
+                bottom.append(UInt8(ord("-")))
+                column += 1
+                edits += 1
+            elif byte == UInt8(ord("I")):
+                top.append(UInt8(ord("-")))
+                bottom.append(b[row])
+                row += 1
+                edits += 1
+            else:
+                if byte == UInt8(ord("=")):
+                    assert_equal(a[column], b[row])
+                elif byte == UInt8(ord("X")):
+                    assert_true(a[column] != b[row])
+                    edits += 1
+                else:
+                    assert_equal(byte, UInt8(ord("M")))
+                top.append(a[column])
+                bottom.append(b[row])
+                column += 1
+                row += 1
+        length = 0
+    assert_equal(length, 0)
+    assert_equal(column, len(a))
+    assert_equal(row, len(b))
+    return (String(unsafe_from_utf8=top), String(unsafe_from_utf8=bottom), edits)
+
+
+def test_edit_cigar_spells_the_alignment() raises:
+    """`edit_cigar` spells the very alignment `edit_alignment` writes out, run by run.
+
+    Pairs settled by one diagonal front, by two, and by a band with seeds, with symbols past `ACGT`,
+    and with empty sides; the CIGAR rebuilds both gapped rows, every `=` joins equal bases and every
+    `X` differing ones, its substitutions and gaps number the distance, and with `M` for both the
+    same runs merge.
+    """
+    seed(29)
+    var pairs: List[Tuple[String, String]] = [("", ""), ("", "ACG"), ("ACG", ""), ("ACGT", "ACGT")]
+    var alphabets: List[String] = [DNA_ALPHABET, "ACGTN"]
+    for alphabet in alphabets:
+        for length in [1, 40, 700, 3000, 20000]:
+            for rate in [0.0, 0.02, 0.15, 0.4]:
+                var first = random_sequence(length, length, alphabet)
+                pairs.append((first, mutate(first, rate)))
+    for pair in pairs:
+        var aligned = edit_alignment(pair[0], pair[1])
+        var spelled = edit_cigar(pair[0], pair[1])
+        assert_equal(spelled.distance, Int(aligned.score))
+        var rows = rows_from_cigar(pair[0], pair[1], spelled.cigar)
+        assert_equal(rows[0], aligned.first_gapped)
+        assert_equal(rows[1], aligned.second_gapped)
+        assert_equal(rows[2], spelled.distance)
+        var plain = edit_cigar(pair[0], pair[1], extended=False)
+        assert_equal(plain.distance, spelled.distance)
+        var plain_rows = rows_from_cigar(pair[0], pair[1], plain.cigar)
+        assert_equal(plain_rows[0], aligned.first_gapped)
+        assert_equal(plain_rows[1], aligned.second_gapped)
+        assert_false("=" in plain.cigar or "X" in plain.cigar)
 
 
 def sprinkle(text: String, rate: Float64, symbol: String) -> String:

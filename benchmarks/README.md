@@ -157,7 +157,7 @@ pixi run results-astarpa2 tables    # the tables below, into .cache/results/asta
 
 ### Setup
 
-As A\*PA2's evaluation runs them: one single-threaded job at a time, every pair aligned once with its traceback, the time the average wall clock per alignment, reading the data left out.
+As A\*PA2's evaluation runs them: one single-threaded job at a time, every pair aligned once with its traceback, which every aligner hands back as a CIGAR, the time the average wall clock per alignment, reading the data left out. (The tables below, measured before dinara-align could, time its two gapped rows instead, within a few percent of its CIGAR either way.)
 
 The machine is an Intel Core i9-7900X under Ubuntu 26.04 (Linux 7.0), with Mojo 1.1.0, set up as A\*PA2's i7-10750H was: every core fixed at 3.3 GHz, turbo boost and hyper-threading off, and each collection pinned to one core with `taskset`.
 One thing differs: the jobs ran at normal priority, not A\*PA2's niceness −20, on an otherwise idle machine.

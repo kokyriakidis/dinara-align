@@ -3908,15 +3908,52 @@ def trace_back(profile: Profile, trail: Trail, start_column: Int, start_row: Int
         moves.append(UP)
 
 
+@fieldwise_init
+struct EditPath(Movable):
+    """An optimal alignment as traceback moves, as `edit_path` finds it: `prefix` from the origin to
+    `(middle_column, middle_row)` right to left, as the traceback appends them, and `suffix` from
+    there to the corner left to right, so neither is reversed first."""
+
+    var prefix: List[UInt8]
+    var suffix: List[UInt8]
+    var middle_column: Int
+    var middle_row: Int
+    var distance: Int
+
+
+@fieldwise_init
+struct EditCigar(Copyable, Movable, Writable):
+    """The global edit distance between two sequences and an optimal alignment as a CIGAR string, the
+    first sequence the reference: `=` a match, `X` a substitution (or `M` for either), `D` a base of the
+    first sequence alone, `I` a base of the second alone, each run as its length then its letter."""
+
+    var distance: Int
+    var cigar: String
+
+
 def edit_alignment(first: String, second: String) raises AlignmentError -> AlignmentResult:
-    """The global edit distance between two sequences, and an optimal alignment; symbols past `ACGT`
-    as `edit_distance` takes them.
+    """The global edit distance between two sequences, and an optimal alignment as two gapped rows;
+    symbols past `ACGT` as `edit_distance` takes them. The score is the distance, as
+    `levenshtein_alignment` reports it."""
+    var path = edit_path(first, second)
+    return gapped_rows(first, second, path.prefix, path.middle_column, path.middle_row, path.suffix, path.distance)
+
+
+def edit_cigar(first: String, second: String, extended: Bool = True) raises AlignmentError -> EditCigar:
+    """The global edit distance between two sequences, and an optimal alignment as a CIGAR string, `=`
+    and `X` for matches and substitutions, or with `extended` false `M` for both (see `EditCigar`);
+    the same alignment `edit_alignment` writes out, without the gapped rows."""
+    var path = edit_path(first, second)
+    return EditCigar(path.distance, cigar_string(first, second, path, extended))
+
+
+def edit_path(first: String, second: String) raises AlignmentError -> EditPath:
+    """The global edit distance between two sequences and an optimal alignment's moves.
 
     The distance comes from `edit_distance`'s band doubling, recording each tile's left edge in the
     round that succeeds; the alignment is then traced back tile by tile from those edges (see
     `trace_back`). Where the two-ended diagonal transition settles the distance, its fronts give the
-    path, traced to the start and on to the end from where they met. The score is the distance, as
-    `levenshtein_alignment` reports it.
+    path, traced to the start and on to the end from where they met.
     """
     var profile = Profile(first, second)
     var columns = profile.columns
@@ -3938,7 +3975,7 @@ def edit_alignment(first: String, second: String) raises AlignmentError -> Align
         var close = diagonal_transition(profile, STEP_TENTHS_ALIGNMENT, near, switch_setup=TWO_ENDED_SETUP)
         if close.distance >= 0:
             trace_diagonals(profile, near, close.distance, forward_moves)
-            return gapped_rows(first, second, forward_moves, columns, rows, backward_moves, close.distance)
+            return EditPath(forward_moves^, backward_moves^, columns, rows, close.distance)
         # Diagonal transition from both ends, keeping every front, while it is cheaper than a band:
         # where the fronts meet, the path is traced back to the start through the forward fronts
         # and on to the end through the backward ones.
@@ -3971,16 +4008,14 @@ def edit_alignment(first: String, second: String) raises AlignmentError -> Align
                 columns - middle_column,
                 backward_moves,
             )
-            return gapped_rows(
-                first, second, forward_moves, middle_column, middle_row, backward_moves, meeting.probe.distance
-            )
+            return EditPath(forward_moves^, backward_moves^, middle_column, middle_row, meeting.probe.distance)
         var probe = meeting.probe
         var trusted = True
         var heuristic = band_start(profile, meeting.probe, probe, trusted)
         var trail = Trail(columns)
         distance = band_doubling[True](profile, False, probe, trail, heuristic, trusted)
         trace_back(profile, trail, columns, rows, distance, forward_moves)
-    return gapped_rows(first, second, forward_moves, columns, rows, backward_moves, distance)
+    return EditPath(forward_moves^, backward_moves^, columns, rows, distance)
 
 
 @inline(.always)
@@ -4093,6 +4128,134 @@ def gapped_rows(
         at += 1
         index += 1
     return AlignmentResult(Int32(distance), String(unsafe_from_utf8=top_row), String(unsafe_from_utf8=bottom_row))
+
+
+struct CigarWriter:
+    """A CIGAR string written a run at a time into bytes, a run of the same letter as the last one
+    joining it; each length's digits are written by hand, as formatting one through a `String` took
+    longer than the gapped rows' whole copy on short reads."""
+
+    var text: List[UInt8]
+    var letter: UInt8
+    var length: Int
+
+    def __init__(out self, capacity: Int):
+        self.text = List[UInt8](capacity=capacity)
+        self.letter = 0
+        self.length = 0
+
+    @inline(.always)
+    def add(mut self, letter: UInt8, length: Int):
+        if letter != self.letter:
+            self.flush()
+            self.letter = letter
+        self.length += length
+
+    def flush(mut self):
+        if self.length == 0:
+            return
+        var digits = 1
+        var power = 10
+        while power <= self.length:
+            digits += 1
+            power *= 10
+        var at = len(self.text)
+        self.text.resize(unsafe_uninit_length=at + digits + 1)
+        var out = self.text.unsafe_ptr()
+        var rest = self.length
+        for place in range(digits - 1, -1, -1):
+            out[unsafe_offset=at + place] = UInt8(ord("0") + rest % 10)
+            rest //= 10
+        out[unsafe_offset=at + digits] = self.letter
+        self.length = 0
+
+    def finish(var self) -> String:
+        self.flush()
+        return String(unsafe_from_utf8=self.text)
+
+
+@inline(.always)
+def equal_run(first: ImmPointer[UInt8, _], second: ImmPointer[UInt8, _], column: Int, row: Int, limit: Int) -> Int:
+    """How many of the next `limit` bases along the diagonal from `(column, row)` are equal, eight at a time."""
+    var length = 0
+    while length + 8 <= limit:
+        var differing = (
+            first.unsafe_offset(column + length).unsafe_bitcast[UInt64]().unsafe_load()
+            ^ second.unsafe_offset(row + length).unsafe_bitcast[UInt64]().unsafe_load()
+        )
+        if differing != 0:
+            return length + Int(count_trailing_zeros(differing)) // 8
+        length += 8
+    while length < limit and first[unsafe_offset=column + length] == second[unsafe_offset=row + length]:
+        length += 1
+    return length
+
+
+def cigar_string(first: String, second: String, path: EditPath, extended: Bool) -> String:
+    """`path` as a CIGAR string (see `EditCigar`): its moves put left to right, the prefix reversed, and
+    each run of one move written as one entry, a diagonal run split into its matches and substitutions
+    by comparing the bases eight at a time unless `M` stands for both."""
+    var before = len(path.prefix)
+    var count = before + len(path.suffix)
+    var moves = List[UInt8](capacity=count)
+    moves.resize(unsafe_uninit_length=count)
+    var ordered = moves.unsafe_ptr()
+    var prefix = path.prefix.unsafe_ptr()
+    comptime CHUNK = 16
+    var index = 0
+    while index + CHUNK <= before:
+        var chunk = prefix.unsafe_offset(before - index - CHUNK).unsafe_load[width=CHUNK]()
+        ordered.unsafe_offset(index).unsafe_store(chunk.reversed())
+        index += CHUNK
+    while index < before:
+        ordered[unsafe_offset=index] = prefix[unsafe_offset=before - 1 - index]
+        index += 1
+    copy_bytes(ordered.unsafe_offset(before), path.suffix.unsafe_ptr(), len(path.suffix))
+
+    var first_bytes = first.unsafe_ptr()
+    var second_bytes = second.unsafe_ptr()
+    var writer = CigarWriter(64)
+    var column = 0
+    var row = 0
+    index = 0
+    while index < count:
+        var move = ordered[unsafe_offset=index]
+        if move == DIAGONAL:
+            var run = diagonal_run(ordered, index, count)
+            index += run
+            if not extended:
+                writer.add(UInt8(ord("M")), run)
+                column += run
+                row += run
+                continue
+            var end = column + run
+            while column < end:
+                var same = equal_run(first_bytes, second_bytes, column, row, end - column)
+                if same > 0:
+                    writer.add(UInt8(ord("=")), same)
+                    column += same
+                    row += same
+                var differ = 0
+                while (
+                    column + differ < end
+                    and first_bytes[unsafe_offset=column + differ] != second_bytes[unsafe_offset=row + differ]
+                ):
+                    differ += 1
+                if differ > 0:
+                    writer.add(UInt8(ord("X")), differ)
+                    column += differ
+                    row += differ
+            continue
+        var start = index
+        while index < count and ordered[unsafe_offset=index] == move:
+            index += 1
+        if move == LEFT:
+            writer.add(UInt8(ord("D")), index - start)
+            column += index - start
+        else:
+            writer.add(UInt8(ord("I")), index - start)
+            row += index - start
+    return writer^.finish()
 
 
 # endregion Traceback

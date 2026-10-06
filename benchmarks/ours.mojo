@@ -20,6 +20,7 @@ from dinara_align import (
     alignments,
     edit_alignment,
     edit_alignments,
+    edit_cigar,
     edit_distance,
     hardware_threads,
     score,
@@ -222,10 +223,11 @@ def seq_mode() raises:
             var first = String(lines[index][byte=1:])
             var second = String(lines[index + 1][byte=1:])
             var started = perf_counter_ns()
-            var aligned = edit_alignment(first, second)
+            # A CIGAR, as every rival's traceback hands back, rather than the two gapped rows.
+            var aligned = edit_cigar(first, second)
             var seconds = Float64(perf_counter_ns() - started) / 1e9
             spent += seconds
-            print(tool, path, seconds, Int(aligned.score), sep="\t", flush=True)
+            print(tool, path, seconds, aligned.distance, sep="\t", flush=True)
             index += 2
 
 
