@@ -188,7 +188,12 @@ def generated(total: int, rates: list[str], lengths: list[int]) -> list[Path]:
 
 
 def historic_runner(commit: str) -> Path:
-    """The package as of `commit`, built with `DRIVER` into a runner of its own, once."""
+    """The package as of `commit`, built with `DRIVER` into a runner of its own, once.
+
+    Commits before 66a0b82 name a NEON register in `opaque`'s inline assembly, which x86 cannot
+    allocate: on x86 their copy takes that commit's fix, `x` for `w`, and nothing else. A runner that
+    cannot align one short pair is refused rather than timed.
+    """
     root = CACHE / "history" / commit
     binary = root / "runner"
     if binary.exists():
@@ -199,9 +204,18 @@ def historic_runner(commit: str) -> Path:
     ).stdout
     with tarfile.open(fileobj=io.BytesIO(archive)) as opened:
         opened.extractall(root)
+    if platform.machine().lower() in ("x86_64", "amd64"):
+        source = root / "dinara_align" / "edit_distance.mojo"
+        source.write_text(source.read_text().replace('constraints="=w,0"', 'constraints="=x,0"'))
     (root / "driver.mojo").write_text(DRIVER)
     print(f"building the package as of {commit} ...", file=sys.stderr, flush=True)
     subprocess.run(["mojo", "build", "-I", str(root), str(root / "driver.mojo"), "-o", str(binary)], check=True)
+    probe = root / "probe.seq"
+    probe.write_text(">ACGTACGTAC\n<ACGAACGTAC\n")
+    checked = subprocess.run([str(binary), "seq", "history", "10", str(probe)], capture_output=True, text=True, timeout=60)
+    if not checked.stdout.strip().endswith("\t1"):
+        binary.unlink()
+        sys.exit(f"the package as of {commit} built a runner that cannot align one pair")
     return binary
 
 
