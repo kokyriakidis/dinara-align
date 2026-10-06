@@ -11,6 +11,7 @@ Prints one tab-separated row per measurement, in the shape `run.py` reads from e
 
 from std.sys import argv
 from std.ffi import external_call
+from std.os.path import getsize
 from std.sys.info import CompilationTarget
 from std.time import perf_counter_ns
 
@@ -180,6 +181,51 @@ def write_scoring(directory: String, scoring: Scoring) raises:
         out.write(text)
 
 
+struct SeqFile:
+    """A `.seq` file's pairs, a `>` line and a `<` line each, read in one call of exactly the file's size
+    as the Rust runners read theirs; each line becomes a `String`, its mark left off, only as its pair
+    comes up, so the file and one pair are all that is held. Read through a growing buffer and split
+    into lines first, the file left several times its size resident at the peak."""
+
+    var data: List[UInt8]
+    var at: Int
+
+    def __init__(out self, path: String) raises:
+        var handle = open(path, "r")
+        self.data = handle.read_bytes(getsize(path))
+        handle.close()
+        self.at = 0
+
+    def line(mut self) -> String:
+        """The next line, without its first byte, the mark; empty past the last."""
+        comptime CHUNK = 16
+        var length = len(self.data)
+        var start = self.at
+        var end = start
+        var bytes = self.data.unsafe_ptr()
+        while end + CHUNK <= length:
+            var newline = bytes.unsafe_offset(end).unsafe_load[width=CHUNK]().eq(UInt8(ord("\n")))
+            if newline.reduce_or():
+                break
+            end += CHUNK
+        while end < length and bytes[unsafe_offset=end] != UInt8(ord("\n")):
+            end += 1
+        self.at = min(end + 1, length)
+        if end - start < 1:
+            return String()
+        return String(StringSlice(unsafe_from_utf8=Span(self.data)[start + 1 : end]))
+
+    def next(mut self, mut first: String, mut second: String) -> Bool:
+        """The next pair into `first` and `second`, false past the last."""
+        if self.at >= len(self.data):
+            return False
+        first = self.line()
+        if self.at >= len(self.data):
+            return False
+        second = self.line()
+        return True
+
+
 def peak_resident() -> Int:
     """The process's peak resident memory so far, in bytes: `getrusage`'s `ru_maxrss`, after the two
     16-byte times that open `struct rusage`, counts kilobytes on Linux and bytes on macOS. Read before
@@ -212,14 +258,14 @@ def seq_mode() raises:
     if "batch" in tool:
         for argument in range(4, len(argv())):
             var path = String(argv()[argument])
-            var lines = open(path, "r").read().split("\n")
+            var pairs = SeqFile(path)
             var firsts = List[String]()
             var seconds = List[String]()
-            var index = 0
-            while index + 1 < len(lines):
-                firsts.append(String(lines[index][byte=1:]))
-                seconds.append(String(lines[index + 1][byte=1:]))
-                index += 2
+            var first = String()
+            var second = String()
+            while pairs.next(first, second):
+                firsts.append(first)
+                seconds.append(second)
             var started = perf_counter_ns()
             var aligned = edit_alignments(firsts, seconds, hardware_threads())
             var share = Float64(perf_counter_ns() - started) / 1e9 / Float64(max(len(firsts), 1))
@@ -231,11 +277,10 @@ def seq_mode() raises:
         if spent >= budget:
             break
         var path = String(argv()[argument])
-        var lines = open(path, "r").read().split("\n")
-        var index = 0
-        while index + 1 < len(lines) and spent < budget:
-            var first = String(lines[index][byte=1:])
-            var second = String(lines[index + 1][byte=1:])
+        var pairs = SeqFile(path)
+        var first = String()
+        var second = String()
+        while spent < budget and pairs.next(first, second):
             var before = peak_resident()
             var started = perf_counter_ns()
             # A CIGAR, as every rival's traceback hands back, rather than the two gapped rows.
@@ -244,7 +289,6 @@ def seq_mode() raises:
             var growth = peak_resident() - before
             spent += seconds
             print(tool, path, seconds, aligned.distance, growth, sep="\t", flush=True)
-            index += 2
 
 
 def main() raises:
