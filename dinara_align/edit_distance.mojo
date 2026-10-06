@@ -3145,18 +3145,12 @@ struct Edge(Movable):
         self.top = top
         self.low_row = top * WORD_BITS
         self.high_row = min(end * WORD_BITS, rows)
-        self.bases.clear()
-        self.plus.clear()
-        self.minus.clear()
-        var running = anchor
-        self.bases.append(running)
-        for word in range(top, end):
-            var plus = frontier.vertical_plus[word]
-            var minus = frontier.vertical_minus[word]
-            self.plus.append(plus)
-            self.minus.append(minus)
-            running += word_value(plus, minus)
-            self.bases.append(running)
+        self.fill(
+            frontier.vertical_plus.unsafe_ptr().unsafe_offset(top),
+            frontier.vertical_minus.unsafe_ptr().unsafe_offset(top),
+            end - top,
+            anchor,
+        )
 
     def load(mut self, trail: Trail, tile: Int, rows: Int):
         """Reads one tile's left edge from the trail, reusing this edge's buffers.
@@ -3169,18 +3163,32 @@ struct Edge(Movable):
         var offset = trail.offsets[tile]
         self.low_row = self.top * WORD_BITS
         self.high_row = rows if tile == 0 else min(trail.ends[tile - 1] * WORD_BITS, rows)
-        self.bases.clear()
-        self.plus.clear()
-        self.minus.clear()
-        var running = trail.anchors[tile]
-        self.bases.append(running)
+        self.fill(
+            trail.edge_plus.unsafe_ptr().unsafe_offset(offset),
+            trail.edge_minus.unsafe_ptr().unsafe_offset(offset),
+            count,
+            trail.anchors[tile],
+        )
+
+    @inline(.always)
+    def fill(mut self, plus: ImmPointer[UInt64, _], minus: ImmPointer[UInt64, _], count: Int, anchor: Int):
+        """`count` words of differences, and the score at each word's top from `anchor` on, the buffers
+        sized once and written through pointers rather than grown an element at a time."""
+        self.plus.resize(unsafe_uninit_length=count)
+        self.minus.resize(unsafe_uninit_length=count)
+        self.bases.resize(unsafe_uninit_length=count + 1)
+        var plus_out = self.plus.unsafe_ptr()
+        var minus_out = self.minus.unsafe_ptr()
+        var bases = self.bases.unsafe_ptr()
+        var running = anchor
+        bases[unsafe_offset=0] = running
         for word in range(count):
-            var plus = trail.edge_plus[offset + word]
-            var minus = trail.edge_minus[offset + word]
-            self.plus.append(plus)
-            self.minus.append(minus)
-            running += word_value(plus, minus)
-            self.bases.append(running)
+            var up = plus[unsafe_offset=word]
+            var down = minus[unsafe_offset=word]
+            plus_out[unsafe_offset=word] = up
+            minus_out[unsafe_offset=word] = down
+            running += word_value(up, down)
+            bases[unsafe_offset=word + 1] = running
 
     @inline(.always)
     def score(self, row: Int) -> Int:
