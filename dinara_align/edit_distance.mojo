@@ -2017,6 +2017,14 @@ struct SeedHeuristic(Movable):
             return max(gap, potential)
         return potential - chained
 
+    @inline(.always)
+    def bound[seeded: Bool](mut self, column: Int, row: Int) -> Int:
+        """`h` in a band known to have seeds, or not: without, the gap alone, so the band's loops carry
+        none of the seeds' code, which on the Skylake-X slowed pairs without seeds by 3 to 7%."""
+        comptime if seeded:
+            return self.h(column, row)
+        return abs((self.columns - column) - (self.rows - row))
+
 
 # endregion Seed heuristic
 
@@ -2090,7 +2098,9 @@ struct Band(Movable):
     def end_column(self, tile: Int) -> Int:
         return self.bounds[tile + 1]
 
-    def prepare[record: Bool](mut self, tile: Int, mut trail: Trail, mut heuristic: SeedHeuristic) -> Bool:
+    def prepare[
+        record: Bool, seeded: Bool
+    ](mut self, tile: Int, mut trail: Trail, mut heuristic: SeedHeuristic) -> Bool:
         """Sets the tile's words and readies its edge; false, with `outcome` set, when no word is left."""
         var first_column = self.bounds[tile]
         var end_column = self.bounds[tile + 1]
@@ -2107,7 +2117,7 @@ struct Band(Movable):
             max(end_diagonal, (slack + self.deepest + width + end_diagonal) // 2),
             self.rows,
         )
-        if heuristic.seeds > 0:
+        comptime if seeded:
             # The seeds bound the bottom tighter, as A*PA2 bounds a block's: a row `k` past the
             # diagonal from the deepest kept cell costs at least `floor + k` to reach, so it is in
             # reach only while that plus the heuristic there fits the bound. Going up, the first drops
@@ -2116,7 +2126,12 @@ struct Band(Movable):
             var diagonal_row = self.deepest + width
             var step = 1 + heuristic.climb()
             while reach_row > diagonal_row:
-                var over = self.floor + (reach_row - diagonal_row) + heuristic.h(end_column, reach_row) - self.threshold
+                var over = (
+                    self.floor
+                    + (reach_row - diagonal_row)
+                    + heuristic.bound[seeded](end_column, reach_row)
+                    - self.threshold
+                )
                 if over <= 0:
                     break
                 reach_row = max(reach_row - ceildiv(over, step), diagonal_row)
@@ -2136,7 +2151,7 @@ struct Band(Movable):
         """The sweep for one tile, its horizontal edge starting at the tile's first column."""
         return self.sweep.shifted(self.bounds[tile])
 
-    def finish(mut self, tile: Int, mut heuristic: SeedHeuristic) -> Bool:
+    def finish[seeded: Bool](mut self, tile: Int, mut heuristic: SeedHeuristic) -> Bool:
         """Prunes after a swept tile; false, with `outcome` set, when every row went."""
         var end_column = self.bounds[tile + 1]
         self.anchor += end_column - self.bounds[tile]
@@ -2150,19 +2165,19 @@ struct Band(Movable):
         var last_kept = self.edge.high_row
         var step = 1 + heuristic.climb()
         while first_kept <= last_kept:
-            var over = self.edge.score(first_kept) + heuristic.h(end_column, first_kept) - self.threshold
+            var over = self.edge.score(first_kept) + heuristic.bound[seeded](end_column, first_kept) - self.threshold
             if over <= 0:
                 break
             first_kept += ceildiv(over, step)
         while last_kept >= first_kept:
-            var over = self.edge.score(last_kept) + heuristic.h(end_column, last_kept) - self.threshold
+            var over = self.edge.score(last_kept) + heuristic.bound[seeded](end_column, last_kept) - self.threshold
             if over <= 0:
                 break
             last_kept -= ceildiv(over, step)
         if first_kept > last_kept:
             self.outcome = Round(-1, end_column, self.threshold, -1)
             return False
-        if self.adapt and not self.check(end_column, first_kept, last_kept, heuristic):
+        if self.adapt and not self.check[seeded](end_column, first_kept, last_kept, heuristic):
             return False
 
         # Move the top down to the word whose top row is at or above the first kept row, carrying the
@@ -2177,7 +2192,9 @@ struct Band(Movable):
         self.floor = self.edge.score(last_kept)
         return True
 
-    def check(mut self, end_column: Int, first_kept: Int, last_kept: Int, mut heuristic: SeedHeuristic) -> Bool:
+    def check[
+        seeded: Bool
+    ](mut self, end_column: Int, first_kept: Int, last_kept: Int, mut heuristic: SeedHeuristic) -> Bool:
         """Re-aims the bound from the band's own climb at a checkpoint; false, with `outcome` set, to
         give the round up.
 
@@ -2201,12 +2218,12 @@ struct Band(Movable):
         var least = Int.MAX
         var row = first_kept
         while True:
-            least = min(least, self.edge.score(row) + heuristic.h(end_column, row))
+            least = min(least, self.edge.score(row) + heuristic.bound[seeded](end_column, row))
             if row == last_kept:
                 break
             row = min(row + CHECK_ROWS, last_kept)
         var gap = abs(self.difference)
-        var origin = heuristic.h(0, 0)
+        var origin = heuristic.bound[seeded](0, 0)
         var estimate = origin + max(least - origin, 0) * self.columns // end_column
         var margin = estimate * (CHECKPOINTS + 1 - passed) * CHECK_MARGIN // 10
         if estimate - margin // 2 > self.threshold:
@@ -2227,7 +2244,7 @@ struct Band(Movable):
 
 
 def pruned_distance[
-    record: Bool
+    record: Bool, seeded: Bool
 ](mut profile: Profile, threshold: Int, mut trail: Trail, mut heuristic: SeedHeuristic, adapt: Bool,) -> Round:
     """One round of band doubling with A*PA2-simple's pruning.
 
@@ -2251,7 +2268,7 @@ def pruned_distance[
 
     With `record`, every tile's left edge goes into `trail` before the tile is swept, for the
     traceback; without, the trail is untouched. With `extended`, matches take the third plane (see
-    `Profile.extended`).
+    `Profile.extended`). `seeded` says whether `heuristic` has seeds (see `SeedHeuristic.bound`).
 
     With `adapt`, the round re-aims its bound as it goes (see `Band.check`), and a distance is exact
     only within the bound it ends on.
@@ -2260,12 +2277,12 @@ def pruned_distance[
         trail.clear()
     var band = Band(profile, threshold, adapt)
     for tile in range(band.tiles()):
-        if not band.prepare[record](tile, trail, heuristic):
+        if not band.prepare[record, seeded](tile, trail, heuristic):
             return band.outcome
         band.tile_sweep(tile).words(
             profile.extended, band.top, band.end_word, band.first_column(tile), band.end_column(tile)
         )
-        if not band.finish(tile, heuristic):
+        if not band.finish[seeded](tile, heuristic):
             return band.outcome
     return band.result()
 
@@ -3159,8 +3176,12 @@ def band_doubling[
             if give_up_wide:
                 return -1
             threshold = max(threshold, columns + rows)
-        # Symbols past `ACGT` take their own copy of the round, so the bases' copy matches on two planes.
-        var attempt = pruned_distance[record](profile, threshold, trail, heuristic, first_round)
+        # A round with seeds and one without each take their own copy (see `SeedHeuristic.bound`).
+        var attempt: Round
+        if heuristic.seeds > 0:
+            attempt = pruned_distance[record, True](profile, threshold, trail, heuristic, first_round)
+        else:
+            attempt = pruned_distance[record, False](profile, threshold, trail, heuristic, first_round)
         first_round = False
 
         var found = attempt.distance
@@ -3212,8 +3233,8 @@ def edit_distance(first: String, second: String) raises AlignmentError -> Int:
     """The global edit distance between two sequences, by bit-parallel sweep.
 
     Built for DNA over `ACGT`. Up to four other bytes, `N` among them, are symbols of their own,
-    each matching only itself; a pair holding them is aligned without the seed heuristic, so a long
-    divergent one runs slower than bases alone would.
+    each matching only itself; a pair holding them sweeps a third bit plane, so runs a little slower
+    than bases alone would.
 
     Band doubling, as in A*PA2-simple: guess a bound, sweep only the band of cells a path within it
     could cross, and raise the guess until the answer fits under it, which proves it optimal. Close
