@@ -184,12 +184,12 @@ def times(
         for choice in choices:
             rows, _, _ = measure(binary, choice, path, BUDGET, None if binary == binaries["ours"] else kept)
             KEPT.write_text(json.dumps(kept))
-            mean = sum(t for t, _ in rows) / len(rows) if rows else math.inf
+            mean = sum(row[0] for row in rows) / len(rows) if rows else math.inf
             if best is None or (len(rows), -mean) > (len(best[0]), -best[1]):
                 best = (rows, mean)
         rows = best[0]
-        found[column] = [seconds for seconds, _ in rows]
-        seen.append((column, [cost for _, cost in rows]))
+        found[column] = [row[0] for row in rows]
+        seen.append((column, [row[1] for row in rows]))
     if reference is not None:
         seen.append(("published", reference))
     for index, (column, costs) in enumerate(seen):
@@ -204,10 +204,10 @@ def times(
             rows, _, _ = measure(binaries["wrapper"], column, path, BUDGET, kept)
             exact = distance
             if reference_tool is not None:
-                exact = [cost for _, cost in measure(binaries["wrapper"], reference_tool, path, BUDGET, kept)[0]]
+                exact = [row[1] for row in measure(binaries["wrapper"], reference_tool, path, BUDGET, kept)[0]]
             KEPT.write_text(json.dumps(kept))
-            found[column] = [seconds for seconds, _ in rows]
-            costs = [cost for _, cost in rows]
+            found[column] = [row[0] for row in rows]
+            costs = [row[1] for row in rows]
             if any(cost < best for cost, best in zip(costs, exact)):
                 sys.exit(f"{LABELS[column]} reports a cost below the exact one on {name}")
             correct[column] = [sum(cost == best for cost, best in zip(costs, exact)), min(len(costs), len(exact))]
@@ -309,7 +309,7 @@ def collect() -> None:
                 rows, peak, stopped = run_tool(historic_runner(commit), "history", path, 3 * BUDGET)
                 kept[key] = {"budget": 3 * BUDGET, "rows": rows, "peak": peak, "stopped": stopped}
                 KEPT.write_text(json.dumps(kept))
-            steps[commit] = [seconds for seconds, _ in kept[key]["rows"]]
+            steps[commit] = [row[0] for row in kept[key]["rows"]]
         history[name] = {"steps": steps, "current": real[name]["times"][dinara("1 thread")]}
     measured["history"] = history
 
