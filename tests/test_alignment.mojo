@@ -928,10 +928,12 @@ def test_colouring_keeps_the_rows_it_paints() raises:
 
 
 def test_device_matches_host() raises:
-    """Every device path returns what the host returns, scores and strings alike.
+    """Every device path returns the host's score, with an alignment that earns it.
 
-    Covers the banded batch, the tiled sweep for a pair too tall for one block, the linear-space
-    device traceback, and empty sides. Skipped where no accelerator answers.
+    The host traces a global alignment under a uniform table through the wavefront's fronts, which
+    may resolve a tie between optimal paths differently from the device's Gotoh walk, so the strings
+    need not match. Covers the banded batch, the tiled sweep for a pair too tall for one block, the
+    linear-space device traceback, and empty sides. Skipped where no accelerator answers.
     """
     if not gpu_available():
         print("    skipped: no accelerator serves a real alignment here")
@@ -951,8 +953,8 @@ def test_device_matches_host() raises:
             for index in range(len(firsts)):
                 var expected = align[mode](firsts[index], seconds[index], scoring, host)
                 assert_equal(on_device[index].score, expected.score)
-                assert_equal(on_device[index].first_gapped, expected.first_gapped)
-                assert_equal(on_device[index].second_gapped, expected.second_gapped)
+                assert_well_formed[mode](firsts[index], seconds[index], on_device[index], scoring)
+                assert_well_formed[mode](firsts[index], seconds[index], expected, scoring)
                 assert_equal(device_scores[index], expected.score)
 
     var scoring = expensive_gap()

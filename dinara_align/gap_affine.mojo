@@ -20,6 +20,10 @@ alignment front slides over matches for free. The first cost whose front reaches
 optimum. The work grows with the square of the cost, not with the matrix, so a close pair costs a
 small share of a full sweep; a pair whose projected work would pass a share of the sweep is handed
 back, and the dynamic programming answers it.
+
+For an alignment every cost's fronts are kept, as WFA's high-memory mode keeps them, and the path is
+traced back through them from the corner (see `wavefront_align`): a close pair then needs no second,
+banded sweep to find its alignment.
 """
 
 from std.bit import count_trailing_zeros
@@ -49,6 +53,17 @@ comptime CHECK_STRIDE = 64
 
 comptime CHECK_START = 128
 """The cost from which the search judges its projection, so it has a few edits to go on."""
+
+comptime HISTORY_LIMIT = 1 << 24
+"""Diagonals of each layer an alignment's kept fronts may hold, 64 MB a layer, past which the search
+hands the pair back to the banded sweep, whose memory then grows more slowly."""
+
+comptime ALIGNED = 0
+"""The front ending in two letters aligned, a match or a substitution."""
+comptime FIRST_GAP = 1
+"""The front ending in a letter of the first sequence against a gap."""
+comptime SECOND_GAP = 2
+"""The front ending in a letter of the second sequence against a gap."""
 
 comptime CELLS_PER_STEP = 4
 """Cells of the vectorized full sweep (see `vector_score`) one diagonal step of the three fronts
@@ -138,6 +153,50 @@ def slide(first: ImmPointer[UInt8, _], second: ImmPointer[UInt8, _], start: Int,
             ^ lag.unsafe_offset(column).unsafe_bitcast[UInt64]().unsafe_load()
         )
     return column + (Int(count_trailing_zeros(mismatches)) >> 3)
+
+
+struct History(Movable):
+    """Every cost's three fronts over the diagonals it kept, for the traceback: cost `s` holds diagonals
+    `lows[s] ..= highs[s]` from `starts[s]` of each layer's list, and reads as unreached elsewhere."""
+
+    var starts: List[Int]
+    var lows: List[Int]
+    var highs: List[Int]
+    var aligned: List[Int32]
+    var first_gaps: List[Int32]
+    var second_gaps: List[Int32]
+
+    def __init__(out self):
+        self.starts = List[Int]()
+        self.lows = List[Int]()
+        self.highs = List[Int]()
+        self.aligned = List[Int32]()
+        self.first_gaps = List[Int32]()
+        self.second_gaps = List[Int32]()
+
+    def record(mut self, low: Int, high: Int, aligned: Slot, first_gaps: Slot, second_gaps: Slot):
+        """The next cost's fronts on `low ..= high`, copied whole; none when `low > high`."""
+        self.starts.append(len(self.aligned))
+        self.lows.append(low)
+        self.highs.append(high)
+        var count = high - low + 1
+        if count <= 0:
+            return
+        self.aligned.extend(Span(unsafe_ptr=aligned.unsafe_offset(low), length=count))
+        self.first_gaps.extend(Span(unsafe_ptr=first_gaps.unsafe_offset(low), length=count))
+        self.second_gaps.extend(Span(unsafe_ptr=second_gaps.unsafe_offset(low), length=count))
+
+    @always_inline
+    def at(self, layer: Int, cost: Int, diagonal: Int) -> Int:
+        """The furthest column of `diagonal` at `cost` in `layer`, or `UNREACHED`."""
+        if cost < 0 or cost >= len(self.lows) or diagonal < self.lows[cost] or diagonal > self.highs[cost]:
+            return Int(UNREACHED)
+        var index = self.starts[cost] + diagonal - self.lows[cost]
+        if layer == ALIGNED:
+            return Int(self.aligned[index])
+        if layer == FIRST_GAP:
+            return Int(self.first_gaps[index])
+        return Int(self.second_gaps[index])
 
 
 struct Fronts(Movable):
@@ -318,6 +377,21 @@ def wavefront_score(
 
     With `give_up` off, the search runs to the end whatever it costs.
     """
+    var history = History()
+    var cost = wavefront_cost[False](first, second, penalties, give_up, history)
+    if not cost:
+        return None
+    return penalties.score(cost.value(), len(first) + len(second))
+
+
+def wavefront_cost[
+    record: Bool
+](first: List[UInt8], second: List[UInt8], penalties: Penalties, give_up: Bool, mut history: History) -> Optional[Int]:
+    """The optimal global cost of two encoded sequences, or None once a full sweep would be cheaper.
+
+    With `record`, every cost's fronts go into `history` for the traceback, and the search also hands
+    the pair back once they would pass `HISTORY_LIMIT`.
+    """
     var columns = len(first)
     var rows = len(second)
     var letters = columns + rows
@@ -327,7 +401,7 @@ def wavefront_score(
     if columns == 0 or rows == 0:
         if letters == 0:
             return 0
-        return penalties.score(o + e * letters, letters)
+        return o + e * letters
     var first_codes = padded(first, FIRST_SENTINEL)
     var second_codes = padded(second, SECOND_SENTINEL)
     var first_pointer = first_codes.unsafe_ptr()
@@ -341,8 +415,13 @@ def wavefront_score(
     fronts.claim(0, 0, 0)
     var start = slide(first_pointer, second_pointer, 0, 0)
     fronts.aligned[0][base] = Int32(start)
+    comptime if record:
+        var origin = fronts.aligned[0].unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(base)
+        var none = fronts.opened_first[0].unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(base)
+        var neither = fronts.opened_second[0].unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(base)
+        history.record(0, 0, origin, none, neither)
     if target == 0 and start >= columns:
-        return penalties.score(0, letters)
+        return 0
     var budget = columns * rows // CELLS_PER_STEP
     var work = 0
     var furthest = 2 * start
@@ -375,6 +454,9 @@ def wavefront_score(
         high = min(high, columns)
         if low > high:
             fronts.claim(slot, 1, 0)
+            comptime if record:
+                var nothing = fronts.aligned[slot].unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
+                history.record(1, 0, nothing, nothing, nothing)
             continue
         # The step reads a lane group past `high` and a diagonal either side of the range.
         fronts.ready(low - 1, high + LANES + 1)
@@ -416,8 +498,7 @@ def wavefront_score(
                 column = slide(first_pointer, second_pointer, column, diagonal)
                 front[unsafe_offset=diagonal] = Int32(column)
                 furthest = max(furthest, 2 * column - diagonal)
-        if target >= low and target <= high and Int(front[unsafe_offset=target]) >= columns:
-            return penalties.score(cost, letters)
+        var reached = target >= low and target <= high and Int(front[unsafe_offset=target]) >= columns
         work += high - low + 1
         # Diagonals no layer reached at either end are dropped, as WFA trims them, so the range
         # tracks the paths alive rather than every diagonal the gap costs allow.
@@ -443,6 +524,12 @@ def wavefront_score(
         elif kept_low != low or kept_high != high:
             fronts.lows[slot] = kept_low
             fronts.highs[slot] = kept_high
+        comptime if record:
+            history.record(kept_low, kept_high, front, first_gaps, second_gaps)
+            if len(history.aligned) > HISTORY_LIMIT:
+                return None
+        if reached:
+            return cost
         if give_up and cost >= next_check:
             next_check = cost + CHECK_STRIDE
             # The fronts widen with the cost, so the work grows with its square; projected from how
@@ -451,3 +538,120 @@ def wavefront_score(
             var ratio = Float64(projected) / Float64(cost)
             if Float64(work) * (ratio * ratio - 1.0) > Float64(budget - work):
                 return None
+
+
+def wavefront_trace(
+    history: History,
+    penalties: Penalties,
+    first: ImmPointer[UInt8, _],
+    second: ImmPointer[UInt8, _],
+    columns: Int,
+    rows: Int,
+    cost: Int,
+) -> List[UInt8]:
+    """An optimal path's layers, right to left from the corner, through every cost's kept fronts.
+
+    In the aligned front the matches the slide crossed come first, back to the column the front held
+    before it; that column is a substitution `x` back, or a gap front's at the same cost. A gap front's
+    letter comes from the diagonal beside it, opened from the aligned front `o + e` back or extended
+    from its own `e` back. Each move is the layer it consumes in: `ALIGNED` both letters, a gap layer
+    its own sequence's.
+    """
+    var x = penalties.mismatch
+    var o = penalties.opening
+    var e = penalties.extension
+    var moves = List[UInt8](capacity=columns + rows)
+    if columns == 0 or rows == 0:
+        for _ in range(columns):
+            moves.append(UInt8(FIRST_GAP))
+        for _ in range(rows):
+            moves.append(UInt8(SECOND_GAP))
+        return moves^
+    var spent = cost
+    var diagonal = columns - rows
+    var column = columns
+    var layer = ALIGNED
+    while True:
+        if layer == ALIGNED:
+            if spent == 0:
+                for _ in range(column):
+                    moves.append(UInt8(ALIGNED))
+                break
+            var same = history.at(ALIGNED, spent - x, diagonal)
+            var substituted = same + 1 if same >= 0 and same < columns and same - diagonal < rows else Int(UNREACHED)
+            var first_gap = history.at(FIRST_GAP, spent, diagonal)
+            var second_gap = history.at(SECOND_GAP, spent, diagonal)
+            var before = max(substituted, max(first_gap, second_gap))
+            for _ in range(column - before):
+                moves.append(UInt8(ALIGNED))
+            column = before
+            if before == substituted:
+                moves.append(UInt8(ALIGNED))
+                column -= 1
+                spent -= x
+            elif before == first_gap:
+                layer = FIRST_GAP
+            else:
+                layer = SECOND_GAP
+        elif layer == FIRST_GAP:
+            moves.append(UInt8(FIRST_GAP))
+            column -= 1
+            diagonal -= 1
+            if history.at(ALIGNED, spent - o - e, diagonal) == column:
+                spent -= o + e
+                layer = ALIGNED
+            else:
+                spent -= e
+        else:
+            moves.append(UInt8(SECOND_GAP))
+            diagonal += 1
+            if history.at(ALIGNED, spent - o - e, diagonal) == column:
+                spent -= o + e
+                layer = ALIGNED
+            else:
+                spent -= e
+    return moves^
+
+
+def wavefront_align(
+    first: List[UInt8], second: List[UInt8], penalties: Penalties, alphabet: String
+) -> Optional[Tuple[Int, String, String]]:
+    """The optimal global score of two encoded sequences and the gapped rows of an alignment that earns
+    it, or None once a full sweep would be cheaper or the kept fronts too large (see `HISTORY_LIMIT`)."""
+    var history = History()
+    # The pair handed back costs a score sweep and a banded alignment besides, far more than the
+    # search's work spared, so only the kept fronts' memory sends it back.
+    var cost = wavefront_cost[True](first, second, penalties, False, history)
+    if not cost:
+        return None
+    var first_codes = padded(first, FIRST_SENTINEL)
+    var second_codes = padded(second, SECOND_SENTINEL)
+    var moves = wavefront_trace(
+        history, penalties, first_codes.unsafe_ptr(), second_codes.unsafe_ptr(), len(first), len(second), cost.value()
+    )
+    comptime GAP = UInt8(ord("-"))
+    var letters = alphabet.as_bytes()
+    var top = List[UInt8](capacity=len(moves))
+    var bottom = List[UInt8](capacity=len(moves))
+    var column = 0
+    var row = 0
+    for index in range(len(moves) - 1, -1, -1):
+        var move = Int(moves[index])
+        if move == ALIGNED:
+            top.append(letters[Int(first[column])])
+            bottom.append(letters[Int(second[row])])
+            column += 1
+            row += 1
+        elif move == FIRST_GAP:
+            top.append(letters[Int(first[column])])
+            bottom.append(GAP)
+            column += 1
+        else:
+            top.append(GAP)
+            bottom.append(letters[Int(second[row])])
+            row += 1
+    return (
+        penalties.score(cost.value(), len(first) + len(second)),
+        String(unsafe_from_utf8=top),
+        String(unsafe_from_utf8=bottom),
+    )

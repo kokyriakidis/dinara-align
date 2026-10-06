@@ -49,7 +49,7 @@ from .common import (
 )
 from .edit_distance import edit_alignment, edit_distance
 from .errors import AlignmentError, ErrorKind
-from .gap_affine import wavefront_penalties, wavefront_score
+from .gap_affine import wavefront_align, wavefront_penalties, wavefront_score
 from .vector_score import optimal_band, uniform_table, vector_align, vector_score
 
 from std.atomic import Atomic
@@ -327,6 +327,9 @@ def align_on_host[
 ) raises -> AlignmentResult:
     """One pair on the host, stored while its matrix fits the budget and linear once it does not.
 
+    A global alignment under a table of one match and one mismatch score is traced back through the
+    wavefront's fronts while the wavefront is cheaper (see `gap_affine.wavefront_align`).
+
     Under a table of one match and one mismatch score the matrix is swept sixteen cells at a time,
     the same cells and so the same alignment (see `vector_align`); and a global alignment stores only
     the band of diagonals every optimal path stays on, which its score bounds (see `optimal_band`),
@@ -340,6 +343,15 @@ def align_on_host[
             var mismatch = table.value()[1]
             var codes_first = List[UInt8](first)
             var codes_second = List[UInt8](second)
+            # A close pair's alignment is traced back through the wavefront's own fronts, with no
+            # second, banded sweep; a pair it hands back takes the band its score bounds.
+            var penalties = wavefront_penalties(
+                scoring.substitutions, scoring.alphabet_size(), Int(scoring.gaps.open), Int(scoring.gaps.extend)
+            )
+            if penalties:
+                var traced = wavefront_align(codes_first, codes_second, penalties.value(), scoring.alphabet)
+                if traced:
+                    return AlignmentResult(Int32(traced.value()[0]), traced.value()[1], traced.value()[2])
             var best = Int(host_score[mode](first, second, scoring))
             var band = optimal_band(len(first), len(second), reward, mismatch, scoring.gaps, best)
             var width = min(band[1], len(second)) - max(band[0], -len(first)) + 1
