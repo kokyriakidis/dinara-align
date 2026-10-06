@@ -57,6 +57,14 @@ Eight measured fastest on an M2, where four left the pipeline idle and sixteen r
 That matches A*PA2's own choice of two four-lane vectors side by side.
 """
 
+comptime PAIRED_GROUPS = simd_width_of[DType.uint64]() >= 8
+"""
+Whether a sweep runs its groups two at a time, one under the other in one loop (see `pair_block`).
+
+On AVX-512 the pair took 5 to 7% off the long reads and left the rest within noise; sixteen lanes in one
+vector did about as well but cost up to 2% on short divergent pairs. On an M2 both were slower.
+"""
+
 comptime NARROW_LANES = 4
 """
 The smaller group a sweep falls back to below `LANES` words, A*PA2's own width, so a narrow band rounds
@@ -291,12 +299,17 @@ struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
     def words_matching[extended: Bool](self, first_word: Int, end_word: Int, first_column: Int, end_column: Int):
         """`words`, its match test fixed by `extended`.
 
-        Full groups of `LANES` take the staggered vector sweep when the span is wide enough for it.
+        Full groups of `LANES` take the staggered vector sweep when the span is wide enough for it, two
+        at a time where `PAIRED_GROUPS`.
         Of what is left, four words take a narrow vector, five to seven a narrow vector with the rest
         in scalar registers beside it, two or three scalar registers alone, and one word goes on its own.
         """
         var word = first_word
         if end_column - first_column >= 2 * LANES:
+            comptime if PAIRED_GROUPS:
+                while word + 2 * LANES <= end_word:
+                    self.pair_block[extended](word, first_column, end_column)
+                    word += 2 * LANES
             while word + LANES <= end_word:
                 self.block[LANES, extended](word, first_column, end_column)
                 word += LANES
@@ -331,6 +344,14 @@ struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
         var group = VectorGroup[lanes, extended](self, first_word, first_column, end_column)
         stagger(group)
         group.finish()
+
+    def pair_block[extended: Bool](self, first_word: Int, first_column: Int, end_column: Int):
+        """Two groups of `LANES` words, one under the other, in one loop, the lower a little behind."""
+        var top = VectorGroup[LANES, extended](self, first_word, first_column, end_column)
+        var bottom = VectorGroup[LANES, extended](self, first_word + LANES, first_column, end_column)
+        stagger_pair(top, bottom, LANES + 2)
+        top.finish()
+        bottom.finish()
 
     def scalar_block[lanes: Int, extended: Bool](self, first_word: Int, first_column: Int, end_column: Int):
         """`lanes` words through `[first_column, end_column)` in scalar registers, staggered (see `ScalarGroup`)."""

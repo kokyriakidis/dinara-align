@@ -9,6 +9,11 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
   hardware's limit for Myers' recurrence, about 2.4 cycles a word-column on AVX-512, so the band
   only gets faster by sweeping fewer cells. On genvar 16% of the band's word-columns go to rounds
   that fail and are retried (7% on ont-500k), three to six rounds a pair.
+- [x] **Wider vectors on AVX-512.** A sweep there now runs two eight-lane groups at a time, one under
+  the other in one loop: genvar 7% and ont-500k 5% faster on the Skylake-X, the sample sets within
+  noise (measured best of five beside the owner's jobs). One sixteen-lane group did about as well on
+  the long reads but cost up to 2% on short divergent pairs; on the M2 both were slower, so NEON and
+  AVX2 keep one group.
 - [ ] **Seed setup (about 2.5 s).** Inexact seeds: the scan of the second sequence (about 1.4 s
   when forced on every read), local pruning (about 0.8 s) and layer insertion (about 0.4 s).
   The scan is bound by loop overhead and memory, not one hot spot; going further means indexing
