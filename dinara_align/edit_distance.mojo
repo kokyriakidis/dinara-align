@@ -3032,8 +3032,10 @@ def band_doubling[
             if estimate != Int.MAX:
                 next_bound = max(bound + bound // 4, estimate + estimate // 8 + PROBE_MARGIN)
                 if heuristic.seeds > 0:
-                    # The origin's bound is certain; only the climb above it is estimated.
-                    next_bound = max(bound + SEED_SLACK, estimate + (estimate - origin) // 2 + PROBE_MARGIN)
+                    # The origin's bound is certain; only the climb above it is estimated, and the
+                    # retry aims a quarter of that climb past it: half overshot the final bound by a
+                    # tenth or more on the long reads, widening the band that succeeds.
+                    next_bound = max(bound + SEED_SLACK, estimate + (estimate - origin) // 4 + PROBE_MARGIN)
         if found < 0 and heuristic.seeds > 0 and attempt.reached * SEEDED_TRUST_SHARE < columns:
             # A seeded round that died within its first columns projects from those alone, which on
             # real reads hold their errors gathered at the start: its margin over the origin's bound

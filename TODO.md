@@ -3,7 +3,9 @@
 Where the time still goes in a single-threaded alignment, profiled on the Skylake-X (3.3 GHz,
 pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
 
-- [ ] **Band rounds that fail (about 1 s of the band's 6.5 s).** The sweep itself runs near the
+- [~] **Band rounds that fail (about 1 s of the band's 6.5 s).** A retry now aims a quarter of the
+  estimated climb past its estimate, not half: genvar 2% and ont-500k 7.5% faster on the Skylake-X.
+  Lowering later rounds' bounds at checkpoints, as the first round does, never ended on some reads. The sweep itself runs near the
   hardware's limit for Myers' recurrence, about 2.4 cycles a word-column on AVX-512, so the band
   only gets faster by sweeping fewer cells. On genvar 16% of the band's word-columns go to rounds
   that fail and are retried (7% on ont-500k), three to six rounds a pair.
