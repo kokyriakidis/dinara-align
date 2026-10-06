@@ -1,5 +1,6 @@
 // The C API through its C++ wrapper (see c/dinara.h): known distances and CIGARs, empty sequences, symbols
-// past ACGT, too many of them, long pairs whose CIGAR spells the distance, and four threads at once.
+// past ACGT, too many of them, long pairs whose CIGAR spells the distance, the affine cost, and four
+// threads at once.
 //
 //     pixi run test-c
 #include <cstdio>
@@ -75,6 +76,18 @@ int main() {
     }
     CHECK(refused);
 
+    dinara::AffineAlignment affine = dinara::affine_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2);
+    CHECK(affine.cost == 12 && affine.cigar == "4=3X6=");
+    CHECK(dinara::affine_cigar("ACGT", "", 4, 6, 2).cigar == "4D");
+    CHECK(dinara::affine_cigar("ACGT", "", 4, 6, 2).cost == 14);
+    bool invalid = false;
+    try {
+        dinara::affine_cigar("A", "C", 0, 6, 2);
+    } catch (const std::invalid_argument &) {
+        invalid = true;
+    }
+    CHECK(invalid);
+
     std::mt19937 random(7);
     std::uniform_int_distribution<int> base(0, 3);
     std::vector<std::pair<std::string, std::string>> pairs;
@@ -89,6 +102,8 @@ int main() {
         CHECK(long_aligned.distance == dinara::edit_distance(pair.first, pair.second));
         CHECK(edits(long_aligned.cigar, pair.first.size(), pair.second.size()) == long_aligned.distance);
         distances.push_back(long_aligned.distance);
+        // At unit costs the affine cost is the edit distance plus an opening of zero.
+        CHECK(dinara::affine_cigar(pair.first, pair.second, 1, 0, 1).cost == long_aligned.distance);
     }
 
     // No state between calls: four threads aligning the same pairs agree with the single thread.

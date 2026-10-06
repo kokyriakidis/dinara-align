@@ -19,6 +19,7 @@ from dinara_align import (
     AlignmentMode,
     AlignmentResult,
     DNA_ALPHABET,
+    affine_cigar,
     Placement,
     Scoring,
     align,
@@ -40,6 +41,8 @@ from dinara_align import (
     smith_waterman_gotoh_score,
 )
 from dinara_align.seeds import SEED_COLUMNS
+from dinara_align.gap_affine import wavefront_align, wavefront_penalties
+from dinara_align.vector_score import vector_score
 
 comptime GLOBAL = AlignmentMode.GLOBAL
 comptime LOCAL = AlignmentMode.LOCAL
@@ -920,6 +923,131 @@ def test_colouring_keeps_the_rows_it_paints() raises:
     assert_true("\x1b[31mT" in painted[1], "a mismatch is not painted red")
     with assert_raises(contains="do not"):
         _ = colorize("ACGTA", "AC")
+
+
+def mutated(text: String, rate: Float64, longest_gap: Int) -> String:
+    """`text` with substitutions, insertions and deletions at `rate` in all, each gap up to `longest_gap` long."""
+    var letters = text.as_bytes()
+    var bases = DNA_ALPHABET.as_bytes()
+    var out = List[UInt8]()
+    var index = 0
+    while index < len(letters):
+        var draw = random_float64()
+        if draw < rate / 3:
+            out.append(bases[Int(random_ui64(0, 3))])
+            index += 1
+        elif draw < 2 * rate / 3:
+            index += Int(random_ui64(1, UInt64(longest_gap)))
+        elif draw < rate:
+            for _ in range(Int(random_ui64(1, UInt64(longest_gap)))):
+                out.append(bases[Int(random_ui64(0, 3))])
+        else:
+            out.append(letters[index])
+            index += 1
+    return String(unsafe_from_utf8=out)
+
+
+def dna_codes(text: String) -> List[UInt8]:
+    """Each base's position in `DNA_ALPHABET`."""
+    var codes = List[UInt8]()
+    var bases = DNA_ALPHABET.as_bytes()
+    for byte in text.as_bytes():
+        for code in range(4):
+            if bases[code] == byte:
+                codes.append(UInt8(code))
+    return codes^
+
+
+def test_wavefront_matches_the_full_sweep() raises:
+    """The two-ended wavefront's global score and alignment are the full sweep's optimum.
+
+    Pairs of every shape the meeting must handle: close and far, long gaps either way, one side much
+    longer than the other, and a single letter; under WFA's costs and a dear opening. The scores are
+    the full Gotoh sweep's, which shares no code with the wavefront.
+    """
+    seed(23)
+    var regimes = List[Scoring]()
+    regimes.append(Scoring.uniform(0, -4, -8, -2))
+    regimes.append(Scoring.uniform(5, -4, -20, -1))
+    regimes.append(Scoring.uniform(1, -3, -6, -1))
+    var host = Placement.on_cpu(1)
+    for scoring in regimes:
+        var gaps = scoring.gaps
+        for trial in range(120):
+            var first = random_sequence(1, 400, DNA_ALPHABET)
+            var rate = [0.0, 0.02, 0.1, 0.3][trial % 4]
+            var second = mutated(first, rate, [1, 3, 40][trial % 3])
+            if trial % 11 == 0:
+                second = random_sequence(1, 3, DNA_ALPHABET)
+            if second.byte_length() == 0:
+                second = "A"
+            var expected = vector_score[GLOBAL](
+                dna_codes(first), dna_codes(second), Int(scoring.substitutions[0]), Int(scoring.substitutions[1]), gaps
+            )
+            var produced = align[GLOBAL](first, second, scoring, host)
+            assert_equal(produced.score, expected)
+            assert_well_formed[GLOBAL](first, second, produced, scoring)
+            assert_equal(score[GLOBAL](first, second, scoring, host), expected)
+
+
+def test_wavefront_splits_a_pair_too_large_to_keep() raises:
+    """A pair whose fronts pass the limit is split where an optimal path crosses, recursively, and the
+    pieces' alignment is still optimal: limits of no entries at all, a few and some, so splits fall
+    between moves and inside gaps of either sequence, with pieces that must end or begin in them."""
+    seed(29)
+    var regimes = List[Scoring]()
+    regimes.append(Scoring.uniform(0, -4, -8, -2))
+    regimes.append(Scoring.uniform(5, -4, -20, -1))
+    for scoring in regimes:
+        var penalties = wavefront_penalties(
+            scoring.substitutions, scoring.alphabet_size(), Int(scoring.gaps.open), Int(scoring.gaps.extend)
+        ).value()
+        for trial in range(60):
+            var first = random_sequence(1, 300, DNA_ALPHABET)
+            var rate = [0.02, 0.1, 0.3][trial % 3]
+            var second = mutated(first, rate, [1, 5, 60][trial % 3])
+            if second.byte_length() == 0:
+                second = "C"
+            var expected = vector_score[GLOBAL](
+                dna_codes(first),
+                dna_codes(second),
+                Int(scoring.substitutions[0]),
+                Int(scoring.substitutions[1]),
+                scoring.gaps,
+            )
+            for limit in [0, 64, 4096]:
+                var traced = wavefront_align(dna_codes(first), dna_codes(second), penalties, DNA_ALPHABET, limit)
+                var produced = AlignmentResult(Int32(traced[0]), traced[1], traced[2])
+                assert_equal(produced.score, expected)
+                assert_well_formed[GLOBAL](first, second, produced, scoring)
+
+
+def test_affine_cigar_spells_an_optimal_alignment() raises:
+    """`affine_cigar`'s cost is the full sweep's optimum at WFA's costs, and its CIGAR spells an
+    alignment of both sequences that costs exactly that, gap runs and all."""
+    seed(31)
+    for costs in [(4, 6, 2), (1, 0, 1), (3, 10, 1)]:
+        var x = costs[0]
+        var o = costs[1]
+        var e = costs[2]
+        var scoring = Scoring.uniform(0, -x, -(o + e), -e)
+        for trial in range(40):
+            var first = random_sequence(0, 300, DNA_ALPHABET)
+            var second = mutated(first, [0.0, 0.05, 0.2][trial % 3], [1, 4, 30][trial % 3])
+            if trial % 13 == 0:
+                second = String()
+            var found = affine_cigar(first, second, x, o, e)
+            var expected = -Int(vector_score[GLOBAL](dna_codes(first), dna_codes(second), 0, -x, scoring.gaps))
+            assert_equal(found.cost, expected)
+            var rows = rows_from_cigar(first, second, found.cigar)
+            assert_equal(rescore(rows[0], rows[1], scoring), -expected)
+    # Three substitutions, 12, undercut the two single gaps the edit distance takes, 16.
+    var known = affine_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2)
+    assert_equal(known.cost, 12)
+    assert_equal(known.cigar, "4=3X6=")
+    assert_equal(affine_cigar("acgu", "acgu", 4, 6, 2).cigar, "4=")
+    with assert_raises(contains="must cost"):
+        _ = affine_cigar("A", "C", 0, 6, 2)
 
 
 # endregion Refusals

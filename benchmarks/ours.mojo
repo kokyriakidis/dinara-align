@@ -19,6 +19,7 @@ from dinara_align import (
     AlignmentMode,
     Placement,
     Scoring,
+    affine_cigar,
     align,
     alignments,
     edit_alignment,
@@ -250,17 +251,19 @@ def seq_mode() raises:
     pair the batch's wall-clock time shared evenly: a throughput, not one pair's latency.
 
     A tool named `name:x,o,e` aligns at affine costs instead, as WFA counts them: a mismatch `x` and a
-    gap of `k` letters `o + k e`, the global Gotoh alignment at scores `0`, `-x`, `-(o + e)` and `-e`,
-    on one thread; its cost is the score negated.
+    gap of `k` letters `o + k e`, on one thread, with a CIGAR as the rivals' traceback hands back.
     """
     var tool = String(argv()[2])
-    var affine = Optional[Scoring]()
+    var affine = False
+    var mismatch = 0
+    var opening = 0
+    var extension = 0
     if ":" in tool:
         var costs = tool.split(":")[1].split(",")
-        var mismatch = Int(String(costs[0]))
-        var opening = Int(String(costs[1]))
-        var extension = Int(String(costs[2]))
-        affine = Scoring.uniform(0, -mismatch, -(opening + extension), -extension)
+        affine = True
+        mismatch = Int(String(costs[0]))
+        opening = Int(String(costs[1]))
+        extension = Int(String(costs[2]))
     var budget = Float64(String(argv()[3]))
     # A short spin first, so the scheduler has moved this process onto a fast core.
     var spun = perf_counter_ns()
@@ -296,7 +299,7 @@ def seq_mode() raises:
             var started = perf_counter_ns()
             var cost: Int
             if affine:
-                cost = -Int(align[GLOBAL](first, second, affine.value(), Placement.on_cpu(1)).score)
+                cost = affine_cigar(first, second, mismatch, opening, extension).cost
             else:
                 # A CIGAR, as every rival's traceback hands back, rather than the two gapped rows.
                 cost = edit_cigar(first, second).distance

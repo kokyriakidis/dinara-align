@@ -29,6 +29,15 @@ var seconds: List[String] = ["ACGACGT", "TTGGCA"]
 var distances = edit_distances(firsts, seconds)
 ```
 
+Gap-affine costs as WFA counts them, a mismatch and a gap's opening and extension, have a wavefront
+from both ends whose work grows with the square of the cost; every byte is a symbol of its own:
+
+```mojo
+from dinara_align import affine_cigar
+
+var aligned = affine_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2)  # cost 12, CIGAR "4=3X6="
+```
+
 A pattern can also be found inside a text, Edlib's infix mode, or at its start, its prefix mode:
 
 ```mojo
@@ -65,5 +74,6 @@ from .api import (
 )
 from .edit_distance import EditCigar, edit_alignment, edit_cigar, edit_distance
 from .edit_search import EditHit, edit_search, edit_search_alignment
+from .gap_affine import AffineCigar, affine_cigar
 from .common import Device, DeviceScope, GpuSpecs, Placement, hardware_threads
 from .errors import AlignmentError, ErrorKind
