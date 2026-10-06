@@ -40,6 +40,7 @@ work; a run stopped mid-pair had reached at least what it shows.
 """
 
 import argparse
+import signal
 import hashlib
 import json
 import os
@@ -84,6 +85,13 @@ KEPT = CACHE / "pa-bench-rivals.json"
 """The rivals' results from earlier runs, by tool, sample, budget and binary."""
 
 
+THREADS = os.cpu_count() or 1
+"""The threads dinara-align's multi-threaded columns take: every one this machine offers."""
+
+TIMER = Path("/usr/bin/time")
+"""GNU time, which on Linux reports a runner's own peak memory (see `run_tool`)."""
+
+
 def dinara(threads: str) -> str:
     return f"dinara-align (bit-parallel, {threads})"
 
@@ -92,8 +100,8 @@ def tools(dataset: str, ours: Path, astarpa: Path, wrapper: Path) -> list[tuple[
     """Each column's runner and the tool name it is given, as the evaluation ran them on a dataset."""
     return [
         (dinara("1 thread"), ours, dinara("1 thread")),
-        (dinara("8 threads"), ours, dinara("8 threads")),
-        (dinara("batch, 8 threads"), ours, dinara("batch, 8 threads")),
+        (dinara(f"{THREADS} threads"), ours, dinara(f"{THREADS} threads")),
+        (dinara(f"batch, {THREADS} threads"), ours, dinara(f"batch, {THREADS} threads")),
         ("a*pa2-full", astarpa, "a*pa2-full"),
         ("a*pa2-simple", astarpa, "a*pa2-simple"),
         ("a*pa", astarpa, astarpa_settings(dataset)),
@@ -233,27 +241,49 @@ def run_tool(binary: Path, tool: str, path: Path, budget: float) -> tuple[list[t
     whether it was stopped mid-pair.
 
     The runner prints a row as each pair finishes and checks its budget only between pairs, so one
-    still busy a grace past the budget is stopped, keeping the rows it printed. `wait4` reports the
-    process's peak memory, even when stopped, where `subprocess` would discard it.
+    still busy a grace past the budget is stopped, keeping the rows it printed.
+
+    The peak memory is the runner's own. On macOS `wait4` reports it, even when stopped, where
+    `subprocess` would discard it. On Linux a forked process starts from its parent's peak, so a
+    runner forked from this harness, which holds whole datasets, would report the harness's: there
+    GNU time, a small process, forks the runner and reports its peak, and a runner stopped mid-pair
+    has none to report, -1. The runner starts a session of its own, so stopping it stops GNU time
+    and the runner together.
     """
+    timed = sys.platform.startswith("linux") and TIMER.exists()
+    command = [str(binary), "seq", tool, str(budget), str(path)]
+    if timed:
+        command = [str(TIMER), "-f", "peak %M", *command]
     process = subprocess.Popen(
-        [str(binary), "seq", tool, str(budget), str(path)], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE if timed else subprocess.DEVNULL,
+        text=True,
+        start_new_session=True,
     )
     stopped = threading.Event()
 
     def stop() -> None:
         stopped.set()
-        process.kill()
+        os.killpg(process.pid, signal.SIGKILL)
 
     timer = threading.Timer(budget + GRACE, stop)
     timer.start()
     output = process.stdout.read()
     process.stdout.close()
+    errors = process.stderr.read() if timed else ""
+    if timed:
+        process.stderr.close()
     _, status, usage = os.wait4(process.pid, 0)
     timer.cancel()
     process.returncode = os.waitstatus_to_exitcode(status)
-    # macOS counts peak memory in bytes, Linux in kilobytes.
-    peak = usage.ru_maxrss if sys.platform == "darwin" else usage.ru_maxrss * 1024
+    if timed:
+        # GNU time counts kilobytes.
+        reported = [line for line in errors.splitlines() if line.startswith("peak ")]
+        peak = int(reported[-1].split()[1]) * 1024 if reported else -1
+    else:
+        # macOS counts bytes.
+        peak = usage.ru_maxrss
     rows = []
     for line in output.splitlines():
         fields = line.split("\t")
@@ -336,6 +366,8 @@ def load_kept() -> dict:
 
 
 def megabytes(peak: int, stopped: bool) -> str:
+    if peak < 0:
+        return "—"
     return f"{'≥ ' if stopped else ''}{peak / 2**20:.0f} MB"
 
 
