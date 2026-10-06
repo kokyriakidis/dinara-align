@@ -380,11 +380,13 @@ def step[
     opened_first: Slot,
     opened_second: Slot,
     flags: MutPointer[UInt8, MutUntrackedOrigin],
+    first: ImmPointer[UInt8, _],
+    second: ImmPointer[UInt8, _],
     low: Int,
     high: Int,
     columns: Int,
     rows: Int,
-):
+) -> Int:
     """One cost's three fronts on diagonals `low ..= high`, every pointer indexed by diagonal, and with
     `record` each diagonal's flag (see `FROM_FIRST_GAP`).
 
@@ -392,6 +394,9 @@ def step[
     the gap fronts are their own layers an extension back. A letter of the first sequence against
     a gap comes from the diagonal below and moves one column; one of the second, from the diagonal
     above, stays in its column and moves one row. Each only where it stays inside the matrix.
+
+    Each lane group's alignment front then slides over its matches straight away, the eight slides
+    independent of each other, and the furthest anti-diagonal, `2 column - diagonal`, comes back.
     """
     comptime Lanes = SIMD[DType.int32, LANES]
     var lane_diagonals = Lanes()
@@ -400,6 +405,7 @@ def step[
     var column_limit = Lanes(Int32(columns))
     var row_limit = Lanes(Int32(rows))
     var unreached = Lanes(UNREACHED)
+    var reach = Lanes(Int32.MIN // 2)
     var diagonal = low
     while diagonal <= high:
         var diagonals = lane_diagonals + Int32(diagonal)
@@ -416,7 +422,13 @@ def step[
         var gapped = max(first_gap, second_gap)
         opened_first.unsafe_offset(diagonal).unsafe_store(first_gap)
         opened_second.unsafe_offset(diagonal).unsafe_store(second_gap)
-        aligned.unsafe_offset(diagonal).unsafe_store(max(substituted, gapped))
+        var entry = max(substituted, gapped)
+        comptime for lane in range(LANES):
+            var column = Int(entry[lane])
+            if column >= 0:
+                entry[lane] = Int32(slide(first, second, column, diagonal + lane))
+        aligned.unsafe_offset(diagonal).unsafe_store(entry)
+        reach = max(reach, entry + entry - diagonals)
         comptime if record:
             # Worked out in the fronts' own lanes and narrowed once.
             var entry = substituted.ge(gapped).select(
@@ -427,6 +439,7 @@ def step[
             ).select(Lanes(Int32(SECOND_OPENED)), Lanes(0))
             flags.unsafe_offset(diagonal).unsafe_store((entry | opened).cast[DType.uint8]())
         diagonal += LANES
+    return Int(reach.reduce_max())
 
 
 struct Wavefront(Movable):
@@ -552,7 +565,7 @@ struct Wavefront(Movable):
         var flags = front.unsafe_bitcast[UInt8]()
         comptime if record:
             flags = self.history.flags_for(low, high)
-        step[record](
+        var reach = step[record](
             self.fronts.row(mismatch_slot, ALIGNED),
             self.fronts.row(opening_slot, ALIGNED),
             self.fronts.row(extension_slot, FIRST_GAP),
@@ -561,6 +574,8 @@ struct Wavefront(Movable):
             first_gaps,
             second_gaps,
             flags,
+            self.first.unsafe_ptr(),
+            self.second.unsafe_ptr(),
             low,
             high,
             columns,
@@ -571,26 +586,21 @@ struct Wavefront(Movable):
             front[unsafe_offset=diagonal] = UNREACHED
             first_gaps[unsafe_offset=diagonal] = UNREACHED
             second_gaps[unsafe_offset=diagonal] = UNREACHED
-        if opened == 1:
-            first_gaps[unsafe_offset=1] = 1
-            front[unsafe_offset=1] = max(front[unsafe_offset=1], 1)
-            comptime if record:
-                flags[unsafe_offset=1] = FROM_FIRST_GAP | FIRST_OPENED
-        elif opened == -1:
-            second_gaps[unsafe_offset=-1] = 0
-            front[unsafe_offset=-1] = max(front[unsafe_offset=-1], 0)
-            comptime if record:
-                flags[unsafe_offset=-1] = FROM_SECOND_GAP | SECOND_OPENED
-        # Then each alignment front slides over its matches.
-        var first_pointer = self.first.unsafe_ptr()
-        var second_pointer = self.second.unsafe_ptr()
-        var reach = Int.MIN // 2
-        for diagonal in range(low, high + 1):
-            var column = Int(front[unsafe_offset=diagonal])
-            if column >= 0:
-                column = slide(first_pointer, second_pointer, column, diagonal)
-                front[unsafe_offset=diagonal] = Int32(column)
-                reach = max(reach, 2 * column - diagonal)
+        # The gap an origin must open enters past the step, and slides as the step's columns did.
+        if opened != 0:
+            var column = 1 if opened == 1 else 0
+            if opened == 1:
+                first_gaps[unsafe_offset=1] = 1
+                comptime if record:
+                    flags[unsafe_offset=1] = FROM_FIRST_GAP | FIRST_OPENED
+            else:
+                second_gaps[unsafe_offset=-1] = 0
+                comptime if record:
+                    flags[unsafe_offset=-1] = FROM_SECOND_GAP | SECOND_OPENED
+            if Int(front[unsafe_offset=opened]) < column:
+                column = slide(self.first.unsafe_ptr(), self.second.unsafe_ptr(), column, opened)
+                front[unsafe_offset=opened] = Int32(column)
+                reach = max(reach, 2 * column - opened)
         self.fronts.reach[slot] = reach
         self.furthest = max(self.furthest, reach)
         self.work += high - low + 1
@@ -930,15 +940,18 @@ def solve(
     finish: Int,
     limit: Int,
     mut moves: List[UInt8],
+    keep: Bool = True,
 ) -> Int:
     """Appends an optimal path's moves right to left and returns its cost, from an origin as `start`
     allows and to a corner the backward search's origin `finish` allows (see `FREE_START`).
 
-    Both searches keep every cost's fronts while they stay within `limit` entries, and the path is
-    traced from where they met: back to the origin through the forward fronts, and to the corner
-    through the backward ones. A pair too large is split instead where an optimal path crosses, which
-    the two searches find keeping only their rings, as BiWFA does; a crossing inside a gap leaves the
-    piece before it to end in that gap and the piece after it to begin there, the opening paid once.
+    With `keep`, both searches keep every cost's fronts while they stay within `limit` entries, and
+    the path is traced from where they met: back to the origin through the forward fronts, and to the
+    corner through the backward ones. A pair too large is split instead where an optimal path
+    crosses, which the two searches find keeping only their rings, as BiWFA does; a crossing inside a
+    gap leaves the piece before it to end in that gap and the piece after it to begin there, the
+    opening paid once. A piece is about a quarter of the pair, its two searches about half of the
+    diagonals the pair's search grew from its end, so one that cannot fit skips keeping at once.
     """
     var columns = len(first)
     var rows = len(second)
@@ -950,28 +963,29 @@ def solve(
         var letters = columns + rows
         var continued = (start == IN_FIRST_GAP and rows == 0) or (start == IN_SECOND_GAP and columns == 0)
         return 0 if letters == 0 else penalties.extension * letters + (0 if continued else penalties.opening)
-    var forward = Wavefront(first, second, penalties, start, True, False)
-    var backward = Wavefront(first, second, penalties, finish, True, True)
+    var forward = Wavefront(first, second, penalties, start, keep, False)
+    var backward = Wavefront(first, second, penalties, finish, keep, True)
     var best = Meeting.none()
-    if bidirectional[True](forward, backward, best, False, limit):
-        # The backward walk runs from the meeting to the corner, left to right as the forward path goes.
-        var behind = List[UInt8](capacity=columns + rows)
-        trace(
-            backward.history,
-            penalties,
-            best.layer,
-            best.backward_cost,
-            columns - rows - best.diagonal,
-            columns - best.column,
-            behind,
-        )
-        for index in range(len(behind) - 1, -1, -1):
-            moves.append(behind[index])
-        trace(forward.history, penalties, best.layer, best.forward_cost, best.diagonal, best.column, moves)
-        return best.cost
-    # Too large to keep: the searches go on from where they stopped keeping only their rings.
-    forward.history = History()
-    backward.history = History()
+    if keep:
+        if bidirectional[True](forward, backward, best, False, limit):
+            # The backward walk runs from the meeting to the corner, left to right as the forward path goes.
+            var behind = List[UInt8](capacity=columns + rows)
+            trace(
+                backward.history,
+                penalties,
+                best.layer,
+                best.backward_cost,
+                columns - rows - best.diagonal,
+                columns - best.column,
+                behind,
+            )
+            for index in range(len(behind) - 1, -1, -1):
+                moves.append(behind[index])
+            trace(forward.history, penalties, best.layer, best.forward_cost, best.diagonal, best.column, moves)
+            return best.cost
+        # Too large to keep: the searches go on from where they stopped keeping only their rings.
+        forward.history = History()
+        backward.history = History()
     _ = bidirectional[False](forward, backward, best, False, Int.MAX)
     var column = best.column
     var row = column - best.diagonal
@@ -986,8 +1000,8 @@ def solve(
     elif best.layer == SECOND_GAP:
         before_finish = OPENING_SECOND_GAP
         after_start = IN_SECOND_GAP
-    _ = solve(first[column:], second[row:], penalties, after_start, finish, limit, moves)
-    _ = solve(first[:column], second[:row], penalties, start, before_finish, limit, moves)
+    _ = solve(first[column:], second[row:], penalties, after_start, finish, limit, moves, backward.work // 2 <= limit)
+    _ = solve(first[:column], second[:row], penalties, start, before_finish, limit, moves, forward.work // 2 <= limit)
     return best.cost
 
 
