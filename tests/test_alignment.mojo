@@ -39,7 +39,7 @@ from dinara_align import (
     smith_waterman_gotoh_alignment,
     smith_waterman_gotoh_score,
 )
-from dinara_align.edit_distance import SEED_COLUMNS
+from dinara_align.seeds import SEED_COLUMNS
 
 comptime GLOBAL = AlignmentMode.GLOBAL
 comptime LOCAL = AlignmentMode.LOCAL

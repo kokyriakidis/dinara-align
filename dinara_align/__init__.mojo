@@ -63,14 +63,7 @@ from .api import (
     smith_waterman_gotoh_alignment,
     smith_waterman_gotoh_score,
 )
-from .edit_distance import (
-    EditCigar,
-    EditHit,
-    edit_alignment,
-    edit_cigar,
-    edit_distance,
-    edit_search,
-    edit_search_alignment,
-)
+from .edit_distance import EditCigar, edit_alignment, edit_cigar, edit_distance
+from .edit_search import EditHit, edit_search, edit_search_alignment
 from .common import Device, DeviceScope, GpuSpecs, Placement, hardware_threads
 from .errors import AlignmentError, ErrorKind
