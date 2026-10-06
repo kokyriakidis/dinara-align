@@ -24,9 +24,10 @@ pairs both aligned, and against the costs A*PA2's published results recorded for
 disagreement fails the run.
 
 The aligners are the evaluation's exact ones: Edlib, BiWFA, A*PA, A*PA2-simple and A*PA2-full, with
-its parameters. Like it, the times here are wall-clock on one thread; dinara-align also runs as a
-batch, every pair of the sample in one call spread over the threads a pair at a time, whose column is
-the batch's time over its pairs: a throughput, where the others are latencies.
+its parameters, and WFA2-lib's WFA keeping every front, under a memory cap (see `MEMORY_CAP`). Like
+the evaluation, the times here are wall-clock on one thread; dinara-align also runs as a batch, every
+pair of the sample in one call spread over the threads a pair at a time, whose column is the batch's
+time over its pairs: a throughput, where the others are latencies.
 
 The rivals are pinned, so each one runs on a sample once and its results are kept for good, while its
 pinned commit and our runner's source stay the same; a smaller budget replays the kept run, a larger
@@ -44,6 +45,7 @@ import hashlib
 import json
 import os
 import random
+import resource
 import subprocess
 import sys
 import threading
@@ -80,6 +82,14 @@ pairs take from 60 ms to 1.5 s."""
 GRACE = 1.0
 """The seconds past its budget a runner may take, starting up included, before it is stopped."""
 
+MEMORY_CAP = 8 << 30
+"""Bytes WFA may take before it is stopped as its budget would stop it: its keep-every-front mode
+grows with the square of the distance, past any machine's memory on the longest divergent pairs,
+and faster than a budget of seconds stops it."""
+
+CAPPED = ("wfa",)
+"""The tools run under `MEMORY_CAP`."""
+
 KEPT = CACHE / "pa-bench-rivals.json"
 """The rivals' results from earlier runs, by tool, sample, budget and binary."""
 
@@ -105,6 +115,7 @@ def tools(dataset: str, ours: Path, astarpa: Path, wrapper: Path) -> list[tuple[
         ("a*pa", astarpa, astarpa_settings(dataset)),
         ("edlib", wrapper, "edlib"),
         ("biwfa", wrapper, "biwfa"),
+        ("wfa", wrapper, "wfa"),
     ]
 
 
@@ -247,26 +258,50 @@ def run_tool(binary: Path, tool: str, path: Path, budget: float) -> tuple[list[t
     GNU time, a small process, forks the runner and reports its peak, and a runner stopped mid-pair
     has none to report, -1. The runner starts a session of its own, so stopping it stops GNU time
     and the runner together.
+
+    A tool in `CAPPED` stops at `MEMORY_CAP`, its pairs so far kept, as a budget stops it: on Linux
+    the kernel refuses it the memory, on macOS, which does not enforce that limit, its resident size
+    is watched instead.
     """
     timed = sys.platform.startswith("linux") and TIMER.exists()
     command = [str(binary), "seq", tool, str(budget), str(path)]
     if timed:
         command = [str(TIMER), "-f", "peak %M", *command]
+    capped = tool in CAPPED
+
+    def limit() -> None:
+        resource.setrlimit(resource.RLIMIT_AS, (MEMORY_CAP, MEMORY_CAP))
+
     process = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE if timed else subprocess.DEVNULL,
         text=True,
         start_new_session=True,
+        preexec_fn=limit if capped and sys.platform.startswith("linux") else None,
     )
     stopped = threading.Event()
 
     def stop() -> None:
         stopped.set()
-        os.killpg(process.pid, signal.SIGKILL)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
     timer = threading.Timer(budget + GRACE, stop)
     timer.start()
+    if capped and sys.platform == "darwin":
+
+        def watch() -> None:
+            while process.poll() is None and not stopped.is_set():
+                resident = subprocess.run(["ps", "-o", "rss=", "-p", str(process.pid)], capture_output=True, text=True)
+                if resident.stdout.strip() and int(resident.stdout) * 1024 > MEMORY_CAP:
+                    stop()
+                    return
+                stopped.wait(0.05)
+
+        threading.Thread(target=watch, daemon=True).start()
     output = process.stdout.read()
     process.stdout.close()
     errors = process.stderr.read() if timed else ""

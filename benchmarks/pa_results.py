@@ -107,7 +107,7 @@ def main() raises:
 """
 """A runner for an older commit: only `edit_alignment`, which every commit has, on one thread."""
 
-ALIGNERS = [dinara("1 thread"), "a*pa2-full", "a*pa2-simple", "a*pa", "edlib", "biwfa"]
+ALIGNERS = [dinara("1 thread"), "a*pa2-full", "a*pa2-simple", "a*pa", "edlib", "biwfa", "wfa"]
 """The single-threaded aligners, in the figures' fixed order and colours."""
 
 LABELS = {
@@ -117,6 +117,7 @@ LABELS = {
     "a*pa": "A*PA",
     "edlib": "Edlib",
     "biwfa": "BiWFA",
+    "wfa": "WFA",
 }
 
 
@@ -143,6 +144,7 @@ def aligners(dataset: str, binaries: dict) -> list[tuple[str, Path, str]]:
         ("a*pa", binaries["astarpa"], astarpa_settings(dataset)),
         ("edlib", binaries["wrapper"], "edlib"),
         ("biwfa", binaries["wrapper"], "biwfa"),
+        ("wfa", binaries["wrapper"], "wfa"),
     ]
 
 

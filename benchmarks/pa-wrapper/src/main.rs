@@ -47,8 +47,9 @@ fn measure(mut run: impl FnMut() -> i64) -> (f64, i64) {
 /// pa-bench's `.seq` files hold pairs as a `>` line and a `<` line. Each pair is aligned with its
 /// traceback, once, as pa-bench times every aligner, until the budget is spent; one row per pair,
 /// flushed as it finishes, gives its file, its time and its cost, so a run stopped mid-pair still
-/// reports the pairs before it. `biwfa` is the evaluation's WFA2-lib,
-/// its lowest-memory mode; WFA's keep-every-front mode would want gigabytes on its longest pairs.
+/// reports the pairs before it. `biwfa` is the evaluation's WFA2-lib, its lowest-memory mode, and
+/// `wfa` its keep-every-front mode, whose memory grows with the square of the distance; the harness
+/// caps it (see `pa_bench.py`).
 fn seq_mode(arguments: &[String]) {
     let tool = arguments[0].as_str();
     let budget: f64 = arguments[1].parse().unwrap();
@@ -59,6 +60,7 @@ fn seq_mode(arguments: &[String]) {
     let params = match tool {
         "edlib" => AlignerParams::Edlib(EdlibParams),
         "biwfa" => AlignerParams::Wfa(WfaParams { memory_model: MemoryModel::MemoryUltraLow, heuristic: Heuristic::None }),
+        "wfa" => AlignerParams::Wfa(WfaParams { memory_model: MemoryModel::MemoryHigh, heuristic: Heuristic::None }),
         other => panic!("unknown tool {other}"),
     };
     let mut spent = 0.0;
