@@ -22,10 +22,11 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
 Its limitations and future work (curiouscoding.nl/posts/astarpa2/#discussion), and where dinara-align
 stands on each.
 
-- [ ] **Symbols beyond `ACGT`.** The edit distance rejects `N` and anything else, as A*PA2 does; the
-  affine-gap aligners take any alphabet. The bit-parallel sweep matches two bit planes; a third plane
-  would cover up to eight symbols, and the seeds need care so that a seed with an `N` never charges a
-  path that matches it.
+- [x] **Symbols beyond `ACGT`.** The edit distance takes `ACGT` and up to four other bytes, `N`
+  among them, each matching only itself, through a third bit plane its own kernels read, at no cost
+  to bases alone. Still open: such a pair runs without seeds, which pack two bits a base, so a long
+  divergent pair with an `N` is slower; seeds that skip any window holding a symbol past `ACGT`, and
+  a potential that charges nothing for those seeds, would bring them back.
 - [ ] **Semi-global and open-ended alignment.** Only global; Edlib and WFA also align a read anywhere
   in a reference, or let either end run free.
 - [ ] **Traceback while sweeping, to save memory** (as TALCO does). The band records every tile's left

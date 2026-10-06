@@ -485,8 +485,41 @@ def test_bit_parallel_edit_distance_matches_the_full_matrix() raises:
             bytes[Int(random_ui64(0, UInt64(len(bytes) - 1)))] = UInt8(ord("A"))
         second = String(unsafe_from_utf8=bytes)
         assert_equal(edit_distance(first, second), Int(levenshtein_alignment(first, second).score))
-    with assert_raises(contains="ACGT"):
-        _ = edit_distance("ACGT", "ACGN")
+    with assert_raises(contains="symbols"):
+        _ = edit_distance("ACGT", "ACGTNRYKM")
+
+
+def test_bit_parallel_symbols_past_acgt() raises:
+    """Bytes past `ACGT` are symbols of their own, each matching only itself, up to four of them.
+
+    `N` alone and four extra symbols, short pairs and long ones whose band sweeps without seeds,
+    close and divergent, and pairs where only one side holds them; every distance is the global
+    affine alignment's at unit costs over the same alphabet, which shares no code with the sweep,
+    and every alignment rebuilds both inputs and rescores to the distance.
+    """
+    seed(19)
+    var alphabets: List[String] = ["ACGTN", "ACGTNRYK"]
+    for alphabet in alphabets:
+        var unit = Scoring.edit_distance(alphabet)
+        for length in [1, 2, 64, 65, 700, 3000, 17000]:
+            for rate in [0.0, 0.05, 0.2]:
+                var first = random_sequence(length, length, alphabet)
+                var second = mutate(first, rate)
+                var plain = random_sequence(length, length, DNA_ALPHABET)
+                var pairs: List[Tuple[String, String]] = [(first, second), (second, first), (first, plain)]
+                # One long pair an alphabet: past `SEED_COLUMNS`, where bases alone would take seeds.
+                if length > 3000:
+                    if rate != 0.05:
+                        continue
+                    pairs = [(first, second)]
+                for pair in pairs:
+                    var expected = -Int(score[GLOBAL](pair[0], pair[1], unit))
+                    assert_equal(edit_distance(pair[0], pair[1]), expected)
+                    var aligned = edit_alignment(pair[0], pair[1])
+                    assert_equal(Int(aligned.score), expected)
+                    assert_equal(aligned.first_gapped.replace("-", ""), pair[0])
+                    assert_equal(aligned.second_gapped.replace("-", ""), pair[1])
+                    assert_equal(rescore(aligned.first_gapped, aligned.second_gapped, unit), -expected)
 
 
 def test_bit_parallel_whole_matrix_is_exact() raises:
@@ -614,7 +647,7 @@ def test_edit_batches_match_single_pairs() raises:
             assert_equal(Int(aligned[index].score), expected)
             assert_equal(aligned[index].first_gapped.replace("-", ""), firsts[index])
             assert_equal(aligned[index].second_gapped.replace("-", ""), seconds[index])
-    var bad_firsts: List[String] = ["ACGT", "ACGT", "ACGN"]
+    var bad_firsts: List[String] = ["ACGT", "ACGT", "ACGTNRYKM"]
     var bad_seconds: List[String] = ["ACGA", "ACG", "ACGT"]
     with assert_raises():
         _ = edit_distances(bad_firsts, bad_seconds, 8)

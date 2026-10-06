@@ -183,19 +183,6 @@ def advance[
     vertical_minus = plus & crossing
 
 
-def base_code(byte: UInt8) raises AlignmentError -> Int:
-    """`A`, `C`, `G` and `T` as zero to three, the two bits the profile is built from."""
-    if byte == UInt8(ord("A")):
-        return 0
-    if byte == UInt8(ord("C")):
-        return 1
-    if byte == UInt8(ord("G")):
-        return 2
-    if byte == UInt8(ord("T")):
-        return 3
-    raise AlignmentError(ErrorKind.UNKNOWN_SYMBOL, String("bit-parallel edit distance takes ACGT, not byte ", byte))
-
-
 struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
     """Pointers to the profile and the frontier, which the caller's lists own and outlive.
 
@@ -214,8 +201,11 @@ struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
 
     var column_low: ImmPointer[UInt64, ImmUntrackedOrigin]
     var column_high: ImmPointer[UInt64, ImmUntrackedOrigin]
+    var column_extra: ImmPointer[UInt64, ImmUntrackedOrigin]
     var row_low: ImmPointer[UInt64, ImmUntrackedOrigin]
     var row_high: ImmPointer[UInt64, ImmUntrackedOrigin]
+    var row_extra: ImmPointer[UInt64, ImmUntrackedOrigin]
+    """The third plane, read only by the kernels a profile with symbols past `ACGT` takes."""
     var horizontal_plus: MutPointer[UInt64, MutUntrackedOrigin]
     var horizontal_minus: MutPointer[UInt64, MutUntrackedOrigin]
     var vertical_plus: MutPointer[UInt64, MutUntrackedOrigin]
@@ -225,8 +215,10 @@ struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
         out self,
         column_low: List[UInt64],
         column_high: List[UInt64],
+        column_extra: List[UInt64],
         row_low: List[UInt64],
         row_high: List[UInt64],
+        row_extra: List[UInt64],
         mut horizontal_plus: List[UInt64],
         mut horizontal_minus: List[UInt64],
         mut vertical_plus: List[UInt64],
@@ -237,8 +229,12 @@ struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
         self.column_high = (
             column_high.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]().unsafe_offset(COLUMN_PADDING)
         )
+        self.column_extra = (
+            column_extra.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]().unsafe_offset(COLUMN_PADDING)
+        )
         self.row_low = row_low.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()
         self.row_high = row_high.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()
+        self.row_extra = row_extra.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()
         self.horizontal_plus = horizontal_plus.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
         self.horizontal_minus = horizontal_minus.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
         self.vertical_plus = vertical_plus.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
@@ -256,7 +252,7 @@ struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
         return moved
 
     @inline(.always)
-    def run(self, word: Int, first_column: Int, end_column: Int):
+    def run[extended: Bool](self, word: Int, first_column: Int, end_column: Int):
         """One word through `[first_column, end_column)`, its vertical differences held in registers.
 
         Only the horizontal edge goes through memory, and each column's is a different address, so
@@ -266,20 +262,34 @@ struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
         var vm = self.vertical_minus[unsafe_offset=word]
         var row_low = self.row_low[unsafe_offset=word]
         var row_high = self.row_high[unsafe_offset=word]
+        var row_extra = self.row_extra[unsafe_offset=word] if extended else UInt64(0)
         for column in range(first_column, end_column):
             var hp = self.horizontal_plus[unsafe_offset=column]
             var hm = self.horizontal_minus[unsafe_offset=column]
             var matches = (self.column_low[unsafe_offset=column] ^ row_low) & (
                 self.column_high[unsafe_offset=column] ^ row_high
             )
+            comptime if extended:
+                matches &= self.column_extra[unsafe_offset=column] ^ row_extra
             advance[1](hp, hm, vp, vm, matches)
             self.horizontal_plus[unsafe_offset=column] = hp
             self.horizontal_minus[unsafe_offset=column] = hm
         self.vertical_plus[unsafe_offset=word] = vp
         self.vertical_minus[unsafe_offset=word] = vm
 
-    def words(self, first_word: Int, end_word: Int, first_column: Int, end_column: Int):
-        """Words `[first_word, end_word)` through columns `[first_column, end_column)`.
+    def words(self, extended: Bool, first_word: Int, end_word: Int, first_column: Int, end_column: Int):
+        """Words `[first_word, end_word)` through columns `[first_column, end_column)`, matching on the
+        third plane when `extended`, as a profile with symbols past `ACGT` needs (see `words_matching`)."""
+        if extended:
+            self.words_matching[True](first_word, end_word, first_column, end_column)
+        else:
+            self.words_matching[False](first_word, end_word, first_column, end_column)
+
+    # Out of line, each kernel its own function: inlined side by side, or chosen per band round, the
+    # two slowed the bases' one by 1 to 4%.
+    @inline(.never)
+    def words_matching[extended: Bool](self, first_word: Int, end_word: Int, first_column: Int, end_column: Int):
+        """`words`, its match test fixed by `extended`.
 
         Full groups of `LANES` take the staggered vector sweep when the span is wide enough for it.
         Of what is left, four words take a narrow vector, five to seven a narrow vector with the rest
@@ -288,54 +298,54 @@ struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
         var word = first_word
         if end_column - first_column >= 2 * LANES:
             while word + LANES <= end_word:
-                self.block[LANES](word, first_column, end_column)
+                self.block[LANES, extended](word, first_column, end_column)
                 word += LANES
             # Five to seven words left: a narrow vector with the rest in scalar registers in its shadow.
             var left = end_word - word
             if left == 7:
-                self.hybrid_block[NARROW_LANES, 3](word, first_column, end_column)
+                self.hybrid_block[NARROW_LANES, 3, extended](word, first_column, end_column)
                 word += 7
             elif left == 6:
-                self.hybrid_block[NARROW_LANES, 2](word, first_column, end_column)
+                self.hybrid_block[NARROW_LANES, 2, extended](word, first_column, end_column)
                 word += 6
             elif left == 5:
-                self.hybrid_block[NARROW_LANES, 1](word, first_column, end_column)
+                self.hybrid_block[NARROW_LANES, 1, extended](word, first_column, end_column)
                 word += 5
             elif left == 4:
-                self.block[NARROW_LANES](word, first_column, end_column)
+                self.block[NARROW_LANES, extended](word, first_column, end_column)
                 word += NARROW_LANES
             # Two or three words left run side by side in scalar registers, which beats a vector
             # this narrow: its chain waits two cycles an operation, a scalar one.
             if end_word - word == 3:
-                self.scalar_block[3](word, first_column, end_column)
+                self.scalar_block[3, extended](word, first_column, end_column)
                 word += 3
             elif end_word - word == 2:
-                self.scalar_block[2](word, first_column, end_column)
+                self.scalar_block[2, extended](word, first_column, end_column)
                 word += 2
         while word < end_word:
-            self.run(word, first_column, end_column)
+            self.run[extended](word, first_column, end_column)
             word += 1
 
-    def block[lanes: Int](self, first_word: Int, first_column: Int, end_column: Int):
+    def block[lanes: Int, extended: Bool](self, first_word: Int, first_column: Int, end_column: Int):
         """`lanes` words through `[first_column, end_column)` in one vector, staggered (see `VectorGroup`)."""
-        var group = VectorGroup[lanes](self, first_word, first_column, end_column)
+        var group = VectorGroup[lanes, extended](self, first_word, first_column, end_column)
         stagger(group)
         group.finish()
 
-    def scalar_block[lanes: Int](self, first_word: Int, first_column: Int, end_column: Int):
+    def scalar_block[lanes: Int, extended: Bool](self, first_word: Int, first_column: Int, end_column: Int):
         """`lanes` words through `[first_column, end_column)` in scalar registers, staggered (see `ScalarGroup`)."""
-        var group = ScalarGroup[lanes](self, first_word, first_column, end_column)
+        var group = ScalarGroup[lanes, extended](self, first_word, first_column, end_column)
         stagger(group)
         group.finish()
 
-    def hybrid_block[lanes: Int, below: Int](self, first_word: Int, first_column: Int, end_column: Int):
+    def hybrid_block[lanes: Int, below: Int, extended: Bool](self, first_word: Int, first_column: Int, end_column: Int):
         """`lanes` words in a vector and the `below` words under them in scalar registers, in one loop.
 
         A narrow vector's chain leaves the integer units idle, so the scalar words run in its
         shadow, a few columns behind so the differences the vector sends down are already stored.
         """
-        var top = VectorGroup[lanes](self, first_word, first_column, end_column)
-        var bottom = ScalarGroup[below](self, first_word + lanes, first_column, end_column)
+        var top = VectorGroup[lanes, extended](self, first_word, first_column, end_column)
+        var bottom = ScalarGroup[below, extended](self, first_word + lanes, first_column, end_column)
         stagger_pair(top, bottom, below + 2)
         top.finish()
         bottom.finish()
@@ -369,7 +379,7 @@ trait Staggered(Movable):
         ...
 
 
-struct VectorGroup[lanes: Int](Staggered, TrivialRegisterPassable):
+struct VectorGroup[lanes: Int, extended: Bool](Staggered, TrivialRegisterPassable):
     """`lanes` words in one SIMD vector: lane `k` holds the `k`-th word from the bottom.
 
     Each lane takes the difference the lane above sent by rotating the lanes, and the top lane
@@ -383,6 +393,7 @@ struct VectorGroup[lanes: Int](Staggered, TrivialRegisterPassable):
     var end: Int
     var row_low: SIMD[DType.uint64, Self.lanes]
     var row_high: SIMD[DType.uint64, Self.lanes]
+    var row_extra: SIMD[DType.uint64, Self.lanes]
     var vertical_plus: SIMD[DType.uint64, Self.lanes]
     var vertical_minus: SIMD[DType.uint64, Self.lanes]
     var horizontal_plus: SIMD[DType.uint64, Self.lanes]
@@ -397,6 +408,7 @@ struct VectorGroup[lanes: Int](Staggered, TrivialRegisterPassable):
         self.end = end_column
         self.row_low = SIMD[DType.uint64, Self.lanes]()
         self.row_high = SIMD[DType.uint64, Self.lanes]()
+        self.row_extra = SIMD[DType.uint64, Self.lanes]()
         self.vertical_plus = SIMD[DType.uint64, Self.lanes]()
         self.vertical_minus = SIMD[DType.uint64, Self.lanes]()
         self.horizontal_plus = SIMD[DType.uint64, Self.lanes]()
@@ -406,6 +418,8 @@ struct VectorGroup[lanes: Int](Staggered, TrivialRegisterPassable):
             var word = first_word + Self.lanes - 1 - lane
             self.row_low[lane] = sweep.row_low[unsafe_offset=word]
             self.row_high[lane] = sweep.row_high[unsafe_offset=word]
+            comptime if Self.extended:
+                self.row_extra[lane] = sweep.row_extra[unsafe_offset=word]
             self.vertical_plus[lane] = sweep.vertical_plus[unsafe_offset=word]
             self.vertical_minus[lane] = sweep.vertical_minus[unsafe_offset=word]
             self.lane_columns[lane] = lane + 1
@@ -434,6 +448,10 @@ struct VectorGroup[lanes: Int](Staggered, TrivialRegisterPassable):
         var low = self.sweep.column_low.unsafe_offset(offset + 1).unsafe_load[width=Self.lanes]()
         var high = self.sweep.column_high.unsafe_offset(offset + 1).unsafe_load[width=Self.lanes]()
         var matches = (low ^ self.row_low) & (high ^ self.row_high)
+        comptime if Self.extended:
+            matches &= (
+                self.sweep.column_extra.unsafe_offset(offset + 1).unsafe_load[width=Self.lanes]() ^ self.row_extra
+            )
         comptime if masked:
             var kept_plus = self.vertical_plus
             var kept_minus = self.vertical_minus
@@ -462,7 +480,7 @@ struct VectorGroup[lanes: Int](Staggered, TrivialRegisterPassable):
             self.sweep.vertical_minus[unsafe_offset=word] = self.vertical_minus[lane]
 
 
-struct ScalarGroup[lanes: Int](Staggered):
+struct ScalarGroup[lanes: Int, extended: Bool](Staggered):
     """`lanes` words in general-purpose registers, one scalar chain each, staggered as `VectorGroup`.
 
     Each word's difference passes down through a register rather than a rotation, and a scalar
@@ -476,6 +494,7 @@ struct ScalarGroup[lanes: Int](Staggered):
     var end: Int
     var row_low: Array[UInt64, Self.lanes]
     var row_high: Array[UInt64, Self.lanes]
+    var row_extra: Array[UInt64, Self.lanes]
     var vertical_plus: Array[UInt64, Self.lanes]
     var vertical_minus: Array[UInt64, Self.lanes]
     var horizontal_plus: Array[UInt64, Self.lanes]
@@ -489,6 +508,7 @@ struct ScalarGroup[lanes: Int](Staggered):
         self.end = end_column
         self.row_low = Array[UInt64, Self.lanes](fill=0)
         self.row_high = Array[UInt64, Self.lanes](fill=0)
+        self.row_extra = Array[UInt64, Self.lanes](fill=0)
         self.vertical_plus = Array[UInt64, Self.lanes](fill=0)
         self.vertical_minus = Array[UInt64, Self.lanes](fill=0)
         self.horizontal_plus = Array[UInt64, Self.lanes](fill=0)
@@ -496,6 +516,8 @@ struct ScalarGroup[lanes: Int](Staggered):
         comptime for j in range(Self.lanes):
             self.row_low[j] = sweep.row_low[unsafe_offset=first_word + j]
             self.row_high[j] = sweep.row_high[unsafe_offset=first_word + j]
+            comptime if Self.extended:
+                self.row_extra[j] = sweep.row_extra[unsafe_offset=first_word + j]
             self.vertical_plus[j] = sweep.vertical_plus[unsafe_offset=first_word + j]
             self.vertical_minus[j] = sweep.vertical_minus[unsafe_offset=first_word + j]
 
@@ -534,6 +556,8 @@ struct ScalarGroup[lanes: Int](Staggered):
             var matches = (self.sweep.column_low[unsafe_offset=column] ^ self.row_low[j]) & (
                 self.sweep.column_high[unsafe_offset=column] ^ self.row_high[j]
             )
+            comptime if Self.extended:
+                matches &= self.sweep.column_extra[unsafe_offset=column] ^ self.row_extra[j]
             advance[1](hp, hm, vp, vm, matches)
             comptime if masked:
                 self.vertical_plus[j] = vp if inside else self.vertical_plus[j]
@@ -651,6 +675,36 @@ def all_bases(text: String) -> Bool:
     return not found
 
 
+def symbol_codes(
+    first: String, second: String, mut column_codes: List[UInt8], mut row_codes: List[UInt8]
+) raises AlignmentError:
+    """Both sequences' codes when some byte is not a base: `ACGT` zero to three, every other byte the
+    next free code, in the order the bytes first appear; past four such symbols, three bits run out."""
+    comptime UNSEEN = Int16(-1)
+    var table = List[Int16](length=256, fill=UNSEEN)
+    table[ord("A")] = 0
+    table[ord("C")] = 1
+    table[ord("G")] = 2
+    table[ord("T")] = 3
+    var next_code = 4
+
+    @inline(.always)
+    def code(byte: UInt8, mut table: List[Int16], mut next_code: Int) raises AlignmentError -> UInt8:
+        if table[Int(byte)] == UNSEEN:
+            if next_code == 8:
+                raise AlignmentError(
+                    ErrorKind.UNKNOWN_SYMBOL, "bit-parallel edit distance takes ACGT and at most four other symbols"
+                )
+            table[Int(byte)] = Int16(next_code)
+            next_code += 1
+        return UInt8(table[Int(byte)])
+
+    for byte in first.as_bytes():
+        column_codes.append(code(byte, table, next_code))
+    for byte in second.as_bytes():
+        row_codes.append(code(byte, table, next_code))
+
+
 struct Profile(Movable):
     """Both sequences as codes, and once a band needs them, as the bit planes `Sweep` reads; see
     `Sweep` for the encoding."""
@@ -660,31 +714,43 @@ struct Profile(Movable):
     var words: Int
     var column_low: List[UInt64]
     var column_high: List[UInt64]
+    var column_extra: List[UInt64]
     var row_low: List[UInt64]
     var row_high: List[UInt64]
+    var row_extra: List[UInt64]
+    var extended: Bool
+    """Whether either sequence holds a symbol past `ACGT`, coded from four up, so a match also needs
+    the codes' third bit, `column_extra` and `row_extra`; the seeds, packed two bits a base, stay out."""
     var column_codes: List[UInt8]
     """The first sequence as codes, which the traceback compares base by base."""
     var row_codes: List[UInt8]
     """The second sequence as codes."""
 
     def __init__(out self, first: String, second: String) raises AlignmentError:
-        """Both sequences as codes, refused unless every byte is a base."""
+        """Both sequences as codes: `A`, `C`, `G` and `T` zero to three, and up to four other bytes the
+        codes four to seven, in the order they first appear, each matching only itself."""
         self.columns = first.byte_length()
         self.rows = second.byte_length()
         self.words = ceildiv(self.rows, WORD_BITS)
-        if not all_bases(first) or not all_bases(second):
-            for byte in first.as_bytes():
-                _ = base_code(byte)
-            for byte in second.as_bytes():
-                _ = base_code(byte)
-
-        # Every byte is now `A`, `C`, `G` or `T`, whose ASCII bits give the code directly: bit 2 is
-        # set for `G` and `T`, the code's high bit, and bit 1 differs from bit 2 for `C` and `T`, its
-        # low bit. Only the codes are built here; the planes wait for a band (see `build_planes`).
         self.column_low = List[UInt64]()
         self.column_high = List[UInt64]()
+        self.column_extra = List[UInt64]()
         self.row_low = List[UInt64]()
         self.row_high = List[UInt64]()
+        self.row_extra = List[UInt64]()
+        self.extended = not all_bases(first) or not all_bases(second)
+        if self.extended:
+            self.column_codes = List[UInt8](capacity=self.columns + CODE_PADDING)
+            self.row_codes = List[UInt8](capacity=self.rows + CODE_PADDING)
+            symbol_codes(first, second, self.column_codes, self.row_codes)
+            for _ in range(CODE_PADDING):
+                self.column_codes.append(FIRST_SENTINEL)
+                self.row_codes.append(SECOND_SENTINEL)
+            return
+
+        # Every byte is `A`, `C`, `G` or `T`, whose ASCII bits give the code directly: bit 2 is set
+        # for `G` and `T`, the code's high bit, and bit 1 differs from bit 2 for `C` and `T`, its low
+        # bit. Only the codes are built here; the planes wait for a band (see `build_planes`).
         self.column_codes = List[UInt8](capacity=self.columns + CODE_PADDING)
         self.column_codes.resize(unsafe_uninit_length=self.columns)
         var first_bytes = first.unsafe_ptr()
@@ -744,12 +810,12 @@ struct Profile(Movable):
         while column + CHUNK <= self.columns:
             var codes = column_codes.unsafe_offset(column).unsafe_load[width=CHUNK]()
             low.unsafe_offset(column).unsafe_store(UInt64(0) - (codes & 1).cast[DType.uint64]())
-            high.unsafe_offset(column).unsafe_store(UInt64(0) - (codes >> 1).cast[DType.uint64]())
+            high.unsafe_offset(column).unsafe_store(UInt64(0) - ((codes >> 1) & 1).cast[DType.uint64]())
             column += CHUNK
         while column < self.columns:
             var code = column_codes[unsafe_offset=column]
             low[unsafe_offset=column] = UInt64(0) - (code & 1).cast[DType.uint64]()
-            high[unsafe_offset=column] = UInt64(0) - (code >> 1).cast[DType.uint64]()
+            high[unsafe_offset=column] = UInt64(0) - ((code >> 1) & 1).cast[DType.uint64]()
             column += 1
 
         comptime ONES = UInt64(0x0101010101010101)
@@ -768,8 +834,21 @@ struct Profile(Movable):
             var code = row_codes[unsafe_offset=row]
             var shift = UInt64(row % WORD_BITS)
             self.row_low[row // WORD_BITS] |= ((code & 1) ^ 1).cast[DType.uint64]() << shift
-            self.row_high[row // WORD_BITS] |= ((code >> 1) ^ 1).cast[DType.uint64]() << shift
+            self.row_high[row // WORD_BITS] |= (((code >> 1) & 1) ^ 1).cast[DType.uint64]() << shift
             row += 1
+        if not self.extended:
+            return
+        # The codes' third bit, as the first two: whole-word masks per column, and per row stored
+        # negated. The eight-at-a-time row packing above reads each byte's two low bits alone, so
+        # codes from four up leave the first two planes exact.
+        self.column_extra = List[UInt64](length=padded, fill=0)
+        self.row_extra = List[UInt64](length=self.words, fill=0)
+        var extra = self.column_extra.unsafe_ptr().unsafe_offset(COLUMN_PADDING)
+        for index in range(self.columns):
+            extra[unsafe_offset=index] = UInt64(0) - ((column_codes[unsafe_offset=index] >> 2) & 1).cast[DType.uint64]()
+        for index in range(self.rows):
+            var bit = (((row_codes[unsafe_offset=index] >> 2) & 1) ^ 1).cast[DType.uint64]()
+            self.row_extra[index // WORD_BITS] |= bit << UInt64(index % WORD_BITS)
 
 
 struct Frontier(Movable):
@@ -811,8 +890,10 @@ struct Frontier(Movable):
         return Sweep(
             profile.column_low,
             profile.column_high,
+            profile.column_extra,
             profile.row_low,
             profile.row_high,
+            profile.row_extra,
             self.horizontal_plus,
             self.horizontal_minus,
             self.vertical_plus,
@@ -842,7 +923,7 @@ def full_distance(mut profile: Profile) -> Int:
     profile.build_planes()
     var frontier = Frontier(profile.columns, profile.words)
     var sweep = frontier.sweep(profile)
-    sweep.words(0, profile.words, 0, profile.columns)
+    sweep.words(profile.extended, 0, profile.words, 0, profile.columns)
 
     # The top-right corner is `columns`; walking down the right edge adds each vertical difference.
     return profile.columns + frontier.down_right_edge(profile.rows)
@@ -2010,7 +2091,8 @@ def pruned_distance[
     words the band reaches.
 
     With `record`, every tile's left edge goes into `trail` before the tile is swept, for the
-    traceback; without, the trail is untouched.
+    traceback; without, the trail is untouched. With `extended`, matches take the third plane (see
+    `Profile.extended`).
 
     With `adapt`, the round re-aims its bound as it goes (see `Band.check`), and a distance is exact
     only within the bound it ends on.
@@ -2021,7 +2103,9 @@ def pruned_distance[
     for tile in range(band.tiles()):
         if not band.prepare[record](tile, trail, heuristic):
             return band.outcome
-        band.tile_sweep(tile).words(band.top, band.end_word, band.first_column(tile), band.end_column(tile))
+        band.tile_sweep(tile).words(
+            profile.extended, band.top, band.end_word, band.first_column(tile), band.end_column(tile)
+        )
         if not band.finish(tile, heuristic):
             return band.outcome
     return band.result()
@@ -2916,6 +3000,7 @@ def band_doubling[
             if give_up_wide:
                 return -1
             threshold = max(threshold, columns + rows)
+        # Symbols past `ACGT` take their own copy of the round, so the bases' copy matches on two planes.
         var attempt = pruned_distance[record](profile, threshold, trail, heuristic, first_round)
         first_round = False
 
@@ -2963,7 +3048,11 @@ def band_doubling[
 
 
 def edit_distance(first: String, second: String) raises AlignmentError -> Int:
-    """The global edit distance between two DNA sequences over `ACGT`, by bit-parallel sweep.
+    """The global edit distance between two sequences, by bit-parallel sweep.
+
+    Built for DNA over `ACGT`. Up to four other bytes, `N` among them, are symbols of their own,
+    each matching only itself; a pair holding them is aligned without the seed heuristic, so a long
+    divergent one runs slower than bases alone would.
 
     Band doubling, as in A*PA2-simple: guess a bound, sweep only the band of cells a path within it
     could cross, and raise the guess until the answer fits under it, which proves it optimal. Close
@@ -3001,7 +3090,9 @@ def band_start(profile: Profile, search: Probe, mut probe: Probe, mut trusted: B
     var seeded = profile.columns >= SEED_COLUMNS or (
         projected.estimate >= SEED_EDITS and projected.estimate * SEED_DIVERGENCE <= profile.columns
     )
-    if not seeded:
+    # Seeds are packed two bits a base, which symbols past `ACGT` do not fit; such a pair sweeps its
+    # band on the gap heuristic, exact still, only less narrowed.
+    if not seeded or profile.extended:
         return SeedHeuristic(profile.columns, profile.rows)
     # Long pairs only: inexact seeds when the projection already says they pay, else exact ones
     # rebuilt inexact if they chain poorly (see `SeedHeuristic`).
@@ -3375,15 +3466,23 @@ def recomputed_segment(
     var window = RECOMPUTE_WORDS
     while True:
         var first_word = max(top, end_word - window)
-        var left = window_segment(
-            profile, trail, tile, end_column, end_row, score, first_word, end_word, buffers, moves
-        )
+        var left: Int
+        if profile.extended:
+            left = window_segment[True](
+                profile, trail, tile, end_column, end_row, score, first_word, end_word, buffers, moves
+            )
+        else:
+            left = window_segment[False](
+                profile, trail, tile, end_column, end_row, score, first_word, end_word, buffers, moves
+            )
         if left >= 0 or first_word == top:
             return left
         window *= 2
 
 
-def window_segment(
+def window_segment[
+    extended: Bool
+](
     profile: Profile,
     trail: Trail,
     tile: Int,
@@ -3425,21 +3524,22 @@ def window_segment(
     var column_high = profile.column_high.unsafe_ptr().unsafe_offset(COLUMN_PADDING + first_column - 1)
     var row_low = profile.row_low.unsafe_ptr().unsafe_offset(top)
     var row_high = profile.row_high.unsafe_ptr().unsafe_offset(top)
+    # The third plane exists only for symbols past `ACGT` (see `Profile.extended`).
+    var column_extra = profile.column_extra.unsafe_ptr().unsafe_offset(COLUMN_PADDING + first_column - 1)
+    var row_extra = profile.row_extra.unsafe_ptr().unsafe_offset(top)
     for step in range(1, width + 1):
         var horizontal_plus = UInt64(1)
         var horizontal_minus = UInt64(0)
         var low = column_low[unsafe_offset=step]
         var high = column_high[unsafe_offset=step]
+        var extra = column_extra[unsafe_offset=step] if extended else UInt64(0)
         for word in range(count):
             var vertical_plus = plus[unsafe_offset=(step - 1) * count + word]
             var vertical_minus = minus[unsafe_offset=(step - 1) * count + word]
-            advance[1](
-                horizontal_plus,
-                horizontal_minus,
-                vertical_plus,
-                vertical_minus,
-                (low ^ row_low[unsafe_offset=word]) & (high ^ row_high[unsafe_offset=word]),
-            )
+            var matches = (low ^ row_low[unsafe_offset=word]) & (high ^ row_high[unsafe_offset=word])
+            comptime if extended:
+                matches &= extra ^ row_extra[unsafe_offset=word]
+            advance[1](horizontal_plus, horizontal_minus, vertical_plus, vertical_minus, matches)
             plus[unsafe_offset=step * count + word] = vertical_plus
             minus[unsafe_offset=step * count + word] = vertical_minus
 
@@ -3527,7 +3627,8 @@ def trace_back(profile: Profile, trail: Trail, start_column: Int, start_row: Int
 
 
 def edit_alignment(first: String, second: String) raises AlignmentError -> AlignmentResult:
-    """The global edit distance between two DNA sequences over `ACGT`, and an optimal alignment.
+    """The global edit distance between two sequences, and an optimal alignment; symbols past `ACGT`
+    as `edit_distance` takes them.
 
     The distance comes from `edit_distance`'s band doubling, recording each tile's left edge in the
     round that succeeds; the alignment is then traced back tile by tile from those edges (see
