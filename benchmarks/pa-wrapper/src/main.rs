@@ -58,8 +58,9 @@ fn measure(mut run: impl FnMut() -> i64) -> (f64, i64) {
 /// `wfa-adaptive` and `block-aligner` are the evaluation's two approximate aligners, with its
 /// parameters: WFA-adaptive's defaults (10, 50, 10), and Block Aligner's blocks from 0.1 to 1% of the
 /// input, at a gap-opening cost of one as it takes only affine costs. Either may return a worse
-/// alignment than the optimum, so each row's cost is its alignment rescored at unit costs, which the
-/// harness holds against the exact distance.
+/// alignment than the optimum at its costs, so the harness holds each against an exact one at the
+/// same costs, as the evaluation does: the exact distance, and for Block Aligner `biwfa-affine`,
+/// BiWFA at its affine costs.
 fn seq_mode(arguments: &[String]) {
     let tool = arguments[0].as_str();
     let budget: f64 = arguments[1].parse().unwrap();
@@ -78,9 +79,16 @@ fn seq_mode(arguments: &[String]) {
         "block-aligner" => {
             AlignerParams::BlockAligner(BlockAlignerParams { size: BlockAlignerSize::Percent(0.001, 0.01) })
         }
+        "biwfa-affine" => {
+            AlignerParams::Wfa(WfaParams { memory_model: MemoryModel::MemoryUltraLow, heuristic: Heuristic::None })
+        }
         other => panic!("unknown tool {other}"),
     };
-    let costs = if tool == "block-aligner" { CostModel::affine(1, 1, 1) } else { CostModel::unit() };
+    // Block Aligner takes only affine costs, a gap's opening one more; its exact reference shares them.
+    let costs = match tool {
+        "block-aligner" | "biwfa-affine" => CostModel::affine(1, 1, 1),
+        _ => CostModel::unit(),
+    };
     let mut spent = 0.0;
     for path in &arguments[2..] {
         if spent >= budget {
@@ -96,14 +104,7 @@ fn seq_mode(arguments: &[String]) {
             }
             let (a, b) = (pair[0][1..].as_bytes(), pair[1][1..].as_bytes());
             let started = Instant::now();
-            let (cost, cigar, _) = aligner.align(a, b);
-            // An approximate alignment rescored at unit costs; the exact aligners report that already.
-            let cost = match cigar {
-                Some(cigar) if !costs.is_unit() || tool == "wfa-adaptive" => {
-                    cigar.verify(&CostModel::unit(), a, b).expect("an alignment of both sequences")
-                }
-                _ => cost,
-            };
+            let cost = aligner.align(a, b).0;
             let seconds = started.elapsed().as_secs_f64();
             spent += seconds;
             // Rust's stdout flushes by line, piped or not.
