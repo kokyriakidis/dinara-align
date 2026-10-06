@@ -20,6 +20,7 @@ from dinara_align import (
     AlignmentResult,
     DNA_ALPHABET,
     affine_cigar,
+    affine_cigars,
     Placement,
     Scoring,
     align,
@@ -1048,6 +1049,19 @@ def test_affine_cigar_spells_an_optimal_alignment() raises:
     assert_equal(affine_cigar("acgu", "acgu", 4, 6, 2).cigar, "4=")
     with assert_raises(contains="must cost"):
         _ = affine_cigar("A", "C", 0, 6, 2)
+
+    # A batch over threads gives every pair what the single call gives it.
+    var firsts = List[String]()
+    var seconds = List[String]()
+    for trial in range(30):
+        var first = random_sequence(0, 2000, DNA_ALPHABET)
+        firsts.append(first)
+        seconds.append(mutated(first, [0.01, 0.1, 0.3][trial % 3], [1, 8, 50][trial % 3]))
+    var batch = affine_cigars(firsts, seconds, 4, 6, 2, threads=4)
+    for index in range(len(firsts)):
+        var single = affine_cigar(firsts[index], seconds[index], 4, 6, 2)
+        assert_equal(batch[index].cost, single.cost)
+        assert_equal(batch[index].cigar, single.cigar)
 
 
 # endregion Refusals

@@ -33,9 +33,12 @@ Gap-affine costs as WFA counts them, a mismatch and a gap's opening and extensio
 from both ends whose work grows with the square of the cost; every byte is a symbol of its own:
 
 ```mojo
-from dinara_align import affine_cigar
+from dinara_align import affine_cigar, affine_cigars
 
 var aligned = affine_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2)  # cost 12, CIGAR "4=3X6="
+var firsts: List[String] = ["ACGTACGT", "TTGCA"]
+var seconds: List[String] = ["ACGACGT", "TTGGCA"]
+var batch = affine_cigars(firsts, seconds, 4, 6, 2)  # every pair, over every thread
 ```
 
 A pattern can also be found inside a text, Edlib's infix mode, or at its start, its prefix mode:
@@ -60,6 +63,7 @@ from .api import (
     DNA_ALPHABET,
     STORED_MATRIX_BUDGET,
     Scoring,
+    affine_cigars,
     align,
     alignments,
     edit_alignments,

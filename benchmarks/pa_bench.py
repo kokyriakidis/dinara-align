@@ -122,8 +122,10 @@ def tools(dataset: str, ours: Path, astarpa: Path, wrapper: Path) -> list[tuple[
 
 def affine_tools(costs: str, ours: Path, wrapper: Path) -> list[tuple[str, Path, str]]:
     """The columns at affine costs `x,o,e`, as WFA counts them: the exact aligners that take them, KSW2's
-    SSE kernels on x86-64 alone."""
-    chosen = [(dinara("1 thread"), ours, f"dinara-align:{costs}"), ("wfa", wrapper, f"wfa:{costs}")]
+    SSE kernels on x86-64 alone, and dinara-align's batch over every thread beside its one-thread column."""
+    batch = f"dinara-align (batch, {THREADS} threads)"
+    chosen = [("dinara-align (1 thread)", ours, f"dinara-align:{costs}"), (batch, ours, f"{batch}:{costs}")]
+    chosen.append(("wfa", wrapper, f"wfa:{costs}"))
     chosen.append(("biwfa", wrapper, f"biwfa:{costs}"))
     if platform.machine().lower() in ("x86_64", "amd64"):
         chosen.append(("ksw2", wrapper, f"ksw2:{costs}"))

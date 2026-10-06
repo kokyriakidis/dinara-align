@@ -20,6 +20,7 @@ from dinara_align import (
     Placement,
     Scoring,
     affine_cigar,
+    affine_cigars,
     align,
     alignments,
     edit_alignment,
@@ -281,10 +282,16 @@ def seq_mode() raises:
                 firsts.append(first)
                 seconds.append(second)
             var started = perf_counter_ns()
-            var aligned = edit_alignments(firsts, seconds, hardware_threads())
+            var costs = List[Int]()
+            if affine:
+                for found in affine_cigars(firsts, seconds, mismatch, opening, extension, threads=hardware_threads()):
+                    costs.append(found.cost)
+            else:
+                for aligned in edit_alignments(firsts, seconds, hardware_threads()):
+                    costs.append(Int(aligned.score))
             var share = Float64(perf_counter_ns() - started) / 1e9 / Float64(max(len(firsts), 1))
-            for pair in range(len(aligned)):
-                print(tool, path, share, Int(aligned[pair].score), sep="\t")
+            for cost in costs:
+                print(tool, path, share, cost, sep="\t")
         return
     var spent = 0.0
     for argument in range(4, len(argv())):

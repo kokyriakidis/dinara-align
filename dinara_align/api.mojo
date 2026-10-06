@@ -49,7 +49,7 @@ from .common import (
 )
 from .edit_distance import edit_alignment, edit_distance
 from .errors import AlignmentError, ErrorKind
-from .gap_affine import wavefront_align, wavefront_penalties, wavefront_score
+from .gap_affine import AffineCigar, affine_cigar, wavefront_align, wavefront_penalties, wavefront_score
 from .vector_score import optimal_band, uniform_table, vector_align, vector_score
 
 from std.atomic import Atomic
@@ -733,6 +733,60 @@ def edit_alignments(
     for index in range(pairs):
         if failed[index]:
             results[index] = edit_alignment(firsts[index], seconds[index])
+    return results^
+
+
+def affine_cigars(
+    firsts: List[String],
+    seconds: List[String],
+    mismatch: Int,
+    opening: Int,
+    extension: Int,
+    extended: Bool = True,
+    threads: Optional[Int] = None,
+) raises -> List[AffineCigar]:
+    """Every pair's least gap-affine cost and an optimal alignment's CIGAR, as `affine_cigar` gives
+    them, the pairs spread over threads as `edit_alignments` spreads them, longest first."""
+    var pairs = paired_length(firsts, seconds)
+    # The costs are checked once, on an empty pair, before any thread starts.
+    _ = affine_cigar(String(), String(), mismatch, opening, extension)
+    var results = List[AffineCigar](capacity=pairs)
+    for _ in range(pairs):
+        results.append(AffineCigar(0, String()))
+    if pairs == 0:
+        return results^
+    var workers = max(threads.or_else(hardware_threads()), 1)
+    var out = results.unsafe_ptr()
+    var order = longest_first(firsts, seconds)
+    var taken = Atomic[Int64](0)
+
+    def affine_worker(
+        worker: Int,
+    ) {
+        mut taken,
+        imm order,
+        imm firsts,
+        imm seconds,
+        imm out,
+        imm pairs,
+        imm mismatch,
+        imm opening,
+        imm extension,
+        imm extended,
+    }:
+        while True:
+            var dealt = Int(taken.fetch_add(1))
+            if dealt >= pairs:
+                return
+            var index = order[dealt]
+            try:
+                out[unsafe_offset=index] = affine_cigar(
+                    firsts[index], seconds[index], mismatch, opening, extension, extended
+                )
+            except:
+                pass
+
+    parallelize(affine_worker, min(workers, pairs), min(workers, pairs))
     return results^
 
 
