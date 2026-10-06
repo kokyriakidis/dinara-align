@@ -16,3 +16,28 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
 - [ ] **The M2's two lost rows.** 100 kbp pairs at 6 and 7% divergence lose to A*PA2-full there:
   the M2's cutoff, 40% of exact seeds chained, rebuilds inexact seeds from 6%, and was tuned when
   inexact setup cost twice what it does now. A sweep of `INEXACT_CHAINED` on the M2 may win them back.
+
+## From A*PA2's discussion
+
+Its limitations and future work (curiouscoding.nl/posts/astarpa2/#discussion), and where dinara-align
+stands on each.
+
+- [ ] **Symbols beyond `ACGT`.** The edit distance rejects `N` and anything else, as A*PA2 does; the
+  affine-gap aligners take any alphabet. The bit-parallel sweep matches two bit planes; a third plane
+  would cover up to eight symbols, and the seeds need care so that a seed with an `N` never charges a
+  path that matches it.
+- [ ] **Semi-global and open-ended alignment.** Only global; Edlib and WFA also align a read anywhere
+  in a reference, or let either end run free.
+- [ ] **Traceback while sweeping, to save memory** (as TALCO does). The band records every tile's left
+  edge and traces back after; memory is level with A*PA2-full's.
+- [ ] **A\* on the diagonal transition** at low divergence. dinara-align runs a plain diagonal
+  transition first and falls back to the band; it is fast below 2% but uses no heuristic there.
+- [ ] **An upper bound on the distance** to keep bounds from overshooting. Bounds are aimed from
+  projections and checkpoints rather than doubled, but 16% of genvar's band still goes to failed
+  rounds (see above); a bound from a quick approximate alignment is untried.
+- [ ] **Affine costs with the seed heuristic.** The affine aligners are exact but sweep without a
+  heuristic; A*PA2's method for affine costs needs a gap-chaining seed heuristic of its own.
+- [x] **Low divergence (below 2%)** was A*PA2's weak spot against BiWFA; the diagonal transition
+  before any band now beats BiWFA and WFA there (146 µs against 302 and 605 at 0%, 100 kbp).
+- [~] **The seeds' setup** was A*PA2's other limitation; it is a quarter of the time it was, but still
+  a quarter of a long read's alignment (see above).
