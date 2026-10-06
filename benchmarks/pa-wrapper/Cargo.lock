@@ -116,6 +116,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b8e56985ec62d17e9c1001dc89c88ecd7dc08e47eba5ec7c29c7b5eeecde967"
 
 [[package]]
+name = "block-aligner"
+version = "0.5.1"
+source = "git+https://github.com/Daniel-Liu-c0deb0t/block-aligner#4fcf630cf775de5b578fe63971f210e1dc958791"
+
+[[package]]
 name = "cc"
 version = "1.2.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -382,6 +387,7 @@ dependencies = [
 name = "pa-wrapper"
 version = "0.1.0"
 dependencies = [
+ "block-aligner",
  "clap",
  "edlib_rs",
  "itertools 0.10.5",

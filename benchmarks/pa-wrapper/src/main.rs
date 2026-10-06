@@ -9,7 +9,11 @@
 
 use pa_types::CostModel;
 use pa_wrapper::{
-    wrappers::{edlib::EdlibParams, wfa::WfaParams},
+    wrappers::{
+        block_aligner::{BlockAlignerParams, BlockAlignerSize},
+        edlib::EdlibParams,
+        wfa::WfaParams,
+    },
     AlignerParams,
 };
 use rust_wfa2::aligner::{Heuristic, MemoryModel};
@@ -50,6 +54,12 @@ fn measure(mut run: impl FnMut() -> i64) -> (f64, i64) {
 /// reports the pairs before it. `biwfa` is the evaluation's WFA2-lib, its lowest-memory mode, and
 /// `wfa` its keep-every-front mode, whose memory grows with the square of the distance; the harness
 /// caps it (see `pa_bench.py`).
+///
+/// `wfa-adaptive` and `block-aligner` are the evaluation's two approximate aligners, with its
+/// parameters: WFA-adaptive's defaults (10, 50, 10), and Block Aligner's blocks from 0.1 to 1% of the
+/// input, at a gap-opening cost of one as it takes only affine costs. Either may return a worse
+/// alignment than the optimum, so each row's cost is its alignment rescored at unit costs, which the
+/// harness holds against the exact distance.
 fn seq_mode(arguments: &[String]) {
     let tool = arguments[0].as_str();
     let budget: f64 = arguments[1].parse().unwrap();
@@ -61,8 +71,16 @@ fn seq_mode(arguments: &[String]) {
         "edlib" => AlignerParams::Edlib(EdlibParams),
         "biwfa" => AlignerParams::Wfa(WfaParams { memory_model: MemoryModel::MemoryUltraLow, heuristic: Heuristic::None }),
         "wfa" => AlignerParams::Wfa(WfaParams { memory_model: MemoryModel::MemoryHigh, heuristic: Heuristic::None }),
+        "wfa-adaptive" => AlignerParams::Wfa(WfaParams {
+            memory_model: MemoryModel::MemoryUltraLow,
+            heuristic: Heuristic::WFadaptive(10, 50, 10),
+        }),
+        "block-aligner" => {
+            AlignerParams::BlockAligner(BlockAlignerParams { size: BlockAlignerSize::Percent(0.001, 0.01) })
+        }
         other => panic!("unknown tool {other}"),
     };
+    let costs = if tool == "block-aligner" { CostModel::affine(1, 1, 1) } else { CostModel::unit() };
     let mut spent = 0.0;
     for path in &arguments[2..] {
         if spent >= budget {
@@ -71,14 +89,21 @@ fn seq_mode(arguments: &[String]) {
         let text = fs::read_to_string(path).unwrap();
         let lines: Vec<&str> = text.lines().collect();
         let longest = lines.iter().map(|line| line.len()).max().unwrap_or(1);
-        let (mut aligner, _exact) = params.build_aligner(CostModel::unit(), true, longest);
+        let (mut aligner, _exact) = params.build_aligner(costs, true, longest);
         for pair in lines.chunks(2) {
             if pair.len() < 2 || spent >= budget {
                 break;
             }
             let (a, b) = (pair[0][1..].as_bytes(), pair[1][1..].as_bytes());
             let started = Instant::now();
-            let cost = aligner.align(a, b).0;
+            let (cost, cigar, _) = aligner.align(a, b);
+            // An approximate alignment rescored at unit costs; the exact aligners report that already.
+            let cost = match cigar {
+                Some(cigar) if !costs.is_unit() || tool == "wfa-adaptive" => {
+                    cigar.verify(&CostModel::unit(), a, b).expect("an alignment of both sequences")
+                }
+                _ => cost,
+            };
             let seconds = started.elapsed().as_secs_f64();
             spent += seconds;
             // Rust's stdout flushes by line, piped or not.

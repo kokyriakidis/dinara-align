@@ -108,7 +108,12 @@ def main() raises:
 """A runner for an older commit: only `edit_alignment`, which every commit has, on one thread."""
 
 ALIGNERS = [dinara("1 thread"), "a*pa2-full", "a*pa2-simple", "a*pa", "edlib", "biwfa", "wfa"]
-"""The single-threaded aligners, in the figures' fixed order and colours."""
+"""The single-threaded exact aligners, in the figures' fixed order and colours."""
+
+APPROXIMATE = ["wfa-adaptive", "block-aligner"]
+"""The approximate aligners A*PA2's evaluation sets beside the exact ones on the real datasets, with
+its parameters. They may return a worse alignment than the optimum, so their costs are held against
+the exact distance, never checked for agreement, and the share they get right goes beside their time."""
 
 LABELS = {
     dinara("1 thread"): "dinara-align",
@@ -118,6 +123,8 @@ LABELS = {
     "edlib": "Edlib",
     "biwfa": "BiWFA",
     "wfa": "WFA",
+    "wfa-adaptive": "WFA-adaptive",
+    "block-aligner": "Block Aligner",
 }
 
 
@@ -149,12 +156,22 @@ def aligners(dataset: str, binaries: dict) -> list[tuple[str, Path, str]]:
 
 
 def times(
-    name: str, path: Path, reference, binaries: dict, kept: dict, astarpa_choices: list[str] | None = None
+    name: str,
+    path: Path,
+    reference,
+    binaries: dict,
+    kept: dict,
+    astarpa_choices: list[str] | None = None,
+    correct: dict | None = None,
 ) -> dict[str, list[float]]:
     """Every aligner's seconds per pair on one sample, its costs checked against the others' and the published ones.
 
     With `astarpa_choices`, A*PA runs with each of those settings and keeps the faster: on a sweep the
     evaluation's per-dataset settings do not reach, the fairest reading of A*PA.
+
+    With `correct`, the approximate aligners run too, and `correct` takes, for each, how many of the
+    pairs it finished it aligned at the exact distance, and how many it finished. A cost below the
+    exact distance would be an error in the harness or the aligner, and stops the run.
     """
     found, seen = {}, []
     for column, binary, tool in aligners(name, binaries):
@@ -177,6 +194,17 @@ def times(
             common = min(len(costs), len(other_costs))
             if costs[:common] != other_costs[:common]:
                 sys.exit(f"DISAGREEMENT on {name}: {column} and {other}")
+    if correct is not None:
+        exact = max((costs for _, costs in seen), key=len)
+        for column in APPROXIMATE:
+            print(f"{name}: {LABELS[column]} ...", file=sys.stderr, flush=True)
+            rows, _, _ = measure(binaries["wrapper"], column, path, BUDGET, kept)
+            KEPT.write_text(json.dumps(kept))
+            found[column] = [seconds for seconds, _ in rows]
+            costs = [cost for _, cost in rows]
+            if any(cost < best for cost, best in zip(costs, exact)):
+                sys.exit(f"{LABELS[column]} reports a cost below the exact distance on {name}")
+            correct[column] = [sum(cost == best for cost, best in zip(costs, exact)), min(len(costs), len(exact))]
     return found
 
 
@@ -232,10 +260,12 @@ def collect() -> None:
     for name in REAL:
         files = sorted((DATA / name).glob("*.seq"))
         path, facts = sample(name, files, REAL_BASES.get(name, 2_000_000), published)
+        correct = {}
         real[name] = {
             "pairs": facts["pairs"],
             "mean_length": facts["mean_length"],
-            "times": times(name, path, facts["reference"], binaries, kept),
+            "times": times(name, path, facts["reference"], binaries, kept, correct=correct),
+            "correct": correct,
         }
     measured["real"] = real
 
@@ -315,10 +345,14 @@ def header(first: str, columns: list[str]) -> list[str]:
 def tables(measured: dict) -> str:
     """The results as Markdown tables, one a figure of A*PA2's."""
     names = [LABELS[column] for column in ALIGNERS]
-    out = ["### Real datasets", "", "Mean time per alignment, median in brackets:", ""]
-    out += header("dataset", ["pairs", "mean length"] + names)
+    out = ["### Real datasets", "", "Mean time per alignment, median in brackets; for the approximate aligners, marked with an", "asterisk, also the share of the pairs they finished that they aligned optimally:", ""]
+    out += header("dataset", ["pairs", "mean length"] + names + [LABELS[column] + "*" for column in APPROXIMATE])
     for name, data in measured["real"].items():
         cells = [cell(data["times"].get(column, []), data["pairs"]) for column in ALIGNERS]
+        for column in APPROXIMATE:
+            text = cell(data["times"].get(column, []), data["pairs"])
+            right, finished = data.get("correct", {}).get(column, [0, 0])
+            cells.append(f"{text}, {100 * right / finished:.0f}% optimal" if finished else text)
         out.append(f"| {name} | {data['pairs']} | {data['mean_length'] / 1000:.3g} kbp | " + " | ".join(cells) + " |")
 
     out += ["", f"### Divergence, {DIVERGENCE_LENGTH // 1000} kbp pairs", "", "Mean time per alignment:", ""]
