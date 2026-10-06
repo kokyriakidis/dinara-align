@@ -205,60 +205,79 @@ comptime SECOND_OPENED = UInt8(8)
 struct History(Movable):
     """What the traceback needs of every cost's fronts: the alignment front's column on each diagonal
     kept, and a flag of which source won each layer there (see `FROM_FIRST_GAP` and the bits after
-    it). Cost `s` holds diagonals `lows[s] ..= highs[s]`, its columns and flags from `starts[s]` of
-    the two lists, which grow together; elsewhere it reads as unreached. The step writes both as it
-    goes (see `begin`), so the fronts are never copied out of the rings."""
+    it). Cost `s` holds diagonals `lows[s] ..= highs[s]`, its columns and flags from `starts[s]`;
+    elsewhere it reads as unreached. The step writes both as it goes (see `begin`), so the fronts are
+    never copied out of the rings, and they go into blocks that are never moved either: a list grown
+    by doubling would copy everything kept so far each time, a tenth of an alignment's time.
+    """
 
     var starts: List[Int]
+    """Each cost's block, above `BLOCK_SHIFT`, and its first diagonal's place in the block below."""
     var lows: List[Int]
     var highs: List[Int]
-    var aligned: List[Int32]
-    var flags: List[UInt8]
+    var columns: List[List[Int32]]
+    var flags: List[List[UInt8]]
+    var used: Int
+    """Entries taken from the last block."""
+    var kept: Int
+    """Diagonals kept in all, what `HISTORY_LIMIT` bounds."""
+    var next_block: Int
+    """The entries the next block holds, doubling up to `HISTORY_BLOCK`."""
     var pending_start: Int
-    """Where the cost `begin` made room for starts, and the diagonal it starts at."""
+    """Where the cost `begin` made room for starts in the last block, and the diagonal it starts at."""
     var pending_low: Int
 
     def __init__(out self, capacity: Int = 0):
-        """Kept fronts with room for `capacity` diagonals before the lists first grow."""
+        """Kept fronts whose first block holds `capacity` diagonals."""
         self.starts = List[Int]()
         self.lows = List[Int]()
         self.highs = List[Int]()
-        self.aligned = List[Int32](capacity=capacity)
-        self.flags = List[UInt8](capacity=capacity)
+        self.columns = List[List[Int32]]()
+        self.flags = List[List[UInt8]]()
+        self.used = 0
+        self.kept = 0
+        self.next_block = max(capacity, 1024)
         self.pending_start = 0
         self.pending_low = 0
 
     def begin(mut self, low: Int, high: Int) -> Tuple[Slot, MutPointer[UInt8, MutUntrackedOrigin]]:
         """Room for the next cost's columns and flags on `low ..= high` and a lane group past, each
         indexed by diagonal, which the step fills before `finish` keeps them."""
-        var start = len(self.aligned)
-        var length = start + high - low + 1 + LANES
-        self.aligned.resize(unsafe_uninit_length=length)
-        self.flags.resize(unsafe_uninit_length=length)
-        self.pending_start = start
+        var needed = high - low + 1 + LANES
+        if len(self.columns) == 0 or self.used + needed > len(self.columns[len(self.columns) - 1]):
+            # A block is only ever written, never filled first, so its pages arrive as the step reaches them.
+            var size = max(self.next_block, needed)
+            var block = List[Int32](capacity=size)
+            block.resize(unsafe_uninit_length=size)
+            var block_flags = List[UInt8](capacity=size)
+            block_flags.resize(unsafe_uninit_length=size)
+            self.columns.append(block^)
+            self.flags.append(block_flags^)
+            self.used = 0
+            self.next_block = min(2 * self.next_block, HISTORY_BLOCK)
+        var last = len(self.columns) - 1
+        self.pending_start = self.used
         self.pending_low = low
         return (
-            self.aligned.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(start - low),
-            self.flags.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(start - low),
+            self.columns[last].unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(self.used - low),
+            self.flags[last].unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(self.used - low),
         )
 
     def finish(mut self, low: Int, high: Int):
         """Keeps the cost `begin` made room for on `low ..= high`, inside that room; none when `low > high`."""
-        var start = self.pending_start
+        var block = (len(self.columns) - 1) << BLOCK_SHIFT
         self.lows.append(low)
         self.highs.append(high)
         if low > high:
-            self.starts.append(start)
-            self.aligned.shrink(start)
-            self.flags.shrink(start)
+            self.starts.append(block)
             return
-        self.starts.append(start + low - self.pending_low)
-        self.aligned.shrink(start + high - self.pending_low + 1)
-        self.flags.shrink(start + high - self.pending_low + 1)
+        self.starts.append(block + self.pending_start + low - self.pending_low)
+        self.used = self.pending_start + high - self.pending_low + 1
+        self.kept += high - low + 1
 
     def skip(mut self):
         """The next cost reached nothing."""
-        self.starts.append(len(self.aligned))
+        self.starts.append(0)
         self.lows.append(1)
         self.highs.append(0)
 
@@ -267,12 +286,21 @@ struct History(Movable):
         """The alignment front's furthest column on `diagonal` at `cost`, or `UNREACHED`."""
         if cost < 0 or cost >= len(self.lows) or diagonal < self.lows[cost] or diagonal > self.highs[cost]:
             return Int(UNREACHED)
-        return Int(self.aligned[self.starts[cost] + diagonal - self.lows[cost]])
+        var start = self.starts[cost]
+        return Int(self.columns[start >> BLOCK_SHIFT][(start & BLOCK_MASK) + diagonal - self.lows[cost]])
 
     @inline(.always)
     def flag(self, cost: Int, diagonal: Int) -> UInt8:
         """The flag of `diagonal` at `cost`, which the traceback reads only where a front reached."""
-        return self.flags[self.starts[cost] + diagonal - self.lows[cost]]
+        var start = self.starts[cost]
+        return self.flags[start >> BLOCK_SHIFT][(start & BLOCK_MASK) + diagonal - self.lows[cost]]
+
+
+comptime HISTORY_BLOCK = 1 << 22
+"""The most diagonals one block of kept fronts holds, 20 MB, unless one cost needs more."""
+comptime BLOCK_SHIFT = 40
+"""Where a kept cost's block number starts in its `starts` entry, above its place in the block."""
+comptime BLOCK_MASK = (1 << BLOCK_SHIFT) - 1
 
 
 struct Fronts(Movable):
@@ -856,7 +884,7 @@ def bidirectional[
             for ahead in range(max(0, behind - window, forward.cost - window), forward.cost + 1):
                 meet(forward, ahead, backward, behind, best)
         comptime if record:
-            if len(forward.history.aligned) + len(backward.history.aligned) > limit:
+            if forward.history.kept + backward.history.kept > limit:
                 return False
         var spent = forward.cost + backward.cost
         if give_up and spent >= next_check:
