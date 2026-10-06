@@ -3,6 +3,11 @@
 # environment, so the folder runs on a machine with neither pixi nor Mojo:
 #
 #     pixi run bundle <program.mojo> [out-dir] [target-cpu]
+#     bash scripts/bundle.sh --library <exports.mojo> [out-dir] [target-cpu]
+#
+# With `--library` the Mojo file's `@export` functions become a shared library, `lib<name>.so` or
+# `lib<name>.dylib`, beside the same runtime libraries; a program linking it needs only its folder on
+# its own search path (see `pixi run build-c`).
 #
 # `mojo build` has no static mode and writes the environment's absolute library path into the binary ahead
 # of any `$ORIGIN` passed through `-Xlinker`, so the bundled copies would be ignored wherever that path
@@ -10,6 +15,11 @@
 # Linux targets still need glibc 2.35 or later (Ubuntu 22.04, Debian 12, RHEL 10).
 set -euo pipefail
 
+library=false
+if [ "${1:-}" = --library ]; then
+    library=true
+    shift
+fi
 program=${1:?usage: pixi run bundle <program.mojo> [out-dir] [target-cpu]}
 name=$(basename "$program" .mojo)
 out=${2:-build/bundle/$name}
@@ -26,11 +36,17 @@ esac
 cpu=${3:-$cpu}
 
 mkdir -p "$out"
-mojo build --target-cpu "$cpu" -I "$root" "$program" -o "$out/$name"
+if $library; then
+    [ "$(uname -s)" = Darwin ] && file=lib$name.dylib || file=lib$name.so
+    mojo build --emit shared-lib --target-cpu "$cpu" -I "$root" "$program" -o "$out/$file"
+else
+    file=$name
+    mojo build --target-cpu "$cpu" -I "$root" "$program" -o "$out/$file"
+fi
 
 if [ "$(uname -s)" = Linux ]; then
     # `ldd` lists every library the binary loads, its libraries' libraries too.
-    for path in $(ldd "$out/$name" | awk -v lib="$env_lib/" 'index($3, lib) == 1 { print $3 }'); do
+    for path in $(ldd "$out/$file" | awk -v lib="$env_lib/" 'index($3, lib) == 1 { print $3 }'); do
         copy=$out/$(basename "$path")
         cp -L "$path" "$copy"
         chmod u+w "$copy"
@@ -38,33 +54,41 @@ if [ "$(uname -s)" = Linux ]; then
         strip --strip-unneeded "$copy"
         patchelf --set-rpath '$ORIGIN' "$copy"
     done
-    patchelf --set-rpath '$ORIGIN' "$out/$name"
-    left=$(env -u LD_LIBRARY_PATH ldd "$out/$name" | grep -F "$env_lib/" || true)
+    patchelf --set-rpath '$ORIGIN' "$out/$file"
+    left=$(env -u LD_LIBRARY_PATH ldd "$out/$file" | grep -F "$env_lib/" || true)
 else
-    # Mojo's dylibs name each other through `@rpath`, which a dylib resolves through the executable's search
-    # path, so only the executable's needs rewriting; the closure is followed by hand.
-    pending=$out/$name
+    # Mojo's dylibs name each other through `@rpath`, which a dylib resolves through the search paths of the
+    # images that load it, so only the binary's own needs rewriting; the closure is followed by hand.
+    pending=$out/$file
     while [ -n "$pending" ]; do
-        file=${pending%%$'\n'*}
-        [ "$file" = "$pending" ] && pending= || pending=${pending#*$'\n'}
-        for dep in $(otool -L "$file" | awk 'NR > 1 && $1 ~ /^@rpath\// { sub("@rpath/", "", $1); print $1 }'); do
+        current=${pending%%$'\n'*}
+        [ "$current" = "$pending" ] && pending= || pending=${pending#*$'\n'}
+        for dep in $(otool -L "$current" | awk 'NR > 1 && $1 ~ /^@rpath\// { sub("@rpath/", "", $1); print $1 }'); do
             [ -e "$out/$dep" ] && continue
             cp "$env_lib/$dep" "$out/$dep"
             pending=${pending:+$pending$'\n'}$out/$dep
         done
     done
-    for path in $(otool -l "$out/$name" | awk '$1 == "cmd" && $2 == "LC_RPATH" { getline; getline; print $2 }'); do
-        install_name_tool -delete_rpath "$path" "$out/$name"
+    for path in $(otool -l "$out/$file" | awk '$1 == "cmd" && $2 == "LC_RPATH" { getline; getline; print $2 }'); do
+        install_name_tool -delete_rpath "$path" "$out/$file"
     done
-    install_name_tool -add_rpath @executable_path "$out/$name"
+    if $library; then
+        # Found through the program's search path, its runtime libraries through its own folder.
+        install_name_tool -id "@rpath/$file" "$out/$file"
+        install_name_tool -add_rpath @loader_path "$out/$file"
+    else
+        install_name_tool -add_rpath @executable_path "$out/$file"
+    fi
     # Editing load commands voids the signature, and Apple silicon runs nothing unsigned.
-    codesign --force --sign - "$out/$name"
-    left=$(otool -l "$out/$name" | grep -F "$env_lib" || true)
+    codesign --force --sign - "$out/$file"
+    left=$(otool -l "$out/$file" | grep -F "$env_lib" || true)
 fi
 
 if [ -n "$left" ]; then
-    echo "bundle: $out/$name still loads from the pixi environment:" >&2
+    echo "bundle: $out/$file still loads from the pixi environment:" >&2
     echo "$left" >&2
     exit 1
 fi
-echo "$out: $name for $cpu with $(($(ls "$out" | wc -l) - 1)) libraries, $(du -sh "$out" | cut -f1)"
+runtime=$(ls "$out" | grep -c "^lib" || true)
+$library && runtime=$((runtime - 1))
+echo "$out: $file for $cpu with $runtime runtime libraries, $(du -sh "$out" | cut -f1)"

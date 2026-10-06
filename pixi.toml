@@ -23,7 +23,7 @@ build = {cmd = "mojo precompile dinara_align -o build/dinara_align.mojoc", depen
 # `--target-accelerator <arch>` to target another; see the README for macOS without Xcode.
 build-tests = {cmd = "mojo build -I . tests/test_alignment.mojo -o build/test_alignment $MOJO_ACCELERATOR", depends-on = ["prepare"]}
 test = {cmd = "./build/test_alignment", depends-on = ["build-tests"]}
-format = "mojo format -l 120 dinara_align tests"
+format = "mojo format -l 120 dinara_align tests c"
 # Pulls the latest Mojo skills from github.com/modular/skills into .claude/skills for coding agents.
 sync-skills = "bash .claude/sync-skills.sh"
 # Times dinara-align against other exact global aligners; see `benchmarks/run.py` for the flags.
@@ -35,6 +35,10 @@ results-astarpa2 = "python3 benchmarks/pa_results.py"
 # Builds a program on dinara-align into a folder that runs without pixi or Mojo, for a baseline CPU:
 # `pixi run bundle <program.mojo> [out-dir] [target-cpu]`; see `scripts/bundle.sh`.
 bundle = "bash scripts/bundle.sh"
+# The C API (c/dinara.h) as a shared library in build/c beside its runtime libraries: `pixi run build-c [target-cpu]`.
+build-c = "bash scripts/build_c.sh"
+# Builds the C API and runs its C++ test against it.
+test-c = { cmd = "c++ -std=c++17 -O2 -pthread -I build/c tests/test_c_api.cpp -L build/c -ldinara -Wl,-rpath,$PIXI_PROJECT_ROOT/build/c -o build/test_c_api && ./build/test_c_api", depends-on = ["build-c"] }
 # Regenerates the ported kernels from an AffineGaps checkout: `pixi run port /path/to/AffineGaps`.
 port = "python3 scripts/port_from_affinegaps.py"
 
