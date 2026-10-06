@@ -32,5 +32,14 @@ bench = "python3 benchmarks/run.py"
 bench-astarpa2 = "python3 benchmarks/pa_bench.py"
 # Measures the results tables of benchmarks/README.md: `collect`, then `tables`.
 results-astarpa2 = "python3 benchmarks/pa_results.py"
+# Builds a program on dinara-align into a folder that runs without pixi or Mojo, for a baseline CPU:
+# `pixi run bundle <program.mojo> [out-dir] [target-cpu]`; see `scripts/bundle.sh`.
+bundle = "bash scripts/bundle.sh"
 # Regenerates the ported kernels from an AffineGaps checkout: `pixi run port /path/to/AffineGaps`.
 port = "python3 scripts/port_from_affinegaps.py"
+
+[target.linux-64.dependencies]
+patchelf = ">=0.19.2,<0.20"
+
+[target.linux-aarch64.dependencies]
+patchelf = ">=0.19.2,<0.20"
