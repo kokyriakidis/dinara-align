@@ -75,8 +75,16 @@ stands on each.
   is free, so a bound of `k` still reaches some `2k` rows, which limits the cutoff. Still open: a first
   bound from an estimate instead of 64, a seed heuristic for the search, and a free end for the pattern
   too, as WFA's ends-free mode allows.
-- [ ] **Traceback while sweeping, to save memory** (as TALCO does). The band records every tile's left
-  edge and traces back after; memory is level with A*PA2-full's.
+- [ ] **Traceback while sweeping, to save memory** (as TALCO does). Feasible, and left (2026-10-06):
+  every few tiles the traces from the band's top and bottom kept rows, deterministic and unable to
+  cross without meeting, would settle the alignment behind where they meet and free the tile edges
+  there. But the edges are the smaller part of an alignment's memory: 0.6 to 13 MB a pair against 10 to
+  17 MB of sequences and bit planes (1.1 to 13.3 MB on ont-500k, 0.6 at 1 Mbp and 5%, 13 at 1 Mbp and
+  15%), and the convergence traces would cost a share of the traceback's 5 to 9% again. The larger
+  items: the first sequence's two 64-bit masks a base, 16 bytes, 17 MB at 1 Mbp, which the kernel could
+  expand from the codes at some cost to the sweep; and two free ones, the diagonal transition's kept
+  fronts living on through the band (1 to 3 MB) and the moves copied reversed to write a CIGAR (1 to
+  2 MB).
 - [ ] **A\* on the diagonal transition** at low divergence. dinara-align runs a plain diagonal
   transition first and falls back to the band; it is fast below 2% but uses no heuristic there.
 - [ ] **An upper bound on the distance** to keep bounds from overshooting. Tried and left
