@@ -65,6 +65,9 @@ comptime HISTORY_LIMIT = 1 << 24
 """Diagonals the two searches' kept fronts may hold together, 80 MB, past which the pair is split
 (see `solve`)."""
 
+comptime HISTORY_KEPT_PER_LETTER = 8
+"""Diagonals a recording search makes room for per letter of the pair before its kept fronts first grow."""
+
 comptime ALIGNED = 0
 """The front ending in two letters aligned, a match or a substitution."""
 comptime FIRST_GAP = 1
@@ -213,12 +216,13 @@ struct History(Movable):
     """Where the cost `begin` made room for starts, and the diagonal it starts at."""
     var pending_low: Int
 
-    def __init__(out self):
+    def __init__(out self, capacity: Int = 0):
+        """Kept fronts with room for `capacity` diagonals before the lists first grow."""
         self.starts = List[Int]()
         self.lows = List[Int]()
         self.highs = List[Int]()
-        self.aligned = List[Int32]()
-        self.flags = List[UInt8]()
+        self.aligned = List[Int32](capacity=capacity)
+        self.flags = List[UInt8](capacity=capacity)
         self.pending_start = 0
         self.pending_low = 0
 
@@ -496,7 +500,10 @@ struct Wavefront(Movable):
         self.fronts = Fronts(
             max(penalties.mismatch, penalties.opening + penalties.extension) + 1, self.columns, self.rows
         )
-        self.history = History()
+        # A search keeps a few diagonals a letter on close pairs, so its lists rarely grow on them.
+        self.history = History(
+            min(HISTORY_KEPT_PER_LETTER * (self.columns + self.rows), HISTORY_LIMIT // 2) if record else 0
+        )
         self.cost = 0
         self.work = 0
         self.furthest = Int.MIN // 2
