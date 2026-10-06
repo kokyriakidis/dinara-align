@@ -174,15 +174,15 @@ Mean time per alignment, median in brackets:
 
 | dataset | pairs | mean length | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA |
 | :-- | --: | --: | --: | --: | --: | --: | --: | --: |
-| ont-1k | 1221 | 0.818 kbp | 38 µs (31 µs) | 90 µs (101 µs) | 57 µs (64 µs) | 603 µs (544 µs) | 136 µs (133 µs) | 44 µs (46 µs) |
-| ont-10k | 277 | 3.6 kbp | 236 µs (152 µs) | 464 µs (309 µs) | 340 µs (233 µs) | 15.4 ms (3.22 ms) | 1.07 ms (582 µs) | 746 µs (282 µs) |
-| ont-50k | 104 | 9.52 kbp | 1.04 ms (303 µs) | 1.66 ms (600 µs) | 1.54 ms (452 µs) | 262 ms (11.3 ms), 78/104 | 5.82 ms (1.71 ms) | 7.3 ms (862 µs) |
-| ont-500k | 15 | 638 kbp | 171 ms (120 ms) | 303 ms (150 ms) | 1.15 s (795 ms) | — | 4.72 s (2.88 s), 4/15 | 19.8 s (19.8 s), 1/15 |
-| ont-500k-genvar | 15 | 651 kbp | 230 ms (188 ms) | 367 ms (264 ms) | 1.33 s (1.09 s) | — | 4.94 s (4.91 s), 4/15 | 6.35 s (7.55 s), 3/15 |
-| sars-cov-2 | 33 | 29.6 kbp | 399 µs (229 µs) | 2.43 ms (2.51 ms) | 1.14 ms (1.1 ms) | 6.54 ms (2.03 ms) | 8.17 ms (7.78 ms) | 888 µs (438 µs) |
+| ont-1k | 1221 | 0.818 kbp | 38 µs (32 µs) | 90 µs (101 µs) | 57 µs (64 µs) | 603 µs (544 µs) | 136 µs (133 µs) | 44 µs (46 µs) |
+| ont-10k | 277 | 3.6 kbp | 227 µs (147 µs) | 464 µs (309 µs) | 340 µs (233 µs) | 15.4 ms (3.22 ms) | 1.07 ms (582 µs) | 746 µs (282 µs) |
+| ont-50k | 104 | 9.52 kbp | 1.01 ms (298 µs) | 1.66 ms (600 µs) | 1.54 ms (452 µs) | 262 ms (11.3 ms), 78/104 | 5.82 ms (1.71 ms) | 7.3 ms (862 µs) |
+| ont-500k | 15 | 638 kbp | 162 ms (125 ms) | 303 ms (150 ms) | 1.15 s (795 ms) | — | 4.72 s (2.88 s), 4/15 | 19.8 s (19.8 s), 1/15 |
+| ont-500k-genvar | 15 | 651 kbp | 230 ms (194 ms) | 367 ms (264 ms) | 1.33 s (1.09 s) | — | 4.94 s (4.91 s), 4/15 | 6.35 s (7.55 s), 3/15 |
+| sars-cov-2 | 33 | 29.6 kbp | 396 µs (233 µs) | 2.43 ms (2.51 ms) | 1.14 ms (1.1 ms) | 6.54 ms (2.03 ms) | 8.17 ms (7.78 ms) | 888 µs (438 µs) |
 
-- **dinara-align has the lowest mean and the lowest median on every dataset.** On the short reads, the case A\*PA2's post leaves to BiWFA, 38 against BiWFA's 44 µs, median 31 against 46; on ont-10k and ont-50k it takes about two thirds of A\*PA2-simple's time, and on the SARS-CoV-2 genomes 399 against BiWFA's 888 µs.
-- **On the 500 kbp reads it takes 56 to 63% of A\*PA2-full's time:** 171 against 303 ms on ont-500k and 230 against 367 ms on ont-500k-genvar, medians 120 against 150 and 188 against 264.
+- **dinara-align has the lowest mean and the lowest median on every dataset.** On the short reads, the case A\*PA2's post leaves to BiWFA, 38 against BiWFA's 44 µs, median 32 against 46; on ont-10k and ont-50k it takes about two thirds of A\*PA2-simple's time, and on the SARS-CoV-2 genomes 396 against BiWFA's 888 µs.
+- **On the 500 kbp reads it takes 53 to 63% of A\*PA2-full's time:** 162 against 303 ms on ont-500k and 230 against 367 ms on ont-500k-genvar, medians 125 against 150 and 194 against 264.
 - **Edlib and BiWFA finish only some of the long reads within 20 seconds, and A\*PA none;** their means cover the reads they finished.
 
 ### Divergence, 100 kbp pairs
@@ -191,27 +191,27 @@ Mean time per alignment, A\*PA with whichever of `r = 1` and `r = 2` was the fas
 
 | divergence | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA |
 | :-- | --: | --: | --: | --: | --: | --: |
-| 0% | 147 µs | 8.02 ms | 2.57 ms | 6.72 ms | 42.5 ms | 621 µs |
-| 1% | 1.65 ms | 9.4 ms | 5.98 ms | 8.2 ms | 57.6 ms | 3.28 ms |
-| 2% | 5.48 ms | 9.66 ms | 8.97 ms | 8.75 ms | 70.7 ms | 10.2 ms |
-| 3% | 5.12 ms | 9.73 ms | 16.4 ms | 8.44 ms | 94.4 ms | 21.3 ms |
-| 4% | 5.2 ms | 9.93 ms | 14.2 ms | 10.4 ms | 97.1 ms | 36 ms |
-| 5% | 5.7 ms | 10.4 ms | 31.7 ms | 13 ms | 141 ms | 54.4 ms |
-| 6% | 11.3 ms | 10.8 ms | 28.7 ms | 18.9 ms | 143 ms | 74.3 ms |
-| 7% | 11 ms | 10.7 ms | 26.7 ms | 39.5 ms | 146 ms | 97.9 ms |
-| 8% | 11.3 ms | 15.4 ms | 24.6 ms | 46.8 ms | 150 ms | 124 ms |
-| 9% | 11.3 ms | 17 ms | 22.9 ms | 47 ms | 153 ms | 154 ms |
-| 10% | 11.8 ms | 14.7 ms | 59.2 ms | 53 ms | 234 ms | 186 ms |
-| 11% | 11.8 ms | 21.5 ms | 56.6 ms | 70.5 ms | 237 ms | 221 ms |
-| 12% | 12.2 ms | 18.3 ms | 54.6 ms | 60.7 ms | 239 ms | 255 ms |
-| 13% | 11.8 ms | 30.7 ms | 52.3 ms | 66.1 ms | 242 ms | 293 ms |
-| 14% | 13.1 ms | 28.1 ms | 51.1 ms | 76.9 ms | 245 ms | 332 ms |
-| 15% | 13.2 ms | 25.8 ms | 49.6 ms | 111 ms | 248 ms | 374 ms |
+| 0% | 117 µs | 8.02 ms | 2.57 ms | 6.72 ms | 42.5 ms | 621 µs |
+| 1% | 1.62 ms | 9.4 ms | 5.98 ms | 8.2 ms | 57.6 ms | 3.28 ms |
+| 2% | 5.47 ms | 9.66 ms | 8.97 ms | 8.75 ms | 70.7 ms | 10.2 ms |
+| 3% | 5.11 ms | 9.73 ms | 16.4 ms | 8.44 ms | 94.4 ms | 21.3 ms |
+| 4% | 5.28 ms | 9.93 ms | 14.2 ms | 10.4 ms | 97.1 ms | 36 ms |
+| 5% | 5.73 ms | 10.4 ms | 31.7 ms | 13 ms | 141 ms | 54.4 ms |
+| 6% | 6.52 ms | 10.8 ms | 28.7 ms | 18.9 ms | 143 ms | 74.3 ms |
+| 7% | 7.23 ms | 10.7 ms | 26.7 ms | 39.5 ms | 146 ms | 97.9 ms |
+| 8% | 7.29 ms | 15.4 ms | 24.6 ms | 46.8 ms | 150 ms | 124 ms |
+| 9% | 11.8 ms | 17 ms | 22.9 ms | 47 ms | 153 ms | 154 ms |
+| 10% | 12.1 ms | 14.7 ms | 59.2 ms | 53 ms | 234 ms | 186 ms |
+| 11% | 12.2 ms | 21.5 ms | 56.6 ms | 70.5 ms | 237 ms | 221 ms |
+| 12% | 12.7 ms | 18.3 ms | 54.6 ms | 60.7 ms | 239 ms | 255 ms |
+| 13% | 12.4 ms | 30.7 ms | 52.3 ms | 66.1 ms | 242 ms | 293 ms |
+| 14% | 13.6 ms | 28.1 ms | 51.1 ms | 76.9 ms | 245 ms | 332 ms |
+| 15% | 13.6 ms | 25.8 ms | 49.6 ms | 111 ms | 248 ms | 374 ms |
 
-- **Near-identical pairs finish in the diagonal transition:** 146 µs against BiWFA's 621 at 0%, 1.68 against 3.28 ms at 1%.
-- **From 2% to 5% the exact seeds' bound lands close to the distance,** and dinara-align runs in 5.2 to 6.0 ms, A\*PA2-full in 9.7 to 10.4.
-- **At 6% and 7% A\*PA2-full is the faster,** 10.8 and 10.7 ms against 11.6 and 11.3: at 6% only 37% of the exact seeds chain, under the 40% at which dinara-align builds inexact seeds in their place, and the second seed setup is not yet repaid.
-- **From 8% on dinara-align stays between 11.6 and 13.2 ms,** as inexact seeds keep the bound close, while A\*PA2-full climbs to 26 to 31 ms by 13 to 15%; at 15% A\*PA2-simple takes 50 ms, A\*PA 111, Edlib 248 and BiWFA 374.
+- **dinara-align is the fastest at every divergence.**
+- **Near-identical pairs finish in the diagonal transition:** 117 µs against BiWFA's 621 at 0%, 1.62 against 3.28 ms at 1%.
+- **From 2% to 8% the exact seeds' bound lands close to the distance:** dinara-align runs in 5.1 to 7.3 ms, A\*PA2-full in 9.7 to 15.4.
+- **From 9% on, where fewer than a fifth of the exact seeds chain,** dinara-align rebuilds them to match within one edit and stays between 11.8 and 13.6 ms, while A\*PA2-full climbs to 26 to 31 ms by 13 to 15%; at 15% A\*PA2-simple takes 50 ms, A\*PA 111, Edlib 248 and BiWFA 374. On the M2, whose band is slower beside its seeds' setup, the rebuild starts at 6% (see the history below).
 
 ### Length
 
@@ -219,25 +219,25 @@ Mean time per alignment at 5% divergence:
 
 | length | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA |
 | :-- | --: | --: | --: | --: | --: | --: |
-| 3 kbp | 49 µs | 214 µs | 91 µs | 261 µs | 829 µs | 82 µs |
-| 10 kbp | 300 µs | 919 µs | 465 µs | 919 µs | 3.83 ms | 554 µs |
-| 30 kbp | 1.66 ms | 2.86 ms | 3.14 ms | 3.04 ms | 14.2 ms | 4.9 ms |
-| 100 kbp | 5.48 ms | 9.61 ms | 31.1 ms | 11.9 ms | 139 ms | 53.4 ms |
-| 300 kbp | 21.5 ms | 32.5 ms | 133 ms | 38.9 ms | 712 ms | 463 ms |
-| 1 Mbp | 73.4 ms | 148 ms | 1.84 s | 160 ms | 8.17 s (2/4) | 5.38 s (3/4) |
+| 3 kbp | 50 µs | 214 µs | 91 µs | 261 µs | 829 µs | 82 µs |
+| 10 kbp | 301 µs | 919 µs | 465 µs | 919 µs | 3.83 ms | 554 µs |
+| 30 kbp | 1.67 ms | 2.86 ms | 3.14 ms | 3.04 ms | 14.2 ms | 4.9 ms |
+| 100 kbp | 5.53 ms | 9.61 ms | 31.1 ms | 11.9 ms | 139 ms | 53.4 ms |
+| 300 kbp | 21.7 ms | 32.5 ms | 133 ms | 38.9 ms | 712 ms | 463 ms |
+| 1 Mbp | 74.3 ms | 148 ms | 1.84 s | 160 ms | 8.17 s (2/4) | 5.38 s (3/4) |
 
 At 15% divergence:
 
 | length | dinara-align | A*PA2-full | A*PA2-simple | A*PA | Edlib | BiWFA |
 | :-- | --: | --: | --: | --: | --: | --: |
-| 3 kbp | 119 µs | 243 µs | 212 µs | 1.52 ms | 884 µs | 380 µs |
-| 10 kbp | 425 µs | 1.19 ms | 1.31 ms | 6.61 ms | 5.66 ms | 3.92 ms |
-| 30 kbp | 2.42 ms | 6.33 ms | 4.59 ms | 24.5 ms | 23.2 ms | 34.1 ms |
-| 100 kbp | 13.3 ms | 27.2 ms | 49.6 ms | 111 ms | 248 ms | 368 ms |
-| 300 kbp | 55.2 ms | 237 ms | 619 ms | 514 ms | 2.38 s | 3.37 s |
-| 1 Mbp | 361 ms | 2.76 s | 2.89 s | 2.16 s | 17.7 s (1/4) | — |
+| 3 kbp | 120 µs | 243 µs | 212 µs | 1.52 ms | 884 µs | 380 µs |
+| 10 kbp | 421 µs | 1.19 ms | 1.31 ms | 6.61 ms | 5.66 ms | 3.92 ms |
+| 30 kbp | 2.43 ms | 6.33 ms | 4.59 ms | 24.5 ms | 23.2 ms | 34.1 ms |
+| 100 kbp | 13.7 ms | 27.2 ms | 49.6 ms | 111 ms | 248 ms | 368 ms |
+| 300 kbp | 56.8 ms | 237 ms | 619 ms | 514 ms | 2.38 s | 3.37 s |
+| 1 Mbp | 367 ms | 2.76 s | 2.89 s | 2.16 s | 17.7 s (1/4) | — |
 
-- **dinara-align is the fastest at every length and both divergences.** At 5% it aligns a 1 Mbp pair in 75.6 ms against A\*PA2-full's 148 and A\*PA's 160; at 15% in 362 ms against A\*PA's 2.16 s and A\*PA2-full's 2.76 s.
+- **dinara-align is the fastest at every length and both divergences.** At 5% it aligns a 1 Mbp pair in 74.3 ms against A\*PA2-full's 148 and A\*PA's 160; at 15% in 367 ms against A\*PA's 2.16 s and A\*PA2-full's 2.76 s.
 - **At 15% its band still grows faster than the length,** but less than A\*PA2-full's: from 300 kbp to 1 Mbp, 3.3 times the length, dinara-align takes 6.5 times as long and A\*PA2-full 11.6 times, where A\*PA, whose pruning makes its heuristic nearly exact, takes 4.2 times.
 
 ### dinara-align's history on the long reads
@@ -254,11 +254,11 @@ A\*PA2 measures each of its methods by adding them one at a time. dinara-align's
 | `b60ece0` + real-read fixes | 456 ms (160 ms) | 752 ms (499 ms) |
 | `501a6bb` + retries aimed | 162 ms (94.4 ms) | 199 ms (157 ms) |
 | `ef0e73a` + inexact seeds | 181 ms (131 ms) | 244 ms (204 ms) |
-| today | 171 ms (120 ms) | 230 ms (188 ms) |
+| today | 162 ms (125 ms) | 230 ms (194 ms) |
 
 - **On ont-500k the time falls from 1.32 s at the port of A\*PA2-simple's band doubling to 162 ms once the retries are aimed.**
 - **On ont-500k-genvar the commits between the port and `b60ece0` were several times slower,** 4.3 to 8.5 s a read and up to eight reads past the budget: real reads gather their errors at the ends, and the projections those commits aimed by ran many times over the distance, so they swept bands far wider than needed. `b60ece0` trusted a projection only when two of them agreed and otherwise grew the band from what was known, bringing genvar back to 752 ms, and aiming the retries to 199 ms.
-- **Inexact seeds make these reads slower here,** 162 to 181 ms and 199 to 244 ms, where on the M2 they made them faster, 171 to 131 and 262 to 197: likely this machine sweeps the band faster beside the seeds' setup, so the point past which inexact seeds pay lies further out than the one tuned on the M2. They still win on the uniform pairs past 8%.
+- **Inexact seeds make these reads slower here,** 162 to 181 ms and 199 to 244 ms, where on the M2 they made them faster, 171 to 131 and 262 to 197. This machine's seeds' setup runs twice as slow as the M2's while its band, on AVX-512, runs as fast, so inexact seeds pay only on more divergent pairs; the cutoff now follows the vector width, 20% of the exact seeds chained here against the M2's 40%. That brings ont-500k back to 162 ms; ont-500k-genvar's 230 ms is still above the 199 ms before inexact seeds.
 
 ### Memory
 
