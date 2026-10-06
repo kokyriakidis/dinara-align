@@ -229,6 +229,7 @@ Remaining `raw_load`/`raw_store` uses need a tracking issue.
 ## 9. Simplify control flow; remove duplication
 
 - Return early instead of nesting `if/else`; no `else` after `return`.
+- Clamp with `clamp(x, lo, hi)` rather than `min(max(x, lo), hi)`.
 - Iterate collections directly (`for d in dtypes:`), not by index.
 - Start accumulators at their identity (`accum = 0`) instead of peeling
   the first iteration.
