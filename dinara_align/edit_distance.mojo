@@ -2095,6 +2095,17 @@ On a short pair the projection from a handful of edits ran as much as 1.7 times 
 and a first round that fails there costs nearly a whole round more, where aiming wide costs a band
 some rows taller; a long pair's projection landed within about a sixth either way."""
 
+comptime SHORT_BAND_COLUMNS = 2048
+"""Pairs up to this many columns whose band costs more than its columns: aimed wide (see `SHORT_AIM`),
+its first bound lifts it over the whole matrix, which it sweeps and then traces back through
+full-height tiles. On ONT reads of about a kilobase that came to some 40 µs a read, several times what
+the columns count, so a diagonal transition the per-column budget gave up on still beat it."""
+
+comptime SHORT_BAND_SETUP = 30_000
+"""What a band costs a pair of up to `SHORT_BAND_COLUMNS` columns beyond its columns, in diagonal
+steps: ONT reads of about a kilobase aligned fastest from 20,000 to 40,000, a quarter faster than with
+none, and longer pairs, whose bands stay narrow, are left out."""
+
 comptime SHORT_AIM = 17
 """A short pair's first bound, in tenths of the projection."""
 
@@ -2264,9 +2275,11 @@ def step_budget(columns: Int, step_tenths: Int, estimate: Int) -> Int:
     """How many diagonal steps cost what a band over `columns` columns would, at a projected distance.
 
     A band's column costs a fixed part plus a part growing with the distance, its band taller; in
-    steps that is `step_tenths / 10 + estimate / EDITS_PER_STEP` a column.
+    steps that is `step_tenths / 10 + estimate / EDITS_PER_STEP` a column. A short pair's band costs
+    `SHORT_BAND_SETUP` more (see `SHORT_BAND_COLUMNS`).
     """
-    return columns * step_tenths // 10 + columns * estimate // EDITS_PER_STEP
+    var setup = SHORT_BAND_SETUP if columns <= SHORT_BAND_COLUMNS else 0
+    return setup + columns * step_tenths // 10 + columns * estimate // EDITS_PER_STEP
 
 
 @inline(.always)
