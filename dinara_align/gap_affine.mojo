@@ -1302,6 +1302,9 @@ def affine_cigar(
     Every byte is a symbol matching only itself, so DNA in either case, or any other text, needs no
     alphabet. The two-ended wavefront finds it (see the module): its work grows with the square of
     the cost rather than with the matrix, and its memory stays bounded.
+
+    At costs (2, 0, 1) the cost is the indel distance, but a substitution costs there what a deletion
+    and an insertion do, and the CIGAR may write one as `X` where an indel alignment has `1D1I`.
     """
     var found = cigar_within(
         first, second, affine_penalties(mismatch, opening, extension), extended, Int.MAX, ends_free

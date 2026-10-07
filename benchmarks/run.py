@@ -38,6 +38,8 @@ RIVALS = {
         "https://github.com/RagnarGrootKoerkamp/astar-pairwise-aligner",
         "bf2e14e0cbc3a9a03600dcda0641d7f89e401e63",
     ),
+    # v2.3.6, for its regression set alone (see `scripts/test_wfa.py`).
+    "WFA2-lib": ("https://github.com/smarco/WFA2-lib", "bcf473a6561fa297934a80eaa7c04b4ee412360c"),
 }
 """Each rival's repository and the commit its numbers were taken at."""
 

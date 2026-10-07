@@ -17,4 +17,5 @@ A session-start hook (`.claude/settings.json`) reminds the agent to load them; f
 ## Working here
 
 - Build and test: `pixi run test`; format: `pixi run format` (120 columns).
+- `pixi run test-wfa` holds every mode WFA2-lib also has to its regression set (scores and CIGARs).
 - Finished work merges straight into `main` and is pushed; no pull requests.
