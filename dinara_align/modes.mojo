@@ -105,6 +105,8 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     | `ends_free(...)` | as asked | as asked | WFA2-lib's ends-free, overlaps |
     | `extension(...)` | from one end | from the same end | KSW2's extension, without Z-drop |
     | `local(...)`, `LOCAL` | any part | any part | Smith-Waterman, abPOA's local mode |
+    | `overlap(...)` | a prefix or suffix | a suffix or prefix | semi-global, parasail's `sg`, hyalite's OV |
+    | `REFERENCE_IN_QUERY` | whole | any part | hyalite's SHW |
     """
 
     var kind: UInt8
@@ -120,6 +122,7 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     comptime ENDS = UInt8(0)
     comptime EXTENSION = UInt8(1)
     comptime SMITH_WATERMAN = UInt8(2)
+    comptime OVERLAP = UInt8(3)
 
     comptime GLOBAL = Self(Self.ENDS, 0, 0, 0, 0, 0, Anchor.START)
     """Both sequences end to end."""
@@ -129,6 +132,8 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     """The whole query against the reference's best prefix."""
     comptime SUFFIX = Self(Self.ENDS, UNBOUNDED, 0, 0, 0, 0, Anchor.START)
     """The whole query against the reference's best suffix."""
+    comptime REFERENCE_IN_QUERY = Self(Self.ENDS, 0, 0, UNBOUNDED, UNBOUNDED, 0, Anchor.START)
+    """`INFIX` the other way round: the whole reference against wherever in the query it fits best."""
     comptime LOCAL = Self(Self.SMITH_WATERMAN, 0, 0, 0, 0, 0, Anchor.START)
     """The best-scoring part of each under a `Scoring`, Smith-Waterman, whose table says what a match
     earns; under `Costs`, `local` names the reward."""
@@ -163,6 +168,17 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         if match_score <= 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "a local alignment needs a match that earns")
         return Self(Self.SMITH_WATERMAN, 0, 0, 0, 0, match_score, Anchor.START)
+
+    @staticmethod
+    def overlap(match_score: Int) raises AlignmentError -> Self:
+        """The best-scoring alignment with every end gap free, semi-global: it starts on either
+        sequence's first letter and ends on either's last, so one may overhang the other at each end,
+        an overlap of two reads, or one may lie inside the other. A match earns `match_score`, as with
+        all four ends free and costs alone the empty alignment would win. Its time grows with the
+        matrix, as `local`'s does."""
+        if match_score <= 0:
+            raise AlignmentError(ErrorKind.INVALID_SCORING, "an overlap needs a match that earns")
+        return Self(Self.OVERLAP, 0, 0, 0, 0, match_score, Anchor.START)
 
     def is_global(self) -> Bool:
         return (

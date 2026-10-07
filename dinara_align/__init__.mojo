@@ -31,6 +31,8 @@ var onward = align("ACGTTGCAAGGCTTTT", "ACGTTGCAAGGCGAGA", costs, Mode.extension
 var back = align("TTTTACGTTGCAAGGC", "GAGAACGTTGCAAGGC", costs, Mode.extension(1, Anchor.END))
 # The best-scoring part of each, Smith-Waterman, a match earning 2.
 var core = align("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC", costs, Mode.local(2))  # score 16, "8=", 4..12
+# Two reads overlapping, every end gap free: the first's suffix on the second's prefix.
+var joined = align("TTTTTACGTACGT", "ACGTACGTGGGGG", costs, Mode.overlap(2))  # score 16, "8=", 5..13
 # A batch, over every thread.
 var references: List[String] = ["ACGTACGT", "TTGCA"]
 var queries: List[String] = ["ACGACGT", "TTGGCA"]
@@ -44,7 +46,9 @@ var batch = distances(references, queries)  # [1, 1]
 | `Mode.PREFIX`, `Mode.SUFFIX` | a prefix, a suffix | whole |
 | `Mode.ends_free(...)` | as many letters free at either end as asked | likewise |
 | `Mode.extension(match_score, anchor)` | from one end, as far as pays | from the same end |
+| `Mode.REFERENCE_IN_QUERY` | whole | any part |
 | `Mode.local(match_score)` | any part | any part |
+| `Mode.overlap(match_score)` | a prefix or suffix | a suffix or prefix, or whole |
 
 A `Scoring`, an alphabet's substitution table and gap scores, which an alignment maximizes, aligns by
 Gotoh's Needleman-Wunsch or Smith-Waterman, with the initialization corrections Flouri et al. found

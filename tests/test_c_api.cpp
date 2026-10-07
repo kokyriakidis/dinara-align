@@ -155,6 +155,12 @@ int main() {
     dinara::Alignment local = dinara::align("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC", affine, Mode::local(2));
     CHECK(local.score == 16 && local.cigar == "8=" && local.reference_start == 4 && local.query_start == 4);
     CHECK(dinara::align("ACGT", "ACGT", Costs::edit(), Mode::local(1)).score == 4);
+    // An overlap of two reads, the first's suffix on the second's prefix.
+    dinara::Alignment over = dinara::align("TTTTTACGTACGT", "ACGTACGTGGGGG", affine, Mode::overlap(2));
+    CHECK(over.score == 16 && over.cigar == "8=" && over.reference_start == 5 && over.query_end == 8);
+    // The whole reference inside the query: one gap where it lies at 4, or two mismatches at 8, both 8.
+    dinara::Alignment inside = dinara::align("ACGTCGT", "TTTTACGTACGTTTTT", affine, Mode::reference_in_query());
+    CHECK(inside.cost == 8 && inside.reference_start == 0 && inside.reference_end == 7);
     bool no_cost = false;
     try {
         dinara::distance("ACGT", "ACGT", affine, Mode::extension(1));

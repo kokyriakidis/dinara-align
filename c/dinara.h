@@ -38,8 +38,8 @@ extern "C" {
 #define DINARA_ABOVE_MAX (-4)
 /* No alignment stays inside the band of diagonals asked for. */
 #define DINARA_OUTSIDE_BAND (-5)
-/* A mode that cannot serve what was asked: the least cost of an extension or a local alignment, which
- * maximize a score, a cap on either, or a band on a local alignment. */
+/* A mode that cannot serve what was asked: the least cost of an extension, a local alignment or an
+ * overlap, which maximize a score, a cap on any of them, or a band on the last two. */
 #define DINARA_INVALID_MODE (-6)
 
 /*
@@ -58,6 +58,7 @@ typedef struct {
 #define DINARA_ENDS_FREE 0
 #define DINARA_EXTENSION 1
 #define DINARA_LOCAL 2
+#define DINARA_OVERLAP 3
 /* As many free letters as any sequence has. */
 #define DINARA_ALL INT64_MAX
 
@@ -67,7 +68,8 @@ typedef struct {
  * placed anywhere in it (infix), its end alone a prefix. DINARA_EXTENSION: fixed at both sequences'
  * starts, or with `anchor` nonzero their ends, and free to stop anywhere, a match earning
  * `match_score`: a seed's extension, as KSW2's without Z-drop. DINARA_LOCAL: any part of each, a match
- * earning `match_score`, Smith-Waterman, as abPOA's local mode. A null pointer is a global alignment.
+ * earning `match_score`, Smith-Waterman, as abPOA's local mode. DINARA_OVERLAP: every end gap free, a
+ * match earning `match_score`, semi-global, as parasail's `sg`. A null pointer is a global alignment.
  */
 typedef struct {
     int64_t kind;
@@ -97,8 +99,8 @@ typedef struct {
 } dinara_options;
 
 /*
- * An optimal alignment: its cost, its score (an extension's or a local alignment's matches' reward
- * less the cost, else minus the cost), the spans it aligns, and its CIGAR, NUL-terminated and `cigar_length` bytes long, which the
+ * An optimal alignment: its cost, its score (an extension's, a local alignment's or an overlap's
+ * matches' reward less the cost, else minus the cost), the spans it aligns, and its CIGAR, NUL-terminated and `cigar_length` bytes long, which the
  * caller frees with `dinara_free`.
  */
 typedef struct {
@@ -176,6 +178,8 @@ struct Mode {
     static Mode prefix() { return ends_free(0, DINARA_ALL, 0, 0); }
     /* The whole query against the reference's best suffix. */
     static Mode suffix() { return ends_free(DINARA_ALL, 0, 0, 0); }
+    /* The whole reference against wherever in the query it fits best. */
+    static Mode reference_in_query() { return ends_free(0, 0, DINARA_ALL, DINARA_ALL); }
     /* Up to so many letters at each end of each sequence left unaligned for nothing. */
     static Mode ends_free(int64_t reference_start, int64_t reference_end, int64_t query_start, int64_t query_end) {
         return {{DINARA_ENDS_FREE, reference_start, reference_end, query_start, query_end, 0, 0}};
@@ -186,6 +190,8 @@ struct Mode {
     }
     /* The best-scoring alignment of any part of each, a match earning `match_score`: Smith-Waterman. */
     static Mode local(int64_t match_score) { return {{DINARA_LOCAL, 0, 0, 0, 0, match_score, 0}}; }
+    /* The best-scoring alignment with every end gap free, a match earning `match_score`: an overlap. */
+    static Mode overlap(int64_t match_score) { return {{DINARA_OVERLAP, 0, 0, 0, 0, match_score, 0}}; }
 };
 
 /* The diagonals every move stays on, `low ..= high`; the default is every diagonal. */

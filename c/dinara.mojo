@@ -26,12 +26,13 @@ comptime ABOVE_MAX = -4
 comptime OUTSIDE_BAND = -5
 """No alignment stays inside the band asked for."""
 comptime INVALID_MODE = -6
-"""A mode that cannot serve what was asked: the least cost of an extension or a local alignment, which
-maximize a score, a cap on either, or a band on a local alignment."""
+"""A mode that cannot serve what was asked: the least cost of an extension, a local alignment or an
+overlap, which maximize a score, a cap on any of them, or a band on the last two."""
 
 comptime C_ENDS_FREE = 0
 comptime C_EXTENSION = 1
 comptime C_LOCAL = 2
+comptime C_OVERLAP = 3
 
 comptime CInts = ImmPointer[Int, MutAnyOrigin]
 """A C struct of `int64_t` fields, read by index; null for the default."""
@@ -74,6 +75,8 @@ def mode_of(fields: OptionalPointer[Int, MutAnyOrigin]) raises AlignmentError ->
         return Mode.extension(at[unsafe_offset=5], Anchor.END if at[unsafe_offset=6] != 0 else Anchor.START)
     if at[unsafe_offset=0] == C_LOCAL:
         return Mode.local(at[unsafe_offset=5])
+    if at[unsafe_offset=0] == C_OVERLAP:
+        return Mode.overlap(at[unsafe_offset=5])
     if at[unsafe_offset=0] != C_ENDS_FREE:
         raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "an unknown mode")
     return Mode.ends_free(

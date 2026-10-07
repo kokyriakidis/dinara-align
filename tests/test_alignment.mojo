@@ -971,6 +971,13 @@ def test_refuses_what_it_cannot_do() raises:
         _ = align("ACGT", "ACG", Costs.edit(), Mode.LOCAL)
     with assert_raises(contains="earns"):
         _ = Mode.local(0)
+    with assert_raises(contains="earns"):
+        _ = Mode.overlap(0)
+    with assert_raises(contains="score"):
+        _ = distance("ACGT", "ACG", Costs.edit(), Mode.overlap(1))
+    var overlap = Mode.overlap(1)
+    with assert_raises(contains="globally or locally"):
+        _ = score("ACGT", "ACG", dna, overlap)
     with assert_raises(contains="score"):
         _ = distance("ACGT", "ACG", Costs.edit(), Mode.extension(1))
     with assert_raises(contains="cap"):
@@ -1498,6 +1505,43 @@ def local_optimum(first: String, second: String, a: Int, x: Int, o: Int, e: Int,
             value = max(value, best[at - width - 1] + (a if p[i - 1] == q[j - 1] else -x))
             best[at] = value
             answer = max(answer, value)
+    return answer
+
+
+def overlap_optimum(first: String, second: String, a: Int, x: Int, o: Int, e: Int, o2: Int, e2: Int) -> Int:
+    """The best score of an alignment starting on the first row or column and ending on the last, both
+    edges free, by Gotoh's recurrence over the whole matrix; shares no code with the library."""
+    comptime LOW = -(1 << 40)
+    var p = first.as_bytes()
+    var q = second.as_bytes()
+    var n = len(p)
+    var m = len(q)
+    var width = m + 1
+    var best = List[Int](length=(n + 1) * width, fill=0)
+    var layers = List[List[Int]]()
+    for _ in range(4):
+        layers.append(List[Int](length=(n + 1) * width, fill=LOW))
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            var at = i * width + j
+            var value = LOW
+            for piece in range(2 if o2 >= 0 else 1):
+                var opening = o if piece == 0 else o2
+                var extension = e if piece == 0 else e2
+                layers[2 * piece][at] = max(
+                    best[at - width] - opening - extension, layers[2 * piece][at - width] - extension
+                )
+                layers[2 * piece + 1][at] = max(
+                    best[at - 1] - opening - extension, layers[2 * piece + 1][at - 1] - extension
+                )
+                value = max(value, max(layers[2 * piece][at], layers[2 * piece + 1][at]))
+            value = max(value, best[at - width - 1] + (a if p[i - 1] == q[j - 1] else -x))
+            best[at] = value
+    var answer = 0
+    for j in range(m + 1):
+        answer = max(answer, best[n * width + j])
+    for i in range(n + 1):
+        answer = max(answer, best[i * width + m])
     return answer
 
 
@@ -2153,6 +2197,23 @@ def test_every_mode_matches_the_full_matrix() raises:
                 else:
                     assert_equal(local.cigar, "")
                     assert_equal(local.reference_end, 0)
+            for ties in [Ties.LEFT, Ties.RIGHT]:
+                var over = align(reference, query, costs, Mode.overlap(2), ties=ties)
+                var most = overlap_optimum(reference, query, 2, x, o, e, o2, e2)
+                assert_equal(over.score, most)
+                assert_equal(extension_price(over.cigar, 2, x, o, e, o2, e2), most)
+                assert_equal(over.cost, 2 * matches_in(over.cigar) - most)
+                assert_true(over.reference_start == 0 or over.query_start == 0)
+                assert_true(over.reference_end == reference.byte_length() or over.query_end == query.byte_length())
+                if over.cigar.byte_length() > 0:
+                    _ = rows_from_cigar(
+                        String(reference[byte = over.reference_start : over.reference_end]),
+                        String(query[byte = over.query_start : over.query_end]),
+                        over.cigar,
+                    )
+            var inside = align(query, reference, costs, Mode.REFERENCE_IN_QUERY)
+            var flipped = align(reference, query, costs, Mode.INFIX)
+            assert_equal(inside.cost, flipped.cost)
     # Unit costs inside a reference: the sweep and the wavefront, under a cap, find the same span.
     var placed = align("TTTTACGTACGTTTTT", "ACGTCGT", Costs.edit(), Mode.INFIX)
     assert_equal(placed.cost, 1)
