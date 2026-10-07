@@ -63,6 +63,8 @@ dinara-align writes its default scoring to the data directory and hyalite reads 
 
 ## Results
 
+> **Caveat (2026-10-07): these rows predate a fix in the harness.** The Rust runners were built with no CPU target, so A\*PA, A\*PA2, Edlib and pa-wrapper's own C ran the baseline instruction set while dinara-align ran the host's. A\*PA2's kernels fix their SIMD width at compile time, so on the x86 machine its 256-bit vectors ran as pairs of SSE2 ones; on the M2 the baseline already holds NEON and the gap is small. WFA2-lib (built `-march=native` by its binding), hyalite (which picks its kernels at run time) and the local rivals were not affected. Every tool is now built for the same CPU (`--cpu`, the host's by default), named in each table; the tables here are to be remeasured that way, and until then the A\*PA2 columns on x86 overstate dinara-align's lead.
+
 Measured with `pixi run bench --full`, which took about three minutes, on an Apple M2 (4 performance and 4 efficiency cores, 24 GB) under macOS 27.0.1, with Mojo 1.1.0 and Xcode 27.0, beside other work at a load of about three.
 Hyalite built with Rust 1.92, A\*PA with the nightly its repository pins.
 A dash marks a task the tool does not offer, or a workload it is not run on.
@@ -237,6 +239,8 @@ pixi run results-astarpa2 tables    # the tables below, into .cache/results/asta
 ```
 
 ### Setup
+
+> **Caveat (2026-10-07): these rows predate a fix in the harness.** The Rust runners were built with no CPU target, so A\*PA, A\*PA2, Edlib and pa-wrapper's own C ran the baseline instruction set while dinara-align ran the host's. A\*PA2's kernels fix their SIMD width at compile time, so on the x86 machine its 256-bit vectors ran as pairs of SSE2 ones; on the M2 the baseline already holds NEON and the gap is small. WFA2-lib (built `-march=native` by its binding), hyalite (which picks its kernels at run time) and the local rivals were not affected. Every tool is now built for the same CPU (`--cpu`, the host's by default), named in each table; the tables here are to be remeasured that way, and until then the A\*PA2 columns on x86 overstate dinara-align's lead.
 
 As A\*PA2's evaluation runs them: one single-threaded job at a time, every pair aligned once with its traceback, which every aligner hands back as a CIGAR, the time the average wall clock per alignment, reading the data left out.
 
