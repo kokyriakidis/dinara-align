@@ -13,6 +13,7 @@ from std.math import ceildiv, clamp
 
 from .alignment import AlignmentResult
 from .diagonal import best_source, DiagonalFronts, slide_forward
+from .slides import GATHERED_SLIDES, LANES, gathered_slides, slide
 from .bit_parallel import (
     advance,
     ALL_ONES,
@@ -46,6 +47,9 @@ struct TileFronts(Movable):
     var highs: List[Int]
     var entry_diagonals: List[Int]
     var entry_costs: List[Int]
+    var starts: List[Int]
+    var ordered: List[Int]
+    """The left-edge rows' diagonals by cost, each cost's from `starts` at its level."""
 
     def __init__(out self):
         self.columns = List[Int32](capacity=4096)
@@ -53,6 +57,8 @@ struct TileFronts(Movable):
         self.highs = List[Int](capacity=64)
         self.entry_diagonals = List[Int](capacity=256)
         self.entry_costs = List[Int](capacity=256)
+        self.starts = List[Int](capacity=64)
+        self.ordered = List[Int](capacity=256)
 
 
 @inline(.never)
@@ -82,7 +88,9 @@ def forward_segment(
     wavefront's backtrace does, and stops where its matches reach the left edge.
 
     Every diagonal a path may use lies within the costs to climb of the traced cell's, so the rows
-    share one window of diagonals, laid out once per tile and read unchecked a diagonal either side.
+    share one window of diagonals, laid out once per tile. Each row is written over the diagonals it
+    grew and two either side, which read unreached; a row steps eight diagonals at a time, and on
+    AVX-512 slides them together, as the diagonal transition does (see `step_front`).
     """
     var first = profile.column_codes.unsafe_ptr()
     var second = profile.row_codes.unsafe_ptr()
@@ -127,30 +135,53 @@ def forward_segment(
     var stride = 2 * reach + 1 + 2 * PAD
     if levels * stride > TILE_WORK:
         return -1
-    fronts.columns.resize(unsafe_uninit_length=levels * stride)
+    # Room past the last row for a lane group's stores past its end.
+    fronts.columns.resize(unsafe_uninit_length=levels * stride + LANES)
     var grid = fronts.columns.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-    for index in range(levels * stride):
-        grid[unsafe_offset=index] = UNREACHED
     fronts.lows.resize(levels, 0)
     fronts.highs.resize(levels, 0)
-    var entry_diagonals = fronts.entry_diagonals.unsafe_ptr()
-    var entry_costs = fronts.entry_costs.unsafe_ptr()
+    # The rows by cost, `ordered[starts[level] ..< starts[level + 1]]`, so a cost reads only its own.
+    fronts.starts.clear()
+    fronts.starts.resize(levels + 1, 0)
+    fronts.ordered.resize(unsafe_uninit_length=count)
+    var starts = fronts.starts.unsafe_ptr()
+    var ordered = fronts.ordered.unsafe_ptr()
+    for index in range(count):
+        starts[unsafe_offset=fronts.entry_costs[index] - base] += 1
+    var running = 0
+    for level in range(levels + 1):
+        var here = starts[unsafe_offset=level]
+        starts[unsafe_offset=level] = running
+        running += here
+    for index in range(count):
+        var level = fronts.entry_costs[index] - base
+        ordered[unsafe_offset=starts[unsafe_offset=level]] = fronts.entry_diagonals[index]
+        starts[unsafe_offset=level] += 1
+    for level in range(levels, 0, -1):
+        starts[unsafe_offset=level] = starts[unsafe_offset=level - 1]
+    starts[unsafe_offset=0] = 0
 
     @inline(.always)
     def row_of(level: Int) {imm grid, imm stride, imm window_low} -> MutPointer[Int32, MutUntrackedOrigin]:
-        """A cost's row, indexed by diagonal, a diagonal either side reading unreached."""
+        """A cost's row, indexed by diagonal, two diagonals either side of what it grew reading unreached."""
         return grid.unsafe_offset(level * stride + PAD - window_low)
 
+    comptime Lanes = SIMD[DType.int32, LANES]
+    var lane_diagonals = Lanes()
+    comptime for lane in range(LANES):
+        lane_diagonals[lane] = Int32(lane)
+    var column_limit = Lanes(Int32(end_column))
+    var row_limit = Lanes(Int32(end_row))
+    var unreached = Lanes(UNREACHED)
     var low = Int.MAX
     var high = Int.MIN
     for level in range(levels):
         var cost = base + level
         var new_low = low - 1
         var new_high = high + 1
-        for index in range(count):
-            if entry_costs[unsafe_offset=index] == cost:
-                new_low = min(new_low, entry_diagonals[unsafe_offset=index])
-                new_high = max(new_high, entry_diagonals[unsafe_offset=index])
+        for index in range(starts[unsafe_offset=level], starts[unsafe_offset=level + 1]):
+            new_low = min(new_low, ordered[unsafe_offset=index])
+            new_high = max(new_high, ordered[unsafe_offset=index])
         # Room to reach the traced cell: no more diagonals off than costs left.
         new_low = max(new_low, target - (score - cost))
         new_high = min(new_high, target + (score - cost))
@@ -161,29 +192,44 @@ def forward_segment(
             high = Int.MIN
             continue
         var current = row_of(level)
-        if level > 0:
-            var previous = row_of(level - 1)
-            for diagonal in range(new_low, new_high + 1):
-                # The furthest column at no more than the cost before, then one more edit from it.
-                var same = Int(previous[unsafe_offset=diagonal])
-                var below = Int(previous[unsafe_offset=diagonal - 1])
-                var above = Int(previous[unsafe_offset=diagonal + 1])
-                var reach_column = same
-                var best = -1
-                if same >= first_column and same < end_column and same - diagonal < end_row:
-                    best = same + 1
-                if below >= first_column and below < end_column:
-                    best = max(best, below + 1)
-                if above >= first_column and above - diagonal - 1 < end_row:
-                    best = max(best, above)
-                if best >= first_column:
+        # The diagonals the cost before reaches: the furthest column at no more than it, then one more
+        # edit from it. A substitution past the tile's end leaves the front where it was, as `same`
+        # keeps it. The rest of the row reads unreached, the lanes stored past the last included.
+        var from_low = max(new_low, low - 1)
+        var from_high = min(new_high, high + 1)
+        if from_low > from_high:
+            from_low = new_high + PAD + 1
+            from_high = new_high + PAD
+        var previous = row_of(level - 1)
+        var diagonal = from_low
+        while diagonal <= from_high:
+            var diagonals = lane_diagonals + Int32(diagonal)
+            var stop = min(column_limit, row_limit + diagonals)
+            var same = previous.unsafe_offset(diagonal).unsafe_load[width=LANES]()
+            var below = previous.unsafe_offset(diagonal - 1).unsafe_load[width=LANES]()
+            var above = previous.unsafe_offset(diagonal + 1).unsafe_load[width=LANES]()
+            var deleted = below.lt(column_limit).select(below + 1, unreached)
+            var inserted = above.le(stop).select(above, unreached)
+            var entry = max(min(same + 1, stop), max(deleted, inserted))
+            comptime if GATHERED_SLIDES:
+                var inside = diagonals.le(Int32(from_high))
+                var slid = gathered_slides(first, second, inside.select(entry, unreached), diagonals)
+                current.unsafe_offset(diagonal).unsafe_store(min(slid, stop))
+            else:
+                current.unsafe_offset(diagonal).unsafe_store(entry)
+            diagonal += LANES
+        for diagonal in range(new_low - PAD, from_low):
+            current[unsafe_offset=diagonal] = UNREACHED
+        for diagonal in range(from_high + 1, new_high + PAD + 1):
+            current[unsafe_offset=diagonal] = UNREACHED
+        comptime if not GATHERED_SLIDES:
+            for diagonal in range(from_low, from_high + 1):
+                var column = Int(current[unsafe_offset=diagonal])
+                if column >= 0:
                     var stop = min(end_column, end_row + diagonal)
-                    reach_column = max(reach_column, min(slide_forward(first, second, best, best - diagonal), stop))
-                current[unsafe_offset=diagonal] = Int32(reach_column)
-        for index in range(count):
-            if entry_costs[unsafe_offset=index] != cost:
-                continue
-            var diagonal = entry_diagonals[unsafe_offset=index]
+                    current[unsafe_offset=diagonal] = Int32(min(slide(first, second, column, diagonal), stop))
+        for index in range(starts[unsafe_offset=level], starts[unsafe_offset=level + 1]):
+            var diagonal = ordered[unsafe_offset=index]
             if diagonal < new_low or diagonal > new_high:
                 continue
             var stop = min(end_column, end_row + diagonal)
@@ -191,14 +237,15 @@ def forward_segment(
             current[unsafe_offset=diagonal] = max(current[unsafe_offset=diagonal], Int32(slid))
         low = new_low
         high = new_high
-    if Int(row_of(levels - 1)[unsafe_offset=target]) != end_column:
-        return -1
 
     @inline(.always)
-    def at(level: Int, diagonal: Int) {imm row_of} -> Int:
-        if level < 0:
+    def at(level: Int, diagonal: Int) {imm row_of, imm fronts} -> Int:
+        if level < 0 or diagonal < fronts.lows[level] or diagonal > fronts.highs[level]:
             return Int(UNREACHED)
         return Int(row_of(level)[unsafe_offset=diagonal])
+
+    if at(levels - 1, target) != end_column:
+        return -1
 
     # The backtrace: at each cell's own cost, the furthest source, a substitution before a base of
     # the first sequence alone before one of the second; matches back to the left edge end the tile.
