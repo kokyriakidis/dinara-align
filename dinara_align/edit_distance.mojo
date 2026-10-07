@@ -20,6 +20,8 @@ at a time.
 from .band import band_doubling, band_start
 from .bit_parallel import FIRST_SENTINEL, full_distance, LEFT, Profile, SECOND_SENTINEL, Trail, UP
 from .diagonal import (
+    SHORT_BAND_COLUMNS,
+    full_matrix_steps,
     diagonal_transition,
     DiagonalFronts,
     FrontPair,
@@ -46,14 +48,22 @@ def edit_distance(first: String, second: String) raises AlignmentError -> Int:
     Band doubling, as in A*PA2-simple: guess a bound, sweep only the band of cells a path within it
     could cross, and raise the guess until the answer fits under it, which proves it optimal. Close
     sequences therefore cost far less than the whole matrix. Once the band would cover most of the
-    matrix, the whole matrix is swept instead.
+    matrix, the whole matrix is swept instead; a short pair's band covers it from the start, so the
+    diagonal transition gives way straight to the sweep once it would cost more.
     """
     var profile = Profile(first, second)
     if profile.columns == 0 or profile.rows == 0:
         return profile.columns + profile.rows
-    var search = two_ended_distance(profile, STEP_TENTHS_DISTANCE)
+    # A short pair's band would sweep its whole matrix (see `SHORT_BAND_COLUMNS`), so past what that
+    # sweep costs the diagonal transition gives way to the sweep itself.
+    var short = profile.columns <= SHORT_BAND_COLUMNS
+    var search = two_ended_distance(
+        profile, STEP_TENTHS_DISTANCE, full_matrix_steps(profile.columns, profile.rows) if short else Int.MAX
+    )
     if search.distance >= 0:
         return search.distance
+    if short:
+        return full_distance(profile)
     var probe = search
     var trusted = True
     var heuristic = band_start(profile, search, probe, trusted)

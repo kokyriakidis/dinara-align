@@ -12,6 +12,7 @@ of its distance, which becomes the band's first bound (see `band.band_doubling`)
 
 from std.bit import count_trailing_zeros
 from std.math import sqrt
+from std.sys import simd_width_of
 
 from .slides import GATHERED_SLIDES, gathered_slides, slide
 from .bit_parallel import (
@@ -656,13 +657,13 @@ struct Meeting(ImplicitlyCopyable, TrivialRegisterPassable):
     var backward_score: Int
 
 
-def two_ended_distance(profile: Profile, step_tenths: Int) -> Probe:
-    """The edit distance by `two_ended`, keeping no history."""
+def two_ended_distance(profile: Profile, step_tenths: Int, ceiling: Int = Int.MAX) -> Probe:
+    """The edit distance by `two_ended`, keeping no history, giving up past `ceiling` steps too."""
     var first_back = reversed_codes(profile.column_codes, profile.columns, FIRST_SENTINEL)
     var second_back = reversed_codes(profile.row_codes, profile.rows, SECOND_SENTINEL)
     var ahead = FrontPair()
     var behind = FrontPair()
-    return two_ended(profile, first_back, second_back, step_tenths, ahead, behind).probe
+    return two_ended(profile, first_back, second_back, step_tenths, ahead, behind, ceiling).probe
 
 
 def two_ended(
@@ -672,6 +673,7 @@ def two_ended(
     step_tenths: Int,
     mut ahead: FrontPair,
     mut behind: FrontPair,
+    ceiling: Int = Int.MAX,
 ) -> Meeting:
     """The edit distance by diagonal transition from both ends at once, as BiWFA scores, while cheap.
 
@@ -685,7 +687,8 @@ def two_ended(
     only the last two fronts each way.
 
     It stops as `diagonal_transition` does, once the search still to do passes the budget (see
-    `step_budget`), projecting the distance from both fronts' progress.
+    `step_budget`), or `ceiling` steps where that is less, projecting the distance from both fronts'
+    progress.
     """
     var columns = profile.columns
     var rows = profile.rows
@@ -751,7 +754,9 @@ def two_ended(
                     return met(ahead, behind, sooner, False, True)
                 return met(ahead, behind, meeting, False, False)
         if checking:
-            var estimate = two_ended_gives_up(total, ahead.furthest + behind.furthest, columns, rows, step_tenths)
+            var estimate = two_ended_gives_up(
+                total, ahead.furthest + behind.furthest, columns, rows, step_tenths, ceiling
+            )
             if estimate >= 0:
                 return Meeting(Probe(-1, estimate, total), 0, 0, 0, 0)
     return Meeting(Probe(-1, 2 * limit + 1, total), 0, 0, 0, 0)
@@ -776,16 +781,39 @@ def trusted_projection(search: Probe, projected: Probe) -> Bool:
     return first * AGREEMENT <= later * (AGREEMENT + 1) and later * AGREEMENT <= first * (AGREEMENT + 1)
 
 
-def two_ended_gives_up(total: Int, reached: Int, columns: Int, rows: Int, step_tenths: Int) -> Int:
-    """The two-ended search's projected distance once what is left of it passes the budget, or -1."""
+def two_ended_gives_up(
+    total: Int, reached: Int, columns: Int, rows: Int, step_tenths: Int, ceiling: Int = Int.MAX
+) -> Int:
+    """The two-ended search's projected distance once what is left of it passes the budget, or the
+    `ceiling` where that is less, or -1."""
     var estimate = total * (columns + rows) // max(reached, 1)
+    # A ceiling the search's own fallback costs, widened by the projection's noise (see `noisy_budget`),
+    # so a projection that overshoots does not give up a search that would have finished cheaper.
+    var cap = noisy_budget(ceiling, total) if ceiling != Int.MAX else ceiling
     # What is left, about half of `estimate² - total²` diagonals, against what a band costs.
     # Both fronts' steps, about 0.57 ns per square edit with the overlap check, in one-front steps.
-    if (estimate * estimate - total * total) * TWO_ENDED_PERCENT // 100 > step_budget(
-        columns, step_tenths, estimate
-    ) and total * total * TWO_ENDED_PERCENT // 100 * GIVE_UP_SHARE >= step_budget(columns, step_tenths, total):
+    if (estimate * estimate - total * total) * TWO_ENDED_PERCENT // 100 > min(
+        step_budget(columns, step_tenths, estimate), cap
+    ) and total * total * TWO_ENDED_PERCENT // 100 * GIVE_UP_SHARE >= min(
+        step_budget(columns, step_tenths, total), cap
+    ):
         return max(estimate, total + 1)
     return -1
+
+
+comptime FULL_WORD_HUNDREDTHS = 35 if simd_width_of[DType.uint64]() >= 8 else (
+    45 if simd_width_of[DType.uint64]() >= 4 else 77
+)
+"""What the whole matrix's sweep costs a word, a column of 64 rows, in hundredths of a diagonal step,
+by vector width: measured on 1 kbp pairs at 15%, where both run to the end, as 0.64 ns a word against
+1.83 ns a step on AVX-512 (a Skylake-X at 3.3 GHz), 1.05 against 2.34 on AVX2 (the same machine
+built for Haswell) and 1.03 against 1.33 on NEON (an M2): the wider the vectors, the cheaper the
+sweep beside the diagonal transition, which steps a diagonal at a time."""
+
+
+def full_matrix_steps(columns: Int, rows: Int) -> Int:
+    """What sweeping a pair's whole matrix costs, in diagonal steps (see `FULL_WORD_HUNDREDTHS`)."""
+    return columns * ((rows + 63) // 64) * FULL_WORD_HUNDREDTHS // 100
 
 
 def grow_to(profile: Profile, mut ahead: DiagonalFronts, behind: DiagonalFronts, distance: Int):
