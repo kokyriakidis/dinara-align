@@ -6,7 +6,8 @@ alignment as a CIGAR, for any `Mode`; `distances` and `alignments` take a batch 
 Unit costs, global or with the query found inside or at the start of the reference, take the
 bit-parallel band doubling of A*PA2 (see `edit_distance` and `edit_search`); every other case, and a
 pair holding more symbols than it takes, the gap-affine wavefront from both ends (see `gap_affine`),
-which gives the same alignment at the same costs.
+which gives the same alignment at the same costs; a local alignment, Smith-Waterman's sweep and an
+extension back from where it ends (see `local`).
 
 Under a `Scoring`, an alphabet's substitution table and gap scores, which an alignment maximizes,
 `score` and `align` take a global or a local alignment, on the host or the device (see `scoring`).
@@ -21,6 +22,7 @@ from .common import Placement, hardware_threads
 from .edit_distance import edit_cigar, edit_distance
 from .edit_search import edit_search
 from .errors import AlignmentError, ErrorKind
+from .local import local_alignment
 from .gap_affine import (
     AffineCigar,
     EndsFree,
@@ -142,11 +144,9 @@ def searched_by_sweep(ends: EndsFree, columns: Int, rows: Int) -> Bool:
 
 
 def refuse(mode: Mode) raises AlignmentError:
-    """Raises for the modes `Costs` cannot serve where a cost is asked for."""
+    """Raises for the modes that maximize a score, where a least cost is asked for."""
     if mode.kind == Mode.SMITH_WATERMAN:
-        raise AlignmentError(
-            ErrorKind.INVALID_ARGUMENT, "a local alignment needs matches that earn: align it under a Scoring"
-        )
+        raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a local alignment maximizes a score, which `align` finds")
     if mode.kind == Mode.EXTENSION:
         raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "an extension maximizes a score, which `align` finds")
 
@@ -208,6 +208,15 @@ def aligned_within(
         if max_cost != Int.MAX:
             raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "an extension maximizes a score and takes no cost cap")
         return extended_alignment(reference, query, costs, mode, band, ties, extended)
+    if mode.kind == Mode.SMITH_WATERMAN:
+        if mode.match_score <= 0:
+            raise AlignmentError(
+                ErrorKind.INVALID_SCORING, "a local alignment under Costs needs a match that earns: Mode.local"
+            )
+        if max_cost != Int.MAX or not band.covers(columns, rows):
+            raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a local alignment takes no cost cap and no band")
+        _ = penalties_of(costs)
+        return local_alignment(reference, query, costs, mode.match_score, ties, extended)
     refuse(mode)
     var ends = free_ends(mode, columns, rows)
     var scale = costs.unit_scale()

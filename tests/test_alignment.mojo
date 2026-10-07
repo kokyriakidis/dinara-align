@@ -961,8 +961,12 @@ def test_refuses_what_it_cannot_do() raises:
         _ = Mode.extension(-1)
     with assert_raises(contains="rejected"):
         _ = Mode.ends_free(reference_start=-1)
-    with assert_raises(contains="Scoring"):
-        _ = distance("ACGT", "ACG", Costs.edit(), Mode.LOCAL)
+    with assert_raises(contains="score"):
+        _ = distance("ACGT", "ACG", Costs.edit(), Mode.local(1))
+    with assert_raises(contains="earns"):
+        _ = align("ACGT", "ACG", Costs.edit(), Mode.LOCAL)
+    with assert_raises(contains="earns"):
+        _ = Mode.local(0)
     with assert_raises(contains="score"):
         _ = distance("ACGT", "ACG", Costs.edit(), Mode.extension(1))
     with assert_raises(contains="cap"):
@@ -1454,6 +1458,40 @@ def extension_optimum(
                 value = max(value, max(layers[2 * piece][at], layers[2 * piece + 1][at]))
             if i > 0 and j > 0:
                 value = max(value, best[at - width - 1] + (a if p[i - 1] == q[j - 1] else -x))
+            best[at] = value
+            answer = max(answer, value)
+    return answer
+
+
+def local_optimum(first: String, second: String, a: Int, x: Int, o: Int, e: Int, o2: Int, e2: Int) -> Int:
+    """The best score of an alignment of any part of each sequence, Smith-Waterman's recurrence over
+    the whole matrix, every cell floored at zero; shares no code with the library."""
+    comptime LOW = -(1 << 40)
+    var p = first.as_bytes()
+    var q = second.as_bytes()
+    var n = len(p)
+    var m = len(q)
+    var width = m + 1
+    var best = List[Int](length=(n + 1) * width, fill=0)
+    var layers = List[List[Int]]()
+    for _ in range(4):
+        layers.append(List[Int](length=(n + 1) * width, fill=LOW))
+    var answer = 0
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            var at = i * width + j
+            var value = 0
+            for piece in range(2 if o2 >= 0 else 1):
+                var opening = o if piece == 0 else o2
+                var extension = e if piece == 0 else e2
+                layers[2 * piece][at] = max(
+                    best[at - width] - opening - extension, layers[2 * piece][at - width] - extension
+                )
+                layers[2 * piece + 1][at] = max(
+                    best[at - 1] - opening - extension, layers[2 * piece + 1][at - 1] - extension
+                )
+                value = max(value, max(layers[2 * piece][at], layers[2 * piece + 1][at]))
+            value = max(value, best[at - width - 1] + (a if p[i - 1] == q[j - 1] else -x))
             best[at] = value
             answer = max(answer, value)
     return answer
@@ -2095,6 +2133,22 @@ def test_every_mode_matches_the_full_matrix() raises:
             assert_equal(extended.score, best)
             assert_equal(extension_price(extended.cigar, 1, x, o, e, o2, e2), best)
             assert_equal(extended.cost, matches_in(extended.cigar) - best)
+            for ties in [Ties.LEFT, Ties.RIGHT]:
+                var local = align(reference, query, costs, Mode.local(2), ties=ties)
+                var top = local_optimum(reference, query, 2, x, o, e, o2, e2)
+                assert_equal(local.score, top)
+                assert_equal(extension_price(local.cigar, 2, x, o, e, o2, e2), top)
+                assert_equal(local.cost, 2 * matches_in(local.cigar) - top)
+                if top > 0:
+                    var part = rows_from_cigar(
+                        String(reference[byte = local.reference_start : local.reference_end]),
+                        String(query[byte = local.query_start : local.query_end]),
+                        local.cigar,
+                    )
+                    assert_true(part[0].byte_length() > 0)
+                else:
+                    assert_equal(local.cigar, "")
+                    assert_equal(local.reference_end, 0)
     # Unit costs inside a reference: the sweep and the wavefront, under a cap, find the same span.
     var placed = align("TTTTACGTACGTTTTT", "ACGTCGT", Costs.edit(), Mode.INFIX)
     assert_equal(placed.cost, 1)

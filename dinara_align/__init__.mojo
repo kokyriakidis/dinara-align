@@ -29,6 +29,8 @@ var capped = distance("ACGTACGTTTGCA", "ACGTCGTTTTGCA", costs, max_cost=10)  # N
 # A seed's extension, fixed at one end and stopping where it scores best, a match earning 1.
 var onward = align("ACGTTGCAAGGCTTTT", "ACGTTGCAAGGCGAGA", costs, Mode.extension(1))  # score 12, "12="
 var back = align("TTTTACGTTGCAAGGC", "GAGAACGTTGCAAGGC", costs, Mode.extension(1, Anchor.END))
+# The best-scoring part of each, Smith-Waterman, a match earning 2.
+var core = align("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC", costs, Mode.local(2))  # score 16, "8=", 4..12
 # A batch, over every thread.
 var references: List[String] = ["ACGTACGT", "TTGCA"]
 var queries: List[String] = ["ACGACGT", "TTGGCA"]
@@ -42,7 +44,7 @@ var batch = distances(references, queries)  # [1, 1]
 | `Mode.PREFIX`, `Mode.SUFFIX` | a prefix, a suffix | whole |
 | `Mode.ends_free(...)` | as many letters free at either end as asked | likewise |
 | `Mode.extension(match_score, anchor)` | from one end, as far as pays | from the same end |
-| `Mode.LOCAL` | any part, under a `Scoring` | any part |
+| `Mode.local(match_score)` | any part | any part |
 
 A `Scoring`, an alphabet's substitution table and gap scores, which an alignment maximizes, aligns by
 Gotoh's Needleman-Wunsch or Smith-Waterman, with the initialization corrections Flouri et al. found

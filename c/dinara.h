@@ -2,7 +2,7 @@
  * dinara-align from C and C++: the least cost of aligning a query to a reference, and an optimal
  * alignment as a CIGAR, under unit costs (the edit distance), gap-affine or two-piece gap-affine costs,
  * globally, with free ends (a read inside a reference, at its start or end, an overlap), as an
- * extension from one end, within a band or under a cost cap. Every result is exact. Build the library
+ * extension from one end, locally, within a band or under a cost cap. Every result is exact. Build the library
  * with `pixi run build-c [target-cpu]`, which leaves it in build/c beside the Mojo runtime libraries it
  * loads and this header; link with `-Lbuild/c -ldinara` and put build/c on the program's library search
  * path (an rpath, say). build/c also holds the libstdc++ the runtime loads, which a C++ program then
@@ -38,7 +38,8 @@ extern "C" {
 #define DINARA_ABOVE_MAX (-4)
 /* No alignment stays inside the band of diagonals asked for. */
 #define DINARA_OUTSIDE_BAND (-5)
-/* A mode these costs cannot serve: an extension's cost asked by `dinara_distance`, or capped. */
+/* A mode that cannot serve what was asked: the least cost of an extension or a local alignment, which
+ * maximize a score, a cap on either, or a band on a local alignment. */
 #define DINARA_INVALID_MODE (-6)
 
 /*
@@ -56,6 +57,7 @@ typedef struct {
 
 #define DINARA_ENDS_FREE 0
 #define DINARA_EXTENSION 1
+#define DINARA_LOCAL 2
 /* As many free letters as any sequence has. */
 #define DINARA_ALL INT64_MAX
 
@@ -64,7 +66,8 @@ typedef struct {
  * unaligned for nothing; all zero is a global alignment, the reference's two at DINARA_ALL a query
  * placed anywhere in it (infix), its end alone a prefix. DINARA_EXTENSION: fixed at both sequences'
  * starts, or with `anchor` nonzero their ends, and free to stop anywhere, a match earning
- * `match_score`: a seed's extension, as KSW2's without Z-drop. A null pointer is a global alignment.
+ * `match_score`: a seed's extension, as KSW2's without Z-drop. DINARA_LOCAL: any part of each, a match
+ * earning `match_score`, Smith-Waterman, as abPOA's local mode. A null pointer is a global alignment.
  */
 typedef struct {
     int64_t kind;
@@ -94,8 +97,8 @@ typedef struct {
 } dinara_options;
 
 /*
- * An optimal alignment: its cost, its score (an extension's matches' reward less the cost, else minus
- * the cost), the spans it aligns, and its CIGAR, NUL-terminated and `cigar_length` bytes long, which the
+ * An optimal alignment: its cost, its score (an extension's or a local alignment's matches' reward
+ * less the cost, else minus the cost), the spans it aligns, and its CIGAR, NUL-terminated and `cigar_length` bytes long, which the
  * caller frees with `dinara_free`.
  */
 typedef struct {
@@ -181,6 +184,8 @@ struct Mode {
     static Mode extension(int64_t match_score, Anchor anchor = Anchor::start) {
         return {{DINARA_EXTENSION, 0, 0, 0, 0, match_score, anchor == Anchor::end ? 1 : 0}};
     }
+    /* The best-scoring alignment of any part of each, a match earning `match_score`: Smith-Waterman. */
+    static Mode local(int64_t match_score) { return {{DINARA_LOCAL, 0, 0, 0, 0, match_score, 0}}; }
 };
 
 /* The diagonals every move stays on, `low ..= high`; the default is every diagonal. */

@@ -26,10 +26,12 @@ comptime ABOVE_MAX = -4
 comptime OUTSIDE_BAND = -5
 """No alignment stays inside the band asked for."""
 comptime INVALID_MODE = -6
-"""A mode these costs cannot serve: a cost asked of an extension, a cap on one, or a local alignment."""
+"""A mode that cannot serve what was asked: the least cost of an extension or a local alignment, which
+maximize a score, a cap on either, or a band on a local alignment."""
 
 comptime C_ENDS_FREE = 0
 comptime C_EXTENSION = 1
+comptime C_LOCAL = 2
 
 comptime CInts = ImmPointer[Int, MutAnyOrigin]
 """A C struct of `int64_t` fields, read by index; null for the default."""
@@ -70,6 +72,8 @@ def mode_of(fields: OptionalPointer[Int, MutAnyOrigin]) raises AlignmentError ->
     var at = fields.value()
     if at[unsafe_offset=0] == C_EXTENSION:
         return Mode.extension(at[unsafe_offset=5], Anchor.END if at[unsafe_offset=6] != 0 else Anchor.START)
+    if at[unsafe_offset=0] == C_LOCAL:
+        return Mode.local(at[unsafe_offset=5])
     if at[unsafe_offset=0] != C_ENDS_FREE:
         raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "an unknown mode")
     return Mode.ends_free(
@@ -165,7 +169,7 @@ def dinara_align(
         var second = sequence(query, query_length)
         var wanted_mode = mode_of(mode)
         var found: Optional[Alignment]
-        if asked.max_cost < 0 or wanted_mode.kind == Mode.EXTENSION:
+        if asked.max_cost < 0 or wanted_mode.kind != Mode.ENDS:
             if asked.max_cost >= 0:
                 return INVALID_MODE
             found = align(

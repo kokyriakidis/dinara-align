@@ -104,7 +104,7 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     | `SUFFIX` | a suffix | whole | |
     | `ends_free(...)` | as asked | as asked | WFA2-lib's ends-free, overlaps |
     | `extension(...)` | from one end | from the same end | KSW2's extension, without Z-drop |
-    | `LOCAL` | any part | any part | Smith-Waterman, a `Scoring`'s alone |
+    | `local(...)`, `LOCAL` | any part | any part | Smith-Waterman, abPOA's local mode |
     """
 
     var kind: UInt8
@@ -114,7 +114,7 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     var query_start: Int
     var query_end: Int
     var match_score: Int
-    """What a match earns in an extension, the only mode that maximizes a score."""
+    """What a match earns in an extension or a local alignment, the modes that maximize a score."""
     var anchor: Anchor
 
     comptime ENDS = UInt8(0)
@@ -130,8 +130,8 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     comptime SUFFIX = Self(Self.ENDS, UNBOUNDED, 0, 0, 0, 0, Anchor.START)
     """The whole query against the reference's best suffix."""
     comptime LOCAL = Self(Self.SMITH_WATERMAN, 0, 0, 0, 0, 0, Anchor.START)
-    """The best-scoring part of each, Smith-Waterman: with costs alone, aligning nothing would always
-    win, so only a `Scoring`, whose matches earn, aligns locally."""
+    """The best-scoring part of each under a `Scoring`, Smith-Waterman, whose table says what a match
+    earns; under `Costs`, `local` names the reward."""
 
     @staticmethod
     def ends_free(
@@ -153,6 +153,16 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         if match_score < 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "a match that costs")
         return Self(Self.EXTENSION, 0, 0, 0, 0, match_score, anchor)
+
+    @staticmethod
+    def local(match_score: Int) raises AlignmentError -> Self:
+        """The best-scoring alignment of any part of the reference against any part of the query,
+        Smith-Waterman: a match earns `match_score` and every edit costs what `Costs` charges. It is
+        every end free, with a reward: with costs alone, aligning nothing would always win. Its time
+        grows with the matrix, as every local aligner's does (see `local`)."""
+        if match_score <= 0:
+            raise AlignmentError(ErrorKind.INVALID_SCORING, "a local alignment needs a match that earns")
+        return Self(Self.SMITH_WATERMAN, 0, 0, 0, 0, match_score, Anchor.START)
 
     def is_global(self) -> Bool:
         return (

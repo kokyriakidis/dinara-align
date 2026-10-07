@@ -151,6 +151,10 @@ int main() {
                                            Mode::extension(1, dinara::Anchor::end));
     CHECK(left.score == 12 && left.cigar == "12=" && left.reference_start == 10 && left.query_start == 10);
     CHECK(dinara::align("ACGTTGCAAGGCTTTT", "ACGTTGCAAGGCGAGA", two_piece, Mode::extension(1)).score == 12);
+    // A local alignment: the shared core, whichever ends surround it.
+    dinara::Alignment local = dinara::align("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC", affine, Mode::local(2));
+    CHECK(local.score == 16 && local.cigar == "8=" && local.reference_start == 4 && local.query_start == 4);
+    CHECK(dinara::align("ACGT", "ACGT", Costs::edit(), Mode::local(1)).score == 4);
     bool no_cost = false;
     try {
         dinara::distance("ACGT", "ACGT", affine, Mode::extension(1));
