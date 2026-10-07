@@ -7,7 +7,8 @@
 
 Copies `alignment.mojo`, `common.mojo` and `errors.mojo` into the `dinara_align` package, drops
 everything that serves folding, cofolding, proteins, the Python bindings or the command line, and
-applies the Mojo 1.1 migrations. `api.mojo` and `__init__.mojo` are this repository's own and are left alone.
+applies the Mojo 1.1 migrations. Every other module, `api.mojo`, `modes.mojo`, `scoring.mojo` and
+`__init__.mojo` among them, is this repository's own and is left alone.
 
 Every textual edit is asserted, so an upstream rewrite fails here loudly rather than shipping half a
 port. The script is the record of how this package differs from upstream.
@@ -80,8 +81,12 @@ def port_alignment(text: str) -> str:
         "parallelize[solve_leaf](len(leaves), placement.threads)",
         "parallelize(solve_leaf, len(leaves), placement.threads)",
     )
-    # DNA only: the protein defaults and the BLOSUM62 table go, and `api.mojo` supplies DNA presets.
+    # DNA only: the protein defaults and the BLOSUM62 table go, and `scoring.mojo` supplies DNA presets.
     text = replace(text, "    DEFAULT_PROTEINS_ALPHABET,\n", "")
+    text = replace(text, "    translate,\n", "")
+    # `Alignment` is this package's CIGAR result (see `modes.mojo`); the gapped rows are named as such.
+    assert "AlignmentResult" in text, "upstream no longer names AlignmentResult"
+    text = re.sub(r"\bAlignmentResult\b", "GappedAlignment", text)
     text = cut(text, "comptime DEFAULT_PROTEINS_SCALE", "comptime CORNER_BYTES")
     return cut(text, "# BLOSUM62 scaled by five", "@fieldwise_init\nstruct AffineGapCosts")
 
@@ -134,9 +139,23 @@ that presumes a rotating band or an affine gap belongs to `alignment.mojo`.
 
 
 def port_errors(text: str) -> str:
-    """The error type, without the folding table's kind and the command line's exit status."""
+    """The error type, without the folding table's kind, the unit-cost aligner's ASCII refusal (the
+    wavefront takes any byte) and the command line's exit status, and with a band no alignment fits."""
     text = cut(text, "    comptime INCONSISTENT_TABLE", "    def write_to")
     text = cut(text, "        elif self == Self.INCONSISTENT_TABLE:", "        else:")
+    text = cut(text, "    comptime NOT_ASCII", "    def write_to")
+    text = cut(text, "        elif self == Self.NOT_ASCII:", "        else:")
+    text = replace(
+        text,
+        "    def write_to",
+        '    comptime OUTSIDE_BAND = Self(-9)\n    """No alignment stays inside the band of diagonals asked for."""\n\n    def write_to',
+    )
+    text = replace(
+        text,
+        "        else:\n            writer.write(\"an unnamed failure\")",
+        '        elif self == Self.OUTSIDE_BAND:\n            writer.write("no alignment stays inside the band")\n'
+        '        else:\n            writer.write("an unnamed failure")',
+    )
     text = cut(text, "    def exit_status(self) -> Int:", "\n\n@fieldwise_init")
     return replace(text, 'writer.write("AffineGaps: ", self.kind', 'writer.write("dinara-align: ", self.kind')
 

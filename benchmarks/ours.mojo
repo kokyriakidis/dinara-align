@@ -15,24 +15,9 @@ from std.os.path import getsize
 from std.sys.info import CompilationTarget
 from std.time import perf_counter_ns
 
-from dinara_align import (
-    AlignmentMode,
-    Placement,
-    Scoring,
-    affine_cigar,
-    affine_cigars,
-    align,
-    alignments,
-    edit_alignment,
-    edit_alignments,
-    edit_cigar,
-    edit_distance,
-    hardware_threads,
-    score,
-    scores,
-)
+from dinara_align import Costs, Mode, distance, Placement, Scoring, align, alignments, hardware_threads, score, scores
 
-comptime GLOBAL = AlignmentMode.GLOBAL
+comptime GLOBAL = Mode.GLOBAL
 
 
 struct Pairs(Movable):
@@ -73,7 +58,7 @@ comptime PAIR_SCORE = 2
 """One pair, scored or aligned, by the affine-gap kernels."""
 comptime PAIR_ALIGNMENT = 3
 comptime EDIT_DISTANCE = 4
-"""One pair by the bit-parallel edit distance, distance alone or with its alignment."""
+"""One pair by the bit-parallel edit distance, distance alone or with its alignment's CIGAR."""
 comptime EDIT_ALIGNMENT = 5
 
 comptime BATCHES = 20
@@ -88,22 +73,22 @@ def call[task: Int](data: Pairs, index: Int, scoring: Scoring, placement: Placem
     """Runs one task once and returns its answer as the checksum `run.py` compares."""
     comptime if task == BATCH_SCORE:
         var values = List[Int]()
-        for value in scores[GLOBAL](data.firsts, data.seconds, scoring, placement):
+        for value in scores(data.firsts, data.seconds, scoring, GLOBAL, placement):
             values.append(Int(value))
         return checksum(values)
     elif task == BATCH_ALIGNMENT:
         var values = List[Int]()
-        for result in alignments[GLOBAL](data.firsts, data.seconds, scoring, placement):
+        for result in alignments(data.firsts, data.seconds, scoring, GLOBAL, placement):
             values.append(Int(result.score))
         return checksum(values)
     elif task == PAIR_SCORE:
-        return checksum([Int(score[GLOBAL](data.firsts[index], data.seconds[index], scoring, placement))])
+        return checksum([Int(score(data.firsts[index], data.seconds[index], scoring, GLOBAL, placement))])
     elif task == PAIR_ALIGNMENT:
-        return checksum([Int(align[GLOBAL](data.firsts[index], data.seconds[index], scoring, placement).score)])
+        return checksum([Int(align(data.firsts[index], data.seconds[index], scoring, GLOBAL, placement).score)])
     elif task == EDIT_DISTANCE:
-        return checksum([edit_distance(data.firsts[index], data.seconds[index])])
+        return checksum([distance(data.firsts[index], data.seconds[index])])
     else:
-        return checksum([Int(edit_alignment(data.firsts[index], data.seconds[index]).score)])
+        return checksum([align(data.firsts[index], data.seconds[index]).cost])
 
 
 def measure[
@@ -137,7 +122,7 @@ def emit(tool: String, workload: String, task: String, device: String, timed: Tu
 def gpu_answers(scoring: Scoring) raises -> Bool:
     """Whether an accelerator serves a real alignment, which also warms the device before timing."""
     try:
-        _ = align[GLOBAL]("ACGT", "AGT", scoring, Placement.on_gpu(0, hardware_threads()))
+        _ = align("ACGT", "AGT", scoring, GLOBAL, Placement.on_gpu(0, hardware_threads()))
         return True
     except:
         return False
@@ -284,11 +269,12 @@ def seq_mode() raises:
             var started = perf_counter_ns()
             var costs = List[Int]()
             if affine:
-                for found in affine_cigars(firsts, seconds, mismatch, opening, extension, threads=hardware_threads()):
+                var model = Costs.affine(mismatch, opening, extension)
+                for found in alignments(firsts, seconds, model, threads=hardware_threads()):
                     costs.append(found.cost)
             else:
-                for aligned in edit_alignments(firsts, seconds, hardware_threads()):
-                    costs.append(Int(aligned.score))
+                for found in alignments(firsts, seconds, threads=hardware_threads()):
+                    costs.append(found.cost)
             var share = Float64(perf_counter_ns() - started) / 1e9 / Float64(max(len(firsts), 1))
             for cost in costs:
                 print(tool, path, share, cost, sep="\t")
@@ -306,10 +292,10 @@ def seq_mode() raises:
             var started = perf_counter_ns()
             var cost: Int
             if affine:
-                cost = affine_cigar(first, second, mismatch, opening, extension).cost
+                cost = align(first, second, Costs.affine(mismatch, opening, extension)).cost
             else:
                 # A CIGAR, as every rival's traceback hands back, rather than the two gapped rows.
-                cost = edit_cigar(first, second).distance
+                cost = align(first, second).cost
             var seconds = Float64(perf_counter_ns() - started) / 1e9
             var growth = peak_resident() - before
             spent += seconds

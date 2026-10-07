@@ -79,14 +79,14 @@ stands on each.
   matches on no more planes than its own symbols need (see `Profile.symbols`): two where neither its
   columns nor any row holds one, the rows' third plane as a mask where only rows do. Reads with an
   `N` 7 to 9% faster on both machines, 5 to 7% over clean ones on ont-50k on the Skylake-X.
-- [~] **Semi-global and open-ended alignment.** `edit_search` finds a pattern inside a text, Edlib's
-  infix mode, or at its start, its prefix mode, and `edit_search_alignment` aligns it there, exact.
-  It sweeps a band as Edlib does, a bound doubled and only the rows some score within it can still
-  reach (Ukkonen's cutoff): 10 kbp in 100 kbp in 13 ms on the M2, 100 kbp in 1 Mbp in 0.75 s, against
-  21 ms and 2 s for the whole matrix. Unrelated text scores about half an edit a base when the start
-  is free, so a bound of `k` still reaches some `2k` rows, which limits the cutoff. Still open: a first
-  bound from an estimate instead of 64, a seed heuristic for the search, and a free end for the pattern
-  too, as WFA's ends-free mode allows.
+- [x] **Semi-global and open-ended alignment.** Every cost model takes every mode (`Mode`): global, a
+  query inside a reference (Edlib's infix), at its start or end, any free ends as WFA's ends-free mode
+  allows, and an extension from either end; the CIGAR spans the aligned parts, their bounds beside it.
+  At unit costs the infix and prefix modes sweep a band as Edlib does, a bound doubled and only the
+  rows some score within it can still reach (Ukkonen's cutoff): 10 kbp in 100 kbp in 13 ms on the M2,
+  100 kbp in 1 Mbp in 0.75 s, against 21 ms and 2 s for the whole matrix; the other modes, a band or a
+  cap take the wavefront at the same costs. Still open: a first bound from an estimate instead of 64,
+  and a seed heuristic for the search.
 - [ ] **Traceback while sweeping, to save memory** (as TALCO does). Feasible, and left (2026-10-06):
   every few tiles the traces from the band's top and bottom kept rows, deterministic and unable to
   cross without meeting, would settle the alignment behind where they meet and free the tile edges

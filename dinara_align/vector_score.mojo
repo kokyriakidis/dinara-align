@@ -12,7 +12,7 @@ uniform table turns each substitution into one comparison.
 from .alignment import (
     AffineGapCosts,
     AlignmentMode,
-    AlignmentResult,
+    GappedAlignment,
     AntiDiagonalMajor,
     BAND_PADDING,
     reconstruct,
@@ -144,7 +144,7 @@ def vector_align[
     alphabet: String,
     low_diagonal: Int = Int.MIN,
     high_diagonal: Int = Int.MAX,
-) -> AlignmentResult:
+) -> GappedAlignment:
     """`serial_align`'s alignment under a uniform table, its three layers swept sixteen cells at a time.
 
     Only the cells on diagonals `low_diagonal ..= high_diagonal`, column minus row, are computed and
@@ -312,7 +312,7 @@ def vector_align[
     # The layout reads `starts` and `lows` through pointers, so both must outlive every use of it.
     _ = len(starts)
     _ = len(lows)
-    return AlignmentResult(final_score, reconstruction[0], reconstruction[1])
+    return GappedAlignment(final_score, reconstruction[0], reconstruction[1])
 
 
 comptime UNREACHABLE = Int32(-(1 << 28))

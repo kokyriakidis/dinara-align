@@ -48,7 +48,6 @@ from .common import (
     THREADS_PER_BLOCK,
     WARPS_PER_BLOCK,
     allocate,
-    translate,
     upload,
     zeroed,
 )
@@ -356,7 +355,7 @@ def advance(state: Layer, decision: CellDecision) -> Move:
 
 
 @fieldwise_init
-struct AlignmentResult(Copyable, Movable):
+struct GappedAlignment(Copyable, Movable):
     """A score and the two gapped strings that realize it."""
 
     var score: Int32
@@ -436,7 +435,7 @@ def serial_align[
     alphabet_size: Int,
     scoring: AffineGapCosts,
     alphabet: String,
-) -> AlignmentResult:
+) -> GappedAlignment:
     """Full-matrix reference, transcribed from the `_*_kernel` plus `_reconstruct_alignment`."""
     var rows = len(first)
     var columns = len(second)
@@ -517,7 +516,7 @@ def serial_align[
         mode,
     )
     var final_score = scores[start_row * stride + start_column]
-    return AlignmentResult(final_score, reconstruction[0], reconstruction[1])
+    return GappedAlignment(final_score, reconstruction[0], reconstruction[1])
 
 
 trait CellLayout(ImplicitlyCopyable):
@@ -1702,7 +1701,7 @@ def device_alignments[
     substitutions: ImmSpan[Scalar[SubstitutionDType], _],
     alphabet: String,
     scoring: AffineGapCosts,
-) raises -> List[AlignmentResult]:
+) raises -> List[GappedAlignment]:
     """Aligns a batch on the GPU by recording every decision, one thread block per pair."""
     var alphabet_bytes = alphabet.as_bytes()
     var alphabet_size = len(alphabet_bytes)
@@ -1763,7 +1762,7 @@ def device_alignments[
     )
     scope.context.synchronize()
 
-    var aligned = List[AlignmentResult](capacity=pairs)
+    var aligned = List[GappedAlignment](capacity=pairs)
     with results_buffer.map_to_host() as scores_host, lengths_buffer.map_to_host() as lengths_host:
         with first_buffer.map_to_host() as first_host, second_buffer.map_to_host() as second_host:
             for pair in range(pairs):
@@ -1775,7 +1774,7 @@ def device_alignments[
                     first_gapped.append(UInt8(first_host[base + index]))
                     second_gapped.append(UInt8(second_host[base + index]))
                 aligned.append(
-                    AlignmentResult(
+                    GappedAlignment(
                         scores_host[pair], String(unsafe_from_utf8=first_gapped), String(unsafe_from_utf8=second_gapped)
                     )
                 )
@@ -2636,7 +2635,7 @@ def device_align[
     alphabet: String,
     leaf_cells: Int,
     placement: Placement,
-) raises -> AlignmentResult:
+) raises -> GappedAlignment:
     """One pair aligned with every sweep on the device, in linear space.
 
     The device counterpart of `serial_align`, so a caller chooses where the work runs without
@@ -2673,7 +2672,7 @@ def device_align[
         )
         var reached = score_path(first, second, path_columns, path_layers, substitutions, alphabet_size, scoring, rows)
         var whole = expand_path(first, second, path_columns, path_layers, alphabet, mode, 0, rows)
-        return AlignmentResult(reached, whole[0], whole[1])
+        return GappedAlignment(reached, whole[0], whole[1])
 
     var last_row, last_column, score = device_local_extremum[SweepHalf.FORWARD](
         scope, buffers, rows, rows, columns, alphabet_size, scoring
@@ -2708,7 +2707,7 @@ def device_align[
         )
 
     var window = expand_path(first, second, path_columns, path_layers, alphabet, mode, first_row, last_row)
-    return AlignmentResult(score, window[0], window[1])
+    return GappedAlignment(score, window[0], window[1])
 
 
 # endregion GPU Wavefront

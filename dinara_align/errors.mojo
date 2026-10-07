@@ -28,8 +28,8 @@ struct ErrorKind(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writabl
     """The gap costs or the substitution scores cannot be served together."""
     comptime INVALID_ARGUMENT = Self(-7)
     """An argument named something this build does not offer, or omitted a value."""
-    comptime NOT_ASCII = Self(-8)
-    """Unit-cost alignment was handed bytes above the ASCII range."""
+    comptime OUTSIDE_BAND = Self(-9)
+    """No alignment stays inside the band of diagonals asked for."""
 
     def write_to(self, mut writer: Some[Writer]):
         # Every kind names itself, and a kind added without a line says so rather than borrowing
@@ -48,8 +48,8 @@ struct ErrorKind(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writabl
             writer.write("the scoring cannot be served")
         elif self == Self.INVALID_ARGUMENT:
             writer.write("an argument was rejected")
-        elif self == Self.NOT_ASCII:
-            writer.write("unit-cost alignment handles ASCII only")
+        elif self == Self.OUTSIDE_BAND:
+            writer.write("no alignment stays inside the band")
         else:
             writer.write("an unnamed failure")
 

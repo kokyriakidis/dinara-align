@@ -11,7 +11,6 @@ WFA2-lib's rule for ties (see `trace_back`), and written out as two gapped rows 
 from std.bit import count_trailing_zeros
 from std.math import ceildiv, clamp
 
-from .alignment import AlignmentResult
 from .diagonal import best_source, DiagonalFronts, slide_forward
 from .slides import GATHERED_SLIDES, LANES, gathered_slides, slide
 from .bit_parallel import (
@@ -566,7 +565,7 @@ def trace_back(profile: Profile, trail: Trail, start_column: Int, start_row: Int
 
 @fieldwise_init
 struct EditPath(Movable):
-    """An optimal alignment as traceback moves, as `edit_path` finds it: `prefix` from the origin to
+    """An optimal alignment as traceback moves, as `edit_cigar` finds it: `prefix` from the origin to
     `(middle_column, middle_row)` right to left, as the traceback appends them, and `suffix` from
     there to the corner left to right, so neither is reversed first."""
 
@@ -601,92 +600,6 @@ def diagonal_run(moves: ImmPointer[UInt8, _], start: Int, end: Int) -> Int:
     while index < end and moves[unsafe_offset=index] == DIAGONAL:
         index += 1
     return index - start
-
-
-def gapped_rows(
-    first: String,
-    second: String,
-    prefix: List[UInt8],
-    middle: Int,
-    meeting_row: Int,
-    suffix: List[UInt8],
-    distance: Int,
-) -> AlignmentResult:
-    """An alignment written out as the two gapped rows.
-
-    `prefix` holds the moves from the origin to `(middle, meeting_row)` right to left, as the
-    traceback appends them, and `suffix` the moves from there to the corner left to right, so
-    neither is reversed first. A run of diagonal moves, most of any alignment, copies both
-    sequences' bases a block at a time; a gap move writes one base against `-`.
-    """
-    comptime GAP = UInt8(ord("-"))
-    var length = len(prefix) + len(suffix)
-    var top_row = List[UInt8](capacity=length)
-    var bottom_row = List[UInt8](capacity=length)
-    top_row.resize(unsafe_uninit_length=length)
-    bottom_row.resize(unsafe_uninit_length=length)
-    var first_bytes = first.unsafe_ptr()
-    var second_bytes = second.unsafe_ptr()
-    var top = top_row.unsafe_ptr()
-    var bottom = bottom_row.unsafe_ptr()
-
-    # The prefix, from its last move back to its first, fills the rows from `len(prefix)` down.
-    var moves = prefix.unsafe_ptr()
-    var count = len(prefix)
-    var column = middle
-    var row = meeting_row
-    var at = count
-    var index = 0
-    while index < count:
-        var run = diagonal_run(moves, index, count)
-        if run > 0:
-            at -= run
-            column -= run
-            row -= run
-            copy_bytes(top.unsafe_offset(at), first_bytes.unsafe_offset(column), run)
-            copy_bytes(bottom.unsafe_offset(at), second_bytes.unsafe_offset(row), run)
-            index += run
-            continue
-        var move = moves[unsafe_offset=index]
-        at -= 1
-        if move == LEFT:
-            column -= 1
-            top[unsafe_offset=at] = first_bytes[unsafe_offset=column]
-            bottom[unsafe_offset=at] = GAP
-        else:
-            row -= 1
-            top[unsafe_offset=at] = GAP
-            bottom[unsafe_offset=at] = second_bytes[unsafe_offset=row]
-        index += 1
-
-    # The suffix, first move first, fills the rest.
-    var later = suffix.unsafe_ptr()
-    count = len(suffix)
-    column = middle
-    row = meeting_row
-    at = len(prefix)
-    index = 0
-    while index < count:
-        var run = diagonal_run(later, index, count)
-        if run > 0:
-            copy_bytes(top.unsafe_offset(at), first_bytes.unsafe_offset(column), run)
-            copy_bytes(bottom.unsafe_offset(at), second_bytes.unsafe_offset(row), run)
-            at += run
-            column += run
-            row += run
-            index += run
-            continue
-        if later[unsafe_offset=index] == LEFT:
-            top[unsafe_offset=at] = first_bytes[unsafe_offset=column]
-            bottom[unsafe_offset=at] = GAP
-            column += 1
-        else:
-            top[unsafe_offset=at] = GAP
-            bottom[unsafe_offset=at] = second_bytes[unsafe_offset=row]
-            row += 1
-        at += 1
-        index += 1
-    return AlignmentResult(Int32(distance), String(unsafe_from_utf8=top_row), String(unsafe_from_utf8=bottom_row))
 
 
 struct CigarWriter:

@@ -10,9 +10,7 @@ distance from the pattern to any substring of the text, and an alignment there.
 
 from std.math import ceildiv
 
-from .alignment import AlignmentResult
 from .bit_parallel import ALL_ONES, BAND_COLUMNS, Frontier, Profile, WORD_BITS, word_value
-from .edit_distance import edit_alignment
 from .errors import AlignmentError
 
 
@@ -173,14 +171,3 @@ def edit_search(pattern: String, text: String, prefix: Bool = False) raises Alig
     var backward = Profile(reversed_text(text, end), reversed_text(pattern, pattern.byte_length()))
     var start_found = last_row_scores[False](backward)
     return EditHit(found[0], end - start_found[1], end)
-
-
-def edit_search_alignment(
-    pattern: String, text: String, prefix: Bool = False
-) raises AlignmentError -> Tuple[EditHit, AlignmentResult]:
-    """`edit_search`, and an optimal alignment of the text's matched part, `text[start:end]`, first,
-    against the whole pattern, second, as `edit_alignment` gives it."""
-    var hit = edit_search(pattern, text, prefix)
-    var part = String(StringSlice(unsafe_from_utf8=text.as_bytes()[hit.start : hit.end]))
-    var aligned = edit_alignment(part, pattern)
-    return (hit, aligned^)

@@ -16,46 +16,34 @@ from std.random import random_float64, random_ui64, seed
 from std.testing import TestSuite, assert_equal, assert_false, assert_raises, assert_true
 
 from dinara_align import (
-    AlignmentMode,
-    AlignmentResult,
-    DNA_ALPHABET,
-    EndsFree,
+    Alignment,
+    AlignmentError,
     Anchor,
     Band,
-    Ties,
-    affine2p_cigar,
-    affine2p_distance,
-    affine2p_extension,
-    affine_cigar,
-    affine_cigars,
-    affine_distance,
-    affine_extension,
+    Costs,
+    DNA_ALPHABET,
+    GappedAlignment,
+    Mode,
     Placement,
     Scoring,
+    Ties,
     align,
     alignments,
     colorize,
-    edit_alignment,
-    edit_alignments,
-    edit_cigar,
-    edit_distance,
-    edit_distances,
-    edit_search,
-    edit_search_alignment,
-    levenshtein_alignment,
-    needleman_wunsch_gotoh_alignment,
-    needleman_wunsch_gotoh_score,
+    distance,
+    distances,
     score,
     scores,
-    smith_waterman_gotoh_alignment,
-    smith_waterman_gotoh_score,
 )
+from dinara_align.alignment import AlignmentMode
+from dinara_align.edit_distance import edit_distance as bit_parallel_distance
 from dinara_align.seeds import SEED_COLUMNS
 from dinara_align.bit_parallel import Profile
 from dinara_align.diagonal import DiagonalFronts, diagonal_transition, trace_diagonals
 from dinara_align.traceback import EditPath, cigar_string
 from dinara_align.gap_affine import (
     ALIGNED,
+    EndsFree,
     FIRST_GAP,
     FREE_START,
     SECOND_GAP,
@@ -70,8 +58,8 @@ from dinara_align.gap_affine import (
 )
 from dinara_align.vector_score import vector_score
 
-comptime GLOBAL = AlignmentMode.GLOBAL
-comptime LOCAL = AlignmentMode.LOCAL
+comptime GLOBAL = Mode.GLOBAL
+comptime LOCAL = Mode.LOCAL
 comptime REPETITIONS = 20
 """Random draws per randomized test."""
 
@@ -90,16 +78,16 @@ def random_sequence(shortest: Int, longest: Int, alphabet: String) -> String:
 
 def expensive_gap() raises -> Scoring:
     """Uniform scores with an opening dearer than a mismatch, the regime most tests hold fixed."""
-    return Scoring.uniform(5, -4, -20, -1)
+    return Scoring.uniform(5, -4, -19, -1)
 
 
 def scoring_regimes() raises -> List[Scoring]:
     """One representative per regime: an expensive gap, a cheap one, unit costs, a free extension, and the DNA default.
     """
     var regimes = List[Scoring]()
-    regimes.append(Scoring.uniform(5, -4, -20, -1))
-    regimes.append(Scoring.uniform(2, -1, -2, -1))
-    regimes.append(Scoring.uniform(0, -1, -1, -1))
+    regimes.append(Scoring.uniform(5, -4, -19, -1))
+    regimes.append(Scoring.uniform(2, -1, -1, -1))
+    regimes.append(Scoring.uniform(0, -1, 0, -1))
     regimes.append(Scoring.uniform(1, -1, -5, 0))
     regimes.append(Scoring.dna())
     return regimes^
@@ -190,11 +178,11 @@ def slice_bytes(text: List[UInt8], start: Int, stop: Int) -> List[UInt8]:
     return piece^
 
 
-def brute_optimum[mode: AlignmentMode](first: String, second: String, scoring: Scoring) -> Int:
+def brute_optimum(mode: Mode, first: String, second: String, scoring: Scoring) -> Int:
     """Global: the best enumerated alignment. Local: the best over every pair of substrings, or zero."""
     var top = List[UInt8](first.as_bytes())
     var bottom = List[UInt8](second.as_bytes())
-    comptime if mode == AlignmentMode.GLOBAL:
+    if mode == GLOBAL:
         return best_enumerated(top, bottom, scoring)
     var best = 0
     for start in range(len(top)):
@@ -207,14 +195,12 @@ def brute_optimum[mode: AlignmentMode](first: String, second: String, scoring: S
     return best
 
 
-def assert_well_formed[
-    mode: AlignmentMode
-](first: String, second: String, produced: AlignmentResult, scoring: Scoring) raises:
+def assert_well_formed(mode: Mode, first: String, second: String, produced: GappedAlignment, scoring: Scoring) raises:
     """Both rows have one length, each rebuilds its input or a piece of it, and they earn their score."""
     assert_equal(produced.first_gapped.byte_length(), produced.second_gapped.byte_length())
     var core_first = produced.first_gapped.replace("-", "")
     var core_second = produced.second_gapped.replace("-", "")
-    comptime if mode == AlignmentMode.GLOBAL:
+    if mode == GLOBAL:
         assert_equal(core_first, first)
         assert_equal(core_second, second)
     else:
@@ -227,10 +213,32 @@ def gpu_available() raises -> Bool:
     """Whether an accelerator serves a real alignment here, which a successful import does not prove."""
     var scoring = Scoring.dna()
     try:
-        _ = score[GLOBAL]("AC", "CA", scoring, Placement.on_gpu(0, 1))
+        _ = score("AC", "CA", scoring, GLOBAL, Placement.on_gpu(0, 1))
         return True
     except:
         return False
+
+
+def unit_distance(first: String, second: String) raises -> Int:
+    """The edit distance by Gotoh's recurrence at unit costs over the pair's own letters, which shares no
+    code with the bit-parallel sweep or the wavefront."""
+    var seen = List[Bool](length=256, fill=False)
+    var letters = List[UInt8]()
+    for text in [first, second]:
+        for byte in text.as_bytes():
+            if not seen[Int(byte)]:
+                seen[Int(byte)] = True
+                letters.append(byte)
+    if len(letters) == 0:
+        letters.append(UInt8(ord("A")))
+    return -Int(score(first, second, Scoring.edit_distance(String(unsafe_from_utf8=letters^)), GLOBAL))
+
+
+def edit_rows(first: String, second: String, ties: Ties = Ties.LEFT) raises -> GappedAlignment:
+    """`align` at unit costs as two gapped rows, its score the distance."""
+    var aligned = align(first, second, ties=ties)
+    var rows = aligned.gapped(first, second)
+    return GappedAlignment(Int32(aligned.cost), rows[0], rows[1])
 
 
 # endregion Oracles
@@ -239,7 +247,7 @@ def gpu_available() raises -> Bool:
 
 
 def test_dna_default_is_minimap2() raises:
-    """Match 2, mismatch -4, and minimap2's `-O4 -E2` gap, which charges the first gapped base six."""
+    """Match 2, mismatch -4, and minimap2's `-O4 -E2` gap, `-(4 + 2k)`: its first gapped base six."""
     var dna = Scoring.dna()
     assert_equal(dna.alphabet, "ACGT")
     for left in [UInt8(ord("A")), UInt8(ord("C")), UInt8(ord("G")), UInt8(ord("T"))]:
@@ -252,35 +260,35 @@ def test_dna_default_is_minimap2() raises:
 def test_hand_computed_global() raises:
     """Pairs whose optimum can be worked out on paper, strings included."""
     var dna = Scoring.dna()
-    var same = needleman_wunsch_gotoh_alignment("ACGTACGT", "ACGTACGT", dna)
+    var same = align("ACGTACGT", "ACGTACGT", dna)
     assert_equal(same.first_gapped, "ACGTACGT")
     assert_equal(same.score, 16)
 
     # One substitution costs -4, which beats opening two gaps at -6 each.
-    var substituted = needleman_wunsch_gotoh_alignment("ACGTACGT", "ACGTTCGT", dna)
+    var substituted = align("ACGTACGT", "ACGTTCGT", dna)
     assert_equal(substituted.first_gapped, "ACGTACGT")
     assert_equal(substituted.second_gapped, "ACGTTCGT")
     assert_equal(substituted.score, 7 * 2 - 4)
 
-    # A three-base deletion is one run: -6 for its first base and -2 for each of the other two.
-    var deleted = needleman_wunsch_gotoh_alignment("ACGTTGCAGGGCATGACGT", "ACGTTGCACATGACGT", dna)
+    # A three-base deletion is one gap, scoring -(4 + 2 * 3).
+    var deleted = align("ACGTTGCAGGGCATGACGT", "ACGTTGCACATGACGT", dna)
     assert_equal(deleted.first_gapped, "ACGTTGCAGGGCATGACGT")
     assert_equal(deleted.second_gapped, "ACGTTGCA---CATGACGT")
     assert_equal(deleted.score, 16 * 2 - 6 - 2 * 2)
-    assert_equal(needleman_wunsch_gotoh_score("ACGTTGCAGGGCATGACGT", "ACGTTGCACATGACGT", dna), 22)
+    assert_equal(score("ACGTTGCAGGGCATGACGT", "ACGTTGCACATGACGT", dna), 22)
 
     # Against nothing, the whole sequence is one gap run.
-    assert_equal(needleman_wunsch_gotoh_score("AAAA", "", dna), -6 - 3 * 2)
-    assert_equal(needleman_wunsch_gotoh_score("", "", dna), 0)
+    assert_equal(score("AAAA", "", dna), -6 - 3 * 2)
+    assert_equal(score("", "", dna), 0)
 
 
 def test_hand_computed_local() raises:
     """The shared core of two otherwise unrelated sequences, trimmed at both ends."""
-    var aligned = smith_waterman_gotoh_alignment("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC", Scoring.dna())
+    var aligned = align("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC", Scoring.dna(), LOCAL)
     assert_equal(aligned.first_gapped, "ACGTACGT")
     assert_equal(aligned.second_gapped, "ACGTACGT")
     assert_equal(aligned.score, 16)
-    assert_equal(smith_waterman_gotoh_score("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC", Scoring.dna()), 16)
+    assert_equal(score("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC", Scoring.dna(), LOCAL), 16)
 
 
 def test_levenshtein_known_distances() raises:
@@ -295,10 +303,11 @@ def test_levenshtein_known_distances() raises:
         ("ACGTACGT", "TACGTACG", 2),
     ]
     for example in cases:
-        var aligned = levenshtein_alignment(example[0], example[1])
-        assert_equal(Int(aligned.score), example[2])
-        assert_equal(aligned.first_gapped.replace("-", ""), example[0])
-        assert_equal(aligned.second_gapped.replace("-", ""), example[1])
+        var aligned = align(example[0], example[1])
+        assert_equal(aligned.cost, example[2])
+        var rows = aligned.gapped(example[0], example[1])
+        assert_equal(rows[0].replace("-", ""), example[0])
+        assert_equal(rows[1].replace("-", ""), example[1])
 
 
 # endregion Known Answers
@@ -306,7 +315,7 @@ def test_levenshtein_known_distances() raises:
 # region Exhaustive Oracle
 
 
-def check_against_enumeration[mode: AlignmentMode]() raises:
+def check_against_enumeration(mode: Mode) raises:
     """Every pair over a two-letter alphabet with combined length at most five."""
     var scoring = expensive_gap()
     var words = List[String]()
@@ -323,18 +332,18 @@ def check_against_enumeration[mode: AlignmentMode]() raises:
         for second in words:
             if first.byte_length() + second.byte_length() > 5:
                 continue
-            var expected = brute_optimum[mode](first, second, scoring)
-            assert_equal(Int(score[mode](first, second, scoring, Placement.on_cpu(1))), expected)
-            var produced = align[mode](first, second, scoring, Placement.on_cpu(1))
+            var expected = brute_optimum(mode, first, second, scoring)
+            assert_equal(Int(score(first, second, scoring, mode, Placement.on_cpu(1))), expected)
+            var produced = align(first, second, scoring, mode, Placement.on_cpu(1))
             assert_equal(Int(produced.score), expected)
 
 
 def test_global_matches_enumeration() raises:
-    check_against_enumeration[GLOBAL]()
+    check_against_enumeration(GLOBAL)
 
 
 def test_local_matches_enumeration() raises:
-    check_against_enumeration[LOCAL]()
+    check_against_enumeration(LOCAL)
 
 
 # endregion Exhaustive Oracle
@@ -342,27 +351,27 @@ def test_local_matches_enumeration() raises:
 # region Properties
 
 
-def check_well_formed[mode: AlignmentMode]() raises:
+def check_well_formed(mode: Mode) raises:
     """Every path is well formed, realizes its own score, and agrees with the score-only kernel."""
     seed(1)
     for scoring in scoring_regimes():
         for _ in range(REPETITIONS):
             var first = random_sequence(5, 25, DNA_ALPHABET)
             var second = random_sequence(5, 25, DNA_ALPHABET)
-            var produced = align[mode](first, second, scoring)
-            assert_well_formed[mode](first, second, produced, scoring)
-            assert_equal(score[mode](first, second, scoring), produced.score)
+            var produced = align(first, second, scoring, mode)
+            assert_well_formed(mode, first, second, produced, scoring)
+            assert_equal(score(first, second, scoring, mode), produced.score)
 
 
 def test_global_output_is_well_formed() raises:
-    check_well_formed[GLOBAL]()
+    check_well_formed(GLOBAL)
 
 
 def test_local_output_is_well_formed() raises:
-    check_well_formed[LOCAL]()
+    check_well_formed(LOCAL)
 
 
-def check_linear_matches_stored[mode: AlignmentMode]() raises:
+def check_linear_matches_stored(mode: Mode) raises:
     """Both traceback strategies reach the same score, each with a path that earns it.
 
     Ties may land differently under a divide-and-conquer join, so the strings need not match.
@@ -372,20 +381,20 @@ def check_linear_matches_stored[mode: AlignmentMode]() raises:
         for _ in range(3):
             var first = random_sequence(140, 260, DNA_ALPHABET)
             var second = random_sequence(140, 260, DNA_ALPHABET)
-            var stored = align[mode](first, second, scoring, Placement.default(), 10**12)
-            var linear = align[mode](first, second, scoring, Placement.default(), 0)
+            var stored = align(first, second, scoring, mode, Placement.default(), 10**12)
+            var linear = align(first, second, scoring, mode, Placement.default(), 0)
             assert_equal(stored.score, linear.score)
-            assert_equal(stored.score, score[mode](first, second, scoring))
-            assert_well_formed[mode](first, second, stored, scoring)
-            assert_well_formed[mode](first, second, linear, scoring)
+            assert_equal(stored.score, score(first, second, scoring, mode))
+            assert_well_formed(mode, first, second, stored, scoring)
+            assert_well_formed(mode, first, second, linear, scoring)
 
 
 def test_global_linear_matches_stored() raises:
-    check_linear_matches_stored[GLOBAL]()
+    check_linear_matches_stored(GLOBAL)
 
 
 def test_local_linear_matches_stored() raises:
-    check_linear_matches_stored[LOCAL]()
+    check_linear_matches_stored(LOCAL)
 
 
 def test_linear_space_carries_a_long_pair() raises:
@@ -394,8 +403,8 @@ def test_linear_space_carries_a_long_pair() raises:
     var scoring = expensive_gap()
     var first = random_sequence(3000, 3000, DNA_ALPHABET)
     var second = random_sequence(3000, 3000, DNA_ALPHABET)
-    assert_well_formed[GLOBAL](first, second, align[GLOBAL](first, second, scoring, Placement.default(), 0), scoring)
-    assert_well_formed[LOCAL](first, second, align[LOCAL](first, second, scoring, Placement.default(), 0), scoring)
+    assert_well_formed(GLOBAL, first, second, align(first, second, scoring, GLOBAL, Placement.default(), 0), scoring)
+    assert_well_formed(LOCAL, first, second, align(first, second, scoring, LOCAL, Placement.default(), 0), scoring)
 
 
 def test_symmetry() raises:
@@ -405,8 +414,8 @@ def test_symmetry() raises:
     for _ in range(REPETITIONS):
         var first = random_sequence(5, 25, DNA_ALPHABET)
         var second = random_sequence(5, 25, DNA_ALPHABET)
-        assert_equal(score[GLOBAL](first, second, scoring), score[GLOBAL](second, first, scoring))
-        assert_equal(score[LOCAL](first, second, scoring), score[LOCAL](second, first, scoring))
+        assert_equal(score(first, second, scoring, GLOBAL), score(second, first, scoring, GLOBAL))
+        assert_equal(score(first, second, scoring, LOCAL), score(second, first, scoring, LOCAL))
 
 
 def test_levenshtein_is_the_unit_cost_limit() raises:
@@ -416,7 +425,7 @@ def test_levenshtein_is_the_unit_cost_limit() raises:
     for _ in range(REPETITIONS):
         var first = random_sequence(3, 15, DNA_ALPHABET)
         var second = random_sequence(3, 15, DNA_ALPHABET)
-        assert_equal(-score[GLOBAL](first, second, unit), levenshtein_alignment(first, second).score)
+        assert_equal(-Int(score(first, second, unit, GLOBAL)), distance(first, second))
 
 
 def test_local_never_scores_below_global() raises:
@@ -426,9 +435,9 @@ def test_local_never_scores_below_global() raises:
     for _ in range(REPETITIONS):
         var first = random_sequence(5, 25, DNA_ALPHABET)
         var second = random_sequence(5, 25, DNA_ALPHABET)
-        var local = score[LOCAL](first, second, scoring)
+        var local = score(first, second, scoring, LOCAL)
         assert_true(local >= 0)
-        assert_true(local >= score[GLOBAL](first, second, scoring))
+        assert_true(local >= score(first, second, scoring, GLOBAL))
 
 
 def test_optimum_falls_as_gaps_get_harsher() raises:
@@ -439,7 +448,7 @@ def test_optimum_falls_as_gaps_get_harsher() raises:
         var second = random_sequence(5, 25, DNA_ALPHABET)
         var previous = Int32.MAX
         for opening in [-2, -5, -10, -20, -40]:
-            var current = score[GLOBAL](first, second, Scoring.uniform(5, -4, opening, -1))
+            var current = score(first, second, Scoring.uniform(5, -4, opening, -1), GLOBAL)
             assert_true(current <= previous, "a harsher gap raised the optimum")
             previous = current
 
@@ -455,9 +464,9 @@ def test_free_extension_ignores_gap_width() raises:
         var cut = len(bytes) // 2
         var head = String(unsafe_from_utf8=slice_bytes(List[UInt8](bytes), 0, cut))
         var tail = String(unsafe_from_utf8=slice_bytes(List[UInt8](bytes), cut, len(bytes)))
-        var reference = score[GLOBAL](first, head + "N" + tail, free_extension)
+        var reference = score(first, head + "N" + tail, free_extension, GLOBAL)
         for width in range(2, 6):
-            assert_equal(score[GLOBAL](first, head + "N" * width + tail, free_extension), reference)
+            assert_equal(score(first, head + "N" * width + tail, free_extension, GLOBAL), reference)
 
 
 def test_table_matches_the_uniform_costs_it_spells() raises:
@@ -471,8 +480,8 @@ def test_table_matches_the_uniform_costs_it_spells() raises:
     for _ in range(REPETITIONS):
         var first = random_sequence(10, 40, "ACGT")
         var second = random_sequence(10, 40, "ACGT")
-        assert_equal(score[GLOBAL](first, second, tabulated), score[GLOBAL](first, second, uniform))
-        assert_equal(score[LOCAL](first, second, tabulated), score[LOCAL](first, second, uniform))
+        assert_equal(score(first, second, tabulated, GLOBAL), score(first, second, uniform, GLOBAL))
+        assert_equal(score(first, second, tabulated, LOCAL), score(first, second, uniform, LOCAL))
 
 
 def test_batch_matches_single_pairs() raises:
@@ -484,15 +493,15 @@ def test_batch_matches_single_pairs() raises:
     for _ in range(24):
         firsts.append(random_sequence(5, 40, DNA_ALPHABET))
         seconds.append(random_sequence(5, 40, DNA_ALPHABET))
-    var batch_scores = scores[GLOBAL](firsts, seconds, scoring)
-    var batch_alignments = alignments[LOCAL](firsts, seconds, scoring)
+    var batch_scores = scores(firsts, seconds, scoring, GLOBAL)
+    var batch_alignments = alignments(firsts, seconds, scoring, LOCAL)
     for index in range(len(firsts)):
-        assert_equal(batch_scores[index], score[GLOBAL](firsts[index], seconds[index], scoring))
-        var single = align[LOCAL](firsts[index], seconds[index], scoring)
+        assert_equal(batch_scores[index], score(firsts[index], seconds[index], scoring, GLOBAL))
+        var single = align(firsts[index], seconds[index], scoring, LOCAL)
         assert_equal(batch_alignments[index].first_gapped, single.first_gapped)
         assert_equal(batch_alignments[index].second_gapped, single.second_gapped)
         assert_equal(batch_alignments[index].score, single.score)
-    assert_equal(len(scores[GLOBAL](List[String](), List[String](), scoring)), 0)
+    assert_equal(len(scores(List[String](), List[String](), scoring, GLOBAL)), 0)
 
 
 def test_bit_parallel_edit_distance_matches_the_full_matrix() raises:
@@ -508,7 +517,7 @@ def test_bit_parallel_edit_distance_matches_the_full_matrix() raises:
         for second_length in lengths:
             var first = random_sequence(first_length, first_length, DNA_ALPHABET)
             var second = random_sequence(second_length, second_length, DNA_ALPHABET)
-            assert_equal(edit_distance(first, second), Int(levenshtein_alignment(first, second).score))
+            assert_equal(distance(first, second), unit_distance(first, second))
     # Similar pairs too, where long runs of matches carry through whole words.
     for _ in range(REPETITIONS):
         var first = random_sequence(500, 900, DNA_ALPHABET)
@@ -517,9 +526,11 @@ def test_bit_parallel_edit_distance_matches_the_full_matrix() raises:
         for _ in range(10):
             bytes[Int(random_ui64(0, UInt64(len(bytes) - 1)))] = UInt8(ord("A"))
         second = String(unsafe_from_utf8=bytes)
-        assert_equal(edit_distance(first, second), Int(levenshtein_alignment(first, second).score))
+        assert_equal(distance(first, second), unit_distance(first, second))
     with assert_raises(contains="symbols"):
-        _ = edit_distance("ACGT", "ACGTNRYKM")
+        _ = bit_parallel_distance("ACGT", "ACGTNRYKM")
+    # Past what the sweep takes, the wavefront serves the pair at the same costs.
+    assert_equal(distance("ACGT", "ACGTNRYKM"), 5)
 
 
 def test_bit_parallel_symbols_past_acgt() raises:
@@ -551,9 +562,9 @@ def test_bit_parallel_symbols_past_acgt() raises:
                         continue
                     pairs = [(first, second)]
                 for pair in pairs:
-                    var expected = -Int(score[GLOBAL](pair[0], pair[1], unit))
-                    assert_equal(edit_distance(pair[0], pair[1]), expected)
-                    var aligned = edit_alignment(pair[0], pair[1])
+                    var expected = -Int(score(pair[0], pair[1], unit, GLOBAL))
+                    assert_equal(distance(pair[0], pair[1]), expected)
+                    var aligned = edit_rows(pair[0], pair[1])
                     assert_equal(Int(aligned.score), expected)
                     assert_equal(aligned.first_gapped.replace("-", ""), pair[0])
                     assert_equal(aligned.second_gapped.replace("-", ""), pair[1])
@@ -572,13 +583,13 @@ def test_bit_parallel_whole_matrix_is_exact() raises:
     for shape in shapes:
         var first = random_sequence(shape[0], shape[0], DNA_ALPHABET)
         var second = random_sequence(shape[1], shape[1], DNA_ALPHABET)
-        assert_equal(edit_distance(first, second), -Int(score[GLOBAL](first, second, unit)))
+        assert_equal(distance(first, second), -Int(score(first, second, unit, GLOBAL)))
     var first = random_sequence(9000, 9000, DNA_ALPHABET)
     var bytes = List[UInt8](first.as_bytes())
     for _ in range(900):
         bytes[Int(random_ui64(0, UInt64(len(bytes) - 1)))] = UInt8(ord("G"))
     var second = String(unsafe_from_utf8=bytes)
-    assert_equal(edit_distance(first, second), Int(levenshtein_alignment(first, second).score))
+    assert_equal(distance(first, second), unit_distance(first, second))
 
 
 def mutate(text: String, rate: Float64) -> String:
@@ -617,12 +628,12 @@ def test_bit_parallel_band_doubling_is_exact() raises:
             )
             var pairs: List[Tuple[String, String]] = [(first, second), (second, first), (first, cut), (cut, first)]
             for pair in pairs:
-                assert_equal(edit_distance(pair[0], pair[1]), Int(levenshtein_alignment(pair[0], pair[1]).score))
+                assert_equal(distance(pair[0], pair[1]), unit_distance(pair[0], pair[1]))
     var unrelated_first = random_sequence(3000, 3000, DNA_ALPHABET)
     var unrelated_second = random_sequence(2800, 2800, DNA_ALPHABET)
     assert_equal(
-        edit_distance(unrelated_first, unrelated_second),
-        Int(levenshtein_alignment(unrelated_first, unrelated_second).score),
+        distance(unrelated_first, unrelated_second),
+        unit_distance(unrelated_first, unrelated_second),
     )
 
 
@@ -646,8 +657,8 @@ def test_edit_alignment_is_an_optimal_alignment() raises:
                 pairs.append((first, cut))
                 pairs.append((cut, first))
             for pair in pairs:
-                var aligned = edit_alignment(pair[0], pair[1])
-                assert_equal(Int(aligned.score), Int(levenshtein_alignment(pair[0], pair[1]).score))
+                var aligned = edit_rows(pair[0], pair[1])
+                assert_equal(Int(aligned.score), unit_distance(pair[0], pair[1]))
                 assert_equal(aligned.first_gapped.replace("-", ""), pair[0])
                 assert_equal(aligned.second_gapped.replace("-", ""), pair[1])
                 assert_equal(
@@ -697,17 +708,21 @@ def test_edit_search_matches_the_dynamic_program() raises:
                             String(unsafe_from_utf8=slice_bytes(bytes, start, start + pattern_length)), rate
                         )
                     var expected = semi_global_distance(pattern, text, prefix)
-                    var hit = edit_search(pattern, text, prefix)
-                    assert_equal(hit.distance, expected)
+                    var mode = Mode.PREFIX if prefix else Mode.INFIX
+                    assert_equal(distance(text, pattern, Costs.edit(), mode), expected)
+                    var found = align(text, pattern, Costs.edit(), mode)
+                    assert_equal(found.cost, expected)
                     if prefix:
-                        assert_equal(hit.start, 0)
-                    var found = edit_search_alignment(pattern, text, prefix)
-                    var aligned = found[1].copy()
-                    var part = String(StringSlice(unsafe_from_utf8=text.as_bytes()[hit.start : hit.end]))
-                    assert_equal(Int(aligned.score), expected)
-                    assert_equal(aligned.first_gapped.replace("-", ""), part)
-                    assert_equal(aligned.second_gapped.replace("-", ""), pattern)
-                    assert_equal(rescore(aligned.first_gapped, aligned.second_gapped, unit), -expected)
+                        assert_equal(found.reference_start, 0)
+                    assert_equal(found.query_start, 0)
+                    assert_equal(found.query_end, pattern.byte_length())
+                    var rows = found.gapped(text, pattern)
+                    var part = String(
+                        StringSlice(unsafe_from_utf8=text.as_bytes()[found.reference_start : found.reference_end])
+                    )
+                    assert_equal(rows[0].replace("-", ""), part)
+                    assert_equal(rows[1].replace("-", ""), pattern)
+                    assert_equal(rescore(rows[0], rows[1], unit), -expected)
 
 
 def test_edit_batches_match_single_pairs() raises:
@@ -730,25 +745,29 @@ def test_edit_batches_match_single_pairs() raises:
             firsts.append(first)
             seconds.append(mutate(first, rate))
     for threads in [1, 8]:
-        var distances = edit_distances(firsts, seconds, threads)
-        var aligned = edit_alignments(firsts, seconds, threads)
-        assert_equal(len(distances), len(firsts))
+        var found = distances(firsts, seconds, threads=threads)
+        var aligned = alignments(firsts, seconds, threads=threads)
+        assert_equal(len(found), len(firsts))
         assert_equal(len(aligned), len(firsts))
         for index in range(len(firsts)):
-            var expected = edit_distance(firsts[index], seconds[index])
-            assert_equal(distances[index], expected)
-            assert_equal(Int(aligned[index].score), expected)
-            assert_equal(aligned[index].first_gapped.replace("-", ""), firsts[index])
-            assert_equal(aligned[index].second_gapped.replace("-", ""), seconds[index])
-    var bad_firsts: List[String] = ["ACGT", "ACGT", "ACGTNRYKM"]
+            var expected = distance(firsts[index], seconds[index])
+            assert_equal(found[index], expected)
+            assert_equal(aligned[index].cost, expected)
+            assert_equal(aligned[index].cigar, align(firsts[index], seconds[index]).cigar)
+            var rows = aligned[index].gapped(firsts[index], seconds[index])
+            assert_equal(rows[0].replace("-", ""), firsts[index])
+            assert_equal(rows[1].replace("-", ""), seconds[index])
+    # A band no alignment of one pair fits fails the batch, as a serial loop would; so do sides of
+    # different lengths.
+    var bad_firsts: List[String] = ["ACGT", "ACGT", "ACGTACGTACGT"]
     var bad_seconds: List[String] = ["ACGA", "ACG", "ACGT"]
-    with assert_raises():
-        _ = edit_distances(bad_firsts, bad_seconds, 8)
-    with assert_raises():
-        _ = edit_alignments(bad_firsts, bad_seconds, 8)
+    with assert_raises(contains="band"):
+        _ = distances(bad_firsts, bad_seconds, band=Band.around(2), threads=8)
+    with assert_raises(contains="band"):
+        _ = alignments(bad_firsts, bad_seconds, band=Band.around(2), threads=8)
     var short: List[String] = ["ACGT"]
     with assert_raises():
-        _ = edit_distances(bad_firsts, short)
+        _ = distances(bad_firsts, short)
 
 
 def test_seeded_bands_are_exact() raises:
@@ -773,9 +792,9 @@ def test_seeded_bands_are_exact() raises:
         )
         var pairs: List[Tuple[String, String]] = [(first, second), (second, first), (first, burst)]
         for pair in pairs:
-            var expected = -Int(score[GLOBAL](pair[0], pair[1], unit))
-            assert_equal(edit_distance(pair[0], pair[1]), expected)
-            var aligned = edit_alignment(pair[0], pair[1])
+            var expected = -Int(score(pair[0], pair[1], unit, GLOBAL))
+            assert_equal(distance(pair[0], pair[1]), expected)
+            var aligned = edit_rows(pair[0], pair[1])
             assert_equal(Int(aligned.score), expected)
             assert_equal(aligned.first_gapped.replace("-", ""), pair[0])
             assert_equal(aligned.second_gapped.replace("-", ""), pair[1])
@@ -829,12 +848,12 @@ def rows_from_cigar(first: String, second: String, cigar: String) raises -> Tupl
 
 
 def test_edit_cigar_spells_the_alignment() raises:
-    """`edit_cigar` spells the very alignment `edit_alignment` writes out, run by run.
+    """At unit costs the CIGAR spells an optimal alignment, run by run.
 
     Pairs settled by one diagonal front, by two, and by a band with seeds, with symbols past `ACGT`,
-    and with empty sides; the CIGAR rebuilds both gapped rows, every `=` joins equal bases and every
-    `X` differing ones, its substitutions and gaps number the distance, and with `M` for both the
-    same runs merge.
+    and with empty sides; the CIGAR rebuilds both sequences, every `=` joins equal bases and every `X`
+    differing ones, its substitutions and gaps number the distance, and with `M` for both the same
+    runs merge.
     """
     seed(29)
     var pairs: List[Tuple[String, String]] = [("", ""), ("", "ACG"), ("ACG", ""), ("ACGT", "ACGT")]
@@ -845,18 +864,18 @@ def test_edit_cigar_spells_the_alignment() raises:
                 var first = random_sequence(length, length, alphabet)
                 pairs.append((first, mutate(first, rate)))
     for pair in pairs:
-        var aligned = edit_alignment(pair[0], pair[1])
-        var spelled = edit_cigar(pair[0], pair[1])
-        assert_equal(spelled.distance, Int(aligned.score))
+        var spelled = align(pair[0], pair[1])
+        assert_equal(spelled.cost, distance(pair[0], pair[1]))
         var rows = rows_from_cigar(pair[0], pair[1], spelled.cigar)
-        assert_equal(rows[0], aligned.first_gapped)
-        assert_equal(rows[1], aligned.second_gapped)
-        assert_equal(rows[2], spelled.distance)
-        var plain = edit_cigar(pair[0], pair[1], extended=False)
-        assert_equal(plain.distance, spelled.distance)
+        assert_equal(rows[2], spelled.cost)
+        var gapped = spelled.gapped(pair[0], pair[1])
+        assert_equal(rows[0], gapped[0])
+        assert_equal(rows[1], gapped[1])
+        var plain = align(pair[0], pair[1], extended=False)
+        assert_equal(plain.cost, spelled.cost)
         var plain_rows = rows_from_cigar(pair[0], pair[1], plain.cigar)
-        assert_equal(plain_rows[0], aligned.first_gapped)
-        assert_equal(plain_rows[1], aligned.second_gapped)
+        assert_equal(plain_rows[0], rows[0])
+        assert_equal(plain_rows[1], rows[1])
         assert_false("=" in plain.cigar or "X" in plain.cigar)
 
 
@@ -901,9 +920,9 @@ def test_seeded_bands_fold_symbols_past_acgt() raises:
             (mutate(bases, rate), first),
         ]
         for pair in pairs:
-            var expected = -Int(score[GLOBAL](pair[0], pair[1], unit))
-            assert_equal(edit_distance(pair[0], pair[1]), expected)
-            var aligned = edit_alignment(pair[0], pair[1])
+            var expected = -Int(score(pair[0], pair[1], unit, GLOBAL))
+            assert_equal(distance(pair[0], pair[1]), expected)
+            var aligned = edit_rows(pair[0], pair[1])
             assert_equal(Int(aligned.score), expected)
             assert_equal(aligned.first_gapped.replace("-", ""), pair[0])
             assert_equal(aligned.second_gapped.replace("-", ""), pair[1])
@@ -919,11 +938,11 @@ def test_refuses_what_it_cannot_do() raises:
     """Every contradiction is refused rather than quietly answered."""
     var dna = Scoring.dna()
     with assert_raises(contains="outside the alphabet"):
-        _ = score[GLOBAL]("ACGT", "ACGN", dna)
+        _ = score("ACGT", "ACGN", dna, GLOBAL)
     with assert_raises(contains="outside the alphabet"):
-        _ = score[GLOBAL]("ACGT", "acgt", dna)
+        _ = score("ACGT", "acgt", dna, GLOBAL)
     with assert_raises(contains="cannot be served"):
-        _ = Scoring.uniform(5, -4, -1, -20)
+        _ = Scoring.uniform(5, -4, 1, -2)
     with assert_raises(contains="cannot be served"):
         _ = Scoring.uniform(5, -4, -1, 1)
     with assert_raises(contains="cannot be served"):
@@ -931,9 +950,23 @@ def test_refuses_what_it_cannot_do() raises:
     with assert_raises(contains="cannot be served"):
         _ = Scoring.tabulated("AC", List[Int8](length=9, fill=0))
     with assert_raises(contains="do not"):
-        _ = scores[GLOBAL](["AC", "CA"], ["AC"], dna)
-    with assert_raises(contains="ASCII"):
-        _ = levenshtein_alignment("naïve", "naive")
+        _ = scores(["AC", "CA"], ["AC"], dna, GLOBAL)
+    with assert_raises(contains="globally or locally"):
+        _ = score("ACGT", "ACG", dna, Mode.INFIX)
+    with assert_raises(contains="cannot be served"):
+        _ = Costs.affine(0, 6, 2)
+    with assert_raises(contains="cannot be served"):
+        _ = Costs.two_piece(4, 6, 2, 24, 0)
+    with assert_raises(contains="cannot be served"):
+        _ = Mode.extension(-1)
+    with assert_raises(contains="rejected"):
+        _ = Mode.ends_free(reference_start=-1)
+    with assert_raises(contains="Scoring"):
+        _ = distance("ACGT", "ACG", Costs.edit(), Mode.LOCAL)
+    with assert_raises(contains="score"):
+        _ = distance("ACGT", "ACG", Costs.edit(), Mode.extension(1))
+    with assert_raises(contains="cap"):
+        _ = align("ACGT", "ACG", Costs.edit(), Mode.extension(1), max_cost=3)
 
 
 def test_colouring_keeps_the_rows_it_paints() raises:
@@ -994,7 +1027,7 @@ def test_wavefront_matches_the_full_sweep() raises:
     seed(23)
     var regimes = List[Scoring]()
     regimes.append(Scoring.uniform(0, -4, -8, -2))
-    regimes.append(Scoring.uniform(5, -4, -20, -1))
+    regimes.append(Scoring.uniform(5, -4, -19, -1))
     regimes.append(Scoring.uniform(1, -3, -6, -1))
     var host = Placement.on_cpu(1)
     for scoring in regimes:
@@ -1007,13 +1040,13 @@ def test_wavefront_matches_the_full_sweep() raises:
                 second = random_sequence(1, 3, DNA_ALPHABET)
             if second.byte_length() == 0:
                 second = "A"
-            var expected = vector_score[GLOBAL](
+            var expected = vector_score[AlignmentMode.GLOBAL](
                 dna_codes(first), dna_codes(second), Int(scoring.substitutions[0]), Int(scoring.substitutions[1]), gaps
             )
-            var produced = align[GLOBAL](first, second, scoring, host)
+            var produced = align(first, second, scoring, GLOBAL, host)
             assert_equal(produced.score, expected)
-            assert_well_formed[GLOBAL](first, second, produced, scoring)
-            assert_equal(score[GLOBAL](first, second, scoring, host), expected)
+            assert_well_formed(GLOBAL, first, second, produced, scoring)
+            assert_equal(score(first, second, scoring, GLOBAL, host), expected)
 
 
 def test_wavefront_splits_a_pair_too_large_to_keep() raises:
@@ -1023,7 +1056,7 @@ def test_wavefront_splits_a_pair_too_large_to_keep() raises:
     seed(29)
     var regimes = List[Scoring]()
     regimes.append(Scoring.uniform(0, -4, -8, -2))
-    regimes.append(Scoring.uniform(5, -4, -20, -1))
+    regimes.append(Scoring.uniform(5, -4, -19, -1))
     for scoring in regimes:
         var penalties = wavefront_penalties(
             scoring.substitutions, scoring.alphabet_size(), Int(scoring.gaps.open), Int(scoring.gaps.extend)
@@ -1034,7 +1067,7 @@ def test_wavefront_splits_a_pair_too_large_to_keep() raises:
             var second = mutated(first, rate, [1, 5, 60][trial % 3])
             if second.byte_length() == 0:
                 second = "C"
-            var expected = vector_score[GLOBAL](
+            var expected = vector_score[AlignmentMode.GLOBAL](
                 dna_codes(first),
                 dna_codes(second),
                 Int(scoring.substitutions[0]),
@@ -1043,9 +1076,9 @@ def test_wavefront_splits_a_pair_too_large_to_keep() raises:
             )
             for limit in [0, 64, 4096]:
                 var traced = wavefront_align(dna_codes(first), dna_codes(second), penalties, DNA_ALPHABET, limit)
-                var produced = AlignmentResult(Int32(traced[0]), traced[1], traced[2])
+                var produced = GappedAlignment(Int32(traced[0]), traced[1], traced[2])
                 assert_equal(produced.score, expected)
-                assert_well_formed[GLOBAL](first, second, produced, scoring)
+                assert_well_formed(GLOBAL, first, second, produced, scoring)
 
 
 def test_affine_cigar_spells_an_optimal_alignment() raises:
@@ -1056,24 +1089,26 @@ def test_affine_cigar_spells_an_optimal_alignment() raises:
         var x = costs[0]
         var o = costs[1]
         var e = costs[2]
-        var scoring = Scoring.uniform(0, -x, -(o + e), -e)
+        var scoring = Scoring.uniform(0, -x, -o, -e)
         for trial in range(40):
             var first = random_sequence(0, 300, DNA_ALPHABET)
             var second = mutated(first, [0.0, 0.05, 0.2][trial % 3], [1, 4, 30][trial % 3])
             if trial % 13 == 0:
                 second = String()
-            var found = affine_cigar(first, second, x, o, e)
-            var expected = -Int(vector_score[GLOBAL](dna_codes(first), dna_codes(second), 0, -x, scoring.gaps))
+            var found = align(first, second, Costs.affine(x, o, e))
+            var expected = -Int(
+                vector_score[AlignmentMode.GLOBAL](dna_codes(first), dna_codes(second), 0, -x, scoring.gaps)
+            )
             assert_equal(found.cost, expected)
             var rows = rows_from_cigar(first, second, found.cigar)
             assert_equal(rescore(rows[0], rows[1], scoring), -expected)
     # Three substitutions, 12, undercut the two single gaps the edit distance takes, 16.
-    var known = affine_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2)
+    var known = align("ACGTACGTTTGCA", "ACGTCGTTTTGCA", Costs.affine(4, 6, 2))
     assert_equal(known.cost, 12)
     assert_equal(known.cigar, "4=3X6=")
-    assert_equal(affine_cigar("acgu", "acgu", 4, 6, 2).cigar, "4=")
+    assert_equal(align("acgu", "acgu", Costs.affine(4, 6, 2)).cigar, "4=")
     with assert_raises(contains="must cost"):
-        _ = affine_cigar("A", "C", 0, 6, 2)
+        _ = align("A", "C", Costs.affine(0, 6, 2))
 
     # A batch over threads gives every pair what the single call gives it.
     var firsts = List[String]()
@@ -1082,9 +1117,9 @@ def test_affine_cigar_spells_an_optimal_alignment() raises:
         var first = random_sequence(0, 2000, DNA_ALPHABET)
         firsts.append(first)
         seconds.append(mutated(first, [0.01, 0.1, 0.3][trial % 3], [1, 8, 50][trial % 3]))
-    var batch = affine_cigars(firsts, seconds, 4, 6, 2, threads=4)
+    var batch = alignments(firsts, seconds, Costs.affine(4, 6, 2), threads=4)
     for index in range(len(firsts)):
-        var single = affine_cigar(firsts[index], seconds[index], 4, 6, 2)
+        var single = align(firsts[index], seconds[index], Costs.affine(4, 6, 2))
         assert_equal(batch[index].cost, single.cost)
         assert_equal(batch[index].cigar, single.cigar)
 
@@ -1102,19 +1137,88 @@ def test_affine_distance_and_its_cap() raises:
             var second = mutated(first, [0.0, 0.03, 0.15, 0.4][trial % 4], [1, 5, 40][trial % 3])
             if trial % 9 == 0:
                 second = String()
-            var cost = affine_cigar(first, second, x, o, e).cost
-            assert_equal(affine_distance(first, second, x, o, e), cost)
-            assert_equal(affine_distance(first, second, x, o, e, max_cost=cost).value(), cost)
-            assert_equal(affine_distance(first, second, x, o, e, max_cost=cost + 1000).value(), cost)
-            var within = affine_cigar(first, second, x, o, e, max_cost=cost)
+            var cost = align(first, second, Costs.affine(x, o, e)).cost
+            assert_equal(distance(first, second, Costs.affine(x, o, e)), cost)
+            assert_equal(distance(first, second, Costs.affine(x, o, e), max_cost=cost).value(), cost)
+            assert_equal(distance(first, second, Costs.affine(x, o, e), max_cost=cost + 1000).value(), cost)
+            var within = align(first, second, Costs.affine(x, o, e), max_cost=cost)
             assert_true(Bool(within), "a cap at the optimum refused it")
             assert_equal(within.value().cost, cost)
-            assert_equal(within.value().cigar, affine_cigar(first, second, x, o, e).cigar)
+            assert_equal(within.value().cigar, align(first, second, Costs.affine(x, o, e)).cigar)
             if cost > 0:
-                assert_false(Bool(affine_distance(first, second, x, o, e, max_cost=cost - 1)), "under the cap")
-                assert_false(Bool(affine_cigar(first, second, x, o, e, max_cost=cost - 1)), "under the cap")
-    assert_false(Bool(affine_distance("", "", 4, 6, 2, max_cost=-1)), "a cap below zero")
-    assert_equal(affine_distance("", "", 4, 6, 2, max_cost=0).value(), 0)
+                assert_false(Bool(distance(first, second, Costs.affine(x, o, e), max_cost=cost - 1)), "under the cap")
+                assert_false(Bool(align(first, second, Costs.affine(x, o, e), max_cost=cost - 1)), "under the cap")
+    assert_false(Bool(distance("", "", Costs.affine(4, 6, 2), max_cost=-1)), "a cap below zero")
+    assert_equal(distance("", "", Costs.affine(4, 6, 2), max_cost=0).value(), 0)
+
+
+def ends_mode(ends: EndsFree) raises AlignmentError -> Mode:
+    """The mode freeing what `ends` frees."""
+    return Mode.ends_free(
+        reference_start=ends.first_begin,
+        reference_end=ends.first_end,
+        query_start=ends.second_begin,
+        query_end=ends.second_end,
+    )
+
+
+def whole(found: Alignment, first: String, second: String) -> Alignment:
+    """`found` with its free letters back in its CIGAR as `D` and `I` runs, spanning both sequences, so
+    it prices and walks as a global alignment's would."""
+    var leading = String()
+    if found.reference_start > 0:
+        leading = String(found.reference_start, "D")
+    elif found.query_start > 0:
+        leading = String(found.query_start, "I")
+    var trailing = String()
+    if found.reference_end < first.byte_length():
+        trailing = String(first.byte_length() - found.reference_end, "D")
+    elif found.query_end < second.byte_length():
+        trailing = String(second.byte_length() - found.query_end, "I")
+    return Alignment(
+        found.cost,
+        found.score,
+        merged_cigar(leading + found.cigar + trailing),
+        0,
+        first.byte_length(),
+        0,
+        second.byte_length(),
+    )
+
+
+def merged_cigar(cigar: String) -> String:
+    """A CIGAR with neighbouring runs of one letter joined."""
+    var letters = List[UInt8]()
+    var lengths = List[Int]()
+    var length = 0
+    for byte in cigar.as_bytes():
+        if byte >= UInt8(ord("0")) and byte <= UInt8(ord("9")):
+            length = length * 10 + Int(byte - UInt8(ord("0")))
+            continue
+        if len(letters) > 0 and letters[len(letters) - 1] == byte:
+            lengths[len(lengths) - 1] += length
+        else:
+            letters.append(byte)
+            lengths.append(length)
+        length = 0
+    var out = String()
+    for index in range(len(letters)):
+        out += String(lengths[index], chr(Int(letters[index])))
+    return out
+
+
+def matches_in(cigar: String) -> Int:
+    """The `=` letters of a CIGAR."""
+    var total = 0
+    var length = 0
+    for byte in cigar.as_bytes():
+        if byte >= UInt8(ord("0")) and byte <= UInt8(ord("9")):
+            length = length * 10 + Int(byte - UInt8(ord("0")))
+            continue
+        if byte == UInt8(ord("=")):
+            total += length
+        length = 0
+    return total
 
 
 def ends_free_optimum(
@@ -1230,17 +1334,19 @@ def test_affine_ends_free_matches_the_full_matrix() raises:
                 sizes[trial % 4], sizes[(trial // 4) % 4], sizes[(trial // 2) % 4], sizes[(trial // 3) % 4]
             )
             var expected = ends_free_optimum(first, second, x, o, e, ends)
-            assert_equal(affine_distance(first, second, x, o, e, ends_free=ends), expected)
-            var found = affine_cigar(first, second, x, o, e, ends_free=ends)
+            assert_equal(distance(first, second, Costs.affine(x, o, e), ends_mode(ends)), expected)
+            var found = whole(align(first, second, Costs.affine(x, o, e), ends_mode(ends)), first, second)
             assert_equal(found.cost, expected)
             var rows = rows_from_cigar(first, second, found.cigar)
             assert_equal(rows[0].replace("-", ""), first)
             assert_equal(rows[1].replace("-", ""), second)
             assert_equal(ends_free_price(found.cigar, x, o, e, ends), expected)
-            var capped = affine_cigar(first, second, x, o, e, max_cost=expected, ends_free=ends)
+            var capped = align(first, second, Costs.affine(x, o, e), ends_mode(ends), max_cost=expected)
             assert_equal(capped.value().cost, expected)
             if expected > 0:
-                assert_false(Bool(affine_distance(first, second, x, o, e, max_cost=expected - 1, ends_free=ends)))
+                assert_false(
+                    Bool(distance(first, second, Costs.affine(x, o, e), ends_mode(ends), max_cost=expected - 1))
+                )
             for limit in [0, 64]:
                 var moves = List[UInt8]()
                 var cost = solve[1](
@@ -1257,7 +1363,11 @@ def test_affine_ends_free_matches_the_full_matrix() raises:
                 )
                 assert_equal(cost * penalties.scale, expected)
                 assert_equal(len(moves) >= max(first.byte_length(), second.byte_length()), True)
-    var placed = affine_cigar("TTTTACGTACGTTTTT", "ACGTACGT", 4, 6, 2, ends_free=EndsFree(16, 16, 0, 0))
+    var placed = whole(
+        align("TTTTACGTACGTTTTT", "ACGTACGT", Costs.affine(4, 6, 2), ends_mode(EndsFree(16, 16, 0, 0))),
+        "TTTTACGTACGTTTTT",
+        "ACGTACGT",
+    )
     assert_equal(placed.cost, 0)
     assert_equal(placed.cigar, "4D8=4D")
 
@@ -1449,18 +1559,22 @@ def test_affine2p_matches_the_full_matrix() raises:
             if trial % 5 == 0:
                 first, second = second, first
             var expected = ends_free_optimum(first, second, x, o, e, ends, o2, e2)
-            assert_equal(affine2p_distance(first, second, x, o, e, o2, e2, ends_free=ends), expected)
-            var found = affine2p_cigar(first, second, x, o, e, o2, e2, ends_free=ends)
+            assert_equal(distance(first, second, Costs.two_piece(x, o, e, o2, e2), ends_mode(ends)), expected)
+            var found = whole(align(first, second, Costs.two_piece(x, o, e, o2, e2), ends_mode(ends)), first, second)
             assert_equal(found.cost, expected)
             var rows = rows_from_cigar(first, second, found.cigar)
             assert_equal(rows[0].replace("-", ""), first)
             assert_equal(rows[1].replace("-", ""), second)
             assert_equal(ends_free_price(found.cigar, x, o, e, ends, o2, e2), expected)
-            var capped = affine2p_cigar(first, second, x, o, e, o2, e2, max_cost=expected, ends_free=ends)
+            var capped = align(first, second, Costs.two_piece(x, o, e, o2, e2), ends_mode(ends), max_cost=expected)
             assert_equal(capped.value().cost, expected)
             if expected > 0:
                 assert_false(
-                    Bool(affine2p_distance(first, second, x, o, e, o2, e2, max_cost=expected - 1, ends_free=ends))
+                    Bool(
+                        distance(
+                            first, second, Costs.two_piece(x, o, e, o2, e2), ends_mode(ends), max_cost=expected - 1
+                        )
+                    )
                 )
             for limit in [0, 64]:
                 var moves = List[UInt8]()
@@ -1483,15 +1597,15 @@ def test_affine2p_matches_the_full_matrix() raises:
     # piece alone charges 74 and the second 79.
     var gapped = "GATTACAGCTTGCA" + "C" * 30 + "TGGACCATGAGTCA" + "TTGACCAGTCGATC"
     var plain = "GATTACAGCTTGCA" + "TGGACCATGAGTCA" + "G" + "TTGACCAGTCGATC"
-    var both = affine2p_cigar(gapped, plain, 4, 6, 2, 24, 1)
+    var both = align(gapped, plain, Costs.two_piece(4, 6, 2, 24, 1))
     assert_equal(both.cost, 62)
     assert_equal(both.cigar, "14=30D14=1I14=")
-    assert_equal(affine_distance(gapped, plain, 4, 6, 2), 74)
-    assert_equal(affine_distance(gapped, plain, 4, 24, 1), 79)
-    assert_equal(affine2p_distance("", "ACGT", 4, 6, 2, 24, 1), 14)
-    assert_equal(affine2p_distance("", "A" * 30, 4, 6, 2, 24, 1), 54)
+    assert_equal(distance(gapped, plain, Costs.affine(4, 6, 2)), 74)
+    assert_equal(distance(gapped, plain, Costs.affine(4, 24, 1)), 79)
+    assert_equal(distance("", "ACGT", Costs.two_piece(4, 6, 2, 24, 1)), 14)
+    assert_equal(distance("", "A" * 30, Costs.two_piece(4, 6, 2, 24, 1)), 54)
     with assert_raises():
-        _ = affine2p_distance("A", "C", 4, 6, 2, 24, 0)
+        _ = distance("A", "C", Costs.two_piece(4, 6, 2, 24, 0))
 
 
 def test_affine_band_matches_the_full_matrix() raises:
@@ -1528,30 +1642,42 @@ def test_affine_band_matches_the_full_matrix() raises:
             if expected >= 1 << 40:
                 with assert_raises(contains="band"):
                     if two:
-                        _ = affine2p_distance(first, second, x, o, e, o2, e2, ends_free=ends, band=band)
+                        _ = distance(first, second, Costs.two_piece(x, o, e, o2, e2), ends_mode(ends), band=band)
                     else:
-                        _ = affine_distance(first, second, x, o, e, ends_free=ends, band=band)
+                        _ = distance(first, second, Costs.affine(x, o, e), ends_mode(ends), band=band)
                 with assert_raises(contains="band"):
                     if two:
-                        _ = affine2p_cigar(first, second, x, o, e, o2, e2, ends_free=ends, band=band)
+                        _ = whole(
+                            align(first, second, Costs.two_piece(x, o, e, o2, e2), ends_mode(ends), band=band),
+                            first,
+                            second,
+                        )
                     else:
-                        _ = affine_cigar(first, second, x, o, e, ends_free=ends, band=band)
-                assert_false(Bool(affine_cigar(first, second, x, o, e, max_cost=1 << 30, ends_free=ends, band=band)))
+                        _ = whole(
+                            align(first, second, Costs.affine(x, o, e), ends_mode(ends), band=band), first, second
+                        )
+                assert_false(
+                    Bool(align(first, second, Costs.affine(x, o, e), ends_mode(ends), max_cost=1 << 30, band=band))
+                )
                 continue
-            var distance: Int
+            var least: Int
             var cigar: String
             var cost: Int
             if two:
-                distance = affine2p_distance(first, second, x, o, e, o2, e2, ends_free=ends, band=band)
-                var found = affine2p_cigar(first, second, x, o, e, o2, e2, ends_free=ends, band=band)
+                least = distance(first, second, Costs.two_piece(x, o, e, o2, e2), ends_mode(ends), band=band)
+                var found = whole(
+                    align(first, second, Costs.two_piece(x, o, e, o2, e2), ends_mode(ends), band=band), first, second
+                )
                 cost = found.cost
                 cigar = found.cigar
             else:
-                distance = affine_distance(first, second, x, o, e, ends_free=ends, band=band)
-                var found = affine_cigar(first, second, x, o, e, ends_free=ends, band=band)
+                least = distance(first, second, Costs.affine(x, o, e), ends_mode(ends), band=band)
+                var found = whole(
+                    align(first, second, Costs.affine(x, o, e), ends_mode(ends), band=band), first, second
+                )
                 cost = found.cost
                 cigar = found.cigar
-            assert_equal(distance, expected)
+            assert_equal(least, expected)
             assert_equal(cost, expected)
             var rows = rows_from_cigar(first, second, cigar)
             assert_equal(rows[0].replace("-", ""), first)
@@ -1560,12 +1686,18 @@ def test_affine_band_matches_the_full_matrix() raises:
             assert_true(stays_inside(cigar, ends, band), String("the CIGAR leaves the band: ", cigar))
             if not two:
                 assert_equal(
-                    affine_cigar(first, second, x, o, e, max_cost=expected, ends_free=ends, band=band).value().cost,
+                    align(first, second, Costs.affine(x, o, e), ends_mode(ends), max_cost=expected, band=band)
+                    .value()
+                    .cost,
                     expected,
                 )
                 if expected > 0:
                     assert_false(
-                        Bool(affine_distance(first, second, x, o, e, max_cost=expected - 1, ends_free=ends, band=band))
+                        Bool(
+                            distance(
+                                first, second, Costs.affine(x, o, e), ends_mode(ends), max_cost=expected - 1, band=band
+                            )
+                        )
                     )
             for limit in [0, 64]:
                 var moves = List[UInt8]()
@@ -1604,10 +1736,10 @@ def test_affine_band_matches_the_full_matrix() raises:
                 assert_true(stays_inside(split, ends, band), String("the split's CIGAR leaves the band: ", split))
     # A band of one diagonal admits only the diagonal itself: four substitutions, where a gap either
     # way would be cheaper.
-    assert_equal(affine_cigar("ACGTACGT", "ACGAACGT", 4, 6, 2, band=Band(0, 0)).cigar, "3=1X4=")
-    assert_equal(affine_cigar("AAAACCCC", "CCCCAAAA", 4, 6, 2, band=Band.around(0)).cost, 32)
+    assert_equal(align("ACGTACGT", "ACGAACGT", Costs.affine(4, 6, 2), band=Band(0, 0)).cigar, "3=1X4=")
+    assert_equal(align("AAAACCCC", "CCCCAAAA", Costs.affine(4, 6, 2), band=Band.around(0)).cost, 32)
     with assert_raises(contains="band"):
-        _ = affine_distance("ACGT", "AC", 4, 6, 2, band=Band.around(1))
+        _ = distance("ACGT", "AC", Costs.affine(4, 6, 2), band=Band.around(1))
 
 
 def single_search_cigar[
@@ -1696,25 +1828,46 @@ def test_ties_follow_a_fixed_rule() raises:
             var flipped = EndsFree(ends.first_end, ends.first_begin, ends.second_end, ends.second_begin)
             var back = band.mirrored(target)
             if two:
-                right = affine2p_cigar(first, second, x, o, e, o2, e2, ends_free=ends, band=band, ties=Ties.RIGHT).cigar
-                left = affine2p_cigar(first, second, x, o, e, o2, e2, ends_free=ends, band=band).cigar
-                mirrored = affine2p_cigar(
+                right = whole(
+                    align(first, second, Costs.two_piece(x, o, e, o2, e2), ends_mode(ends), band=band, ties=Ties.RIGHT),
+                    first,
+                    second,
+                ).cigar
+                left = whole(
+                    align(first, second, Costs.two_piece(x, o, e, o2, e2), ends_mode(ends), band=band), first, second
+                ).cigar
+                mirrored = whole(
+                    align(
+                        reversed_text(first),
+                        reversed_text(second),
+                        Costs.two_piece(x, o, e, o2, e2),
+                        ends_mode(flipped),
+                        band=back,
+                        ties=Ties.RIGHT,
+                    ),
                     reversed_text(first),
                     reversed_text(second),
-                    x,
-                    o,
-                    e,
-                    o2,
-                    e2,
-                    ends_free=flipped,
-                    band=back,
-                    ties=Ties.RIGHT,
                 ).cigar
             else:
-                right = affine_cigar(first, second, x, o, e, ends_free=ends, band=band, ties=Ties.RIGHT).cigar
-                left = affine_cigar(first, second, x, o, e, ends_free=ends, band=band).cigar
-                mirrored = affine_cigar(
-                    reversed_text(first), reversed_text(second), x, o, e, ends_free=flipped, band=back, ties=Ties.RIGHT
+                right = whole(
+                    align(first, second, Costs.affine(x, o, e), ends_mode(ends), band=band, ties=Ties.RIGHT),
+                    first,
+                    second,
+                ).cigar
+                left = whole(
+                    align(first, second, Costs.affine(x, o, e), ends_mode(ends), band=band), first, second
+                ).cigar
+                mirrored = whole(
+                    align(
+                        reversed_text(first),
+                        reversed_text(second),
+                        Costs.affine(x, o, e),
+                        ends_mode(flipped),
+                        band=back,
+                        ties=Ties.RIGHT,
+                    ),
+                    reversed_text(first),
+                    reversed_text(second),
                 ).cigar
             assert_equal(right, reference[1], String("the right rule, trial ", trial))
             assert_equal(left, reversed_cigar(mirrored), String("the left rule, trial ", trial))
@@ -1754,15 +1907,15 @@ def test_ties_follow_a_fixed_rule() raises:
                     )
                 assert_equal(cigar_of_moves(first, second, moves), reference[1])
     # A gap in a run of repeats sits at its left end by default, at its right end for WFA2-lib's rule.
-    assert_equal(affine_cigar("ACGTTTTACG", "ACGTTTACG", 4, 6, 2).cigar, "3=1D6=")
-    assert_equal(affine_cigar("ACGTTTTACG", "ACGTTTACG", 4, 6, 2, ties=Ties.RIGHT).cigar, "6=1D3=")
+    assert_equal(align("ACGTTTTACG", "ACGTTTACG", Costs.affine(4, 6, 2)).cigar, "3=1D6=")
+    assert_equal(align("ACGTTTTACG", "ACGTTTACG", Costs.affine(4, 6, 2), ties=Ties.RIGHT).cigar, "6=1D3=")
 
 
 def test_edit_ties_follow_a_fixed_rule() raises:
-    """`edit_cigar`'s alignment is the one `Ties` names whichever search finds the distance: near
-    pairs settled from one end, moderate ones from both, divergent ones by band doubling. `Ties.RIGHT`
-    is one front from the start traced back from the corner, WFA2-lib's, and `Ties.LEFT` the right
-    rule's CIGAR of both sequences reversed, read backwards; the gapped rows agree with the CIGAR."""
+    """At unit costs the alignment is the one `Ties` names whichever search finds the distance: near
+    pairs settled from one end, moderate ones from both, divergent ones by band doubling, and under a
+    cap the wavefront. `Ties.RIGHT` is one front from the start traced back from the corner, WFA2-lib's,
+    and `Ties.LEFT` the right rule's CIGAR of both sequences reversed, read backwards."""
     seed(61)
     for trial in range(90):
         var unit = random_sequence(1, 4, DNA_ALPHABET)
@@ -1776,24 +1929,23 @@ def test_edit_ties_follow_a_fixed_rule() raises:
         var profile = Profile(first, second)
         var fronts = DiagonalFronts()
         var reference = diagonal_transition(profile, 1 << 30, fronts)
-        var right = edit_cigar(first, second, ties=Ties.RIGHT)
+        var right = align(first, second, ties=Ties.RIGHT)
         if reference.distance >= 0:
             var moves = List[UInt8]()
             trace_diagonals(profile, fronts, reference.distance, moves)
             var path = EditPath(moves^, List[UInt8](), first.byte_length(), second.byte_length(), reference.distance)
-            assert_equal(right.distance, reference.distance)
+            assert_equal(right.cost, reference.distance)
             assert_equal(right.cigar, cigar_string(first, second, path, True), String("the right rule, trial ", trial))
-        var left = edit_cigar(first, second)
-        var mirrored = edit_cigar(reversed_text(first), reversed_text(second), ties=Ties.RIGHT)
-        assert_equal(left.distance, right.distance)
+        var left = align(first, second)
+        var mirrored = align(reversed_text(first), reversed_text(second), ties=Ties.RIGHT)
+        assert_equal(left.cost, right.cost)
         assert_equal(left.cigar, reversed_cigar(mirrored.cigar), String("the left rule, trial ", trial))
-        var rows = edit_alignment(first, second)
-        var spelled = rows_from_cigar(first, second, left.cigar)
-        assert_equal(rows.first_gapped, spelled[0])
-        assert_equal(rows.second_gapped, spelled[1])
+        var capped = align(first, second, max_cost=right.cost, ties=Ties.RIGHT)
+        assert_equal(capped.value().cigar, right.cigar, String("the wavefront's right rule, trial ", trial))
+        assert_equal(align(first, second, max_cost=left.cost).value().cigar, left.cigar)
     # A gap in a run of repeats: at its left end by default, at its right end under WFA2-lib's rule.
-    assert_equal(edit_cigar("ACGTTTTACG", "ACGTTTACG").cigar, "3=1D6=")
-    assert_equal(edit_cigar("ACGTTTTACG", "ACGTTTACG", ties=Ties.RIGHT).cigar, "6=1D3=")
+    assert_equal(align("ACGTTTTACG", "ACGTTTACG").cigar, "3=1D6=")
+    assert_equal(align("ACGTTTTACG", "ACGTTTACG", ties=Ties.RIGHT).cigar, "6=1D3=")
 
 
 def test_affine_extension_matches_the_full_matrix() raises:
@@ -1825,24 +1977,35 @@ def test_affine_extension_matches_the_full_matrix() raises:
                 var left = reversed_text(first) if at_end else first
                 var right = reversed_text(second) if at_end else second
                 var expected = extension_optimum(left, right, a, x, o, e, o2, e2, band)
-                var found = affine2p_extension(
-                    left if at_end else first, right if at_end else second, a, x, o, e, o2, e2, band=band
-                ) if two else affine_extension(
-                    left if at_end else first, right if at_end else second, a, x, o, e, band=band
+                var found = align(
+                    left if at_end else first,
+                    right if at_end else second,
+                    Costs.two_piece(x, o, e, o2, e2),
+                    Mode.extension(a),
+                    band=band,
+                ) if two else align(
+                    left if at_end else first,
+                    right if at_end else second,
+                    Costs.affine(x, o, e),
+                    Mode.extension(a),
+                    band=band,
                 )
                 # Asked from the end of the reversed texts, which the oracle reads from their start.
                 if at_end:
-                    found = affine2p_extension(
-                        first, second, a, x, o, e, o2, e2, anchor=Anchor.END, band=band
-                    ) if two else affine_extension(first, second, a, x, o, e, anchor=Anchor.END, band=band)
+                    found = align(
+                        first, second, Costs.two_piece(x, o, e, o2, e2), Mode.extension(a, Anchor.END), band=band
+                    ) if two else align(first, second, Costs.affine(x, o, e), Mode.extension(a, Anchor.END), band=band)
                 assert_equal(found.score, expected)
-                var covered_first = String(
-                    first[byte = first.byte_length() - found.first_length :]
-                ) if at_end else String(first[byte = : found.first_length])
-                var covered_second = String(
-                    second[byte = second.byte_length() - found.second_length :]
-                ) if at_end else String(second[byte = : found.second_length])
-                if found.first_length + found.second_length > 0:
+                var covered_first = String(first[byte = found.reference_start : found.reference_end])
+                var covered_second = String(second[byte = found.query_start : found.query_end])
+                if at_end:
+                    assert_equal(found.reference_end, first.byte_length())
+                    assert_equal(found.query_end, second.byte_length())
+                else:
+                    assert_equal(found.reference_start, 0)
+                    assert_equal(found.query_start, 0)
+                assert_equal(found.cost, a * matches_in(found.cigar) - found.score)
+                if covered_first.byte_length() + covered_second.byte_length() > 0:
                     var rows = rows_from_cigar(covered_first, covered_second, found.cigar)
                     assert_equal(rows[0].replace("-", ""), covered_first)
                     assert_equal(rows[1].replace("-", ""), covered_second)
@@ -1854,15 +2017,90 @@ def test_affine_extension_matches_the_full_matrix() raises:
                     stays_inside(walked, EndsFree(), band), String("the extension leaves the band: ", found.cigar)
                 )
     # A read that matches its reference for twelve letters, then not at all: the extension stops there.
-    var read = affine_extension("ACGTTGCAAGGC" + "TTTTTTTTTT", "ACGTTGCAAGGC" + "GAGAGAGAGA", 1, 4, 6, 2)
+    var read = align(
+        "ACGTTGCAAGGC" + "TTTTTTTTTT", "ACGTTGCAAGGC" + "GAGAGAGAGA", Costs.affine(4, 6, 2), Mode.extension(1)
+    )
     assert_equal(read.score, 12)
     assert_equal(read.cigar, "12=")
-    var back = affine_extension(
-        "TTTTTTTTTT" + "ACGTTGCAAGGC", "GAGAGAGAGA" + "ACGTTGCAAGGC", 1, 4, 6, 2, anchor=Anchor.END
+    var back = align(
+        "TTTTTTTTTT" + "ACGTTGCAAGGC",
+        "GAGAGAGAGA" + "ACGTTGCAAGGC",
+        Costs.affine(4, 6, 2),
+        Mode.extension(1, Anchor.END),
     )
     assert_equal(back.score, 12)
-    assert_equal(back.first_length, 12)
-    assert_equal(affine_extension("ACGT", "TGCA", 0, 4, 6, 2).cigar, "")
+    assert_equal(back.reference_end - back.reference_start, 12)
+    assert_equal(back.reference_start, 10)
+    assert_equal(align("ACGT", "TGCA", Costs.affine(4, 6, 2), Mode.extension(0)).cigar, "")
+
+
+def test_every_mode_matches_the_full_matrix() raises:
+    """Every cost model in every mode is the whole matrix's optimum: unit costs, linear, affine and
+    two-piece gaps, globally, a query inside, at the start or at the end of a reference, with random
+    free ends, and as an extension. The CIGAR spans what it claims and prices to the cost with its free
+    letters put back, and the capped search, the wavefront's whatever the costs, agrees with the
+    uncapped one, the bit-parallel sweep's at unit costs."""
+    seed(71)
+    var models: List[Costs] = [Costs.edit(), Costs.linear(2, 3), Costs.affine(4, 6, 2), Costs.two_piece(4, 6, 2, 24, 1)]
+    for costs in models:
+        var x = costs.mismatch
+        var o = costs.opening
+        var e = costs.extension
+        var o2 = costs.opening2
+        var e2 = costs.extension2
+        for trial in range(40):
+            var core = random_sequence(1, 150, DNA_ALPHABET)
+            var reference = random_sequence(0, 40, DNA_ALPHABET) + core + random_sequence(0, 40, DNA_ALPHABET)
+            var query = mutated(core, [0.0, 0.05, 0.2][trial % 3], [1, 4, 20][(trial // 3) % 3])
+            var sizes = [0, 2, 30, 1000]
+            var modes: List[Mode] = [
+                Mode.GLOBAL,
+                Mode.INFIX,
+                Mode.PREFIX,
+                Mode.SUFFIX,
+                Mode.ends_free(
+                    reference_start=sizes[trial % 4],
+                    reference_end=sizes[(trial // 4) % 4],
+                    query_start=sizes[(trial // 2) % 4],
+                    query_end=sizes[(trial // 3) % 4],
+                ),
+            ]
+            for mode in modes:
+                var ends = EndsFree(
+                    min(mode.reference_start, reference.byte_length()),
+                    min(mode.reference_end, reference.byte_length()),
+                    min(mode.query_start, query.byte_length()),
+                    min(mode.query_end, query.byte_length()),
+                )
+                var expected = ends_free_optimum(reference, query, x, o, e, ends, o2, e2)
+                assert_equal(distance(reference, query, costs, mode), expected)
+                var found = align(reference, query, costs, mode)
+                assert_equal(found.cost, expected)
+                assert_equal(found.score, -expected)
+                var spelled = rows_from_cigar(
+                    String(reference[byte = found.reference_start : found.reference_end]),
+                    String(query[byte = found.query_start : found.query_end]),
+                    found.cigar,
+                )
+                assert_equal(spelled[0].replace("-", "").byte_length(), found.reference_end - found.reference_start)
+                var full = whole(found, reference, query)
+                assert_equal(ends_free_price(full.cigar, x, o, e, ends, o2, e2), expected)
+                assert_equal(distance(reference, query, costs, mode, max_cost=expected).value(), expected)
+                var capped = align(reference, query, costs, mode, max_cost=expected).value().copy()
+                assert_equal(capped.cost, expected)
+                if expected > 0:
+                    assert_false(Bool(align(reference, query, costs, mode, max_cost=expected - 1)))
+            var best = extension_optimum(reference, query, 1, x, o, e, o2, e2, Band())
+            var extended = align(reference, query, costs, Mode.extension(1))
+            assert_equal(extended.score, best)
+            assert_equal(extension_price(extended.cigar, 1, x, o, e, o2, e2), best)
+            assert_equal(extended.cost, matches_in(extended.cigar) - best)
+    # Unit costs inside a reference: the sweep and the wavefront, under a cap, find the same span.
+    var placed = align("TTTTACGTACGTTTTT", "ACGTCGT", Costs.edit(), Mode.INFIX)
+    assert_equal(placed.cost, 1)
+    assert_equal(placed.cigar, "4=1D3=")
+    assert_equal(placed.reference_start, 4)
+    assert_equal(placed.reference_end, 12)
 
 
 # endregion Refusals
@@ -1891,27 +2129,27 @@ def test_device_matches_host() raises:
             firsts.append(random_sequence(5, 60, DNA_ALPHABET))
             seconds.append(random_sequence(5, 60, DNA_ALPHABET))
         comptime for mode in [GLOBAL, LOCAL]:
-            var on_device = alignments[mode](firsts, seconds, scoring, device)
-            var device_scores = scores[mode](firsts, seconds, scoring, device)
+            var on_device = alignments(firsts, seconds, scoring, mode, device)
+            var device_scores = scores(firsts, seconds, scoring, mode, device)
             for index in range(len(firsts)):
-                var expected = align[mode](firsts[index], seconds[index], scoring, host)
+                var expected = align(firsts[index], seconds[index], scoring, mode, host)
                 assert_equal(on_device[index].score, expected.score)
-                assert_well_formed[mode](firsts[index], seconds[index], on_device[index], scoring)
-                assert_well_formed[mode](firsts[index], seconds[index], expected, scoring)
+                assert_well_formed(mode, firsts[index], seconds[index], on_device[index], scoring)
+                assert_well_formed(mode, firsts[index], seconds[index], expected, scoring)
                 assert_equal(device_scores[index], expected.score)
 
     var scoring = expensive_gap()
     var tall = "A" * 70_000
     var short = "ACGT" * 4
     comptime for mode in [GLOBAL, LOCAL]:
-        assert_equal(score[mode](tall, short, scoring, device), score[mode](tall, short, scoring, host))
-        assert_equal(score[mode](tall, "", scoring, device), score[mode](tall, "", scoring, host))
-        assert_equal(score[mode]("", short, scoring, device), score[mode]("", short, scoring, host))
+        assert_equal(score(tall, short, scoring, mode, device), score(tall, short, scoring, mode, host))
+        assert_equal(score(tall, "", scoring, mode, device), score(tall, "", scoring, mode, host))
+        assert_equal(score("", short, scoring, mode, device), score("", short, scoring, mode, host))
         var long_first = random_sequence(2000, 2000, DNA_ALPHABET)
         var long_second = random_sequence(2000, 2000, DNA_ALPHABET)
-        var linear = align[mode](long_first, long_second, scoring, device, 0)
-        assert_well_formed[mode](long_first, long_second, linear, scoring)
-        assert_equal(linear.score, score[mode](long_first, long_second, scoring, host))
+        var linear = align(long_first, long_second, scoring, mode, device, 0)
+        assert_well_formed(mode, long_first, long_second, linear, scoring)
+        assert_equal(linear.score, score(long_first, long_second, scoring, mode, host))
 
 
 # endregion Device

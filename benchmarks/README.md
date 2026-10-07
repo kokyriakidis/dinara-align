@@ -24,7 +24,7 @@ Every rival is cloned at a pinned commit into `.cache/` and built there; nothing
 | Tool                                                                            | Commit    | License    | What it is run on                                                          |
 | :------------------------------------------------------------------------------ | :-------- | :--------- | :------------------------------------------------------------------------- |
 | dinara-align                                                                    | this tree | Apache-2.0 | the read batches and the affine pairs, on the CPU and on the GPU where one answers |
-| dinara-align (bit-parallel, …)                                                  | this tree | MPL-2.0    | the edit-distance workloads: `edit_distance` and `edit_alignment`, ported from A\*PA2-simple, on one thread and on all of them |
+| dinara-align (bit-parallel, …)                                                  | this tree | MPL-2.0    | the edit-distance workloads: `distance` and `align` at unit costs, ported from A\*PA2-simple, on one thread and on all of them |
 | [hyalite](https://github.com/Psy-Fer/hyalite)                                   | `0189bcb` | MIT        | the read batches and the affine pairs, global mode (`Mode::Nw`), one CPU thread with its NEON or AVX2 kernels |
 | [A\*PA, A\*PA2](https://github.com/RagnarGrootKoerkamp/astar-pairwise-aligner) | `bf2e14e` | MPL-2.0    | the edit-distance workloads, because it computes edit distance and nothing else |
 | [Edlib](https://github.com/Martinsos/edlib), [WFA2-lib](https://github.com/smarco/WFA2-lib) through [pa-bench](https://github.com/pairwise-alignment/pa-bench) | `af7a50d` | MIT | the edit-distance workloads: the other exact aligners A\*PA2's evaluation compares against, with its parameters |
@@ -119,7 +119,7 @@ A dash marks a task the tool does not offer, or a workload it is not run on.
 `pa_bench.py` runs the exact aligners of A\*PA2's evaluation, with its parameters, and WFA beside BiWFA, on its own datasets: Oxford Nanopore reads and SARS-CoV-2 genomes from pa-bench's release, and the uniform-error pairs pa-generate regenerates exactly from the evaluation's seed and lock.
 Each dataset is a fixed shuffled sample of about 2 Mbp and at least four pairs, the same for every tool; each tool aligns its pairs with traceback, once each, as pa-bench times them, within a budget of five seconds, and every cost is checked against every other tool's and against the costs A\*PA2's published results recorded.
 The rivals are pinned, so their results are kept and reused until `--fresh`; a second table gives each tool's peak resident memory.
-dinara-align also runs as a batch on all eight threads, `edit_alignments` over the whole sample, one pair a thread, whose column is the batch's wall-clock time over its pairs, a throughput where the others are each one pair's latency.
+dinara-align also runs as a batch on all eight threads, `alignments` over the whole sample, one pair a thread, whose column is the batch's wall-clock time over its pairs, a throughput where the others are each one pair's latency.
 
 Measured as above, dinara-align's columns the fastest of three warm runs; a count marks a tool its budget, or WFA's 8 GiB cap, stopped partway, and more than the budget one that finished no pair:
 
@@ -149,7 +149,7 @@ Four long reads are few: on all 50 ont-500k reads dinara-align took 6.5 s, and A
 ## Affine Costs
 
 `pa_bench.py --affine x,o,e` runs the same samples at gap-affine costs as WFA counts them, a mismatch `x` and a gap of `k` letters `o + k e`, against the exact aligners that take them: WFA2-lib keeping every front (WFA), its lowest-memory mode (BiWFA), and KSW2's banded SSE kernel with band doubling, on x86-64 alone.
-dinara-align answers with `affine_cigar`, a CIGAR as the others hand back, from a wavefront grown from both ends at once, which keeps five bytes a diagonal for its traceback and splits a pair whose fronts would pass 80 MB where an optimal path crosses, as BiWFA does.
+dinara-align answers with `align` under `Costs.affine`, a CIGAR as the others hand back, from a wavefront grown from both ends at once, which keeps five bytes a diagonal for its traceback and splits a pair whose fronts would pass 80 MB where an optimal path crosses, as BiWFA does.
 
 ```bash
 pixi run bench-astarpa2 --affine 4,6,2

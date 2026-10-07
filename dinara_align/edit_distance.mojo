@@ -5,20 +5,18 @@
 # commit bf2e14e), by Ragnar Groot Koerkamp and Pesho Ivanov, itself translated from Edlib.
 """
 The global unit-cost edit distance between two sequences, and an optimal alignment, by bit-parallel
-sweep: a substitution, an insertion and a deletion each cost one, the distance `levenshtein_alignment`
-returns.
+sweep: a substitution, an insertion and a deletion each cost one, `Costs.edit()`.
 
 A pair first goes through diagonal transition (see `diagonal`), which settles near-identical pairs and
 projects any other's distance. Band doubling (see `band`) then sweeps only the cells a path within a
 bound could cross, its rows pruned with the seed heuristic on long pairs (see `seeds`), with the
 bit-parallel kernels of `bit_parallel`; a pair too divergent for a band is swept whole. The alignment
-is traced back by a fixed rule for ties, whichever search found the distance (see `edit_path`).
+is traced back by a fixed rule for ties, whichever search found the distance (see `edit_cigar`).
 
-Each pair runs on one thread; `edit_distances` and `edit_alignments` in `api` spread a batch over
-threads a pair at a time.
+Each pair runs on one thread; `distances` and `alignments` in `api` spread a batch over threads a pair
+at a time.
 """
 
-from .alignment import AlignmentResult
 from .band import band_doubling, band_start
 from .bit_parallel import FIRST_SENTINEL, full_distance, LEFT, Profile, SECOND_SENTINEL, Trail, UP
 from .diagonal import (
@@ -29,14 +27,13 @@ from .diagonal import (
     STEP_TENTHS_ALIGNMENT,
     STEP_TENTHS_DISTANCE,
     grow_to,
-    trace_diagonals,
     two_ended,
     two_ended_distance,
     two_ended_setup,
 )
 from .errors import AlignmentError
-from .gap_affine import Ties
-from .traceback import cigar_string, diagonal_cigar, EditPath, gapped_rows, trace_back
+from .modes import Ties
+from .traceback import cigar_string, diagonal_cigar, EditPath, trace_back
 
 
 def edit_distance(first: String, second: String) raises AlignmentError -> Int:
@@ -77,21 +74,11 @@ struct EditCigar(Copyable, Movable, Writable):
     var cigar: String
 
 
-def edit_alignment(first: String, second: String, ties: Ties = Ties.LEFT) raises AlignmentError -> AlignmentResult:
-    """The global edit distance between two sequences, and an optimal alignment as two gapped rows;
-    symbols past `ACGT` as `edit_distance` takes them. The score is the distance, as
-    `levenshtein_alignment` reports it. Of several optimal alignments, the one `ties` names (see
-    `edit_cigar`)."""
-    var path = edit_path(first, second, ties)
-    return gapped_rows(first, second, path.prefix, path.middle_column, path.middle_row, path.suffix, path.distance)
-
-
 def edit_cigar(
     first: String, second: String, extended: Bool = True, ties: Ties = Ties.LEFT
 ) raises AlignmentError -> EditCigar:
     """The global edit distance between two sequences, and an optimal alignment as a CIGAR string, `=`
-    and `X` for matches and substitutions, or with `extended` false `M` for both (see `EditCigar`);
-    the same alignment `edit_alignment` writes out, without the gapped rows.
+    and `X` for matches and substitutions, or with `extended` false `M` for both (see `EditCigar`).
 
     Of several optimal alignments the CIGAR is always the one `ties` names, as for the gap-affine
     alignment (see `Ties`): by default every edit as far left as it goes, indels placed as minimap2
@@ -105,19 +92,6 @@ def edit_cigar(
         return EditCigar(settled.distance, diagonal_cigar(profile, settled.fronts, settled.distance, reverse, extended))
     var path = oriented(settled^, profile.columns, profile.rows, reverse)
     return EditCigar(path.distance, cigar_string(first, second, path, extended))
-
-
-def edit_path(first: String, second: String, ties: Ties = Ties.LEFT) raises AlignmentError -> EditPath:
-    """The global edit distance between two sequences and the optimal alignment `ties` names.
-
-    The right rule is WFA2-lib's backtrace from the corner (see `settle`); the left rule is that over
-    both sequences reversed, its moves read the other way."""
-    var reverse = ties == Ties.LEFT
-    var profile = Profile(first, second, reverse)
-    var settled = settle(profile)
-    if not settled.banded:
-        trace_diagonals(profile, settled.fronts, settled.distance, settled.moves)
-    return oriented(settled^, profile.columns, profile.rows, reverse)
 
 
 def oriented(var settled: Settled, columns: Int, rows: Int, reverse: Bool) -> EditPath:

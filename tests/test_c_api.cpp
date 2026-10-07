@@ -1,6 +1,6 @@
-// The C API through its C++ wrapper (see c/dinara.h): known distances and CIGARs, empty sequences, symbols
-// past ACGT, too many of them, long pairs whose CIGAR spells the distance, the affine cost, and four
-// threads at once.
+// The C API through its C++ wrapper (see c/dinara.h), and once through C's own structs: known distances
+// and CIGARs, empty sequences, symbols past ACGT, every mode, long pairs whose CIGAR spells the distance,
+// and four threads at once.
 //
 //     pixi run test-c
 #include <cstdio>
@@ -56,85 +56,122 @@ static std::string mutated(const std::string &text, double rate, std::mt19937 &r
 }
 
 int main() {
-    CHECK(dinara::edit_distance("ACGTACGTTTGCA", "ACGTCGTTTTGCA") == 2);
-    dinara::Alignment aligned = dinara::edit_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA");
-    CHECK(aligned.distance == 2 && aligned.cigar == "4=1D2=1I6=");
-    CHECK(dinara::edit_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", false).cigar == "4M1D2M1I6M");
+    using dinara::Costs;
+    using dinara::Mode;
+    CHECK(dinara::distance("ACGTACGTTTGCA", "ACGTCGTTTTGCA") == 2);
+    dinara::Alignment aligned = dinara::align("ACGTACGTTTGCA", "ACGTCGTTTTGCA");
+    CHECK(aligned.cost == 2 && aligned.score == -2 && aligned.cigar == "4=1D2=1I6=");
+    CHECK(aligned.reference_start == 0 && aligned.reference_end == 13 && aligned.query_end == 13);
+    CHECK(dinara::align("ACGTACGTTTGCA", "ACGTCGTTTTGCA", Costs::edit(), Mode::global(), {}, dinara::Ties::left, false)
+              .cigar == "4M1D2M1I6M");
 
-    CHECK(dinara::edit_cigar("", "ACG").cigar == "3I");
-    CHECK(dinara::edit_cigar("ACG", "").cigar == "3D");
-    dinara::Alignment empty = dinara::edit_cigar("", "");
-    CHECK(empty.distance == 0 && empty.cigar.empty());
+    CHECK(dinara::align("", "ACG").cigar == "3I");
+    CHECK(dinara::align("ACG", "").cigar == "3D");
+    dinara::Alignment empty = dinara::align("", "");
+    CHECK(empty.cost == 0 && empty.cigar.empty());
 
-    CHECK(dinara::edit_cigar("ACGTNNAC", "ACGTNNAC").cigar == "8=");
-    CHECK(dinara::edit_distance("ACGTN", "ACGTA") == 1);
+    CHECK(dinara::align("ACGTNNAC", "ACGTNNAC").cigar == "8=");
+    CHECK(dinara::distance("ACGTN", "ACGTA") == 1);
+    // More symbols than the bit-parallel sweep takes: the wavefront takes any byte.
+    CHECK(dinara::distance("NRYKMSW", "NRYKMSA") == 1);
     bool refused = false;
     try {
-        dinara::edit_distance("NRYKM", "A");
+        dinara::distance("\xfe", "A");
     } catch (const dinara::UnsupportedSymbols &) {
         refused = true;
     }
     CHECK(refused);
 
-    dinara::AffineAlignment affine = dinara::affine_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2);
-    CHECK(affine.cost == 12 && affine.cigar == "4=3X6=");
-    CHECK(dinara::affine_cigar("ACGT", "", 4, 6, 2).cigar == "4D");
-    CHECK(dinara::affine_cigar("ACGT", "", 4, 6, 2).cost == 14);
+    Costs affine = Costs::affine(4, 6, 2);
+    dinara::Alignment cost12 = dinara::align("ACGTACGTTTGCA", "ACGTCGTTTTGCA", affine);
+    CHECK(cost12.cost == 12 && cost12.cigar == "4=3X6=");
+    CHECK(dinara::align("ACGT", "", affine).cigar == "4D");
+    CHECK(dinara::align("ACGT", "", affine).cost == 14);
     bool invalid = false;
     try {
-        dinara::affine_cigar("A", "C", 0, 6, 2);
+        dinara::align("A", "C", Costs::affine(0, 6, 2));
     } catch (const std::invalid_argument &) {
         invalid = true;
     }
     CHECK(invalid);
-    CHECK(dinara::affine_distance("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2) == 12);
-    CHECK(dinara::affine_distance_within("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2, 12) == 12);
-    CHECK(!dinara::affine_distance_within("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2, 11));
-    CHECK(!dinara::affine_cigar_within("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2, 11));
-    CHECK(dinara::affine_cigar_within("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2, 12)->cigar == "4=3X6=");
-    // A read placed inside a reference, the reference's ends free.
-    dinara::EndsFree inside{16, 16, 0, 0};
-    dinara::AffineAlignment placed = dinara::affine_cigar("TTTTACGTACGTTTTT", "ACGTACGT", 4, 6, 2, true, inside);
-    CHECK(placed.cost == 0 && placed.cigar == "4D8=4D");
-    CHECK(dinara::affine_distance("TTTTACGTACGTTTTT", "ACGTACGT", 4, 6, 2) > 0);
-    CHECK(dinara::affine_distance("TTTTACGTACGTTTTT", "ACGTACGT", 4, 6, 2, inside) == 0);
+    CHECK(dinara::distance("ACGTACGTTTGCA", "ACGTCGTTTTGCA", affine) == 12);
+    CHECK(dinara::distance_within("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 12, affine) == 12);
+    CHECK(!dinara::distance_within("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 11, affine));
+    CHECK(!dinara::align_within("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 11, affine));
+    CHECK(dinara::align_within("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 12, affine)->cigar == "4=3X6=");
+    // A read placed inside a reference: its span, and the CIGAR over it alone.
+    dinara::Alignment placed = dinara::align("TTTTACGTACGTTTTT", "ACGTACGT", affine, Mode::infix());
+    CHECK(placed.cost == 0 && placed.cigar == "8=" && placed.reference_start == 4 && placed.reference_end == 12);
+    dinara::Alignment found = dinara::align("TTTTACGTACGTTTTT", "ACGTCGT", Costs::edit(), Mode::infix());
+    CHECK(found.cost == 1 && found.reference_start == 4);
+    CHECK(dinara::distance("TTTTACGTACGTTTTT", "ACGTACGT", affine) > 0);
+    CHECK(dinara::distance("TTTTACGTACGTTTTT", "ACGTACGT", affine, Mode::infix()) == 0);
+    CHECK(dinara::distance("ACGTACGTTTTT", "ACGTACGT", affine, Mode::prefix()) == 0);
+    CHECK(dinara::distance("TTTTACGTACGT", "ACGTACGT", affine, Mode::suffix()) == 0);
+    CHECK(dinara::distance("TTTTACGTACGT", "ACGTACGT", Costs::edit(), Mode::suffix()) == 0);
+    dinara::Alignment overlap = dinara::align("TTTTTACGTACGT", "ACGTACGTGGGGG", affine, Mode::ends_free(5, 0, 0, 5));
+    CHECK(overlap.cost == 0 && overlap.cigar == "8=" && overlap.reference_start == 5 && overlap.query_end == 8);
     // Two-piece gap costs: a long gap at the second piece, 24 + 30, and a short one at the first, 6 + 2.
     std::string gapped = "GATTACAGCTTGCA" + std::string(30, 'C') + "TGGACCATGAGTCATTGACCAGTCGATC";
     std::string plain = "GATTACAGCTTGCATGGACCATGAGTCAGTTGACCAGTCGATC";
-    dinara::SecondPiece cheap_long{24, 1};
-    dinara::AffineAlignment two = dinara::affine2p_cigar(gapped, plain, 4, 6, 2, cheap_long);
+    Costs two_piece = Costs::two_piece(4, 6, 2, 24, 1);
+    dinara::Alignment two = dinara::align(gapped, plain, two_piece);
     CHECK(two.cost == 62 && two.cigar == "14=30D14=1I14=");
-    CHECK(dinara::affine_distance(gapped, plain, 4, 6, 2) == 74);
-    CHECK(dinara::affine2p_distance(gapped, plain, 4, 6, 2, cheap_long) == 62);
-    CHECK(dinara::affine2p_distance_within(gapped, plain, 4, 6, 2, cheap_long, 62) == 62);
-    CHECK(!dinara::affine2p_distance_within(gapped, plain, 4, 6, 2, cheap_long, 61));
-    CHECK(!dinara::affine2p_cigar_within(gapped, plain, 4, 6, 2, cheap_long, 61));
-    CHECK(dinara::affine2p_cigar("TTTTACGTACGTTTTT", "ACGTACGT", 4, 6, 2, cheap_long, true, inside).cost == 0);
+    CHECK(dinara::distance(gapped, plain, affine) == 74);
+    CHECK(dinara::distance(gapped, plain, two_piece) == 62);
+    CHECK(dinara::distance_within(gapped, plain, 62, two_piece) == 62);
+    CHECK(!dinara::distance_within(gapped, plain, 61, two_piece));
+    CHECK(!dinara::align_within(gapped, plain, 61, two_piece));
+    CHECK(dinara::align("TTTTACGTACGTTTTT", "ACGTACGT", two_piece, Mode::infix()).cost == 0);
     // A band of the one diagonal: substitutions only, where a gap either way would be cheaper.
-    CHECK(dinara::affine_cigar("ACGTACGT", "ACGAACGT", 4, 6, 2, true, {}, dinara::Band{0, 0}).cigar == "3=1X4=");
-    CHECK(dinara::affine_distance("AAAACCCC", "CCCCAAAA", 4, 6, 2, {}, dinara::Band::around(0)) == 32);
-    CHECK(dinara::affine_distance("AAAACCCC", "CCCCAAAA", 4, 6, 2) < 32);
-    CHECK(!dinara::affine_distance_within("ACGT", "AC", 4, 6, 2, 100, {}, dinara::Band::around(1)));
+    CHECK(dinara::align("ACGTACGT", "ACGAACGT", affine, Mode::global(), dinara::Band{0, 0}).cigar == "3=1X4=");
+    CHECK(dinara::distance("AAAACCCC", "CCCCAAAA", affine, Mode::global(), dinara::Band::around(0)) == 32);
+    CHECK(dinara::distance("AAAACCCC", "CCCCAAAA", affine) < 32);
+    CHECK(dinara::distance("AAAACCCC", "CCCCAAAA", Costs::edit(), Mode::global(), dinara::Band::around(0)) == 8);
+    CHECK(!dinara::distance_within("ACGT", "AC", 100, affine, Mode::global(), dinara::Band::around(1)));
     bool outside = false;
     try {
-        dinara::affine_distance("ACGT", "AC", 4, 6, 2, {}, dinara::Band::around(1));
+        dinara::distance("ACGT", "AC", affine, Mode::global(), dinara::Band::around(1));
     } catch (const dinara::OutsideBand &) {
         outside = true;
     }
     CHECK(outside);
     // A gap in a run of repeats: at its left end by default, as minimap2 places it, at its right end
     // under WFA2-lib's rule.
-    CHECK(dinara::affine_cigar("ACGTTTTACG", "ACGTTTACG", 4, 6, 2).cigar == "3=1D6=");
-    CHECK(dinara::edit_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", true, dinara::Ties::right).cigar == "4=1D5=1I3=");
-    CHECK(dinara::affine_cigar("ACGTTTTACG", "ACGTTTACG", 4, 6, 2, true, {}, {}, dinara::Ties::right).cigar ==
+    CHECK(dinara::align("ACGTTTTACG", "ACGTTTACG", affine).cigar == "3=1D6=");
+    CHECK(dinara::align("ACGTACGTTTGCA", "ACGTCGTTTTGCA", Costs::edit(), Mode::global(), {}, dinara::Ties::right)
+              .cigar == "4=1D5=1I3=");
+    CHECK(dinara::align("ACGTTTTACG", "ACGTTTACG", affine, Mode::global(), {}, dinara::Ties::right).cigar ==
           "6=1D3=");
     // An extension stops where the read stops matching, from either end.
-    dinara::Extension right = dinara::affine_extension("ACGTTGCAAGGCTTTTTTTTTT", "ACGTTGCAAGGCGAGAGAGAGA", 1, 4, 6, 2);
-    CHECK(right.score == 12 && right.cigar == "12=" && right.first_length == 12 && right.second_length == 12);
-    dinara::Extension left =
-        dinara::affine_extension("TTTTTTTTTTACGTTGCAAGGC", "GAGAGAGAGAACGTTGCAAGGC", 1, 4, 6, 2, dinara::Anchor::end);
-    CHECK(left.score == 12 && left.cigar == "12=");
-    CHECK(dinara::affine2p_extension("ACGTTGCAAGGCTTTT", "ACGTTGCAAGGCGAGA", 1, 4, 6, 2, cheap_long).score == 12);
+    dinara::Alignment right = dinara::align("ACGTTGCAAGGCTTTTTTTTTT", "ACGTTGCAAGGCGAGAGAGAGA", affine, Mode::extension(1));
+    CHECK(right.score == 12 && right.cost == 0 && right.cigar == "12=" && right.reference_end == 12 &&
+          right.query_end == 12);
+    dinara::Alignment left = dinara::align("TTTTTTTTTTACGTTGCAAGGC", "GAGAGAGAGAACGTTGCAAGGC", affine,
+                                           Mode::extension(1, dinara::Anchor::end));
+    CHECK(left.score == 12 && left.cigar == "12=" && left.reference_start == 10 && left.query_start == 10);
+    CHECK(dinara::align("ACGTTGCAAGGCTTTT", "ACGTTGCAAGGCGAGA", two_piece, Mode::extension(1)).score == 12);
+    bool no_cost = false;
+    try {
+        dinara::distance("ACGT", "ACGT", affine, Mode::extension(1));
+    } catch (const std::invalid_argument &) {
+        no_cost = true;
+    }
+    CHECK(no_cost);
+
+    // The C structs themselves, null for every default.
+    dinara_alignment raw{};
+    CHECK(dinara_align("ACGTACGTTTGCA", 13, "ACGTCGTTTTGCA", 13, nullptr, nullptr, nullptr, &raw) == 0);
+    CHECK(raw.cost == 2 && std::string(raw.cigar) == "4=1D2=1I6=" && raw.cigar_length == 10);
+    dinara_free(raw.cigar);
+    dinara_costs c_affine{4, 6, 2, -1, 0};
+    dinara_mode c_infix{DINARA_ENDS_FREE, DINARA_ALL, DINARA_ALL, 0, 0, 0, 0};
+    CHECK(dinara_distance("TTTTACGTACGTTTTT", 16, "ACGTACGT", 8, &c_affine, &c_infix, nullptr) == 0);
+    dinara_options capped{INT64_MIN, INT64_MAX, 11, 1, 0};
+    CHECK(dinara_distance("ACGTACGTTTGCA", 13, "ACGTCGTTTTGCA", 13, &c_affine, nullptr, &capped) == DINARA_ABOVE_MAX);
+    CHECK(dinara_align("ACGTACGTTTGCA", 13, "ACGTCGTTTTGCA", 13, &c_affine, nullptr, &capped, &raw) == DINARA_ABOVE_MAX);
+    dinara_costs c_free{0, 6, 2, -1, 0};
+    CHECK(dinara_distance("A", 1, "C", 1, &c_free, nullptr, nullptr) == DINARA_INVALID_COSTS);
 
     std::mt19937 random(7);
     std::uniform_int_distribution<int> base(0, 3);
@@ -146,14 +183,15 @@ int main() {
     }
     std::vector<int64_t> distances;
     for (auto &pair : pairs) {
-        dinara::Alignment long_aligned = dinara::edit_cigar(pair.first, pair.second);
-        CHECK(long_aligned.distance == dinara::edit_distance(pair.first, pair.second));
-        CHECK(edits(long_aligned.cigar, pair.first.size(), pair.second.size()) == long_aligned.distance);
-        distances.push_back(long_aligned.distance);
-        // At unit costs the affine cost is the edit distance plus an opening of zero.
-        CHECK(dinara::affine_cigar(pair.first, pair.second, 1, 0, 1).cost == long_aligned.distance);
-        CHECK(dinara::affine_distance(pair.first, pair.second, 1, 0, 1) == long_aligned.distance);
-        CHECK(!dinara::affine_distance_within(pair.first, pair.second, 1, 0, 1, long_aligned.distance - 1));
+        dinara::Alignment long_aligned = dinara::align(pair.first, pair.second);
+        CHECK(long_aligned.cost == dinara::distance(pair.first, pair.second));
+        CHECK(edits(long_aligned.cigar, pair.first.size(), pair.second.size()) == long_aligned.cost);
+        distances.push_back(long_aligned.cost);
+        // Unit costs under a cap or a band take the wavefront, and the same CIGAR.
+        CHECK(dinara::align_within(pair.first, pair.second, long_aligned.cost, Costs::edit())->cigar ==
+              long_aligned.cigar);
+        CHECK(dinara::distance(pair.first, pair.second, Costs::linear(2, 2)) == 2 * long_aligned.cost);
+        CHECK(!dinara::distance_within(pair.first, pair.second, long_aligned.cost - 1));
     }
 
     // No state between calls: four threads aligning the same pairs agree with the single thread.
@@ -161,7 +199,7 @@ int main() {
     std::vector<std::thread> threads;
     for (int worker = 0; worker < 4; ++worker)
         threads.emplace_back([&, worker] {
-            for (auto &pair : pairs) seen[worker].push_back(dinara::edit_cigar(pair.first, pair.second).distance);
+            for (auto &pair : pairs) seen[worker].push_back(dinara::align(pair.first, pair.second).cost);
         });
     for (auto &thread : threads) thread.join();
     for (auto &worker : seen) CHECK(worker == distances);

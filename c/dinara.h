@@ -1,20 +1,23 @@
 /*
- * dinara-align from C and C++: the unit-cost edit distance between two sequences, and the least
- * gap-affine cost as WFA counts it, global, ends-free or banded, each with an optimal alignment as a
- * CIGAR, and the best extension from one end. Every result is exact. Build the library with `pixi run build-c [target-cpu]`, which leaves it in
- * build/c beside the Mojo runtime libraries it loads and this header; link with `-Lbuild/c -ldinara`
- * and put build/c on the program's library search path (an rpath, say). build/c also holds the
- * libstdc++ the runtime loads, which a C++ program then shares: it is GCC 15's, as new as any compiler
- * the program is likely built with. Built for an explicit `target-cpu`, the library runs only on CPUs
- * with that instruction set; the default is the platform's oldest (x86-64, apple-m1).
+ * dinara-align from C and C++: the least cost of aligning a query to a reference, and an optimal
+ * alignment as a CIGAR, under unit costs (the edit distance), gap-affine or two-piece gap-affine costs,
+ * globally, with free ends (a read inside a reference, at its start or end, an overlap), as an
+ * extension from one end, within a band or under a cost cap. Every result is exact. Build the library
+ * with `pixi run build-c [target-cpu]`, which leaves it in build/c beside the Mojo runtime libraries it
+ * loads and this header; link with `-Lbuild/c -ldinara` and put build/c on the program's library search
+ * path (an rpath, say). build/c also holds the libstdc++ the runtime loads, which a C++ program then
+ * shares: it is GCC 15's, as new as any compiler the program is likely built with. Built for an
+ * explicit `target-cpu`, the library runs only on CPUs with that instruction set; the default is the
+ * platform's oldest (x86-64, apple-m1).
  *
- * Sequences are bytes. For the edit distance: `A`, `C`, `G` and `T`, and up to four other symbols
- * between the two, each matching only itself. For the affine cost, every byte matches only itself,
- * save 0xFE and 0xFF, which UTF-8 never holds. The functions keep no state between calls, so they may run on many threads at
- * once. Failures come back as a negative result, one of the `DINARA_` codes below.
+ * Sequences are bytes, each matching only itself, save 0xFE and 0xFF, which UTF-8 never holds. The
+ * functions keep no state between calls, so they may run on many threads at once. Failures come back
+ * as a negative result, one of the `DINARA_` codes below.
  *
- * The CIGAR takes the first sequence as the reference: `=` a match, `X` a substitution (or `M` for
- * either), `D` a base of the first sequence alone, `I` a base of the second alone.
+ * The CIGAR reads the first sequence as the reference: `=` a match, `X` a substitution (or `M` for
+ * either), `D` a reference letter alone, `I` a query letter alone. It spans the aligned parts alone,
+ * `reference[reference_start:reference_end]` against `query[query_start:query_end]`; letters a mode
+ * leaves unaligned for nothing lie outside them.
  */
 #ifndef DINARA_H
 #define DINARA_H
@@ -25,97 +28,97 @@
 extern "C" {
 #endif
 
-/* More than four symbols past ACGT between the two sequences, or a 0xFE or 0xFF byte for the affine cost. */
+/* A 0xFE or 0xFF byte in either sequence. */
 #define DINARA_UNSUPPORTED_SYMBOLS (-1)
-/* Affine costs no alignment can be searched by: a mismatch or extension of zero, or a negative cost. */
+/* The CIGAR's memory could not be allocated. */
+#define DINARA_OUT_OF_MEMORY (-2)
+/* Costs no alignment can be searched by: a mismatch or extension of zero, or a negative cost. */
 #define DINARA_INVALID_COSTS (-3)
-/* Every alignment costs more than the `max_cost` asked for. */
+/* Every alignment costs more than the `max_cost` asked for, or under a cap none fits the band. */
 #define DINARA_ABOVE_MAX (-4)
 /* No alignment stays inside the band of diagonals asked for. */
 #define DINARA_OUTSIDE_BAND (-5)
-
-/* The global edit distance, or a DINARA_ code. */
-int64_t dinara_edit_distance(const char *first, int64_t first_length, const char *second, int64_t second_length);
-
-/*
- * The global edit distance, or a DINARA_ code, and an optimal alignment's CIGAR: `=` and `X` when
- * `extended` is nonzero, else `M`. Of equally good alignments, the one with indels placed left, as
- * minimap2 places them, or with `right_ties` nonzero right, WFA2-lib's edit CIGAR byte for byte. On
- * success `*cigar` holds the CIGAR, NUL-terminated and `*cigar_length` bytes long, which the caller
- * frees with `dinara_free`.
- */
-int64_t dinara_edit_cigar(const char *first, int64_t first_length, const char *second, int64_t second_length,
-                          int extended, int right_ties, char **cigar, int64_t *cigar_length);
+/* A mode these costs cannot serve: an extension's cost asked by `dinara_distance`, or capped. */
+#define DINARA_INVALID_MODE (-6)
 
 /*
- * The least global cost under gap-affine costs as WFA counts them, a substitution `mismatch` and a
- * gap of `k` letters `opening + k * extension`, with no alignment, or a DINARA_ code: DINARA_ABOVE_MAX
- * when the cost passes a `max_cost` of zero or more, which the search proves after about half of it.
- * A negative `max_cost` caps nothing. The four `free` counts are the letters at each end of each
- * sequence that may go unaligned for nothing, as WFA2-lib's ends-free alignment counts them: all zero
- * for a global alignment, the first sequence's two at its length to place the second anywhere in it.
- * Every move stays on the diagonals `band_low ..= band_high`, a diagonal being the letters of the first
- * sequence aligned or skipped less those of the second: the exact optimum over the alignments inside,
- * DINARA_OUTSIDE_BAND when none is (DINARA_ABOVE_MAX under a cap); INT64_MIN and INT64_MAX for no band.
- * KSW2's band of width `w` is `-w ..= w`. By a wavefront from both ends keeping a few fronts.
+ * What each edit costs: a substitution `mismatch`, a gap of `k` letters `opening + k * extension`, or
+ * with `opening2` zero or more the less of that and `opening2 + k * extension2`. A null pointer is unit
+ * costs, the edit distance, {1, 0, 1, -1, 0}.
  */
-int64_t dinara_affine_distance(const char *first, int64_t first_length, const char *second, int64_t second_length,
-                               int64_t mismatch, int64_t opening, int64_t extension, int64_t max_cost,
-                               int64_t first_begin_free, int64_t first_end_free, int64_t second_begin_free,
-                               int64_t second_end_free, int64_t band_low, int64_t band_high);
+typedef struct {
+    int64_t mismatch;
+    int64_t opening;
+    int64_t extension;
+    int64_t opening2;
+    int64_t extension2;
+} dinara_costs;
+
+#define DINARA_ENDS_FREE 0
+#define DINARA_EXTENSION 1
+/* As many free letters as any sequence has. */
+#define DINARA_ALL INT64_MAX
 
 /*
- * `dinara_affine_distance`'s cost, or a DINARA_ code, and an optimal alignment's CIGAR, returned as
- * `dinara_edit_cigar` returns it; no CIGAR for DINARA_ABOVE_MAX; free letters as `D` and `I` runs. Of
- * equally good alignments it spells the one a fixed rule picks: every edit as far left as it goes, as
- * minimap2, KSW2 and abPOA place indels, or with `right_ties` nonzero as far right, WFA2-lib's CIGAR
- * byte for byte. Only a pair too large to keep is split, and follows the rule within its pieces.
- * Its time grows with the square of the cost, and its memory stays bounded.
+ * Which alignments count. DINARA_ENDS_FREE: up to so many letters at each end of each sequence left
+ * unaligned for nothing; all zero is a global alignment, the reference's two at DINARA_ALL a query
+ * placed anywhere in it (infix), its end alone a prefix. DINARA_EXTENSION: fixed at both sequences'
+ * starts, or with `anchor` nonzero their ends, and free to stop anywhere, a match earning
+ * `match_score`: a seed's extension, as KSW2's without Z-drop. A null pointer is a global alignment.
  */
-int64_t dinara_affine_cigar(const char *first, int64_t first_length, const char *second, int64_t second_length,
-                            int64_t mismatch, int64_t opening, int64_t extension, int64_t max_cost,
-                            int64_t first_begin_free, int64_t first_end_free, int64_t second_begin_free,
-                            int64_t second_end_free, int64_t band_low, int64_t band_high, int extended,
-                            int right_ties, char **cigar, int64_t *cigar_length);
+typedef struct {
+    int64_t kind;
+    int64_t reference_start;
+    int64_t reference_end;
+    int64_t query_start;
+    int64_t query_end;
+    int64_t match_score;
+    int64_t anchor;
+} dinara_mode;
 
 /*
- * `dinara_affine_distance` under two-piece gap-affine costs, WFA's gap-affine-2p: a gap of `k`
- * letters costs the less of `opening1 + k * extension1` and `opening2 + k * extension2`.
+ * Every move stays on the diagonals `band_low ..= band_high`, a diagonal being the reference's letters
+ * aligned or skipped less the query's, from the alignment's origin: the exact optimum over the
+ * alignments inside; INT64_MIN and INT64_MAX for no band, KSW2's band of width `w` `-w ..= w`. A
+ * `max_cost` of zero or more caps the cost, which the search proves past after about half of it.
+ * `extended` nonzero writes `=` and `X`, else `M`; of equally good alignments the CIGAR places indels
+ * left, as minimap2 does, or with `right_ties` nonzero right, WFA2-lib's CIGAR byte for byte. A null
+ * pointer is no band, no cap, `=` and `X`, indels left.
  */
-int64_t dinara_affine2p_distance(const char *first, int64_t first_length, const char *second, int64_t second_length,
-                                 int64_t mismatch, int64_t opening1, int64_t extension1, int64_t opening2,
-                                 int64_t extension2, int64_t max_cost, int64_t first_begin_free,
-                                 int64_t first_end_free, int64_t second_begin_free, int64_t second_end_free,
-                                 int64_t band_low, int64_t band_high);
-
-/* `dinara_affine_cigar` under two-piece gap-affine costs, as `dinara_affine2p_distance` counts them. */
-int64_t dinara_affine2p_cigar(const char *first, int64_t first_length, const char *second, int64_t second_length,
-                              int64_t mismatch, int64_t opening1, int64_t extension1, int64_t opening2,
-                              int64_t extension2, int64_t max_cost, int64_t first_begin_free, int64_t first_end_free,
-                              int64_t second_begin_free, int64_t second_end_free, int64_t band_low,
-                              int64_t band_high, int extended, int right_ties, char **cigar, int64_t *cigar_length);
+typedef struct {
+    int64_t band_low;
+    int64_t band_high;
+    int64_t max_cost;
+    int64_t extended;
+    int64_t right_ties;
+} dinara_options;
 
 /*
- * The best score of an alignment fixed at both sequences' starts, or with `at_end` nonzero their ends,
- * and free to stop anywhere: a seed's extension, as KSW2's extension without Z-drop, exact. A match
- * earns `match_score` (zero or more), the costs as for `dinara_affine_cigar`; aligning nothing scores
- * zero. The letters of each sequence covered from that end go to `*first_covered` and
- * `*second_covered`, and the CIGAR over them is returned as `dinara_edit_cigar` returns it. The band
- * counts diagonals from the anchor. A negative result is a DINARA_ code.
+ * An optimal alignment: its cost, its score (an extension's matches' reward less the cost, else minus
+ * the cost), the spans it aligns, and its CIGAR, NUL-terminated and `cigar_length` bytes long, which the
+ * caller frees with `dinara_free`.
  */
-int64_t dinara_affine_extension(const char *first, int64_t first_length, const char *second, int64_t second_length,
-                                int64_t match_score, int64_t mismatch, int64_t opening, int64_t extension, int at_end,
-                                int64_t band_low, int64_t band_high, int extended, int right_ties, char **cigar,
-                                int64_t *cigar_length, int64_t *first_covered, int64_t *second_covered);
+typedef struct {
+    int64_t cost;
+    int64_t score;
+    int64_t reference_start;
+    int64_t reference_end;
+    int64_t query_start;
+    int64_t query_end;
+    char *cigar;
+    int64_t cigar_length;
+} dinara_alignment;
 
-/* `dinara_affine_extension` under two-piece gap-affine costs. */
-int64_t dinara_affine2p_extension(const char *first, int64_t first_length, const char *second,
-                                  int64_t second_length, int64_t match_score, int64_t mismatch, int64_t opening1,
-                                  int64_t extension1, int64_t opening2, int64_t extension2, int at_end,
-                                  int64_t band_low, int64_t band_high, int extended, int right_ties, char **cigar,
-                                  int64_t *cigar_length, int64_t *first_covered, int64_t *second_covered);
+/* The least cost of aligning the query to the reference, or a DINARA_ code. */
+int64_t dinara_distance(const char *reference, int64_t reference_length, const char *query, int64_t query_length,
+                        const dinara_costs *costs, const dinara_mode *mode, const dinara_options *options);
 
-/* Frees a CIGAR that any function here returned. */
+/* An optimal alignment into `*alignment`; zero, or a DINARA_ code and then no CIGAR to free. */
+int64_t dinara_align(const char *reference, int64_t reference_length, const char *query, int64_t query_length,
+                     const dinara_costs *costs, const dinara_mode *mode, const dinara_options *options,
+                     dinara_alignment *alignment);
+
+/* Frees a CIGAR that `dinara_align` returned; null is nothing to free. */
 void dinara_free(char *cigar);
 
 #ifdef __cplusplus
@@ -128,58 +131,56 @@ void dinara_free(char *cigar);
 
 namespace dinara {
 
-/* Which of several equally good alignments a CIGAR spells: indels placed left, as minimap2 places them,
- * or right, WFA2-lib's CIGAR byte for byte. */
-enum class Ties { left, right };
-
-/* The global edit distance and an optimal alignment as a CIGAR. */
-struct Alignment {
-    int64_t distance;
-    std::string cigar;
-};
-
-/* Raised on sequences holding more than four symbols past ACGT between them. */
+/* Raised on a 0xFE or 0xFF byte. */
 struct UnsupportedSymbols : std::invalid_argument {
-    UnsupportedSymbols() : std::invalid_argument("dinara: more than four symbols past ACGT") {}
+    UnsupportedSymbols() : std::invalid_argument("dinara: a 0xFE or 0xFF byte") {}
 };
 
-inline int64_t edit_distance(std::string_view first, std::string_view second) {
-    int64_t distance = dinara_edit_distance(first.data(), static_cast<int64_t>(first.size()), second.data(),
-                                            static_cast<int64_t>(second.size()));
-    if (distance < 0) throw UnsupportedSymbols();
-    return distance;
-}
-
-/* The least gap-affine cost and an optimal alignment as a CIGAR. */
-struct AffineAlignment {
-    int64_t cost;
-    std::string cigar;
+/* Raised when no alignment stays inside the band asked for. */
+struct OutsideBand : std::invalid_argument {
+    OutsideBand() : std::invalid_argument("dinara: no alignment stays inside the band") {}
 };
 
-/* `extended` writes `=` and `X`; false writes `M` for both. */
-inline Alignment edit_cigar(std::string_view first, std::string_view second, bool extended = true, Ties ties = Ties::left) {
-    char *text = nullptr;
-    int64_t length = 0;
-    int64_t distance = dinara_edit_cigar(first.data(), static_cast<int64_t>(first.size()), second.data(),
-                                         static_cast<int64_t>(second.size()), extended ? 1 : 0, ties == Ties::right ? 1 : 0, &text, &length);
-    if (distance < 0) throw UnsupportedSymbols();
-    Alignment result{distance, std::string(text, static_cast<size_t>(length))};
-    dinara_free(text);
-    return result;
-}
-
-/* Letters at each end of each sequence an alignment may leave unaligned for nothing; all zero is global. */
-struct EndsFree {
-    int64_t first_begin = 0;
-    int64_t first_end = 0;
-    int64_t second_begin = 0;
-    int64_t second_end = 0;
+/* What each edit costs (see `dinara_costs`). */
+struct Costs {
+    int64_t mismatch = 1, opening = 0, extension = 1, opening2 = -1, extension2 = 0;
+    /* Unit costs: the edit distance. */
+    static Costs edit() { return {}; }
+    /* A substitution `mismatch` and every gapped letter `gap`. */
+    static Costs linear(int64_t mismatch, int64_t gap) { return {mismatch, 0, gap, -1, 0}; }
+    /* A substitution `mismatch`, a gap of `k` letters `opening + k * extension`. */
+    static Costs affine(int64_t mismatch, int64_t opening, int64_t extension) {
+        return {mismatch, opening, extension, -1, 0};
+    }
+    /* A gap of `k` letters the less of `opening + k * extension` and `opening2 + k * extension2`. */
+    static Costs two_piece(int64_t mismatch, int64_t opening, int64_t extension, int64_t opening2,
+                           int64_t extension2) {
+        return {mismatch, opening, extension, opening2, extension2};
+    }
 };
 
-/* A second gap piece: a gap of `k` letters then costs the less of the two pieces' `opening + k * extension`. */
-struct SecondPiece {
-    int64_t opening;
-    int64_t extension;
+/* Which end of both sequences an extension is fixed at. */
+enum class Anchor { start, end };
+
+/* Which alignments count (see `dinara_mode`). */
+struct Mode {
+    dinara_mode fields{DINARA_ENDS_FREE, 0, 0, 0, 0, 0, 0};
+    /* Both sequences end to end. */
+    static Mode global() { return {}; }
+    /* The whole query against wherever in the reference it fits best. */
+    static Mode infix() { return ends_free(DINARA_ALL, DINARA_ALL, 0, 0); }
+    /* The whole query against the reference's best prefix. */
+    static Mode prefix() { return ends_free(0, DINARA_ALL, 0, 0); }
+    /* The whole query against the reference's best suffix. */
+    static Mode suffix() { return ends_free(DINARA_ALL, 0, 0, 0); }
+    /* Up to so many letters at each end of each sequence left unaligned for nothing. */
+    static Mode ends_free(int64_t reference_start, int64_t reference_end, int64_t query_start, int64_t query_end) {
+        return {{DINARA_ENDS_FREE, reference_start, reference_end, query_start, query_end, 0, 0}};
+    }
+    /* The best-scoring alignment from one end, a match earning `match_score`. */
+    static Mode extension(int64_t match_score, Anchor anchor = Anchor::start) {
+        return {{DINARA_EXTENSION, 0, 0, 0, 0, match_score, anchor == Anchor::end ? 1 : 0}};
+    }
 };
 
 /* The diagonals every move stays on, `low ..= high`; the default is every diagonal. */
@@ -190,175 +191,86 @@ struct Band {
     static Band around(int64_t width) { return Band{-width, width}; }
 };
 
-/* Raised when no alignment stays inside the band asked for. */
-struct OutsideBand : std::invalid_argument {
-    OutsideBand() : std::invalid_argument("dinara: no alignment stays inside the band") {}
-};
+/* Which of several equally good alignments a CIGAR spells: indels placed left, as minimap2 places them,
+ * or right, WFA2-lib's CIGAR byte for byte. */
+enum class Ties { left, right };
 
-/* Which end of both sequences an extension is fixed at. */
-enum class Anchor { start, end };
-
-
-/* The best extension's score, the letters of each sequence it covers from its anchor, and its CIGAR. */
-struct Extension {
+/* An optimal alignment (see `dinara_alignment`). */
+struct Alignment {
+    int64_t cost;
     int64_t score;
-    int64_t first_length;
-    int64_t second_length;
     std::string cigar;
+    int64_t reference_start, reference_end, query_start, query_end;
 };
 
 namespace detail {
-inline void check_affine(int64_t result) {
+inline void check(int64_t result) {
     if (result == DINARA_INVALID_COSTS) throw std::invalid_argument("dinara: a mismatch and an extension must cost");
+    if (result == DINARA_INVALID_MODE) throw std::invalid_argument("dinara: a mode these costs cannot serve");
     if (result == DINARA_OUTSIDE_BAND) throw OutsideBand();
+    if (result == DINARA_OUT_OF_MEMORY) throw std::bad_alloc();
     if (result < 0 && result != DINARA_ABOVE_MAX) throw UnsupportedSymbols();
 }
 
-inline int64_t affine_distance(std::string_view first, std::string_view second, int64_t mismatch, int64_t opening,
-                               int64_t extension, std::optional<SecondPiece> piece, int64_t max_cost, EndsFree ends,
-                               Band band) {
-    int64_t cost =
-        piece ? dinara_affine2p_distance(first.data(), static_cast<int64_t>(first.size()), second.data(),
-                                         static_cast<int64_t>(second.size()), mismatch, opening, extension,
-                                         piece->opening, piece->extension, max_cost, ends.first_begin, ends.first_end,
-                                         ends.second_begin, ends.second_end, band.low, band.high)
-              : dinara_affine_distance(first.data(), static_cast<int64_t>(first.size()), second.data(),
-                                       static_cast<int64_t>(second.size()), mismatch, opening, extension, max_cost,
-                                       ends.first_begin, ends.first_end, ends.second_begin, ends.second_end, band.low,
-                                       band.high);
-    check_affine(cost);
+inline dinara_costs c_costs(const Costs &costs) {
+    return {costs.mismatch, costs.opening, costs.extension, costs.opening2, costs.extension2};
+}
+
+inline int64_t distance(std::string_view reference, std::string_view query, const Costs &costs, const Mode &mode,
+                        Band band, int64_t max_cost) {
+    dinara_costs c = c_costs(costs);
+    dinara_options options{band.low, band.high, max_cost, 1, 0};
+    int64_t cost = dinara_distance(reference.data(), static_cast<int64_t>(reference.size()), query.data(),
+                                   static_cast<int64_t>(query.size()), &c, &mode.fields, &options);
+    check(cost);
     return cost;
 }
 
-inline std::optional<AffineAlignment> affine_cigar(std::string_view first, std::string_view second, int64_t mismatch,
-                                                   int64_t opening, int64_t extension, std::optional<SecondPiece> piece,
-                                                   int64_t max_cost, bool extended, EndsFree ends, Band band,
-                                                   Ties ties) {
-    char *text = nullptr;
-    int64_t length = 0;
-    int64_t cost =
-        piece ? dinara_affine2p_cigar(first.data(), static_cast<int64_t>(first.size()), second.data(),
-                                      static_cast<int64_t>(second.size()), mismatch, opening, extension,
-                                      piece->opening, piece->extension, max_cost, ends.first_begin, ends.first_end,
-                                      ends.second_begin, ends.second_end, band.low, band.high, extended ? 1 : 0,
-                                      ties == Ties::right ? 1 : 0, &text, &length)
-              : dinara_affine_cigar(first.data(), static_cast<int64_t>(first.size()), second.data(),
-                                    static_cast<int64_t>(second.size()), mismatch, opening, extension, max_cost,
-                                    ends.first_begin, ends.first_end, ends.second_begin, ends.second_end, band.low,
-                                    band.high, extended ? 1 : 0, ties == Ties::right ? 1 : 0, &text, &length);
-    check_affine(cost);
-    if (cost == DINARA_ABOVE_MAX) return std::nullopt;
-    AffineAlignment result{cost, std::string(text, static_cast<size_t>(length))};
-    dinara_free(text);
-    return result;
-}
-
-inline Extension extension(std::string_view first, std::string_view second, int64_t match_score, int64_t mismatch,
-                           int64_t opening, int64_t extension, std::optional<SecondPiece> piece, Anchor anchor,
-                           Band band, bool extended, Ties ties) {
-    char *text = nullptr;
-    int64_t length = 0, first_covered = 0, second_covered = 0;
-    int at_end = anchor == Anchor::end ? 1 : 0;
-    int64_t score =
-        piece ? dinara_affine2p_extension(first.data(), static_cast<int64_t>(first.size()), second.data(),
-                                          static_cast<int64_t>(second.size()), match_score, mismatch, opening,
-                                          extension, piece->opening, piece->extension, at_end, band.low, band.high,
-                                          extended ? 1 : 0, ties == Ties::right ? 1 : 0, &text, &length,
-                                          &first_covered, &second_covered)
-              : dinara_affine_extension(first.data(), static_cast<int64_t>(first.size()), second.data(),
-                                        static_cast<int64_t>(second.size()), match_score, mismatch, opening, extension,
-                                        at_end, band.low, band.high, extended ? 1 : 0, ties == Ties::right ? 1 : 0, &text,
-                                        &length, &first_covered, &second_covered);
-    check_affine(score);
-    Extension result{score, first_covered, second_covered, std::string(text, static_cast<size_t>(length))};
-    dinara_free(text);
+inline std::optional<Alignment> align(std::string_view reference, std::string_view query, const Costs &costs,
+                                      const Mode &mode, Band band, int64_t max_cost, Ties ties, bool extended) {
+    dinara_costs c = c_costs(costs);
+    dinara_options options{band.low, band.high, max_cost, extended ? 1 : 0, ties == Ties::right ? 1 : 0};
+    dinara_alignment found{};
+    int64_t status = dinara_align(reference.data(), static_cast<int64_t>(reference.size()), query.data(),
+                                  static_cast<int64_t>(query.size()), &c, &mode.fields, &options, &found);
+    check(status);
+    if (status == DINARA_ABOVE_MAX) return std::nullopt;
+    Alignment result{found.cost,          found.score,         std::string(found.cigar, static_cast<size_t>(found.cigar_length)),
+                     found.reference_start, found.reference_end, found.query_start, found.query_end};
+    dinara_free(found.cigar);
     return result;
 }
 }  // namespace detail
 
-/* Gap-affine costs as WFA counts them: a substitution `mismatch`, a gap of `k` letters `opening + k * extension`. */
-inline int64_t affine_distance(std::string_view first, std::string_view second, int64_t mismatch, int64_t opening,
-                               int64_t extension, EndsFree ends = {}, Band band = {}) {
-    return detail::affine_distance(first, second, mismatch, opening, extension, std::nullopt, -1, ends, band);
+/* The least cost of aligning the query to the reference. */
+inline int64_t distance(std::string_view reference, std::string_view query, const Costs &costs = Costs::edit(),
+                        const Mode &mode = Mode::global(), Band band = {}) {
+    return detail::distance(reference, query, costs, mode, band, -1);
 }
 
-/* The cost, or nothing when it passes `max_cost`, which the search proves after about half of it. */
-inline std::optional<int64_t> affine_distance_within(std::string_view first, std::string_view second,
-                                                     int64_t mismatch, int64_t opening, int64_t extension,
-                                                     int64_t max_cost, EndsFree ends = {}, Band band = {}) {
+/* The least cost, or nothing when it passes `max_cost`. */
+inline std::optional<int64_t> distance_within(std::string_view reference, std::string_view query, int64_t max_cost,
+                                              const Costs &costs = Costs::edit(), const Mode &mode = Mode::global(),
+                                              Band band = {}) {
     if (max_cost < 0) return std::nullopt;
-    int64_t cost =
-        detail::affine_distance(first, second, mismatch, opening, extension, std::nullopt, max_cost, ends, band);
+    int64_t cost = detail::distance(reference, query, costs, mode, band, max_cost);
     if (cost == DINARA_ABOVE_MAX) return std::nullopt;
     return cost;
 }
 
-/* The cost and an optimal alignment's CIGAR. */
-inline AffineAlignment affine_cigar(std::string_view first, std::string_view second, int64_t mismatch, int64_t opening,
-                                    int64_t extension, bool extended = true, EndsFree ends = {}, Band band = {},
-                                    Ties ties = Ties::left) {
-    return *detail::affine_cigar(first, second, mismatch, opening, extension, std::nullopt, -1, extended, ends, band,
-                                 ties);
+/* An optimal alignment. */
+inline Alignment align(std::string_view reference, std::string_view query, const Costs &costs = Costs::edit(),
+                       const Mode &mode = Mode::global(), Band band = {}, Ties ties = Ties::left,
+                       bool extended = true) {
+    return *detail::align(reference, query, costs, mode, band, -1, ties, extended);
 }
 
-/* The cost and an optimal alignment's CIGAR, or nothing when the cost passes `max_cost`. */
-inline std::optional<AffineAlignment> affine_cigar_within(std::string_view first, std::string_view second,
-                                                          int64_t mismatch, int64_t opening, int64_t extension,
-                                                          int64_t max_cost, bool extended = true,
-                                                          EndsFree ends = {}, Band band = {}, Ties ties = Ties::left) {
+/* An optimal alignment, or nothing when its cost passes `max_cost`. */
+inline std::optional<Alignment> align_within(std::string_view reference, std::string_view query, int64_t max_cost,
+                                             const Costs &costs = Costs::edit(), const Mode &mode = Mode::global(),
+                                             Band band = {}, Ties ties = Ties::left, bool extended = true) {
     if (max_cost < 0) return std::nullopt;
-    return detail::affine_cigar(first, second, mismatch, opening, extension, std::nullopt, max_cost, extended, ends,
-                                band, ties);
-}
-
-/* Two-piece gap-affine costs, WFA's gap-affine-2p: each of the above with a second gap piece. */
-inline int64_t affine2p_distance(std::string_view first, std::string_view second, int64_t mismatch, int64_t opening,
-                                 int64_t extension, SecondPiece piece, EndsFree ends = {}, Band band = {}) {
-    return detail::affine_distance(first, second, mismatch, opening, extension, piece, -1, ends, band);
-}
-
-inline std::optional<int64_t> affine2p_distance_within(std::string_view first, std::string_view second,
-                                                       int64_t mismatch, int64_t opening, int64_t extension,
-                                                       SecondPiece piece, int64_t max_cost, EndsFree ends = {},
-                                                       Band band = {}) {
-    if (max_cost < 0) return std::nullopt;
-    int64_t cost = detail::affine_distance(first, second, mismatch, opening, extension, piece, max_cost, ends, band);
-    if (cost == DINARA_ABOVE_MAX) return std::nullopt;
-    return cost;
-}
-
-inline AffineAlignment affine2p_cigar(std::string_view first, std::string_view second, int64_t mismatch,
-                                      int64_t opening, int64_t extension, SecondPiece piece, bool extended = true,
-                                      EndsFree ends = {}, Band band = {}, Ties ties = Ties::left) {
-    return *detail::affine_cigar(first, second, mismatch, opening, extension, piece, -1, extended, ends, band, ties);
-}
-
-inline std::optional<AffineAlignment> affine2p_cigar_within(std::string_view first, std::string_view second,
-                                                            int64_t mismatch, int64_t opening, int64_t extension,
-                                                            SecondPiece piece, int64_t max_cost, bool extended = true,
-                                                            EndsFree ends = {}, Band band = {}, Ties ties = Ties::left) {
-    if (max_cost < 0) return std::nullopt;
-    return detail::affine_cigar(first, second, mismatch, opening, extension, piece, max_cost, extended, ends, band,
-                                ties);
-}
-
-/*
- * The best-scoring alignment fixed at one end of both sequences and free to stop anywhere, a match
- * earning `match_score`: a seed's extension, as KSW2's without Z-drop, exact.
- */
-inline Extension affine_extension(std::string_view first, std::string_view second, int64_t match_score,
-                                  int64_t mismatch, int64_t opening, int64_t extension, Anchor anchor = Anchor::start,
-                                  Band band = {}, bool extended = true, Ties ties = Ties::left) {
-    return detail::extension(first, second, match_score, mismatch, opening, extension, std::nullopt, anchor, band,
-                             extended, ties);
-}
-
-inline Extension affine2p_extension(std::string_view first, std::string_view second, int64_t match_score,
-                                    int64_t mismatch, int64_t opening, int64_t extension, SecondPiece piece,
-                                    Anchor anchor = Anchor::start, Band band = {}, bool extended = true,
-                                    Ties ties = Ties::left) {
-    return detail::extension(first, second, match_score, mismatch, opening, extension, piece, anchor, band, extended,
-                             ties);
+    return detail::align(reference, query, costs, mode, band, max_cost, ties, extended);
 }
 
 }  // namespace dinara
