@@ -22,7 +22,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from run import CACHE, DATA, HERE, RESULTS, ROOT, cargo_runner, fetch, mutate
+import run
+from run import CACHE, DATA, HERE, RESULTS, ROOT, build_note, c_cpu_flag, cargo_runner, fetch, mojo_cpu_args, mutate
 
 LOCAL = DATA / "local"
 BUILD = CACHE / "local"
@@ -76,7 +77,9 @@ def build_rivals() -> Path:
     parasail = fetch("parasail")
     abpoa = fetch("abPOA")
     ssw = fetch("SSW")
-    build = parasail / "build"
+    # Each CPU its own build: parasail dispatches its kernels at run time either way, but its own C
+    # follows the flag too.
+    build = parasail / f"build-{run.CPU}"
     if not (build / "libparasail.a").exists():
         build.mkdir(exist_ok=True)
         subprocess.run(
@@ -85,6 +88,7 @@ def build_rivals() -> Path:
                 "-DCMAKE_POLICY_VERSION_MINIMUM=3.5",
                 "-DCMAKE_BUILD_TYPE=Release",
                 "-DBUILD_SHARED_LIBS=OFF",
+                f"-DCMAKE_C_FLAGS={c_cpu_flag()}",
                 "..",
             ],
             cwd=build,
@@ -92,17 +96,22 @@ def build_rivals() -> Path:
             capture_output=True,
         )
         subprocess.run(["make", "-j4", "parasail"], cwd=build, check=True, capture_output=True)
-    if not (abpoa / "lib" / "libabpoa.a").exists():
+    # abPOA's Makefile builds for the host's own CPU on x86 and for the M1 on Apple's ARM by default, its
+    # `SIMD_FLAG`; given the CPU every tool is built for instead, kept per CPU.
+    abpoa_library = abpoa / "lib" / f"libabpoa-{run.CPU}.a"
+    if not abpoa_library.exists():
         subprocess.run(["git", "submodule", "update", "--init", "--depth", "1"], cwd=abpoa, check=True)
-        subprocess.run(["make", "libabpoa"], cwd=abpoa, check=True, capture_output=True)
+        subprocess.run(["make", "clean"], cwd=abpoa, check=True, capture_output=True)
+        simd = c_cpu_flag() + (" -D__AVX2__" if run.arm() else "")
+        subprocess.run(["make", "libabpoa", f"SIMD_FLAG={simd}"], cwd=abpoa, check=True, capture_output=True)
+        shutil.copy(abpoa / "lib" / "libabpoa.a", abpoa_library)
     BUILD.mkdir(parents=True, exist_ok=True)
-    binary = BUILD / "rivals"
-    native = "-mcpu=native" if platform.machine().lower() in ("arm64", "aarch64") else "-march=native"
+    binary = BUILD / f"rivals-{run.CPU}"
     subprocess.run(
         [
             "cc",
             "-O3",
-            native,
+            c_cpu_flag(),
             str(HERE / "local" / "rivals.c"),
             str(ssw / "src" / "ssw.c"),
             f"-I{ssw / 'src'}",
@@ -110,7 +119,7 @@ def build_rivals() -> Path:
             f"-I{build}",
             f"-I{abpoa / 'include'}",
             str(build / "libparasail.a"),
-            str(abpoa / "lib" / "libabpoa.a"),
+            str(abpoa_library),
             "-lz",
             "-lm",
             "-lpthread",
@@ -123,13 +132,20 @@ def build_rivals() -> Path:
 
 
 def build_ours() -> Path:
-    binary = BUILD / "dinara-align-local"
+    binary = BUILD / f"dinara-align-local-{run.CPU}"
     BUILD.mkdir(parents=True, exist_ok=True)
-    subprocess.run(["mojo", "build", "-I", str(ROOT), str(HERE / "local.mojo"), "-o", str(binary)], check=True)
+    subprocess.run(
+        ["mojo", "build", "-I", str(ROOT), str(HERE / "local.mojo"), "-o", str(binary), *mojo_cpu_args()], check=True
+    )
     return binary
 
 
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--cpu", default="native", help="the CPU every tool is built for (default: the host's)")
+    run.set_cpu(parser.parse_args().cpu)
     generate()
     ours = build_ours()
     rivals = build_rivals()
@@ -161,7 +177,7 @@ def main() -> None:
             seconds = measured.get(tool)
             cells.append("—" if seconds is None else (f"{seconds * 1e6:.0f} µs" if seconds < 1e-3 else f"{seconds * 1e3:.2f} ms"))
         lines.append(f"| {workload} | {task} | " + " | ".join(cells) + " |")
-    table = "\n".join(lines)
+    table = build_note() + "\n".join(lines)
     RESULTS.mkdir(parents=True, exist_ok=True)
     (RESULTS / "local-results.md").write_text(table + "\n")
     print(table)

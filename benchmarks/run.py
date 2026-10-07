@@ -14,10 +14,17 @@ questions, so a disagreement fails the run.
 Every runner times each measurement the same way, warm and in-process: a call shorter than a tenth
 of a second is repeated in twenty batches and the fastest batch's average kept, a longer one is
 timed once. So one run of each runner is enough.
+
+Every tool is built for the same CPU, `--cpu` (see `set_cpu`): by default the host's own, each
+compiler told so, Rust by `-C target-cpu`, C and C++ by `-march` or `-mcpu`, and Mojo by
+`--target-cpu`, so no tool runs a narrower instruction set than another. A*PA's kernels take their
+SIMD width at compile time, so a build for the baseline CPU would run its 256-bit vectors as
+pairs of 128-bit ones. Each table names the CPU it was built for and the processor it ran on.
 """
 
 import argparse
 import os
+import platform
 import random
 import shutil
 import subprocess
@@ -148,13 +155,72 @@ def nightly_environment(install: bool) -> dict | None:
     return environment
 
 
+CPU = "native"
+"""The CPU every tool is built for: `native`, the host's own, or a name all three compilers know, such
+as `x86-64-v3` or `generic`; see `set_cpu`."""
+
+
+def set_cpu(name: str) -> None:
+    """Builds every tool after this for the CPU `name`."""
+    global CPU
+    CPU = name
+
+
+def arm() -> bool:
+    return platform.machine().lower() in ("arm64", "aarch64")
+
+
+def c_cpu_flag() -> str:
+    """The C and C++ compilers' flag for `CPU`: `-mcpu` on ARM, `-march` elsewhere."""
+    return f"-mcpu={CPU}" if arm() else f"-march={CPU}"
+
+
+def build_environment(environment: dict) -> dict:
+    """`environment` with every compiler a Rust build runs told to build for `CPU`: rustc through
+    `RUSTFLAGS`, a build script's C and C++ through `CFLAGS` and `CXXFLAGS`, each added to what is set."""
+    out = dict(environment)
+    out["RUSTFLAGS"] = f"{out.get('RUSTFLAGS', '')} -C target-cpu={CPU}".strip()
+    for name in ("CFLAGS", "CXXFLAGS"):
+        out[name] = f"{out.get(name, '')} {c_cpu_flag()}".strip()
+    return out
+
+
+def mojo_cpu_args() -> list:
+    """Mojo's flags for `CPU`: none for `native`, its default, else `--target-cpu`."""
+    return [] if CPU == "native" else ["--target-cpu", CPU]
+
+
+def processor() -> str:
+    """The host's processor, as the operating system names it."""
+    try:
+        if sys.platform == "darwin":
+            return subprocess.run(
+                ["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True, check=True
+            ).stdout.strip()
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("model name"):
+                return line.split(":", 1)[1].strip()
+    except (OSError, subprocess.CalledProcessError):
+        pass
+    return platform.processor() or platform.machine()
+
+
+def build_note() -> str:
+    """The line each table opens with: what every tool was built for and what it ran on."""
+    return (
+        f"Every tool built for `{CPU}` (Rust `-C target-cpu={CPU}`, C and C++ `{c_cpu_flag()}`, Mojo "
+        f"{'its default, the host' if CPU == 'native' else '--target-cpu ' + CPU}), run on {processor()}, "
+        "inputs in memory, timed warm in-process.\n\n"
+    )
+
+
 def cargo_runner(crate: str, environment: dict) -> Path:
     """Builds one Rust runner in release mode and returns its binary."""
     target = CACHE / f"target-{crate}"
     subprocess.run(
         ["cargo", "build", "--release", "--quiet"],
         cwd=HERE / crate,
-        env=dict(environment, CARGO_TARGET_DIR=str(target)),
+        env=dict(build_environment(environment), CARGO_TARGET_DIR=str(target)),
         check=True,
     )
     return target / "release" / f"{crate}-runner"
@@ -169,7 +235,7 @@ def mojo_runner() -> Path:
     binary = CACHE / "bin" / "dinara-align-runner"
     binary.parent.mkdir(parents=True, exist_ok=True)
     accelerator = os.environ.get("MOJO_ACCELERATOR", "").split()
-    command = ["mojo", "build", "-I", str(ROOT), str(HERE / "ours.mojo"), "-o", str(binary), *accelerator]
+    command = ["mojo", "build", "-I", str(ROOT), str(HERE / "ours.mojo"), "-o", str(binary), *mojo_cpu_args(), *accelerator]
     stamp = binary.with_suffix(".command")
     sources = [HERE / "ours.mojo", ROOT / "pixi.lock", *(ROOT / "dinara_align").rglob("*.mojo")]
     if (
@@ -250,7 +316,7 @@ def report(rows: list[list[str]]) -> bool:
     for workload, task in order:
         timings = " | ".join(cells.get(((workload, task), column), "—") for column in columns)
         lines.append(f"| {workload} | {task} | {timings} | {'✗' if workload in disagreeing else '✓'} |")
-    table = "\n".join(lines) + "\n"
+    table = build_note() + "\n".join(lines) + "\n"
     (RESULTS / "results.md").write_text(table)
     print(table)
     for workload in disagreeing:
@@ -266,7 +332,9 @@ def main() -> None:
     parser.add_argument("--full", action="store_true", help="include the 100k DNA pairs")
     parser.add_argument("--install-rust", action="store_true", help="install A*PA's nightly under the cache")
     parser.add_argument("--repeat", type=int, default=1, help="runs per tool, keeping the fastest (default 1)")
+    parser.add_argument("--cpu", default="native", help="the CPU every tool is built for (default: the host's)")
     options = parser.parse_args()
+    set_cpu(options.cpu)
 
     generate(options.full)
     # dinara-align runs first: it writes the DNA scoring every other runner reads.

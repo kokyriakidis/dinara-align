@@ -54,7 +54,8 @@ import zipfile
 from pathlib import Path
 from urllib.request import urlretrieve
 
-from run import CACHE, HERE, RESULTS, RIVALS, cargo_runner, duration, fetch, mojo_runner, nightly_environment
+import run
+from run import CACHE, HERE, RESULTS, RIVALS, build_note, cargo_runner, duration, fetch, mojo_runner, nightly_environment
 
 DATA = CACHE / "data" / "pa-bench"
 PUBLISHED = CACHE / "astarpa2-evals"
@@ -340,14 +341,17 @@ def run_tool(binary: Path, tool: str, path: Path, budget: float) -> tuple[list[t
 
 
 def identity(binary: Path) -> str:
-    """What a rival's results depend on: its pinned commit and our runner's source, not the binary's age.
+    """What a rival's results depend on: its pinned commit, our runner's source and the CPU it was built
+    for, not the binary's age.
 
-    A rebuild of unchanged sources keeps every result; moving a pin, or editing the runner, starts afresh.
+    A rebuild of unchanged sources keeps every result; moving a pin, editing the runner, or building for
+    another CPU starts afresh. Results kept before the CPU counted were for the baseline one, and none
+    of them match.
     """
     crate = "astarpa" if "astarpa" in binary.parent.parent.name else "pa-wrapper"
     rival = "astar-pairwise-aligner" if crate == "astarpa" else "pa-bench"
     source = (HERE / crate / "src" / "main.rs").read_bytes() + (HERE / crate / "Cargo.lock").read_bytes()
-    return f"{RIVALS[rival][1][:12]}-{hashlib.sha1(source).hexdigest()[:12]}"
+    return f"{RIVALS[rival][1][:12]}-{hashlib.sha1(source).hexdigest()[:12]}-{run.CPU}"
 
 
 def replay(
@@ -449,7 +453,9 @@ def main() -> None:
     parser.add_argument(
         "--affine", metavar="X,O,E", help="align at affine costs instead, WFA's mismatch, opening and extension"
     )
+    parser.add_argument("--cpu", default="native", help="the CPU every tool is built for (default: the host's)")
     options = parser.parse_args()
+    run.set_cpu(options.cpu)
     bases = int(options.bases)
 
     download()
@@ -539,7 +545,8 @@ def main() -> None:
         KEPT.write_text(json.dumps(kept))
 
     table = (
-        "\n".join(lines)
+        build_note()
+        + "\n".join(lines)
         + "\n\nPeak resident memory over the same runs:\n\n"
         + "\n".join(memory_lines)
         + "\n\nGrowth of peak memory aligning each pair, median / largest, as A*PA2's Table 10 measures it:\n\n"
