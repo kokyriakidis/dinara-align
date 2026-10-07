@@ -12,7 +12,7 @@ from std.bit import count_trailing_zeros
 from std.math import ceildiv, clamp
 
 from .alignment import AlignmentResult
-from .diagonal import slide_forward
+from .diagonal import best_source, DiagonalFronts, slide_forward
 from .bit_parallel import (
     advance,
     ALL_ONES,
@@ -800,4 +800,55 @@ def cigar_string(first: String, second: String, path: EditPath, extended: Bool) 
         else:
             writer.add(UInt8(ord("I")), index - start)
             row += index - start
+    return writer^.finish()
+
+
+def diagonal_cigar(profile: Profile, fronts: DiagonalFronts, distance: Int, reversed: Bool, extended: Bool) -> String:
+    """The CIGAR of the path `trace_diagonals` traces through `fronts`, written straight from them: each
+    score undoes the matches its front slid over, `=`, and the edit that reached its start, a
+    substitution `X`, as one after the furthest point is a mismatch, or a gap; `M` for both kinds of
+    pair without `extended`. The runs come right to left, unless the fronts are the reversed pair's,
+    `reversed`, whose right to left is the pair's left to right."""
+    var columns = profile.columns
+    var rows = profile.rows
+    var matched = UInt8(ord("=")) if extended else UInt8(ord("M"))
+    var substituted = UInt8(ord("X")) if extended else UInt8(ord("M"))
+    var letters = List[UInt8](capacity=2 * distance + 2)
+    var lengths = List[Int](capacity=2 * distance + 2)
+    var diagonal = columns - rows
+    var column = columns
+    var score = distance
+    while score > 0:
+        var source = best_source(fronts, score, diagonal, columns, rows)
+        var best = source[0]
+        if column > best:
+            letters.append(matched)
+            lengths.append(column - best)
+        var move = source[1]
+        if move == DIAGONAL:
+            letters.append(substituted)
+            column = best - 1
+        elif move == LEFT:
+            letters.append(UInt8(ord("D")))
+            column = best - 1
+            diagonal -= 1
+        else:
+            letters.append(UInt8(ord("I")))
+            column = best
+            diagonal += 1
+        lengths.append(1)
+        score -= 1
+    if column > 0:
+        letters.append(matched)
+        lengths.append(column)
+    var digits = 1
+    var power = 10
+    while power <= max(columns, rows):
+        digits += 1
+        power *= 10
+    var writer = CigarWriter((digits + 1) * (2 * distance + 2))
+    var count = len(letters)
+    for index in range(count):
+        var at = index if reversed else count - 1 - index
+        writer.add(letters[at], lengths[at])
     return writer^.finish()

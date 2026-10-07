@@ -62,9 +62,23 @@ comptime TWO_ENDED_PERCENT = 57
 """The two-ended search's cost per square edit of distance, in percent of one front's step."""
 
 
-comptime TWO_ENDED_SETUP = 600
-"""What setting up the two-ended search's second front and histories costs, in one front's steps: an
-alignment's search runs one front while what it has left costs less than starting from both ends."""
+comptime ALIGNED_TWO_ENDED_PERCENT = 73
+"""The two-ended alignment's cost per square edit of distance, in percent of one front's step: the
+search's own `TWO_ENDED_PERCENT` and, since a tie rule needs the path traced from the corner, the
+forward fronts grown on to the distance (see `grow_to`)."""
+
+
+comptime TWO_ENDED_SETUP = 2600
+"""What starting the two-ended alignment costs over one front, in one front's steps, besides a tenth
+of a step a base (see `two_ended_setup`): its second front, its histories, and growing the forward
+fronts on. An alignment's search runs one front while what it has left costs less than that. Fitted
+on 1,300 pairs from 1 to 30 kbp: one front wins every pair below about 100 edits, both ends nearly
+every pair above."""
+
+
+@always_inline
+def two_ended_setup(columns: Int, rows: Int) -> Int:
+    return TWO_ENDED_SETUP + (columns + rows) // 10
 
 
 comptime NO_DIAGONAL = Int.MIN
@@ -446,7 +460,7 @@ def diagonal_transition(
             # With `switch_setup`, give way to the two-ended search once what this front has left costs
             # more than that search would from scratch, setup included; the work done is spent.
             if switch_setup >= 0 and estimate * estimate - score * score > (
-                estimate * estimate * TWO_ENDED_PERCENT // 100 + switch_setup
+                estimate * estimate * ALIGNED_TWO_ENDED_PERCENT // 100 + switch_setup
             ):
                 return Probe(-1, max(estimate, score + 1), score)
             # What is left to search, about `estimate² - score²` diagonals, against what a band
@@ -520,6 +534,10 @@ struct FrontPair(Movable):
         var first = self.front_mut(0)
         for diagonal in range(-FRONT_PADDING, FRONT_PADDING + 1):
             first[unsafe_offset=diagonal] = UNREACHED_OFFSET
+
+    def take_history(deinit self) -> DiagonalFronts:
+        """The fronts kept, the rest given up."""
+        return self.history^
 
     def keep(mut self):
         """Copies the latest front, with its padding, onto the history, when recording."""
