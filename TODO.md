@@ -19,6 +19,13 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
   and a third group, which still fits AVX-512's 32 registers unspilled, at 30 cycles for three: 15%
   less a group. Measured on the Skylake-X it changed nothing within 1.5% on the long reads and pairs
   (2026-10-06): the bands it needs, 24 words and more, are rare once pruning narrows them. Left.
+- [ ] **Mispredicted branches in the inexact seed scan.** perf on the Skylake-X (2026-10-06): branch
+  misses cost about 7% of a 1 Mbp pair's cycles at 15% and half are `inexact_matches`, the rest in
+  `worth_keeping`, `score` and `exact_matches`; the bit-parallel sweep has 2 to 3%. They are short
+  loops' exits, not the one-edit test, which is branch-free: about one seed a bucket, so each row's
+  loops run 0 to 2 times. A branch-free scan, eight entries a bucket in one vector and the test on
+  all eight, would spend about 25M cycles a pair to save about 34M: 1 to 2% on long pairs, nothing
+  on short reads. Left for that.
 - [ ] **Seed setup.** Still 34 to 45% of a long pair's time on the Skylake-X and 9 to 32% on the M2
   (2026-10-06, `197656a`): on genvar 157 ms of inexact matching, 94 of local pruning and 19 of layers
   in 698; on 100 kbp pairs at 15% 27, 16 and 1 in 104; on ont-500k 64, 69 and 10 in 468.
