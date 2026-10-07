@@ -131,7 +131,10 @@ def random_mode(columns: Int, rows: Int) raises AlignmentError -> Mode:
     if kind == 6:
         return Mode.INFIX.with_match_score(reward) if chance(0.5) else Mode.GLOBAL.with_match_score(reward)
     if kind == 7:
-        return Mode.extension(draw(0, 4), Anchor.END if chance(0.5) else Anchor.START)
+        var anchor = Anchor.END if chance(0.5) else Anchor.START
+        if chance(0.3):
+            return Mode.extension(draw(0, 4), anchor, zdrop=draw(0, 60))
+        return Mode.extension(draw(0, 4), anchor)
     if kind == 8:
         return Mode.local(reward)
     return Mode.overlap(reward)
@@ -219,6 +222,11 @@ def check(trial: Case) raises:
     var expected_score = earned.score if trial.mode.is_scored() else -earned.cost
     if found.score != expected_score:
         raise Error(String("score ", found.score, " but the CIGAR earns ", expected_score))
+    if trial.mode.zdrop >= 0:
+        # A Z-drop may give up short of the best: an extension that earns no more than it.
+        if earned.score > best.value():
+            raise Error(String("a Z-dropped extension earns ", earned.score, " past the best, ", best.value()))
+        return
     if earned.score != best.value():
         raise Error(String("the alignment earns ", earned.score, ", the matrix's best is ", best.value()))
     # Free ends: the span the tie rule names.

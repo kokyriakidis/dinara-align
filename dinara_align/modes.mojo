@@ -102,7 +102,7 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     | `PREFIX` | a prefix | whole | Edlib's SHW |
     | `SUFFIX` | a suffix | whole | |
     | `ends_free(...)` | as asked | as asked | WFA2-lib's ends-free, overlaps |
-    | `extension(...)` | from one end | from the same end | KSW2's extension, without Z-drop |
+    | `extension(...)` | from one end | from the same end | KSW2's extension, with or without Z-drop |
     | `local(...)`, `LOCAL` | any part | any part | Smith-Waterman, abPOA's local mode |
     | `overlap(...)` | a prefix or suffix | a suffix or prefix | semi-global, parasail's `sg`, hyalite's OV |
 
@@ -121,22 +121,24 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     """What a match earns: in an extension or a local alignment, which maximize a score, and with free
     ends when asked (see `with_match_score`); zero elsewhere, the costs alone minimized."""
     var anchor: Anchor
+    var zdrop: Int
+    """An extension's Z-drop, -1 for none (see `extension`)."""
 
     comptime ENDS = UInt8(0)
     comptime EXTENSION = UInt8(1)
     comptime SMITH_WATERMAN = UInt8(2)
 
-    comptime GLOBAL = Self(Self.ENDS, 0, 0, 0, 0, 0, Anchor.START)
+    comptime GLOBAL = Self(Self.ENDS, 0, 0, 0, 0, 0, Anchor.START, -1)
     """Both sequences end to end."""
-    comptime INFIX = Self(Self.ENDS, UNBOUNDED, UNBOUNDED, 0, 0, 0, Anchor.START)
+    comptime INFIX = Self(Self.ENDS, UNBOUNDED, UNBOUNDED, 0, 0, 0, Anchor.START, -1)
     """The whole query against wherever in the reference it fits best: a read placed in a window."""
-    comptime PREFIX = Self(Self.ENDS, 0, UNBOUNDED, 0, 0, 0, Anchor.START)
+    comptime PREFIX = Self(Self.ENDS, 0, UNBOUNDED, 0, 0, 0, Anchor.START, -1)
     """The whole query against the reference's best prefix."""
-    comptime SUFFIX = Self(Self.ENDS, UNBOUNDED, 0, 0, 0, 0, Anchor.START)
+    comptime SUFFIX = Self(Self.ENDS, UNBOUNDED, 0, 0, 0, 0, Anchor.START, -1)
     """The whole query against the reference's best suffix."""
-    comptime REFERENCE_IN_QUERY = Self(Self.ENDS, 0, 0, UNBOUNDED, UNBOUNDED, 0, Anchor.START)
+    comptime REFERENCE_IN_QUERY = Self(Self.ENDS, 0, 0, UNBOUNDED, UNBOUNDED, 0, Anchor.START, -1)
     """`INFIX` the other way round: the whole reference against wherever in the query it fits best."""
-    comptime LOCAL = Self(Self.SMITH_WATERMAN, 0, 0, 0, 0, 0, Anchor.START)
+    comptime LOCAL = Self(Self.SMITH_WATERMAN, 0, 0, 0, 0, 0, Anchor.START, -1)
     """The best-scoring part of each under a `Scoring`, Smith-Waterman, whose table says what a match
     earns; under `Costs`, `local` names the reward."""
 
@@ -158,7 +160,7 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
             raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a free end of fewer than no letters")
         if match_score < 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "a match that costs")
-        return Self(Self.ENDS, reference_start, reference_end, query_start, query_end, match_score, Anchor.START)
+        return Self(Self.ENDS, reference_start, reference_end, query_start, query_end, match_score, Anchor.START, -1)
 
     def with_match_score(self, match_score: Int) raises AlignmentError -> Self:
         """These free ends with every match earning `match_score`: the best-scoring alignment, the
@@ -180,17 +182,29 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
             self.query_end,
             match_score,
             Anchor.START,
+            -1,
         )
 
     @staticmethod
-    def extension(match_score: Int, anchor: Anchor = Anchor.START) raises AlignmentError -> Self:
+    def extension(
+        match_score: Int, anchor: Anchor = Anchor.START, *, zdrop: Optional[Int] = None
+    ) raises AlignmentError -> Self:
         """The best-scoring alignment fixed at one end of both sequences, `anchor`, and free to stop
         anywhere: a read mapper's seed extension. A match earns `match_score` and every edit costs what
         `Costs` charges; aligning nothing scores zero. A reward is what makes stopping a choice: with
-        costs alone, aligning nothing would always win."""
+        costs alone, aligning nothing would always win.
+
+        Exact by default: the best stop of all. With `zdrop`, minimap2's `-z` and KSW2's Z-drop, the
+        search gives up once every alignment it is growing scores more than `zdrop`, plus a gap
+        extension a diagonal between them, below the best so far, as WFA2-lib's Z-drop gauges it a cost
+        at a time, and the best stop it found stands: a heuristic, faster on a seed whose read turns to
+        noise, which may miss a better stop past a divergent stretch."""
         if match_score < 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "a match that costs")
-        return Self(Self.EXTENSION, 0, 0, 0, 0, match_score, anchor)
+        var drop = zdrop.or_else(-1)
+        if zdrop and drop < 0:
+            raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a Z-drop below zero")
+        return Self(Self.EXTENSION, 0, 0, 0, 0, match_score, anchor, drop)
 
     @staticmethod
     def local(match_score: Int) raises AlignmentError -> Self:
@@ -200,7 +214,7 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         grows with the matrix, as every local aligner's does (see `scored`)."""
         if match_score <= 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "a local alignment needs a match that earns")
-        return Self(Self.SMITH_WATERMAN, 0, 0, 0, 0, match_score, Anchor.START)
+        return Self(Self.SMITH_WATERMAN, 0, 0, 0, 0, match_score, Anchor.START, -1)
 
     @staticmethod
     def overlap(match_score: Int) raises AlignmentError -> Self:
@@ -211,7 +225,7 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         matrix, as `local`'s does."""
         if match_score <= 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "an overlap needs a match that earns")
-        return Self(Self.ENDS, UNBOUNDED, UNBOUNDED, UNBOUNDED, UNBOUNDED, match_score, Anchor.START)
+        return Self(Self.ENDS, UNBOUNDED, UNBOUNDED, UNBOUNDED, UNBOUNDED, match_score, Anchor.START, -1)
 
     def is_global(self) -> Bool:
         return (

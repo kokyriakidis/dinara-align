@@ -69,7 +69,7 @@ typedef struct {
  * least cost; above zero, the best score, a match earning it, as parasail's and hyalite's semi-global
  * modes count it. DINARA_EXTENSION: fixed at both sequences'
  * starts, or with `anchor` nonzero their ends, and free to stop anywhere, a match earning
- * `match_score`: a seed's extension, as KSW2's without Z-drop. DINARA_LOCAL: any part of each, a match
+ * `match_score`: a seed's extension, as KSW2's, with its Z-drop when `zdrop` is above zero. DINARA_LOCAL: any part of each, a match
  * earning `match_score`, Smith-Waterman, as abPOA's local mode. DINARA_OVERLAP: every end gap free, a
  * match earning `match_score`, semi-global, as parasail's `sg`. A null pointer is a global alignment.
  */
@@ -81,6 +81,7 @@ typedef struct {
     int64_t query_end;
     int64_t match_score;
     int64_t anchor;
+    int64_t zdrop;
 } dinara_mode;
 
 /*
@@ -195,7 +196,7 @@ enum class Anchor { start, end };
 
 /* Which alignments count (see `dinara_mode`). */
 struct Mode {
-    dinara_mode fields{DINARA_ENDS_FREE, 0, 0, 0, 0, 0, 0};
+    dinara_mode fields{DINARA_ENDS_FREE, 0, 0, 0, 0, 0, 0, 0};
     /* Both sequences end to end. */
     static Mode global() { return {}; }
     /* The whole query against wherever in the reference it fits best. */
@@ -209,7 +210,7 @@ struct Mode {
     /* Up to so many letters at each end of each sequence left unaligned for nothing. */
     static Mode ends_free(int64_t reference_start, int64_t reference_end, int64_t query_start, int64_t query_end,
                           int64_t match_score = 0) {
-        return {{DINARA_ENDS_FREE, reference_start, reference_end, query_start, query_end, match_score, 0}};
+        return {{DINARA_ENDS_FREE, reference_start, reference_end, query_start, query_end, match_score, 0, 0}};
     }
     /* These free ends with a match earning `match_score`: the best score rather than the least cost. */
     Mode with_match_score(int64_t match_score) const {
@@ -217,14 +218,15 @@ struct Mode {
         scored.fields.match_score = match_score;
         return scored;
     }
-    /* The best-scoring alignment from one end, a match earning `match_score`. */
-    static Mode extension(int64_t match_score, Anchor anchor = Anchor::start) {
-        return {{DINARA_EXTENSION, 0, 0, 0, 0, match_score, anchor == Anchor::end ? 1 : 0}};
+    /* The best-scoring alignment from one end, a match earning `match_score`; with `zdrop` above zero,
+     * given up once it falls that far below its best, as KSW2's Z-drop gives up. */
+    static Mode extension(int64_t match_score, Anchor anchor = Anchor::start, int64_t zdrop = 0) {
+        return {{DINARA_EXTENSION, 0, 0, 0, 0, match_score, anchor == Anchor::end ? 1 : 0, zdrop}};
     }
     /* The best-scoring alignment of any part of each, a match earning `match_score`: Smith-Waterman. */
-    static Mode local(int64_t match_score) { return {{DINARA_LOCAL, 0, 0, 0, 0, match_score, 0}}; }
+    static Mode local(int64_t match_score) { return {{DINARA_LOCAL, 0, 0, 0, 0, match_score, 0, 0}}; }
     /* The best-scoring alignment with every end gap free, a match earning `match_score`: an overlap. */
-    static Mode overlap(int64_t match_score) { return {{DINARA_OVERLAP, 0, 0, 0, 0, match_score, 0}}; }
+    static Mode overlap(int64_t match_score) { return {{DINARA_OVERLAP, 0, 0, 0, 0, match_score, 0, 0}}; }
 };
 
 /* The diagonals every move stays on, `low ..= high`; the default is every diagonal. */

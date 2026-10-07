@@ -151,6 +151,13 @@ int main() {
                                            Mode::extension(1, dinara::Anchor::end));
     CHECK(left.score == 12 && left.cigar == "12=" && left.reference_start == 10 && left.query_start == 10);
     CHECK(dinara::align("ACGTTGCAAGGCTTTT", "ACGTTGCAAGGCGAGA", two_piece, Mode::extension(1)).score == 12);
+    // A Z-drop gives up at the noise: the matching stretch past it is never reached.
+    std::string seed_core(40, 'A'), noise_a = "CGTCGTCGTGCTGCTGACGT", noise_b = "TGCATGCATTGACGTACGTG",
+                                    rest = std::string(30, 'C') + std::string(30, 'G') + std::string(30, 'T');
+    CHECK(dinara::align(seed_core + noise_a + rest, seed_core + noise_b + rest, affine, Mode::extension(1, dinara::Anchor::start, 10))
+              .reference_end == 40);
+    CHECK(dinara::align(seed_core + noise_a + rest, seed_core + noise_b + rest, affine, Mode::extension(1)).reference_end >
+          40);
     // A local alignment: the shared core, whichever ends surround it.
     dinara::Alignment local = dinara::align("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC", affine, Mode::local(2));
     CHECK(local.score == 16 && local.cigar == "8=" && local.reference_start == 4 && local.query_start == 4);
@@ -179,7 +186,7 @@ int main() {
     CHECK(raw.cost == 2 && std::string(raw.cigar) == "4=1D2=1I6=" && raw.cigar_length == 10);
     dinara_free(raw.cigar);
     dinara_costs c_affine{4, 6, 2, -1, 0};
-    dinara_mode c_infix{DINARA_ENDS_FREE, DINARA_ALL, DINARA_ALL, 0, 0, 0, 0};
+    dinara_mode c_infix{DINARA_ENDS_FREE, DINARA_ALL, DINARA_ALL, 0, 0, 0, 0, 0};
     CHECK(dinara_distance("TTTTACGTACGTTTTT", 16, "ACGTACGT", 8, &c_affine, &c_infix, nullptr) == 0);
     dinara_options capped{INT64_MIN, INT64_MAX, 11, 1, 0, 0};
     CHECK(dinara_distance("ACGTACGTTTGCA", 13, "ACGTCGTTTTGCA", 13, &c_affine, nullptr, &capped) == DINARA_ABOVE_MAX);

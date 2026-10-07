@@ -2552,6 +2552,39 @@ def test_memory_budget_keeps_the_cost() raises:
                 _ = rows_from_cigar(part, piece, split.cigar)
 
 
+def test_zdrop_gives_up_on_noise() raises:
+    """An extension with a Z-drop stops where a read turns to noise, while the exact one crosses the
+    noise to the matching stretch past it; a Z-drop larger than any fall is the exact extension. Every
+    stop is an alignment that earns its score."""
+    seed(101)
+    var costs = Costs.affine(4, 6, 2)
+    var core = random_sequence(200, 200, DNA_ALPHABET)
+    var tail = random_sequence(300, 300, DNA_ALPHABET)
+    var reference = core + random_sequence(60, 60, DNA_ALPHABET) + tail
+    var query = core + random_sequence(60, 60, DNA_ALPHABET) + tail
+    var exact = align(reference, query, costs, Mode.extension(1))
+    assert_true(exact.reference_end > 500)
+    var dropped = align(reference, query, costs, Mode.extension(1, zdrop=50))
+    assert_equal(dropped.reference_end, 200)
+    assert_equal(dropped.score, 200)
+    assert_equal(dropped.cigar, "200=")
+    var back = align(reversed_text(reference), reversed_text(query), costs, Mode.extension(1, Anchor.END, zdrop=50))
+    assert_equal(back.reference_start, reference.byte_length() - 200)
+    for trial in range(40):
+        var a = random_sequence(0, 400, DNA_ALPHABET)
+        var b = mutated(a, [0.02, 0.1, 0.3, 0.6][trial % 4], 6) + random_sequence(0, 50, DNA_ALPHABET)
+        var whole_way = align(a, b, costs, Mode.extension(2))
+        var generous = align(a, b, costs, Mode.extension(2, zdrop=1 << 30))
+        assert_equal(generous.score, whole_way.score)
+        assert_equal(generous.cigar, whole_way.cigar)
+        for drop in [0, 10, 100]:
+            var found = align(a, b, costs, Mode.extension(2, zdrop=drop))
+            assert_true(found.score <= whole_way.score)
+            assert_equal(extension_price(found.cigar, 2, 4, 6, 2, -1, 0), found.score)
+    with assert_raises():
+        _ = Mode.extension(1, zdrop=-5)
+
+
 def rebuilt_reference(query: String, cigar: String, md: String) raises -> String:
     """The reference's aligned part from the query's, the CIGAR and the `MD` string, as SAM readers
     rebuild it: the query's letters through matches and substitutions, those `MD` names replaced, and

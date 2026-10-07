@@ -318,9 +318,13 @@ def extended_alignment(
         costs.opening2 if two else 0,
         costs.extension2 if two else 0,
     )
+    # The Z-drop's slack a diagonal is the cheapest extension, as KSW2 charges a long gap.
+    var drop_extension = min(costs.extension, costs.extension2) if two else costs.extension
     var found = extension_of[2](
-        reference, query, penalties, extended, mode.anchor, band, ties, -1, limit
-    ) if two else extension_of[1](reference, query, penalties, extended, mode.anchor, band, ties, -1, limit)
+        reference, query, penalties, extended, mode.anchor, band, ties, -1, limit, mode.zdrop, drop_extension
+    ) if two else extension_of[1](
+        reference, query, penalties, extended, mode.anchor, band, ties, -1, limit, mode.zdrop, drop_extension
+    )
     var columns = reference.byte_length()
     var rows = query.byte_length()
     var cost = mode.match_score * found.matches - found.score

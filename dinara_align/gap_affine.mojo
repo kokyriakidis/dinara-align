@@ -1894,11 +1894,22 @@ def extension_penalties(
 def extend[
     pieces: Int
 ](
-    first: Span[UInt8, _], second: Span[UInt8, _], penalties: Penalties, band: Band, reverse: Bool, known: Int = -1
+    first: Span[UInt8, _],
+    second: Span[UInt8, _],
+    penalties: Penalties,
+    band: Band,
+    reverse: Bool,
+    known: Int = -1,
+    zdrop: Int = -1,
+    drop_extension: Int = 0,
 ) -> Tuple[Int, Int, Int]:
     """Where the best-scoring alignment fixed at the origin ends, the end of both sequences with
     `reverse`: its cost, and the letters of each sequence up to it. A `known` best score, when the
     caller has one, ends the search at the first alignment earning it, the one it would keep.
+
+    A `zdrop` of zero or more gives up as WFA2-lib's Z-drop does: once the best score of a cost's front
+    lies more than `zdrop` plus `drop_extension` a diagonal between it and the best so far below that
+    best, in the costs' own units, the best so far stands.
 
     With the match reward folded into the costs, an alignment of `i` and `j` letters costing `s`
     scores `(reward (i + j) - scale s) / 2`, and the front of each cost holds how far along `i + j`
@@ -1927,7 +1938,29 @@ def extend[
         var slot = search.fronts.current
         var cost = search.cost
         var reach = search.fronts.reach[slot]
-        if reach > Int.MIN // 4 and reward * reach - scale * cost > best:
+        if zdrop >= 0 and reach > Int.MIN // 4:
+            # The front's own best, and how far below the best so far it lies.
+            var front = search.fronts.row(slot, ALIGNED)
+            var top = Int.MIN
+            var top_diagonal = 0
+            for diagonal in range(search.fronts.lows[slot], search.fronts.highs[slot] + 1):
+                var column = Int(front[unsafe_offset=diagonal])
+                if column < 0:
+                    continue
+                var value = reward * (2 * column - diagonal) - scale * cost
+                if value > top:
+                    top = value
+                    top_diagonal = diagonal
+            if top > best:
+                best = top
+                best_cost = cost
+                best_column = Int(front[unsafe_offset=top_diagonal])
+                best_row = best_column - top_diagonal
+            elif top > Int.MIN and best - top > 2 * (
+                zdrop + drop_extension * abs(top_diagonal - (best_column - best_row))
+            ):
+                break
+        elif reach > Int.MIN // 4 and reward * reach - scale * cost > best:
             var front = search.fronts.row(slot, ALIGNED)
             for diagonal in range(search.fronts.lows[slot], search.fronts.highs[slot] + 1):
                 var column = Int(front[unsafe_offset=diagonal])
@@ -2046,17 +2079,19 @@ def extension_of[
     ties: Ties,
     known: Int = -1,
     limit: Int = HISTORY_LIMIT,
+    zdrop: Int = -1,
+    drop_extension: Int = 0,
 ) raises AlignmentError -> AffineExtension:
     """The best extension from `anchor` inside `band`, found by `extend` and aligned by `solve` over the
     letters it covers, as a global alignment of those, split past `limit` kept diagonals, so its memory
-    stays bounded however long. A `known` best score ends the search once it is reached (see
-    `extend`)."""
+    stays bounded however long. A `known` best score ends the search once it is reached, and a `zdrop`
+    of zero or more gives it up once it falls that far (see `extend`)."""
     if not band.holds(0):
         raise outside(band)
     var a = first.as_bytes()
     var b = second.as_bytes()
     var at_end = anchor == Anchor.END
-    var found = extend[pieces](a, b, penalties, band, at_end, known)
+    var found = extend[pieces](a, b, penalties, band, at_end, known, zdrop, drop_extension)
     var columns = found[1]
     var rows = found[2]
     var covered_first = a[len(a) - columns :] if at_end else a[:columns]
