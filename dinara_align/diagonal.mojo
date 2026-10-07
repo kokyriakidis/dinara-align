@@ -552,8 +552,15 @@ struct FrontPair(Movable):
         var count = self.high - self.low + 1 + 2 * FRONT_PADDING
         self.history.offsets.resize(unsafe_uninit_length=start + count)
         var target = self.history.offsets.unsafe_ptr().unsafe_offset(start)
-        for index in range(count):
-            target[unsafe_offset=index] = source[unsafe_offset=self.low - FRONT_PADDING + index]
+        var origin = source.unsafe_offset(self.low - FRONT_PADDING)
+        # Sixteen at a time: the compiler keeps a plain loop here scalar.
+        var index = 0
+        while index + 16 <= count:
+            target.unsafe_offset(index).unsafe_store(origin.unsafe_offset(index).unsafe_load[width=16]())
+            index += 16
+        while index < count:
+            target[unsafe_offset=index] = origin[unsafe_offset=index]
+            index += 1
 
     @inline(.always)
     def previous(self) -> Int:

@@ -141,6 +141,10 @@ def forward_segment(
     var grid = fronts.columns.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
     fronts.lows.resize(levels, 0)
     fronts.highs.resize(levels, 0)
+    var lows = fronts.lows.unsafe_ptr()
+    var highs = fronts.highs.unsafe_ptr()
+    var entry_diagonals = fronts.entry_diagonals.unsafe_ptr()
+    var entry_costs = fronts.entry_costs.unsafe_ptr()
     # The rows by cost, `ordered[starts[level] ..< starts[level + 1]]`, so a cost reads only its own.
     fronts.starts.clear()
     fronts.starts.resize(levels + 1, 0)
@@ -148,15 +152,15 @@ def forward_segment(
     var starts = fronts.starts.unsafe_ptr()
     var ordered = fronts.ordered.unsafe_ptr()
     for index in range(count):
-        starts[unsafe_offset=fronts.entry_costs[index] - base] += 1
+        starts[unsafe_offset=entry_costs[unsafe_offset=index] - base] += 1
     var running = 0
     for level in range(levels + 1):
         var here = starts[unsafe_offset=level]
         starts[unsafe_offset=level] = running
         running += here
     for index in range(count):
-        var level = fronts.entry_costs[index] - base
-        ordered[unsafe_offset=starts[unsafe_offset=level]] = fronts.entry_diagonals[index]
+        var level = entry_costs[unsafe_offset=index] - base
+        ordered[unsafe_offset=starts[unsafe_offset=level]] = entry_diagonals[unsafe_offset=index]
         starts[unsafe_offset=level] += 1
     for level in range(levels, 0, -1):
         starts[unsafe_offset=level] = starts[unsafe_offset=level - 1]
@@ -186,8 +190,8 @@ def forward_segment(
         # Room to reach the traced cell: no more diagonals off than costs left.
         new_low = max(new_low, target - (score - cost))
         new_high = min(new_high, target + (score - cost))
-        fronts.lows[level] = new_low
-        fronts.highs[level] = new_high
+        lows[unsafe_offset=level] = new_low
+        highs[unsafe_offset=level] = new_high
         if new_low > new_high:
             low = Int.MAX
             high = Int.MIN
@@ -240,8 +244,8 @@ def forward_segment(
         high = new_high
 
     @inline(.always)
-    def at(level: Int, diagonal: Int) {imm row_of, imm fronts} -> Int:
-        if level < 0 or diagonal < fronts.lows[level] or diagonal > fronts.highs[level]:
+    def at(level: Int, diagonal: Int) {imm row_of, imm lows, imm highs} -> Int:
+        if level < 0 or diagonal < lows[unsafe_offset=level] or diagonal > highs[unsafe_offset=level]:
             return Int(UNREACHED)
         return Int(row_of(level)[unsafe_offset=diagonal])
 
