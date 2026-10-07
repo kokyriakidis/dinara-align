@@ -194,8 +194,11 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     """An extension's Z-drop, -1 for none (see `extension`)."""
 
     comptime ENDS = UInt8(0)
+    """The kind of a global alignment and of every one with free ends."""
     comptime EXTENSION = UInt8(1)
+    """The kind of an extension from one end (see `extension`)."""
     comptime SMITH_WATERMAN = UInt8(2)
+    """The kind of a local alignment (see `local`)."""
 
     comptime GLOBAL = Self(Self.ENDS, 0, 0, 0, 0, 0, Anchor.START, -1)
     """Both sequences end to end."""

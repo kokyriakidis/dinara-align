@@ -29,6 +29,8 @@ fuzz = {cmd = "./build/fuzz", depends-on = ["build-fuzz"]}
 # Holds every mode WFA2-lib also has to its regression set: its pairs, scores and CIGARs; see `scripts/test_wfa.py`.
 test-wfa = "python3 scripts/test_wfa.py"
 format = "mojo format -l 120 dinara_align tests c python cli"
+# docs/API.md, the reference of everything the package exports, from its docstrings.
+api-docs = "python3 scripts/api_docs.py"
 # Pulls the latest Mojo skills from github.com/modular/skills into .claude/skills for coding agents.
 sync-skills = "bash .claude/sync-skills.sh"
 # Times dinara-align against other exact global aligners; see `benchmarks/run.py` for the flags.

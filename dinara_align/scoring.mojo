@@ -69,10 +69,13 @@ comptime DNA_ALPHABET = "ACGT"
 """The four bases. An `N` or a soft-masked lowercase base must be added to an alphabet explicitly."""
 
 comptime DEFAULT_MATCH = 2
+"""Minimap2's match score, `-A2`."""
 comptime DEFAULT_MISMATCH = -4
+"""Minimap2's mismatch score, `-B4`."""
 comptime DEFAULT_GAP_OPENING = -4
+"""Minimap2's gap opening, `-O4`: a gap of `k` letters scores `-(4 + 2k)`."""
 comptime DEFAULT_GAP_EXTENSION = -2
-"""Minimap2's defaults (`-A2 -B4 -O4 -E2`): a gap of `k` letters scores `-(4 + 2k)`."""
+"""Minimap2's gap extension, `-E2`."""
 
 
 struct Scoring(Copyable, Movable):
