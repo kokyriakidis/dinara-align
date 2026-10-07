@@ -17,6 +17,7 @@ from .slides import GATHERED_SLIDES, LANES, gathered_slides, slide
 from .bit_parallel import (
     advance,
     ALL_ONES,
+    append_diagonals,
     COLUMN_PADDING,
     DIAGONAL,
     Edge,
@@ -264,11 +265,9 @@ def forward_segment(
         var inserted = above if above >= first_column else -1
         var entry = min(column, max(substituted, max(deleted, inserted)))
         if entry <= first_column:
-            for _ in range(column - first_column):
-                moves.append(DIAGONAL)
+            append_diagonals(moves, column - first_column)
             return first_column - diagonal
-        for _ in range(column - entry):
-            moves.append(DIAGONAL)
+        append_diagonals(moves, column - entry)
         if substituted >= entry:
             moves.append(DIAGONAL)
             column = entry - 1

@@ -79,6 +79,22 @@ comptime UP = UInt8(2)
 """A move that consumes a base of the second sequence against a gap."""
 
 
+@inline(.always)
+def append_diagonals(mut moves: List[UInt8], count: Int):
+    """`count` diagonal moves, sixteen a store rather than an append each: a run of matches is most of
+    any traceback's moves."""
+    var start = len(moves)
+    moves.resize(unsafe_uninit_length=start + count)
+    var out = moves.unsafe_ptr().unsafe_offset(start)
+    var index = 0
+    while index + 16 <= count:
+        out.unsafe_offset(index).unsafe_store(SIMD[DType.uint8, 16](DIAGONAL))
+        index += 16
+    while index < count:
+        out[unsafe_offset=index] = DIAGONAL
+        index += 1
+
+
 comptime NARROW_COLUMNS = 64
 """
 Columns of one band tile when the band itself is narrow. A tile computes every word its columns reach,

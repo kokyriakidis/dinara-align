@@ -16,6 +16,7 @@ from std.math import sqrt
 from .slides import GATHERED_SLIDES, gathered_slides, slide
 from .bit_parallel import (
     advance,
+    append_diagonals,
     CODE_PADDING,
     DIAGONAL,
     FIRST_SENTINEL,
@@ -924,8 +925,7 @@ def trace_diagonals(profile: Profile, fronts: DiagonalFronts, distance: Int, mut
     while score > 0:
         var source = best_source(fronts, score, diagonal, columns, rows)
         var best = source[0]
-        for _ in range(column - best):
-            moves.append(DIAGONAL)
+        append_diagonals(moves, column - best)
         var move = source[1]
         moves.append(move)
         if move == DIAGONAL:
@@ -937,5 +937,4 @@ def trace_diagonals(profile: Profile, fronts: DiagonalFronts, distance: Int, mut
             column = best
             diagonal += 1
         score -= 1
-    for _ in range(column):
-        moves.append(DIAGONAL)
+    append_diagonals(moves, column)
