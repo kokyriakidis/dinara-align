@@ -146,6 +146,63 @@ Measured as above, dinara-align's columns the fastest of three warm runs; a coun
 
 Four long reads are few: on all 50 ont-500k reads dinara-align took 6.5 s, and A\*PA2-full 8.4 s (the faster on 16 of them); on all 48 ont-500k-genvar reads 10.4 s against A\*PA2-full's 11.5 s (the faster on 21 of them).
 
+## Affine Costs
+
+`pa_bench.py --affine x,o,e` runs the same samples at gap-affine costs as WFA counts them, a mismatch `x` and a gap of `k` letters `o + k e`, against the exact aligners that take them: WFA2-lib keeping every front (WFA), its lowest-memory mode (BiWFA), and KSW2's banded SSE kernel with band doubling, on x86-64 alone.
+dinara-align answers with `affine_cigar`, a CIGAR as the others hand back, from a wavefront grown from both ends at once, which keeps five bytes a diagonal for its traceback and splits a pair whose fronts would pass 80 MB where an optimal path crosses, as BiWFA does.
+
+```bash
+pixi run bench-astarpa2 --affine 4,6,2
+```
+
+At WFA's costs (4, 6, 2) on the i9-7900X above, pinned to one core, each tool five seconds a sample; a count marks a tool its budget stopped partway, and more than the budget one that finished no pair:
+
+| dataset | pairs | mean length | dinara-align | WFA | BiWFA | KSW2 | agree |
+| :-- | --: | --: | --: | --: | --: | --: | :-: |
+| ont-1k | 1221 of 12477 | 0.818 kbp | 111 µs | 187 µs | 305 µs | 1.11 ms | ✓ |
+| ont-10k | 277 of 5000 | 3.6 kbp | 1.8 ms | 4.81 ms | 5.85 ms | 30.8 ms (163/277) | ✓ |
+| ont-50k | 104 of 10000 | 9.52 kbp | 24.8 ms | 69.1 ms (82/104) | 57.6 ms (90/104) | 363 ms (16/104) | ✓ |
+| ont-500k | 4 of 50 | 638 kbp | > 5 s | > 5 s | > 5 s | > 5 s | ✓ |
+| ont-500k-genvar | 4 of 48 | 659 kbp | > 5 s | > 5 s | > 5 s | > 5 s | ✓ |
+| sars-cov-2 | 33 of 10000 | 29.6 kbp | 785 µs | 2.06 ms | 1.77 ms | 88.8 ms | ✓ |
+| Uniform-t10000000-n3000-e0.05 | 333 of 3333 | 3 kbp | 298 µs | 580 µs | 916 µs | 6.11 ms | ✓ |
+| Uniform-t10000000-n10000-e0.05 | 99 of 1000 | 10 kbp | 2.51 ms | 6.35 ms | 8.02 ms | 97.2 ms (52/99) | ✓ |
+| Uniform-t10000000-n30000-e0.05 | 33 of 333 | 30 kbp | 20.9 ms | 56 ms | 62.6 ms | 1.35 s (4/33) | ✓ |
+| Uniform-t10000000-n100000-e0.05 | 10 of 100 | 100 kbp | 346 ms | 760 ms (7/10) | 642 ms (8/10) | > 5 s | ✓ |
+| Uniform-t10000000-n300000-e0.05 | 4 of 33 | 300 kbp | 3.5 s (1/4) | > 5 s | > 5 s | > 5 s | ✓ |
+| Uniform-t10000000-n1000000-e0.05 | 4 of 10 | 1e+03 kbp | > 5 s | > 5 s | > 5 s | > 5 s | ✓ |
+| Uniform-t10000000-n3000-e0.15 | 333 of 3333 | 3 kbp | 1.42 ms | 3.75 ms | 5.07 ms | 18.7 ms (267/333) | ✓ |
+| Uniform-t10000000-n10000-e0.15 | 99 of 1000 | 10 kbp | 13.5 ms | 38.7 ms | 44.8 ms | 203 ms (25/99) | ✓ |
+| Uniform-t10000000-n30000-e0.15 | 33 of 333 | 30 kbp | 174 ms (29/33) | 386 ms (13/33) | 372 ms (14/33) | 2.48 s (2/33) | ✓ |
+| Uniform-t10000000-n100000-e0.15 | 9 of 100 | 100 kbp | 2.35 s (2/9) | > 5 s | 4.17 s (1/9) | > 5 s | ✓ |
+| Uniform-t10000000-n300000-e0.15 | 4 of 33 | 300 kbp | > 5 s | > 5 s | > 5 s | > 5 s | ✓ |
+| Uniform-t10000000-n1000000-e0.15 | 4 of 10 | 1e+03 kbp | > 5 s | > 5 s | > 5 s | > 5 s | ✓ |
+
+- **dinara-align is the fastest on every dataset any tool finished,** 1.7 to 2.9 times faster than WFA: 111 against 187 µs on ont-1k, 1.8 against 4.81 ms on ont-10k, 785 µs against 2.06 ms on the SARS-CoV-2 genomes, and 13.5 against 38.7 ms on 10 kbp at 15%. BiWFA beats WFA only on the genomes and where WFA's budget runs out.
+- **It alone finishes every ont-50k read,** in 24.8 ms on average, where WFA finishes 82 of the 104 and BiWFA 90 within the budget, and it finishes more of the 100 and 300 kbp pairs than anyone.
+- **KSW2's band doubles from eight diagonals against a loose bound,** so it times out on most reads past 1 kbp.
+- **No aligner finishes a 500 kbp read or a 1 Mbp pair in five seconds:** the wavefront's work grows with the square of the cost, and gap-affine costs have no seed heuristic here to prune it (see TODO.md).
+
+Growth of peak memory aligning each pair, median / largest, as A\*PA2's Table 10 measures it:
+
+| dataset | dinara-align | WFA | BiWFA | KSW2 |
+| :-- | --: | --: | --: | --: |
+| ont-1k | 0.0 / 0.5 MB | 0.0 / 3.0 MB | 0.0 / 1.5 MB | 0.0 / 0.9 MB |
+| ont-10k | 0.0 / 21 MB | 0.0 / 97 MB | 0.0 / 2.1 MB | 0.0 / 58 MB |
+| ont-50k | 0.0 / 84 MB | 0.0 / 1420 MB | 0.0 / 4.4 MB | 0.0 / 317 MB |
+| sars-cov-2 | 0.0 / 11 MB | 0.0 / 51 MB | 0.0 / 2.5 MB | 0.0 / 211 MB |
+| Uniform-t10000000-n3000-e0.05 | 0.0 / 1.2 MB | 0.0 / 5.2 MB | 0.0 / 1.8 MB | 0.0 / 3.1 MB |
+| Uniform-t10000000-n10000-e0.05 | 0.0 / 6.4 MB | 0.0 / 29 MB | 0.0 / 1.8 MB | 0.0 / 40 MB |
+| Uniform-t10000000-n30000-e0.05 | 0.0 / 45 MB | 0.0 / 212 MB | 0.0 / 3.2 MB | 31 / 455 MB |
+| Uniform-t10000000-n100000-e0.05 | 0.0 / 85 MB | 12 / 2413 MB | 0.0 / 9.1 MB | — |
+| Uniform-t10000000-n300000-e0.05 | 99 / 99 MB | — | — | — |
+| Uniform-t10000000-n3000-e0.15 | 0.0 / 4.0 MB | 0.0 / 18 MB | 0.0 / 1.1 MB | 0.0 / 12 MB |
+| Uniform-t10000000-n10000-e0.15 | 0.0 / 34 MB | 0.0 / 160 MB | 0.0 / 3.1 MB | 0.0 / 79 MB |
+| Uniform-t10000000-n30000-e0.15 | 0.0 / 104 MB | 0.5 / 1416 MB | 0.0 / 5.5 MB | 795 / 795 MB |
+| Uniform-t10000000-n100000-e0.15 | 84 / 84 MB | — | 16 / 16 MB | — |
+
+dinara-align keeps under a tenth of WFA's memory on the largest pairs (85 against 2413 MB at 100 kbp), as its traceback keeps a byte of flags and the column of one front a diagonal, from fronts each half as long; BiWFA, keeping only its last few fronts, stays smallest.
+
 ## A\*PA2's Results, Redone
 
 A\*PA2's own results section ([curiouscoding.nl/posts/astarpa2](https://curiouscoding.nl/posts/astarpa2/#results)), redone with dinara-align beside the exact aligners it compares, and WFA, on a machine set up as A\*PA2's was: its real datasets, its uniform pairs swept over divergence and over length, and in place of its ablation, dinara-align's history on the long reads.
