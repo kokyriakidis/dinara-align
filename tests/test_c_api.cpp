@@ -181,7 +181,7 @@ int main() {
     dinara_costs c_affine{4, 6, 2, -1, 0};
     dinara_mode c_infix{DINARA_ENDS_FREE, DINARA_ALL, DINARA_ALL, 0, 0, 0, 0};
     CHECK(dinara_distance("TTTTACGTACGTTTTT", 16, "ACGTACGT", 8, &c_affine, &c_infix, nullptr) == 0);
-    dinara_options capped{INT64_MIN, INT64_MAX, 11, 1, 0};
+    dinara_options capped{INT64_MIN, INT64_MAX, 11, 1, 0, 0};
     CHECK(dinara_distance("ACGTACGTTTGCA", 13, "ACGTCGTTTTGCA", 13, &c_affine, nullptr, &capped) == DINARA_ABOVE_MAX);
     CHECK(dinara_align("ACGTACGTTTGCA", 13, "ACGTCGTTTTGCA", 13, &c_affine, nullptr, &capped, &raw) == DINARA_ABOVE_MAX);
     dinara_costs c_free{0, 6, 2, -1, 0};
@@ -205,6 +205,10 @@ int main() {
         CHECK(dinara::align_within(pair.first, pair.second, long_aligned.cost, Costs::edit())->cigar ==
               long_aligned.cigar);
         CHECK(dinara::distance(pair.first, pair.second, Costs::linear(2, 2)) == 2 * long_aligned.cost);
+        // A memory budget of a few kilobytes splits the pair again and again, at the same cost.
+        dinara::Alignment small = dinara::align(pair.first, pair.second, Costs::affine(4, 6, 2), Mode::global(), {},
+                                                dinara::Ties::left, true, 4096);
+        CHECK(small.cost == dinara::distance(pair.first, pair.second, Costs::affine(4, 6, 2)));
         CHECK(!dinara::distance_within(pair.first, pair.second, long_aligned.cost - 1));
     }
 

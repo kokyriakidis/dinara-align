@@ -14,7 +14,19 @@ it and the run exits nonzero.
 from std.random import random_float64, random_ui64, seed
 from std.sys import argv
 
-from dinara_align import Alignment, AlignmentError, Anchor, Band, Costs, Mode, Ties, align, alignments, distance
+from dinara_align import (
+    DEFAULT_MAX_MEMORY,
+    Alignment,
+    AlignmentError,
+    Anchor,
+    Band,
+    Costs,
+    Mode,
+    Ties,
+    align,
+    alignments,
+    distance,
+)
 
 from oracle import ENDS, EXTENSION, LOCAL, Model, check_alignment, optimum, reversed_bytes, rule_span
 
@@ -167,6 +179,8 @@ struct Case(Copyable, Movable, Writable):
     var band: Band
     var ties: Ties
     var extended: Bool
+    var memory: Int
+    """The kept fronts' budget in bytes: the default, or a few hundred, which splits every pair."""
 
 
 def check(trial: Case) raises:
@@ -253,13 +267,21 @@ def check(trial: Case) raises:
             band=trial.band,
             ties=trial.ties,
             extended=trial.extended,
+            max_memory=trial.memory,
         )
         if Bool(aligned) != (found.cost <= cap):
             raise Error(String("align under cap ", cap, " for cost ", found.cost))
-        if aligned and (
-            aligned.value().cigar != found.cigar
-            or aligned.value().reference_start != found.reference_start
-            or aligned.value().query_start != found.query_start
+        if aligned and aligned.value().cost != found.cost:
+            raise Error(String("align under a cap cost ", aligned.value().cost, ", without ", found.cost))
+        # A split follows the tie rule within its pieces alone, so only an unsplit pair spells the same.
+        if (
+            aligned
+            and trial.memory == DEFAULT_MAX_MEMORY
+            and (
+                aligned.value().cigar != found.cigar
+                or aligned.value().reference_start != found.reference_start
+                or aligned.value().query_start != found.query_start
+            )
         ):
             raise Error(
                 String(
@@ -277,7 +299,10 @@ def check(trial: Case) raises:
                     found.query_start,
                 )
             )
-    # Ties: the left rule is the right one over both sequences reversed, read backwards, span and all.
+    # Ties: the left rule is the right one over both sequences reversed, read backwards, span and all;
+    # a split follows it within its pieces alone.
+    if trial.memory != DEFAULT_MAX_MEMORY:
+        return
     if trial.mode.kind == Mode.SMITH_WATERMAN:
         var n = trial.reference.byte_length()
         var m = trial.query.byte_length()
@@ -339,7 +364,8 @@ def random_case() raises -> Case:
             low = draw(-3, 3)
             high = low + draw(0, 4)
         band = Band(low, high)
-    return Case(pair[0], pair[1], costs, mode, band, Ties.RIGHT if chance(0.5) else Ties.LEFT, chance(0.8))
+    var memory = DEFAULT_MAX_MEMORY if chance(0.7) else draw(0, 2000)
+    return Case(pair[0], pair[1], costs, mode, band, Ties.RIGHT if chance(0.5) else Ties.LEFT, chance(0.8), memory)
 
 
 def main() raises:

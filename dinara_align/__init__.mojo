@@ -83,6 +83,7 @@ from .alignment import GappedAlignment, colorize
 from .api import align, alignments, distance, distances, score, scores
 from .common import Device, DeviceScope, GpuSpecs, Placement, hardware_threads
 from .errors import AlignmentError, ErrorKind
+from .gap_affine import DEFAULT_MAX_MEMORY
 from .modes import AlignedCounts, Alignment, Anchor, Band, Costs, Mode, Ties
 from .scoring import (
     DEFAULT_GAP_EXTENSION,

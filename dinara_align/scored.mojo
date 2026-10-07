@@ -317,7 +317,7 @@ def end_of(reference: Span[UInt8, _], query: Span[UInt8, _], costs: Costs, match
 
 
 def latest_local(
-    reference: String, query: String, costs: Costs, match_score: Int, extended: Bool
+    reference: String, query: String, costs: Costs, match_score: Int, extended: Bool, limit: Int
 ) raises AlignmentError -> Alignment:
     """The best local alignment ending as late as an equally good one allows (see `best_end`) and
     starting as late too, the shortest, its CIGAR by the left rule: the extension back from its end,
@@ -340,8 +340,8 @@ def latest_local(
     var lead = String(StringSlice(unsafe_from_utf8=query.as_bytes()[:end_row]))
     # The best alignment ending at that cell, and starting wherever pays: an extension back from it,
     # which stops on earning the sweep's score, the best any alignment ending there earns.
-    var traced = traced_extension[2](head, lead, penalties, extended, found[0]) if two else traced_extension[1](
-        head, lead, penalties, extended, found[0]
+    var traced = traced_extension[2](head, lead, penalties, extended, found[0], limit) if two else traced_extension[1](
+        head, lead, penalties, extended, found[0], limit
     )
     var back: AffineExtension
     if traced:
@@ -351,9 +351,25 @@ def latest_local(
         # Too many fronts to keep: the extension's own search and split, by the left rule too, over
         # both sequences reversed from the end.
         var mirrored = extension_of[2](
-            reversed_text(head), reversed_text(lead), penalties, extended, Anchor.START, Band(), Ties.RIGHT, found[0]
+            reversed_text(head),
+            reversed_text(lead),
+            penalties,
+            extended,
+            Anchor.START,
+            Band(),
+            Ties.RIGHT,
+            found[0],
+            limit,
         ) if two else extension_of[1](
-            reversed_text(head), reversed_text(lead), penalties, extended, Anchor.START, Band(), Ties.RIGHT, found[0]
+            reversed_text(head),
+            reversed_text(lead),
+            penalties,
+            extended,
+            Anchor.START,
+            Band(),
+            Ties.RIGHT,
+            found[0],
+            limit,
         )
         mirrored.cigar = reversed_cigar(mirrored.cigar)
         back = mirrored^
@@ -369,7 +385,7 @@ def latest_local(
 
 
 def local_alignment(
-    reference: String, query: String, costs: Costs, match_score: Int, ties: Ties, extended: Bool
+    reference: String, query: String, costs: Costs, match_score: Int, ties: Ties, extended: Bool, limit: Int
 ) raises AlignmentError -> Alignment:
     """The best local alignment, a match earning `match_score` (see `Mode.local`).
 
@@ -378,10 +394,10 @@ def local_alignment(
     reversed, read backwards, as for every other mode: it starts and ends as early as it may, gaps
     right."""
     if ties == Ties.LEFT:
-        return latest_local(reference, query, costs, match_score, extended)
+        return latest_local(reference, query, costs, match_score, extended, limit)
     var columns = reference.byte_length()
     var rows = query.byte_length()
-    var mirrored = latest_local(reversed_text(reference), reversed_text(query), costs, match_score, extended)
+    var mirrored = latest_local(reversed_text(reference), reversed_text(query), costs, match_score, extended, limit)
     if mirrored.score == 0:
         return mirrored^
     return Alignment(
@@ -416,7 +432,14 @@ def rewarded_span(
 
 
 def rewarded_alignment(
-    reference: String, query: String, costs: Costs, match_score: Int, ends: EndsFree, ties: Ties, extended: Bool
+    reference: String,
+    query: String,
+    costs: Costs,
+    match_score: Int,
+    ends: EndsFree,
+    ties: Ties,
+    extended: Bool,
+    limit: Int,
 ) raises AlignmentError -> Alignment:
     """The best alignment with the letters `ends` allows free at either end, a match earning
     `match_score` (see `Mode.ends_free`): semi-global with a reward, and with every end free an
@@ -450,15 +473,23 @@ def rewarded_alignment(
         return Alignment(0, span[0], String(), start_column, end_column, start_row, end_row)
     var part = String(StringSlice(unsafe_from_utf8=reference.as_bytes()[start_column:end_column]))
     var piece = String(StringSlice(unsafe_from_utf8=query.as_bytes()[start_row:end_row]))
-    var found = global_rewarded(part, piece, costs, match_score, Band(), ties, extended)
+    var found = global_rewarded(part, piece, costs, match_score, Band(), ties, extended, limit)
     return Alignment(found[0], span[0], found[1], start_column, end_column, start_row, end_row)
 
 
 def global_rewarded(
-    reference: String, query: String, costs: Costs, match_score: Int, band: Band, ties: Ties, extended: Bool
+    reference: String,
+    query: String,
+    costs: Costs,
+    match_score: Int,
+    band: Band,
+    ties: Ties,
+    extended: Bool,
+    limit: Int,
 ) raises AlignmentError -> Tuple[Int, String]:
     """A global alignment with a reward, its letters fixed, so the reward folds into the costs and the
-    wavefront finds it, inside `band`: its cost and CIGAR, or raises when none fits the band."""
+    wavefront finds it, inside `band`, split past `limit` kept diagonals: its cost and CIGAR, or raises
+    when none fits the band."""
     var two = costs.pieces() == 2
     var penalties = extension_penalties(
         match_score,
@@ -468,9 +499,9 @@ def global_rewarded(
         costs.opening2 if two else 0,
         costs.extension2 if two else 0,
     )
-    var found = cigar_within[2](reference, query, penalties, extended, Int.MAX, band, ties) if two else cigar_within[1](
-        reference, query, penalties, extended, Int.MAX, band, ties
-    )
+    var found = cigar_within[2](
+        reference, query, penalties, extended, Int.MAX, band, ties, limit
+    ) if two else cigar_within[1](reference, query, penalties, extended, Int.MAX, band, ties, limit)
     if not found:
         raise outside(band)
     var cigar = found.take().cigar

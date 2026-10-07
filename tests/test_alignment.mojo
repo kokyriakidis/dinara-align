@@ -2528,6 +2528,30 @@ def test_capped_batches_match_single_pairs() raises:
     assert_false(Bool(capped[1]))
 
 
+def test_memory_budget_keeps_the_cost() raises:
+    """Under a budget too small to keep any front, every mode splits its pairs again and again and
+    still finds an alignment of the least cost, or the best score; the default budget keeps them whole."""
+    seed(97)
+    var costs = Costs.affine(4, 6, 2)
+    var modes: List[Mode] = [Mode.GLOBAL, Mode.INFIX, Mode.SUFFIX, Mode.extension(2), Mode.local(2), Mode.overlap(2)]
+    for trial in range(12):
+        var reference = random_sequence(300, 1500, DNA_ALPHABET)
+        var query = mutated(reference, [0.02, 0.1, 0.3][trial % 3], 8)
+        for mode in modes:
+            var whole_pair = align(reference, query, costs, mode)
+            for budget in [0, 5000]:
+                var split = align(reference, query, costs, mode, max_memory=budget)
+                assert_equal(
+                    split.cost if not mode.is_scored() else split.score,
+                    whole_pair.cost if not mode.is_scored() else whole_pair.score,
+                )
+                var part = String(
+                    StringSlice(unsafe_from_utf8=reference.as_bytes()[split.reference_start : split.reference_end])
+                )
+                var piece = String(StringSlice(unsafe_from_utf8=query.as_bytes()[split.query_start : split.query_end]))
+                _ = rows_from_cigar(part, piece, split.cigar)
+
+
 def rebuilt_reference(query: String, cigar: String, md: String) raises -> String:
     """The reference's aligned part from the query's, the CIGAR and the `MD` string, as SAM readers
     rebuild it: the query's letters through matches and substitutions, those `MD` names replaced, and

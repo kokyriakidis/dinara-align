@@ -17,6 +17,7 @@ from std.ffi import external_call
 from max.algorithm import parallelize
 
 from dinara_align import (
+    DEFAULT_MAX_MEMORY,
     Alignment,
     AlignmentError,
     Anchor,
@@ -106,24 +107,26 @@ def mode_of(fields: OptionalPointer[Int, MutAnyOrigin]) raises AlignmentError ->
 
 @fieldwise_init
 struct Options(ImplicitlyCopyable):
-    """`dinara_options`: the band's two edges, the cost cap, `extended` and `right_ties`. Null is no band,
-    no cap, `=` and `X`, and indels placed left."""
+    """`dinara_options`: the band's two edges, the cost cap, `extended`, `right_ties` and the memory for
+    kept fronts. Null is no band, no cap, `=` and `X`, indels placed left, and the default memory."""
 
     var band: Band
     var max_cost: Int
     var extended: Bool
     var ties: Ties
+    var max_memory: Int
 
 
 def options_of(fields: OptionalPointer[Int, MutAnyOrigin]) -> Options:
     if not fields:
-        return Options(Band(), -1, True, Ties.LEFT)
+        return Options(Band(), -1, True, Ties.LEFT, DEFAULT_MAX_MEMORY)
     var at = fields.value()
     comptime EDGE = 1 << 60
     # The C integer limits stand for no band, kept clear of overflow.
     var band = Band(max(at[unsafe_offset=0], -EDGE), min(at[unsafe_offset=1], EDGE))
     var ties = Ties.RIGHT if at[unsafe_offset=4] != 0 else Ties.LEFT
-    return Options(band, at[unsafe_offset=2], at[unsafe_offset=3] != 0, ties)
+    var memory = at[unsafe_offset=5] if at[unsafe_offset=5] > 0 else DEFAULT_MAX_MEMORY
+    return Options(band, at[unsafe_offset=2], at[unsafe_offset=3] != 0, ties, memory)
 
 
 def failure(error: AlignmentError) -> Int:
@@ -182,7 +185,16 @@ def align_into(
         if asked.max_cost < 0 or mode.kind != Mode.ENDS:
             if asked.max_cost >= 0:
                 return INVALID_MODE
-            found = align(first, second, costs, mode, band=asked.band, ties=asked.ties, extended=asked.extended)
+            found = align(
+                first,
+                second,
+                costs,
+                mode,
+                band=asked.band,
+                ties=asked.ties,
+                extended=asked.extended,
+                max_memory=asked.max_memory,
+            )
         else:
             found = align(
                 first,
@@ -193,6 +205,7 @@ def align_into(
                 band=asked.band,
                 ties=asked.ties,
                 extended=asked.extended,
+                max_memory=asked.max_memory,
             )
             if not found:
                 return ABOVE_MAX

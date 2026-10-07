@@ -90,8 +90,14 @@ comptime CHECK_START = 128
 """The cost from which the search judges its projection, so it has a few edits to go on."""
 
 comptime HISTORY_LIMIT = 1 << 24
-"""Diagonals the two searches' kept fronts may hold together, 80 MB, past which the pair is split
-(see `solve`)."""
+"""Diagonals the two searches' kept fronts may hold together by default, 80 MB, past which the pair is
+split (see `solve`); `align`'s `max_memory` sets another."""
+
+comptime KEPT_BYTES = 5
+"""Bytes a kept diagonal takes: its alignment column and the flag of which source won it."""
+
+comptime DEFAULT_MAX_MEMORY = HISTORY_LIMIT * KEPT_BYTES
+"""The bytes of kept fronts an alignment may hold by default, about 80 MB (see `HISTORY_LIMIT`)."""
 
 comptime HISTORY_KEPT_PER_LETTER = 8
 """Diagonals a recording search makes room for per letter of the pair before its kept fronts first grow."""
@@ -1948,11 +1954,13 @@ def extend[
 
 def traced_extension[
     pieces: Int
-](first: String, second: String, penalties: Penalties, extended: Bool, known: Int) -> Optional[AffineExtension]:
+](
+    first: String, second: String, penalties: Penalties, extended: Bool, known: Int, limit: Int = HISTORY_LIMIT
+) -> Optional[AffineExtension]:
     """The best extension fixed at both sequences' ends, as `extend` finds it searching back from there
     with a `known` best score, its fronts kept as it grows and traced back from where it stops, so
     no second search aligns the letters it covers. None when the kept fronts would pass half of
-    `HISTORY_LIMIT`, for `extension_of`'s search and split instead.
+    `limit`, for `extension_of`'s search and split instead.
 
     The trace takes WFA2-lib's rule over the search's own sequences, both reversed, read backwards:
     the alignment `Ties.LEFT` names. The search stops at the first alignment earning `known`, the one
@@ -1989,7 +1997,7 @@ def traced_extension[
                     best_row = column - diagonal
         if best >= 2 * known or cost - search.last_reached > window:
             break
-        if search.history.kept > HISTORY_LIMIT // 2:
+        if search.history.kept > limit // 2:
             return None
         search.advance[True]()
     var moves = List[UInt8](capacity=best_column + best_row)
@@ -2037,10 +2045,12 @@ def extension_of[
     band: Band,
     ties: Ties,
     known: Int = -1,
+    limit: Int = HISTORY_LIMIT,
 ) raises AlignmentError -> AffineExtension:
     """The best extension from `anchor` inside `band`, found by `extend` and aligned by `solve` over the
-    letters it covers, as a global alignment of those, so its memory stays bounded however long. A
-    `known` best score ends the search once it is reached (see `extend`)."""
+    letters it covers, as a global alignment of those, split past `limit` kept diagonals, so its memory
+    stays bounded however long. A `known` best score ends the search once it is reached (see
+    `extend`)."""
     if not band.holds(0):
         raise outside(band)
     var a = first.as_bytes()
@@ -2061,7 +2071,7 @@ def extension_of[
         penalties,
         FREE_START,
         FREE_START,
-        HISTORY_LIMIT,
+        limit,
         moves,
         True,
         Int.MAX,
