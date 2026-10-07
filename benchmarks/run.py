@@ -40,6 +40,13 @@ RIVALS = {
     ),
     # v2.3.6, for its regression set alone (see `scripts/test_wfa.py`).
     "WFA2-lib": ("https://github.com/smarco/WFA2-lib", "bcf473a6561fa297934a80eaa7c04b4ee412360c"),
+    # The local and overlap aligners of `local_bench.py`.
+    "SSW": (
+        "https://github.com/mengyao/Complete-Striped-Smith-Waterman-Library",
+        "a66636b79ef36ac178122437053be0d8ef345271",
+    ),
+    "parasail": ("https://github.com/jeffdaily/parasail", "fb985ee4f2302c72c87d7d56443712b2d920b106"),
+    "abPOA": ("https://github.com/yangao07/abPOA", "2e095ba7f8de6bc62aaaa9a684cda781b8098ee0"),
 }
 """Each rival's repository and the commit its numbers were taken at."""
 

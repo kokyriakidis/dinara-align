@@ -34,6 +34,8 @@ bench = "python3 benchmarks/run.py"
 bench-astarpa2 = "python3 benchmarks/pa_bench.py"
 # Measures the results tables of benchmarks/README.md: `collect`, then `tables`.
 results-astarpa2 = "python3 benchmarks/pa_results.py"
+# Times local and overlap alignment against SSW, parasail, abPOA and hyalite; see `benchmarks/local_bench.py`.
+bench-local = "python3 benchmarks/local_bench.py"
 # Builds a program on dinara-align into a folder that runs without pixi or Mojo, for a baseline CPU:
 # `pixi run bundle <program.mojo> [out-dir] [target-cpu]`; see `scripts/bundle.sh`.
 bundle = "bash scripts/bundle.sh"

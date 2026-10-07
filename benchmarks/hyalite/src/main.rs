@@ -1,5 +1,6 @@
 //! The hyalite side of the comparison: global (`Mode::Nw`) affine-gap alignment of the DNA batches
-//! and pairs `run.py` wrote, through `align_pair` (score) and `align` (alignment), on one CPU thread.
+//! and pairs `run.py` wrote, through `align_pair` (score) and `align` (alignment), on one CPU thread;
+//! and with `local <file>`, `local_bench.py`'s local (`Mode::Sw`) or overlap (`Mode::Ov`) alignments.
 //!
 //! Every workload reads `dna_scoring.txt`, which dinara-align writes from its own default, so both
 //! tools score with the same numbers. The edit-distance pairs are left to the bit-parallel aligners:
@@ -99,7 +100,36 @@ fn each(pairs: &Pairs, scoring: &Scoring) {
     }
 }
 
+/// `local_bench.py`'s workload, local or overlap alignment with traceback at a match 2, a mismatch -4
+/// and a gap of `k` letters `6 + 2k`, which hyalite charges as `8 + 2 (k - 1)`; the faster of two
+/// passes, its mean per pair, and the scores' checksum.
+fn local(path: &str) {
+    let pairs = read(path, "ACGT");
+    let mut matrix = vec![-4; 16];
+    for letter in 0..4 {
+        matrix[letter * 4 + letter] = 2;
+    }
+    let scoring = Scoring::new(4, matrix, 8, 2).unwrap();
+    let overlap = pairs.names[0].contains("overlap");
+    let mode = if overlap { Mode::Ov } else { Mode::Sw };
+    let mut best = f64::INFINITY;
+    let mut scores = Vec::new();
+    for _ in 0..2 {
+        let started = Instant::now();
+        scores = (0..pairs.names.len())
+            .map(|i| align(&pairs.seconds[i], &pairs.firsts[i], &scoring, mode, BUDGET).unwrap().score as i64)
+            .collect();
+        best = best.min(started.elapsed().as_secs_f64());
+    }
+    let task = if overlap { "overlap" } else { "local" };
+    println!("hyalite\t{}\t{task}\t{}\t{}", pairs.names[0], best / pairs.names.len() as f64, checksum(&scores));
+}
+
 fn main() {
+    if env::args().nth(1).as_deref() == Some("local") {
+        local(&env::args().nth(2).expect("usage: hyalite-runner local <workload file>"));
+        return;
+    }
     let directory = env::args().nth(1).expect("usage: hyalite-runner <data directory>");
     let written = fs::read_to_string(format!("{directory}/dna_scoring.txt")).unwrap();
     let mut lines = written.lines();

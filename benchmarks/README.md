@@ -203,6 +203,28 @@ Growth of peak memory aligning each pair, median / largest, as A\*PA2's Table 10
 
 dinara-align keeps under a tenth of WFA's memory on the largest pairs (85 against 2413 MB at 100 kbp), as its traceback keeps a byte of flags and the column of one front a diagonal, from fronts each half as long; BiWFA, keeping only its last few fronts, stays smallest.
 
+## Local and Overlap Alignment
+
+Local alignment, Smith-Waterman, and overlap alignment, every end gap free, each with its CIGAR, against the aligners that offer them:
+
+```bash
+pixi run bench-local   # builds SSW, parasail and abPOA the first time; then about a minute
+```
+
+Every tool scores a match 2, a mismatch -4 and a gap of `k` letters `6 + 2k` (dinara-align's `Mode.local(2)` and `Mode.overlap(2)` under `Costs.affine(4, 6, 2)`), and every tool's scores must agree on every pair, or the run fails; none disagreed.
+A tool's time is the faster of two passes over a workload, its mean per pair, on one thread of the Skylake-X, pinned (see A\*PA2's results below for the machine).
+abPOA aligns to a graph, so its time includes adding the reference to one, as any pairwise use of it pays; SSW and abPOA have no overlap mode.
+
+| workload | dinara-align | SSW | parasail | abPOA | hyalite |
+| :-- | --: | --: | --: | --: | --: |
+| local, 600 short noisy pairs (20 to 700 bp) | **42 µs** | 51 µs | 75 µs | 174 µs | 682 µs |
+| local, 1 kbp read at 10% in a 10 kbp window | **1.61 ms** | 3.18 ms | 5.36 ms | 16.6 ms | 139 ms |
+| local, 10 kbp at 5% against 12 kbp | **51.3 ms** | 84.9 ms | 295 ms | 203 ms | 1.77 s |
+| overlap, 2 kbp reads overlapping by 0.5 to 1.5 kbp | **2.47 ms** | — | 17.8 ms | — | 36.0 ms |
+
+- **dinara-align is the fastest on every workload**, 1.2 to 2 times SSW on local alignment and 7 times parasail on overlaps.
+- **Its sweep runs by anti-diagonal in 16-bit lanes along the shorter sequence,** while the scores fit, and finds only the best end; an extension back from that end, stopping once it earns the sweep's score, gives the alignment, traced as it searched. SSW sweeps striped (Farrar), whose lazy pass runs most of every column when a long alignment scores high, as on the 10 kbp pairs.
+
 ## A\*PA2's Results, Redone
 
 A\*PA2's own results section ([curiouscoding.nl/posts/astarpa2](https://curiouscoding.nl/posts/astarpa2/#results)), redone with dinara-align beside the exact aligners it compares, and WFA, on a machine set up as A\*PA2's was: its real datasets, its uniform pairs swept over divergence and over length, and in place of its ablation, dinara-align's history on the long reads.
