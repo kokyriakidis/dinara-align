@@ -168,7 +168,7 @@ def distance(reference: String, query: String, costs: Costs = Costs.edit(), mode
 ### `distances`
 
 ```mojo
-def distances(references: List[String], queries: List[String], costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, band: Band = Band(), threads: Optional[Int] = None) -> List[Int]
+def distances(references: List[String], queries: List[String], costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, band: Band = Band(), threads: Optional[Int] = None, placement: Optional[Placement] = None) -> List[Int]
 ```
 
 Every pair's `distance`, the pairs spread over `threads` threads, every thread this process may use by default.
@@ -176,6 +176,10 @@ Every pair's `distance`, the pairs spread over `threads` threads, every thread t
 The pairs are independent, so each runs on one thread start to finish, each thread taking the
 next pair of the batch, longest first, as soon as it is free (see `longest_first`). A pair that
 fails raises, after the rest, the same error a serial loop would have raised first.
+
+On the GPU, `placement`, unit costs align globally, a thread a pair by Myers' bit-vectors (see
+`device_edit`), every pair whose shorter sequence fits a thread's 4,096 letters; the rest, and
+every other cost or mode, on the host.
 
 ```mojo
 def distances(references: List[String], queries: List[String], costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, max_cost: Int, band: Band = Band(), threads: Optional[Int] = None) -> List[Optional[Int]]

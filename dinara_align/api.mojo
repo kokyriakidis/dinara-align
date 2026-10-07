@@ -19,7 +19,8 @@ from std.atomic import Atomic
 from max.algorithm import parallelize
 
 from .alignment import AlignmentMode, GappedAlignment
-from .common import Placement, hardware_threads
+from .common import Device, DeviceScope, Placement, hardware_threads
+from .device_edit import MAX_PATTERN_WORDS, device_edit_distances
 from .edit_distance import edit_cigar, edit_distance
 from .edit_search import edit_search
 from .errors import AlignmentError, ErrorKind
@@ -540,14 +541,25 @@ def distances(
     *,
     band: Band = Band(),
     threads: Optional[Int] = None,
-) raises AlignmentError -> List[Int]:
+    placement: Optional[Placement] = None,
+) raises -> List[Int]:
     """Every pair's `distance`, the pairs spread over `threads` threads, every thread this process may
     use by default.
 
     The pairs are independent, so each runs on one thread start to finish, each thread taking the
     next pair of the batch, longest first, as soon as it is free (see `longest_first`). A pair that
     fails raises, after the rest, the same error a serial loop would have raised first.
+
+    On the GPU, `placement`, unit costs align globally, a thread a pair by Myers' bit-vectors (see
+    `device_edit`), every pair whose shorter sequence fits a thread's 4,096 letters; the rest, and
+    every other cost or mode, on the host.
     """
+    if placement and placement.value().device == Device.GPU:
+        if costs.unit_scale() == 0 or not mode.is_global() or not band.covers(1 << 40, 1 << 40):
+            raise AlignmentError(
+                ErrorKind.INVALID_ARGUMENT, "on the GPU, distances at unit costs, globally, with no band"
+            )
+        return gpu_distances(references, queries, costs.unit_scale(), placement.value())
     var found = capped_distances(references, queries, costs, mode, band, Int.MAX, threads)
     var results = List[Int](capacity=len(found))
     for index in range(len(found)):
@@ -569,6 +581,39 @@ def distances(
     `band`, the pairs spread over threads as the uncapped `distances` spreads them: a batch of
     candidates filtered by cost, the far ones costing a fraction of their full search."""
     return capped_distances(references, queries, costs, mode, band, max_cost, threads)
+
+
+def gpu_distances(
+    references: List[String], queries: List[String], scale: Int, placement: Placement
+) raises -> List[Int]:
+    """Every pair's unit-cost distance times `scale`, on the device where its shorter sequence fits a
+    thread (see `device_edit`), on the host otherwise."""
+    var pairs = paired_length(references, queries)
+    var results = List[Int](length=pairs, fill=0)
+    var patterns = List[String]()
+    var texts = List[String]()
+    var on_device = List[Int]()
+    var on_host = List[Int]()
+    comptime LIMIT = 64 * MAX_PATTERN_WORDS
+    for index in range(pairs):
+        var reference = references[index].byte_length()
+        var query = queries[index].byte_length()
+        if min(reference, query) == 0:
+            results[index] = max(reference, query) * scale
+        elif min(reference, query) <= LIMIT:
+            var shorter_query = query <= reference
+            patterns.append(queries[index] if shorter_query else references[index])
+            texts.append(references[index] if shorter_query else queries[index])
+            on_device.append(index)
+        else:
+            on_host.append(index)
+    if len(on_device) > 0:
+        var found = device_edit_distances(DeviceScope(placement.gpu_id), patterns, texts)
+        for slot in range(len(on_device)):
+            results[on_device[slot]] = found[slot] * scale
+    for index in on_host:
+        results[index] = distance(references[index], queries[index], Costs.edit()) * scale
+    return results^
 
 
 def capped_distances(

@@ -2827,6 +2827,33 @@ def rebuilt_reference(query: String, cigar: String, md: String) raises -> String
 # region Device
 
 
+def test_device_edit_distances() raises:
+    """On the GPU, a batch's unit-cost distances are the host's, patterns of one word and of many,
+    symbols past ACGT, empty sides, and a pair too long for a thread, which the host takes; other
+    costs are refused there. Skipped where no accelerator answers."""
+    if not gpu_available():
+        print("    skipped: no accelerator serves a real alignment here")
+        return
+    seed(109)
+    var references = List[String]()
+    var queries = List[String]()
+    for trial in range(400):
+        var reference = random_sequence(0, [60, 300, 1500][trial % 3], "ACGTN" if trial % 5 == 0 else DNA_ALPHABET)
+        references.append(reference)
+        queries.append(mutated(reference, [0.0, 0.1, 0.4][trial % 3], 6))
+    references.append(random_sequence(5000, 5000, DNA_ALPHABET))
+    queries.append(mutated(references[len(references) - 1], 0.05, 4))
+    var device = Placement.on_gpu(0, 4)
+    var found = distances(references, queries, placement=device)
+    var expected = distances(references, queries)
+    for index in range(len(found)):
+        assert_equal(found[index], expected[index])
+    assert_equal(distances(references, queries, Costs.linear(2, 2), placement=device)[3], 2 * expected[3])
+    var affine = Costs.affine(4, 6, 2)
+    with assert_raises(contains="unit costs"):
+        _ = distances(references, queries, affine, placement=device)
+
+
 def test_device_matches_host() raises:
     """Every device path returns the host's score, with an alignment that earns it.
 
