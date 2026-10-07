@@ -6,18 +6,23 @@ WFA2-lib ships 305 pairs (`tests/wfa.utest.seq`) and its own results for each mo
 the edit and indel distances, gap-affine costs at four penalties, three more with a match reward, and
 two-piece gap-affine costs. Every score must equal WFA2-lib's, and every CIGAR must consume both
 sequences exactly, its `M` a match and its `X` a mismatch, and cost the expected score when priced
-afresh, so a tie resolved another way passes and a wrong alignment does not. WFA2-lib's own CIGARs are
-priced the same way, which checks the pricing. Its approximate heuristic modes, which dinara-align does
-not offer, are left out.
+afresh. WFA2-lib's own CIGARs are priced the same way, which checks the pricing.
 
-The indel distance runs as gap-affine costs (2, 0, 1), where a substitution costs what a deletion and
-an insertion do; its CIGARs may write one as `X`, priced as that pair.
+Every gap-affine mode must also give WFA2-lib's CIGAR byte for byte under `Ties.RIGHT`, its own rule
+for ties: the indel distance as costs (3, 0, 1), which give it exactly and never a substitution, and the
+modes with a match reward by the costs WFA2-lib folds the reward into. Those run with no memory limit,
+so no pair is split (see `gap_affine.solve`). The edit distance, a different algorithm with no such
+rule, is held to the score and a valid CIGAR alone. Its approximate heuristic modes, which dinara-align
+does not offer, are left out.
 """
 
 from std.sys import argv
 
 from dinara_align import (
     AlignmentMode,
+    Band,
+    EndsFree,
+    Ties,
     Placement,
     Scoring,
     affine2p_cigar,
@@ -27,6 +32,7 @@ from dinara_align import (
     align,
     edit_cigar,
 )
+from dinara_align.gap_affine import FREE_START, Penalties, affine2p_penalties, affine_penalties, cigar_of, solve
 
 comptime EDIT = 0
 comptime GAP_AFFINE = 1
@@ -79,6 +85,26 @@ def rows_cigar(top: String, bottom: String) -> String:
     if run > 0:
         out += String(run, chr(Int(last)))
     return out
+
+
+def wfa_cigar[pieces: Int](first: String, second: String, penalties: Penalties) -> String:
+    """The alignment `Ties.RIGHT` picks, in WFA2-lib's letters, found with no memory limit."""
+    var moves = List[UInt8]()
+    var cost = solve[pieces](
+        first.as_bytes(),
+        second.as_bytes(),
+        penalties,
+        FREE_START,
+        FREE_START,
+        Int.MAX,
+        moves,
+        True,
+        Int.MAX,
+        EndsFree(),
+        Band(),
+        Ties.RIGHT,
+    )
+    return cigar_of(first, second, moves^, cost, penalties, True).replace("=", "M")
 
 
 def priced(cigar: String, first: String, second: String, mode: Mode) -> Optional[Int]:
@@ -205,6 +231,29 @@ def main() raises:
                 wrong += 1
             if cigar.replace("=", "M") != theirs:
                 differing += 1
+            if mode.kind != EDIT:
+                var exact: String
+                if mode.kind == TWO_PIECE:
+                    exact = wfa_cigar[2](
+                        first,
+                        second,
+                        affine2p_penalties(mode.mismatch, mode.opening, mode.extension, mode.opening2, mode.extension2),
+                    )
+                elif mode.kind == REWARDED:
+                    # WFA2-lib's own fold of the reward into costs (see `gap_affine`).
+                    var a = mode.reward
+                    exact = wfa_cigar[1](
+                        first,
+                        second,
+                        affine_penalties(2 * (mode.mismatch + a), 2 * mode.opening, 2 * mode.extension + a),
+                    )
+                elif mode.name == "indel":
+                    exact = wfa_cigar[1](first, second, affine_penalties(3, 0, 1))
+                else:
+                    exact = wfa_cigar[1](first, second, affine_penalties(mode.mismatch, mode.opening, mode.extension))
+                if exact != theirs:
+                    print("   ", mode.name, "pair", index, ": Ties.RIGHT gives", exact, "where WFA2-lib gives", theirs)
+                    wrong += 1
         print(
             mode.name,
             ":",
@@ -213,7 +262,8 @@ def main() raises:
             len(firsts),
             "pairs agree;",
             differing,
-            "CIGARs differ from WFA2-lib's at the same score",
+            "default CIGARs differ from WFA2-lib's at the same score",
+            "(no rule of its own for ties)" if mode.kind == EDIT else "(gaps placed left), none under Ties.RIGHT",
         )
         failures += wrong
     if failures:

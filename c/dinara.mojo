@@ -19,6 +19,7 @@ from dinara_align import (
     Band,
     EndsFree,
     ErrorKind,
+    Ties,
     affine2p_cigar,
     affine2p_distance,
     affine2p_extension,
@@ -128,6 +129,7 @@ def dinara_affine_cigar(
     band_low: Int,
     band_high: Int,
     extended: Int32,
+    right_ties: Int32,
     cigar: MutPointer[MutPointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     cigar_length: MutPointer[Int, MutAnyOrigin],
 ) abi("C") -> Int:
@@ -135,7 +137,8 @@ def dinara_affine_cigar(
     `opening + k extension`, and an optimal alignment's CIGAR, handed over as `dinara_edit_cigar`'s; or
     `ABOVE_MAX`, and no CIGAR, when the cost passes a `max_cost` of zero or more. Every byte is a symbol
     matching only itself, save the two UTF-8 never holds, which mark the ends; the free counts and the
-    band as for `dinara_affine_distance`, the free letters `D` and `I` runs."""
+    band as for `dinara_affine_distance`, the free letters `D` and `I` runs. Of equally good alignments
+    the CIGAR places gaps left, or with `right_ties` nonzero right, as WFA2-lib's (see `Ties`)."""
     var pair = Pair(first, first_length, second, second_length, first_begin_free, first_end_free)
     return aligned(
         pair,
@@ -150,6 +153,7 @@ def dinara_affine_cigar(
         band_low,
         band_high,
         extended,
+        right_ties,
         cigar,
         cigar_length,
     )
@@ -213,6 +217,7 @@ def dinara_affine2p_cigar(
     band_low: Int,
     band_high: Int,
     extended: Int32,
+    right_ties: Int32,
     cigar: MutPointer[MutPointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     cigar_length: MutPointer[Int, MutAnyOrigin],
 ) abi("C") -> Int:
@@ -233,6 +238,7 @@ def dinara_affine2p_cigar(
         band_low,
         band_high,
         extended,
+        right_ties,
         cigar,
         cigar_length,
     )
@@ -252,6 +258,7 @@ def dinara_affine_extension(
     band_low: Int,
     band_high: Int,
     extended: Int32,
+    right_ties: Int32,
     cigar: MutPointer[MutPointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     cigar_length: MutPointer[Int, MutAnyOrigin],
     first_covered: MutPointer[Int, MutAnyOrigin],
@@ -275,6 +282,7 @@ def dinara_affine_extension(
         band_low,
         band_high,
         extended,
+        right_ties,
         cigar,
         cigar_length,
         first_covered,
@@ -298,6 +306,7 @@ def dinara_affine2p_extension(
     band_low: Int,
     band_high: Int,
     extended: Int32,
+    right_ties: Int32,
     cigar: MutPointer[MutPointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     cigar_length: MutPointer[Int, MutAnyOrigin],
     first_covered: MutPointer[Int, MutAnyOrigin],
@@ -319,6 +328,7 @@ def dinara_affine2p_extension(
         band_low,
         band_high,
         extended,
+        right_ties,
         cigar,
         cigar_length,
         first_covered,
@@ -415,6 +425,7 @@ def aligned(
     band_low: Int,
     band_high: Int,
     extended: Int32,
+    right_ties: Int32,
     cigar: MutPointer[MutPointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     cigar_length: MutPointer[Int, MutAnyOrigin],
 ) -> Int:
@@ -423,6 +434,7 @@ def aligned(
         return UNSUPPORTED_SYMBOLS
     var ends = EndsFree(pair.first_begin_free, pair.first_end_free, second_begin_free, second_end_free)
     var band = band_of(band_low, band_high)
+    var ties = Ties.RIGHT if right_ties != 0 else Ties.LEFT
     var a = pair.first
     var b = pair.second
     try:
@@ -430,10 +442,22 @@ def aligned(
         if max_cost < 0:
             if opening2 >= 0:
                 found = affine2p_cigar(
-                    a, b, mismatch, opening, extension, opening2, extension2, extended != 0, ends_free=ends, band=band
+                    a,
+                    b,
+                    mismatch,
+                    opening,
+                    extension,
+                    opening2,
+                    extension2,
+                    extended != 0,
+                    ends_free=ends,
+                    band=band,
+                    ties=ties,
                 )
             else:
-                found = affine_cigar(a, b, mismatch, opening, extension, extended != 0, ends_free=ends, band=band)
+                found = affine_cigar(
+                    a, b, mismatch, opening, extension, extended != 0, ends_free=ends, band=band, ties=ties
+                )
         elif opening2 >= 0:
             found = affine2p_cigar(
                 a,
@@ -447,10 +471,20 @@ def aligned(
                 max_cost=max_cost,
                 ends_free=ends,
                 band=band,
+                ties=ties,
             )
         else:
             found = affine_cigar(
-                a, b, mismatch, opening, extension, extended != 0, max_cost=max_cost, ends_free=ends, band=band
+                a,
+                b,
+                mismatch,
+                opening,
+                extension,
+                extended != 0,
+                max_cost=max_cost,
+                ends_free=ends,
+                band=band,
+                ties=ties,
             )
         if not found:
             return ABOVE_MAX
@@ -472,6 +506,7 @@ def extended_from(
     band_low: Int,
     band_high: Int,
     extended: Int32,
+    right_ties: Int32,
     cigar: MutPointer[MutPointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     cigar_length: MutPointer[Int, MutAnyOrigin],
     first_covered: MutPointer[Int, MutAnyOrigin],
@@ -482,6 +517,7 @@ def extended_from(
         return UNSUPPORTED_SYMBOLS
     var band = band_of(band_low, band_high)
     var anchor = Anchor.END if at_end != 0 else Anchor.START
+    var ties = Ties.RIGHT if right_ties != 0 else Ties.LEFT
     try:
         var found: AffineExtension
         if opening2 >= 0:
@@ -497,6 +533,7 @@ def extended_from(
                 extended != 0,
                 anchor=anchor,
                 band=band,
+                ties=ties,
             )
         else:
             found = affine_extension(
@@ -509,6 +546,7 @@ def extended_from(
                 extended != 0,
                 anchor=anchor,
                 band=band,
+                ties=ties,
             )
         hand_over(found.cigar, cigar, cigar_length)
         first_covered[] = found.first_length

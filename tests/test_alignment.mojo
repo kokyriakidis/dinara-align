@@ -22,6 +22,7 @@ from dinara_align import (
     EndsFree,
     Anchor,
     Band,
+    Ties,
     affine2p_cigar,
     affine2p_distance,
     affine2p_extension,
@@ -51,10 +52,16 @@ from dinara_align import (
 )
 from dinara_align.seeds import SEED_COLUMNS
 from dinara_align.gap_affine import (
+    ALIGNED,
+    FIRST_GAP,
     FREE_START,
+    SECOND_GAP,
+    Penalties,
+    Wavefront,
     affine2p_penalties,
     affine_penalties,
     solve,
+    trace,
     wavefront_align,
     wavefront_penalties,
 )
@@ -1598,6 +1605,154 @@ def test_affine_band_matches_the_full_matrix() raises:
     assert_equal(affine_cigar("AAAACCCC", "CCCCAAAA", 4, 6, 2, band=Band.around(0)).cost, 32)
     with assert_raises(contains="band"):
         _ = affine_distance("ACGT", "AC", 4, 6, 2, band=Band.around(1))
+
+
+def single_search_cigar[
+    pieces: Int
+](first: String, second: String, penalties: Penalties, ends: EndsFree, band: Band) -> Tuple[Int, String]:
+    """WFA2-lib's alignment as it finds it: one search from the origin, unpruned, every cost kept,
+    until an end the trailing allowances admit is reached, the first on the highest diagonal, traced
+    back from there. The reference `Ties.RIGHT` must match however the library found the cost."""
+    var columns = first.byte_length()
+    var rows = second.byte_length()
+    var search = Wavefront[pieces](
+        first.as_bytes(),
+        second.as_bytes(),
+        penalties,
+        FREE_START,
+        True,
+        False,
+        ends.first_begin,
+        ends.second_begin,
+        band,
+    )
+    while True:
+        var cost = search.cost
+        var history = Pointer(to=search.history)
+        for diagonal in range(history[].highs[cost], history[].lows[cost] - 1, -1):
+            var column = history[].column(cost, diagonal)
+            if column < 0:
+                continue
+            var row = column - diagonal
+            var trailing = -1
+            var along_first = True
+            if row >= rows and columns - column <= ends.first_end:
+                trailing = columns - column
+            elif column >= columns and rows - row <= ends.second_end:
+                trailing = rows - row
+                along_first = False
+            if trailing >= 0:
+                var moves = List[UInt8]()
+                for _ in range(trailing):
+                    moves.append(UInt8(FIRST_GAP) if along_first else UInt8(SECOND_GAP))
+                trace(history[], penalties, ALIGNED, cost, diagonal, column, moves)
+                return (cost * penalties.scale, cigar_of_moves(first, second, moves))
+        search.advance[True]()
+
+
+def test_ties_follow_a_fixed_rule() raises:
+    """Of several equally good alignments the CIGAR is always the one `Ties` names, however the two
+    searches found the cost: `Ties.RIGHT` is one search traced back from the far end, as WFA2-lib's,
+    and `Ties.LEFT` the same rule run from the start, the right rule's CIGAR of both sequences
+    reversed, read backwards. For one gap piece or two, global, with ends free, inside a band."""
+    seed(59)
+    for costs in [(4, 6, 2, -1, 0), (1, 0, 1, -1, 0), (3, 1, 4, -1, 0), (4, 6, 2, 24, 1), (2, 2, 3, 9, 1)]:
+        var x = costs[0]
+        var o = costs[1]
+        var e = costs[2]
+        var o2 = costs[3]
+        var e2 = costs[4]
+        var two = o2 >= 0
+        var penalties = affine2p_penalties(x, o, e, o2, e2) if two else affine_penalties(x, o, e)
+        for trial in range(60):
+            # Repeats make ties: gaps that could sit anywhere in a run, substitutions that trade for gaps.
+            var unit = random_sequence(1, 4, DNA_ALPHABET)
+            var core = random_sequence(1, 60, DNA_ALPHABET)
+            for _ in range(Int(random_ui64(0, 6))):
+                core += unit + random_sequence(0, 20, DNA_ALPHABET)
+            var first = core
+            var second = mutated(core, [0.03, 0.1, 0.25][trial % 3], [1, 4, 12][(trial // 3) % 3])
+            if second.byte_length() == 0:
+                second = "A"
+            var ends = EndsFree()
+            if trial % 3 == 1:
+                var sizes = [0, 2, 9, 1000]
+                ends = EndsFree(
+                    sizes[trial % 4], sizes[(trial // 4) % 4], sizes[(trial // 2) % 4], sizes[(trial // 3) % 4]
+                )
+            var band = Band() if trial % 4 != 3 else Band.around(Int(random_ui64(0, 40)))
+            var target = first.byte_length() - second.byte_length()
+            if not band.holds(0) or not band.holds(target):
+                band = Band()
+            var reference = single_search_cigar[2](
+                first, second, penalties, ends, band
+            ) if two else single_search_cigar[1](first, second, penalties, ends, band)
+            var right: String
+            var left: String
+            var mirrored: String
+            var flipped = EndsFree(ends.first_end, ends.first_begin, ends.second_end, ends.second_begin)
+            var back = band.mirrored(target)
+            if two:
+                right = affine2p_cigar(first, second, x, o, e, o2, e2, ends_free=ends, band=band, ties=Ties.RIGHT).cigar
+                left = affine2p_cigar(first, second, x, o, e, o2, e2, ends_free=ends, band=band).cigar
+                mirrored = affine2p_cigar(
+                    reversed_text(first),
+                    reversed_text(second),
+                    x,
+                    o,
+                    e,
+                    o2,
+                    e2,
+                    ends_free=flipped,
+                    band=back,
+                    ties=Ties.RIGHT,
+                ).cigar
+            else:
+                right = affine_cigar(first, second, x, o, e, ends_free=ends, band=band, ties=Ties.RIGHT).cigar
+                left = affine_cigar(first, second, x, o, e, ends_free=ends, band=band).cigar
+                mirrored = affine_cigar(
+                    reversed_text(first), reversed_text(second), x, o, e, ends_free=flipped, band=back, ties=Ties.RIGHT
+                ).cigar
+            assert_equal(right, reference[1], String("the right rule, trial ", trial))
+            assert_equal(left, reversed_cigar(mirrored), String("the left rule, trial ", trial))
+            # The split of a pair too large to keep follows the rule within its pieces; one that fits
+            # whole, whatever the limit, follows it throughout.
+            for limit in [1 << 20, 1 << 30]:
+                var moves = List[UInt8]()
+                if two:
+                    _ = solve[2](
+                        first.as_bytes(),
+                        second.as_bytes(),
+                        penalties,
+                        FREE_START,
+                        FREE_START,
+                        limit,
+                        moves,
+                        True,
+                        Int.MAX,
+                        ends,
+                        band,
+                        Ties.RIGHT,
+                    )
+                else:
+                    _ = solve[1](
+                        first.as_bytes(),
+                        second.as_bytes(),
+                        penalties,
+                        FREE_START,
+                        FREE_START,
+                        limit,
+                        moves,
+                        True,
+                        Int.MAX,
+                        ends,
+                        band,
+                        Ties.RIGHT,
+                    )
+                assert_equal(cigar_of_moves(first, second, moves), reference[1])
+    # A gap in a run of repeats sits at its left end by default, at its right end for WFA2-lib's rule.
+    assert_equal(affine_cigar("ACGTTTTACG", "ACGTTTACG", 4, 6, 2).cigar, "3=1D6=")
+    assert_equal(affine_cigar("ACGTTTTACG", "ACGTTTACG", 4, 6, 2, ties=Ties.RIGHT).cigar, "6=1D3=")
 
 
 def test_affine_extension_matches_the_full_matrix() raises:

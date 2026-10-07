@@ -33,7 +33,7 @@ Gap-affine costs as WFA counts them, a mismatch and a gap's opening and extensio
 from both ends whose work grows with the square of the cost; every byte is a symbol of its own:
 
 ```mojo
-from dinara_align import Anchor, Band, EndsFree, affine2p_cigar, affine_cigar, affine_cigars, affine_distance
+from dinara_align import Anchor, Band, EndsFree, Ties, affine2p_cigar, affine_cigar, affine_cigars, affine_distance
 from dinara_align import affine_extension
 
 var aligned = affine_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2)  # cost 12, CIGAR "4=3X6="
@@ -46,11 +46,15 @@ var capped = affine_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2, max_cost=10
 var placed = affine_cigar("TTTTACGTACGTTTTT", "ACGTACGT", 4, 6, 2, ends_free=EndsFree(16, 16, 0, 0))  # 4D8=4D
 # Two-piece gap costs, WFA's gap-affine-2p: a gap of k letters costs min(6 + 2k, 24 + k).
 var long_gap = affine2p_cigar("ACGTACGTTTTTTTTTTTTTTTTTTTTTTTTTACGTACGT", "ACGTACGTACGTACGT", 4, 6, 2, 24, 1)
+# Of equally good alignments a fixed rule picks one: indels placed left, as minimap2 places them, or
+# right, WFA2-lib's CIGARs byte for byte.
+var left = affine_cigar("ACGTTTTACG", "ACGTTTACG", 4, 6, 2)  # "3=1D6="
+var right = affine_cigar("ACGTTTTACG", "ACGTTTACG", 4, 6, 2, ties=Ties.RIGHT)  # "6=1D3="
 # Exact within a band of diagonals, KSW2's `w`: the best alignment whose every move stays inside.
 var banded = affine_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2, band=Band.around(2))
 # A seed's extension, fixed at one end and stopping where it scores best, a match earning 1.
-var right = affine_extension("ACGTTGCAAGGCTTTT", "ACGTTGCAAGGCGAGA", 1, 4, 6, 2)  # score 12, "12="
-var left = affine_extension("TTTTACGTTGCAAGGC", "GAGAACGTTGCAAGGC", 1, 4, 6, 2, anchor=Anchor.END)
+var onward = affine_extension("ACGTTGCAAGGCTTTT", "ACGTTGCAAGGCGAGA", 1, 4, 6, 2)  # score 12, "12="
+var back = affine_extension("TTTTACGTTGCAAGGC", "GAGAACGTTGCAAGGC", 1, 4, 6, 2, anchor=Anchor.END)
 ```
 
 A pattern can also be found inside a text, Edlib's infix mode, or at its start, its prefix mode:
@@ -96,6 +100,7 @@ from .gap_affine import (
     Anchor,
     Band,
     EndsFree,
+    Ties,
     affine2p_cigar,
     affine2p_distance,
     affine2p_extension,

@@ -122,6 +122,11 @@ int main() {
         outside = true;
     }
     CHECK(outside);
+    // A gap in a run of repeats: at its left end by default, as minimap2 places it, at its right end
+    // under WFA2-lib's rule.
+    CHECK(dinara::affine_cigar("ACGTTTTACG", "ACGTTTACG", 4, 6, 2).cigar == "3=1D6=");
+    CHECK(dinara::affine_cigar("ACGTTTTACG", "ACGTTTACG", 4, 6, 2, true, {}, {}, dinara::Ties::right).cigar ==
+          "6=1D3=");
     // An extension stops where the read stops matching, from either end.
     dinara::Extension right = dinara::affine_extension("ACGTTGCAAGGCTTTTTTTTTT", "ACGTTGCAAGGCGAGAGAGAGA", 1, 4, 6, 2);
     CHECK(right.score == 12 && right.cigar == "12=" && right.first_length == 12 && right.second_length == 12);

@@ -64,14 +64,17 @@ int64_t dinara_affine_distance(const char *first, int64_t first_length, const ch
 
 /*
  * `dinara_affine_distance`'s cost, or a DINARA_ code, and an optimal alignment's CIGAR, returned as
- * `dinara_edit_cigar` returns it; no CIGAR for DINARA_ABOVE_MAX; free letters as `D` and `I` runs.
+ * `dinara_edit_cigar` returns it; no CIGAR for DINARA_ABOVE_MAX; free letters as `D` and `I` runs. Of
+ * equally good alignments it spells the one a fixed rule picks: every edit as far left as it goes, as
+ * minimap2, KSW2 and abPOA place indels, or with `right_ties` nonzero as far right, WFA2-lib's CIGAR
+ * byte for byte. Only a pair too large to keep is split, and follows the rule within its pieces.
  * Its time grows with the square of the cost, and its memory stays bounded.
  */
 int64_t dinara_affine_cigar(const char *first, int64_t first_length, const char *second, int64_t second_length,
                             int64_t mismatch, int64_t opening, int64_t extension, int64_t max_cost,
                             int64_t first_begin_free, int64_t first_end_free, int64_t second_begin_free,
-                            int64_t second_end_free, int64_t band_low, int64_t band_high, int extended, char **cigar,
-                            int64_t *cigar_length);
+                            int64_t second_end_free, int64_t band_low, int64_t band_high, int extended,
+                            int right_ties, char **cigar, int64_t *cigar_length);
 
 /*
  * `dinara_affine_distance` under two-piece gap-affine costs, WFA's gap-affine-2p: a gap of `k`
@@ -88,7 +91,7 @@ int64_t dinara_affine2p_cigar(const char *first, int64_t first_length, const cha
                               int64_t mismatch, int64_t opening1, int64_t extension1, int64_t opening2,
                               int64_t extension2, int64_t max_cost, int64_t first_begin_free, int64_t first_end_free,
                               int64_t second_begin_free, int64_t second_end_free, int64_t band_low,
-                              int64_t band_high, int extended, char **cigar, int64_t *cigar_length);
+                              int64_t band_high, int extended, int right_ties, char **cigar, int64_t *cigar_length);
 
 /*
  * The best score of an alignment fixed at both sequences' starts, or with `at_end` nonzero their ends,
@@ -100,14 +103,14 @@ int64_t dinara_affine2p_cigar(const char *first, int64_t first_length, const cha
  */
 int64_t dinara_affine_extension(const char *first, int64_t first_length, const char *second, int64_t second_length,
                                 int64_t match_score, int64_t mismatch, int64_t opening, int64_t extension, int at_end,
-                                int64_t band_low, int64_t band_high, int extended, char **cigar,
+                                int64_t band_low, int64_t band_high, int extended, int right_ties, char **cigar,
                                 int64_t *cigar_length, int64_t *first_covered, int64_t *second_covered);
 
 /* `dinara_affine_extension` under two-piece gap-affine costs. */
 int64_t dinara_affine2p_extension(const char *first, int64_t first_length, const char *second,
                                   int64_t second_length, int64_t match_score, int64_t mismatch, int64_t opening1,
                                   int64_t extension1, int64_t opening2, int64_t extension2, int at_end,
-                                  int64_t band_low, int64_t band_high, int extended, char **cigar,
+                                  int64_t band_low, int64_t band_high, int extended, int right_ties, char **cigar,
                                   int64_t *cigar_length, int64_t *first_covered, int64_t *second_covered);
 
 /* Frees a CIGAR that any function here returned. */
@@ -189,6 +192,10 @@ struct OutsideBand : std::invalid_argument {
 /* Which end of both sequences an extension is fixed at. */
 enum class Anchor { start, end };
 
+/* Which of several equally good alignments a CIGAR spells: indels placed left, as minimap2 places them,
+ * or right, WFA2-lib's CIGAR byte for byte. */
+enum class Ties { left, right };
+
 /* The best extension's score, the letters of each sequence it covers from its anchor, and its CIGAR. */
 struct Extension {
     int64_t score;
@@ -222,19 +229,20 @@ inline int64_t affine_distance(std::string_view first, std::string_view second, 
 
 inline std::optional<AffineAlignment> affine_cigar(std::string_view first, std::string_view second, int64_t mismatch,
                                                    int64_t opening, int64_t extension, std::optional<SecondPiece> piece,
-                                                   int64_t max_cost, bool extended, EndsFree ends, Band band) {
+                                                   int64_t max_cost, bool extended, EndsFree ends, Band band,
+                                                   Ties ties) {
     char *text = nullptr;
     int64_t length = 0;
     int64_t cost =
         piece ? dinara_affine2p_cigar(first.data(), static_cast<int64_t>(first.size()), second.data(),
                                       static_cast<int64_t>(second.size()), mismatch, opening, extension,
                                       piece->opening, piece->extension, max_cost, ends.first_begin, ends.first_end,
-                                      ends.second_begin, ends.second_end, band.low, band.high, extended ? 1 : 0, &text,
-                                      &length)
+                                      ends.second_begin, ends.second_end, band.low, band.high, extended ? 1 : 0,
+                                      ties == Ties::right ? 1 : 0, &text, &length)
               : dinara_affine_cigar(first.data(), static_cast<int64_t>(first.size()), second.data(),
                                     static_cast<int64_t>(second.size()), mismatch, opening, extension, max_cost,
                                     ends.first_begin, ends.first_end, ends.second_begin, ends.second_end, band.low,
-                                    band.high, extended ? 1 : 0, &text, &length);
+                                    band.high, extended ? 1 : 0, ties == Ties::right ? 1 : 0, &text, &length);
     check_affine(cost);
     if (cost == DINARA_ABOVE_MAX) return std::nullopt;
     AffineAlignment result{cost, std::string(text, static_cast<size_t>(length))};
@@ -244,7 +252,7 @@ inline std::optional<AffineAlignment> affine_cigar(std::string_view first, std::
 
 inline Extension extension(std::string_view first, std::string_view second, int64_t match_score, int64_t mismatch,
                            int64_t opening, int64_t extension, std::optional<SecondPiece> piece, Anchor anchor,
-                           Band band, bool extended) {
+                           Band band, bool extended, Ties ties) {
     char *text = nullptr;
     int64_t length = 0, first_covered = 0, second_covered = 0;
     int at_end = anchor == Anchor::end ? 1 : 0;
@@ -252,11 +260,12 @@ inline Extension extension(std::string_view first, std::string_view second, int6
         piece ? dinara_affine2p_extension(first.data(), static_cast<int64_t>(first.size()), second.data(),
                                           static_cast<int64_t>(second.size()), match_score, mismatch, opening,
                                           extension, piece->opening, piece->extension, at_end, band.low, band.high,
-                                          extended ? 1 : 0, &text, &length, &first_covered, &second_covered)
+                                          extended ? 1 : 0, ties == Ties::right ? 1 : 0, &text, &length,
+                                          &first_covered, &second_covered)
               : dinara_affine_extension(first.data(), static_cast<int64_t>(first.size()), second.data(),
                                         static_cast<int64_t>(second.size()), match_score, mismatch, opening, extension,
-                                        at_end, band.low, band.high, extended ? 1 : 0, &text, &length, &first_covered,
-                                        &second_covered);
+                                        at_end, band.low, band.high, extended ? 1 : 0, ties == Ties::right ? 1 : 0, &text,
+                                        &length, &first_covered, &second_covered);
     check_affine(score);
     Extension result{score, first_covered, second_covered, std::string(text, static_cast<size_t>(length))};
     dinara_free(text);
@@ -283,18 +292,20 @@ inline std::optional<int64_t> affine_distance_within(std::string_view first, std
 
 /* The cost and an optimal alignment's CIGAR. */
 inline AffineAlignment affine_cigar(std::string_view first, std::string_view second, int64_t mismatch, int64_t opening,
-                                    int64_t extension, bool extended = true, EndsFree ends = {}, Band band = {}) {
-    return *detail::affine_cigar(first, second, mismatch, opening, extension, std::nullopt, -1, extended, ends, band);
+                                    int64_t extension, bool extended = true, EndsFree ends = {}, Band band = {},
+                                    Ties ties = Ties::left) {
+    return *detail::affine_cigar(first, second, mismatch, opening, extension, std::nullopt, -1, extended, ends, band,
+                                 ties);
 }
 
 /* The cost and an optimal alignment's CIGAR, or nothing when the cost passes `max_cost`. */
 inline std::optional<AffineAlignment> affine_cigar_within(std::string_view first, std::string_view second,
                                                           int64_t mismatch, int64_t opening, int64_t extension,
                                                           int64_t max_cost, bool extended = true,
-                                                          EndsFree ends = {}, Band band = {}) {
+                                                          EndsFree ends = {}, Band band = {}, Ties ties = Ties::left) {
     if (max_cost < 0) return std::nullopt;
     return detail::affine_cigar(first, second, mismatch, opening, extension, std::nullopt, max_cost, extended, ends,
-                                band);
+                                band, ties);
 }
 
 /* Two-piece gap-affine costs, WFA's gap-affine-2p: each of the above with a second gap piece. */
@@ -315,16 +326,17 @@ inline std::optional<int64_t> affine2p_distance_within(std::string_view first, s
 
 inline AffineAlignment affine2p_cigar(std::string_view first, std::string_view second, int64_t mismatch,
                                       int64_t opening, int64_t extension, SecondPiece piece, bool extended = true,
-                                      EndsFree ends = {}, Band band = {}) {
-    return *detail::affine_cigar(first, second, mismatch, opening, extension, piece, -1, extended, ends, band);
+                                      EndsFree ends = {}, Band band = {}, Ties ties = Ties::left) {
+    return *detail::affine_cigar(first, second, mismatch, opening, extension, piece, -1, extended, ends, band, ties);
 }
 
 inline std::optional<AffineAlignment> affine2p_cigar_within(std::string_view first, std::string_view second,
                                                             int64_t mismatch, int64_t opening, int64_t extension,
                                                             SecondPiece piece, int64_t max_cost, bool extended = true,
-                                                            EndsFree ends = {}, Band band = {}) {
+                                                            EndsFree ends = {}, Band band = {}, Ties ties = Ties::left) {
     if (max_cost < 0) return std::nullopt;
-    return detail::affine_cigar(first, second, mismatch, opening, extension, piece, max_cost, extended, ends, band);
+    return detail::affine_cigar(first, second, mismatch, opening, extension, piece, max_cost, extended, ends, band,
+                                ties);
 }
 
 /*
@@ -333,15 +345,17 @@ inline std::optional<AffineAlignment> affine2p_cigar_within(std::string_view fir
  */
 inline Extension affine_extension(std::string_view first, std::string_view second, int64_t match_score,
                                   int64_t mismatch, int64_t opening, int64_t extension, Anchor anchor = Anchor::start,
-                                  Band band = {}, bool extended = true) {
+                                  Band band = {}, bool extended = true, Ties ties = Ties::left) {
     return detail::extension(first, second, match_score, mismatch, opening, extension, std::nullopt, anchor, band,
-                             extended);
+                             extended, ties);
 }
 
 inline Extension affine2p_extension(std::string_view first, std::string_view second, int64_t match_score,
                                     int64_t mismatch, int64_t opening, int64_t extension, SecondPiece piece,
-                                    Anchor anchor = Anchor::start, Band band = {}, bool extended = true) {
-    return detail::extension(first, second, match_score, mismatch, opening, extension, piece, anchor, band, extended);
+                                    Anchor anchor = Anchor::start, Band band = {}, bool extended = true,
+                                    Ties ties = Ties::left) {
+    return detail::extension(first, second, match_score, mismatch, opening, extension, piece, anchor, band, extended,
+                             ties);
 }
 
 }  // namespace dinara
