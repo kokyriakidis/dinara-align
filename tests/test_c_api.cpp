@@ -87,6 +87,11 @@ int main() {
         invalid = true;
     }
     CHECK(invalid);
+    CHECK(dinara::affine_distance("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2) == 12);
+    CHECK(dinara::affine_distance_within("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2, 12) == 12);
+    CHECK(!dinara::affine_distance_within("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2, 11));
+    CHECK(!dinara::affine_cigar_within("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2, 11));
+    CHECK(dinara::affine_cigar_within("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2, 12)->cigar == "4=3X6=");
 
     std::mt19937 random(7);
     std::uniform_int_distribution<int> base(0, 3);
@@ -104,6 +109,8 @@ int main() {
         distances.push_back(long_aligned.distance);
         // At unit costs the affine cost is the edit distance plus an opening of zero.
         CHECK(dinara::affine_cigar(pair.first, pair.second, 1, 0, 1).cost == long_aligned.distance);
+        CHECK(dinara::affine_distance(pair.first, pair.second, 1, 0, 1) == long_aligned.distance);
+        CHECK(!dinara::affine_distance_within(pair.first, pair.second, 1, 0, 1, long_aligned.distance - 1));
     }
 
     // No state between calls: four threads aligning the same pairs agree with the single thread.

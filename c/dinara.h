@@ -28,6 +28,8 @@ extern "C" {
 #define DINARA_UNSUPPORTED_SYMBOLS (-1)
 /* Affine costs no alignment can be searched by: a mismatch or extension of zero, or a negative cost. */
 #define DINARA_INVALID_COSTS (-3)
+/* Every alignment costs more than the `max_cost` asked for. */
+#define DINARA_ABOVE_MAX (-4)
 
 /* The global edit distance, or a DINARA_ code. */
 int64_t dinara_edit_distance(const char *first, int64_t first_length, const char *second, int64_t second_length);
@@ -42,13 +44,21 @@ int64_t dinara_edit_cigar(const char *first, int64_t first_length, const char *s
 
 /*
  * The least global cost under gap-affine costs as WFA counts them, a substitution `mismatch` and a
- * gap of `k` letters `opening + k * extension`, or a DINARA_ code, and an optimal alignment's CIGAR,
- * returned as `dinara_edit_cigar` returns it. By a wavefront from both ends: its time grows with the
- * square of the cost, and its memory stays bounded.
+ * gap of `k` letters `opening + k * extension`, with no alignment, or a DINARA_ code: DINARA_ABOVE_MAX
+ * when the cost passes a `max_cost` of zero or more, which the search proves after about half of it.
+ * A negative `max_cost` caps nothing. By a wavefront from both ends keeping a few fronts.
+ */
+int64_t dinara_affine_distance(const char *first, int64_t first_length, const char *second, int64_t second_length,
+                               int64_t mismatch, int64_t opening, int64_t extension, int64_t max_cost);
+
+/*
+ * `dinara_affine_distance`'s cost, or a DINARA_ code, and an optimal alignment's CIGAR, returned as
+ * `dinara_edit_cigar` returns it; no CIGAR for DINARA_ABOVE_MAX. Its time grows with the square of
+ * the cost, and its memory stays bounded.
  */
 int64_t dinara_affine_cigar(const char *first, int64_t first_length, const char *second, int64_t second_length,
-                            int64_t mismatch, int64_t opening, int64_t extension, int extended, char **cigar,
-                            int64_t *cigar_length);
+                            int64_t mismatch, int64_t opening, int64_t extension, int64_t max_cost, int extended,
+                            char **cigar, int64_t *cigar_length);
 
 /* Frees a CIGAR that `dinara_edit_cigar` or `dinara_affine_cigar` returned. */
 void dinara_free(char *cigar);
@@ -56,6 +66,7 @@ void dinara_free(char *cigar);
 #ifdef __cplusplus
 }
 
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -98,19 +109,63 @@ inline Alignment edit_cigar(std::string_view first, std::string_view second, boo
     return result;
 }
 
+namespace detail {
+inline void check_affine(int64_t result) {
+    if (result == DINARA_INVALID_COSTS) throw std::invalid_argument("dinara: a mismatch and an extension must cost");
+    if (result < 0 && result != DINARA_ABOVE_MAX) throw UnsupportedSymbols();
+}
+}  // namespace detail
+
 /* Gap-affine costs as WFA counts them: a substitution `mismatch`, a gap of `k` letters `opening + k * extension`. */
-inline AffineAlignment affine_cigar(std::string_view first, std::string_view second, int64_t mismatch, int64_t opening,
-                                    int64_t extension, bool extended = true) {
+inline int64_t affine_distance(std::string_view first, std::string_view second, int64_t mismatch, int64_t opening,
+                               int64_t extension) {
+    int64_t cost = dinara_affine_distance(first.data(), static_cast<int64_t>(first.size()), second.data(),
+                                          static_cast<int64_t>(second.size()), mismatch, opening, extension, -1);
+    detail::check_affine(cost);
+    return cost;
+}
+
+/* The cost, or nothing when it passes `max_cost`, which the search proves after about half of it. */
+inline std::optional<int64_t> affine_distance_within(std::string_view first, std::string_view second,
+                                                     int64_t mismatch, int64_t opening, int64_t extension,
+                                                     int64_t max_cost) {
+    if (max_cost < 0) return std::nullopt;
+    int64_t cost = dinara_affine_distance(first.data(), static_cast<int64_t>(first.size()), second.data(),
+                                          static_cast<int64_t>(second.size()), mismatch, opening, extension, max_cost);
+    detail::check_affine(cost);
+    if (cost == DINARA_ABOVE_MAX) return std::nullopt;
+    return cost;
+}
+
+namespace detail {
+inline std::optional<AffineAlignment> affine_cigar(std::string_view first, std::string_view second, int64_t mismatch,
+                                                   int64_t opening, int64_t extension, int64_t max_cost,
+                                                   bool extended) {
     char *text = nullptr;
     int64_t length = 0;
     int64_t cost = dinara_affine_cigar(first.data(), static_cast<int64_t>(first.size()), second.data(),
-                                       static_cast<int64_t>(second.size()), mismatch, opening, extension,
+                                       static_cast<int64_t>(second.size()), mismatch, opening, extension, max_cost,
                                        extended ? 1 : 0, &text, &length);
-    if (cost == DINARA_INVALID_COSTS) throw std::invalid_argument("dinara: a mismatch and an extension must cost");
-    if (cost < 0) throw UnsupportedSymbols();
+    check_affine(cost);
+    if (cost == DINARA_ABOVE_MAX) return std::nullopt;
     AffineAlignment result{cost, std::string(text, static_cast<size_t>(length))};
     dinara_free(text);
     return result;
+}
+}  // namespace detail
+
+/* The cost and an optimal alignment's CIGAR. */
+inline AffineAlignment affine_cigar(std::string_view first, std::string_view second, int64_t mismatch, int64_t opening,
+                                    int64_t extension, bool extended = true) {
+    return *detail::affine_cigar(first, second, mismatch, opening, extension, -1, extended);
+}
+
+/* The cost and an optimal alignment's CIGAR, or nothing when the cost passes `max_cost`. */
+inline std::optional<AffineAlignment> affine_cigar_within(std::string_view first, std::string_view second,
+                                                          int64_t mismatch, int64_t opening, int64_t extension,
+                                                          int64_t max_cost, bool extended = true) {
+    if (max_cost < 0) return std::nullopt;
+    return detail::affine_cigar(first, second, mismatch, opening, extension, max_cost, extended);
 }
 
 }  // namespace dinara

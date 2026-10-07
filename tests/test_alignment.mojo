@@ -21,6 +21,7 @@ from dinara_align import (
     DNA_ALPHABET,
     affine_cigar,
     affine_cigars,
+    affine_distance,
     Placement,
     Scoring,
     align,
@@ -1062,6 +1063,34 @@ def test_affine_cigar_spells_an_optimal_alignment() raises:
         var single = affine_cigar(firsts[index], seconds[index], 4, 6, 2)
         assert_equal(batch[index].cost, single.cost)
         assert_equal(batch[index].cigar, single.cigar)
+
+
+def test_affine_distance_and_its_cap() raises:
+    """`affine_distance` is `affine_cigar`'s cost, and a cap of `max_cost` returns both up to the
+    optimum and neither a unit below it: pairs close and far, empty sides, a cap below zero."""
+    seed(37)
+    for costs in [(4, 6, 2), (1, 0, 1), (3, 10, 1)]:
+        var x = costs[0]
+        var o = costs[1]
+        var e = costs[2]
+        for trial in range(36):
+            var first = random_sequence(0, 400, DNA_ALPHABET)
+            var second = mutated(first, [0.0, 0.03, 0.15, 0.4][trial % 4], [1, 5, 40][trial % 3])
+            if trial % 9 == 0:
+                second = String()
+            var cost = affine_cigar(first, second, x, o, e).cost
+            assert_equal(affine_distance(first, second, x, o, e), cost)
+            assert_equal(affine_distance(first, second, x, o, e, max_cost=cost).value(), cost)
+            assert_equal(affine_distance(first, second, x, o, e, max_cost=cost + 1000).value(), cost)
+            var within = affine_cigar(first, second, x, o, e, max_cost=cost)
+            assert_true(Bool(within), "a cap at the optimum refused it")
+            assert_equal(within.value().cost, cost)
+            assert_equal(within.value().cigar, affine_cigar(first, second, x, o, e).cigar)
+            if cost > 0:
+                assert_false(Bool(affine_distance(first, second, x, o, e, max_cost=cost - 1)), "under the cap")
+                assert_false(Bool(affine_cigar(first, second, x, o, e, max_cost=cost - 1)), "under the cap")
+    assert_false(Bool(affine_distance("", "", 4, 6, 2, max_cost=-1)), "a cap below zero")
+    assert_equal(affine_distance("", "", 4, 6, 2, max_cost=0).value(), 0)
 
 
 # endregion Refusals

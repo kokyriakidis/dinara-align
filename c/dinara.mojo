@@ -1,6 +1,6 @@
 """
 The C API of dinara-align: the unit-cost edit distance, and the least gap-affine cost as WFA counts it,
-each with an optimal alignment as a CIGAR, for C, C++ and any language with a C foreign-function
+alone, capped or with an optimal alignment as a CIGAR, for C, C++ and any language with a C foreign-function
 interface. `dinara.h` declares these, with a C++ wrapper.
 
     pixi run build-c [target-cpu]   # build/c: libdinara, its runtime libraries and the header
@@ -11,7 +11,7 @@ called from many threads at once, and reports failure as a negative result (`DIN
 
 from std.ffi import external_call
 
-from dinara_align import affine_cigar, edit_cigar, edit_distance
+from dinara_align import affine_cigar, affine_distance, edit_cigar, edit_distance
 
 comptime UNSUPPORTED_SYMBOLS = -1
 """More than four symbols past `ACGT` between the two sequences."""
@@ -19,6 +19,8 @@ comptime OUT_OF_MEMORY = -2
 """The CIGAR's memory could not be allocated."""
 comptime INVALID_COSTS = -3
 """Gap-affine costs no alignment can be searched by: a free mismatch or extension, or a negative cost."""
+comptime ABOVE_MAX = -4
+"""Every alignment costs more than the `max_cost` asked for."""
 
 
 def sequence(bytes: ImmPointer[UInt8, MutAnyOrigin], length: Int) -> String:
@@ -63,6 +65,32 @@ def dinara_edit_cigar(
         return UNSUPPORTED_SYMBOLS
 
 
+@export("dinara_affine_distance")
+def dinara_affine_distance(
+    first: ImmPointer[UInt8, MutAnyOrigin],
+    first_length: Int,
+    second: ImmPointer[UInt8, MutAnyOrigin],
+    second_length: Int,
+    mismatch: Int,
+    opening: Int,
+    extension: Int,
+    max_cost: Int,
+) abi("C") -> Int:
+    """The least global cost under gap-affine costs, with no alignment, or `ABOVE_MAX` when it passes a
+    `max_cost` of zero or more; a negative `max_cost` caps nothing."""
+    if not plain_bytes(first, first_length) or not plain_bytes(second, second_length):
+        return UNSUPPORTED_SYMBOLS
+    try:
+        var a = sequence(first, first_length)
+        var b = sequence(second, second_length)
+        if max_cost < 0:
+            return affine_distance(a, b, mismatch, opening, extension)
+        var found = affine_distance(a, b, mismatch, opening, extension, max_cost=max_cost)
+        return found.value() if found else ABOVE_MAX
+    except:
+        return INVALID_COSTS
+
+
 @export("dinara_affine_cigar")
 def dinara_affine_cigar(
     first: ImmPointer[UInt8, MutAnyOrigin],
@@ -72,28 +100,39 @@ def dinara_affine_cigar(
     mismatch: Int,
     opening: Int,
     extension: Int,
+    max_cost: Int,
     extended: Int32,
     cigar: MutPointer[MutPointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     cigar_length: MutPointer[Int, MutAnyOrigin],
 ) abi("C") -> Int:
     """The least global cost under gap-affine costs, a substitution `mismatch` and a gap of `k` letters
-    `opening + k extension`, and an optimal alignment's CIGAR, handed over as `dinara_edit_cigar`'s.
-    Every byte is a symbol matching only itself, save the two UTF-8 never holds, which mark the ends."""
-    # The wavefront's sentinels are the two bytes UTF-8 never uses.
-    for index in range(first_length):
-        if first[unsafe_offset=index] >= 0xFE:
-            return UNSUPPORTED_SYMBOLS
-    for index in range(second_length):
-        if second[unsafe_offset=index] >= 0xFE:
-            return UNSUPPORTED_SYMBOLS
+    `opening + k extension`, and an optimal alignment's CIGAR, handed over as `dinara_edit_cigar`'s; or
+    `ABOVE_MAX`, and no CIGAR, when the cost passes a `max_cost` of zero or more. Every byte is a symbol
+    matching only itself, save the two UTF-8 never holds, which mark the ends."""
+    if not plain_bytes(first, first_length) or not plain_bytes(second, second_length):
+        return UNSUPPORTED_SYMBOLS
     try:
-        var aligned = affine_cigar(
-            sequence(first, first_length), sequence(second, second_length), mismatch, opening, extension, extended != 0
-        )
-        hand_over(aligned.cigar, cigar, cigar_length)
-        return aligned.cost
+        var a = sequence(first, first_length)
+        var b = sequence(second, second_length)
+        if max_cost < 0:
+            var aligned = affine_cigar(a, b, mismatch, opening, extension, extended != 0)
+            hand_over(aligned.cigar, cigar, cigar_length)
+            return aligned.cost
+        var found = affine_cigar(a, b, mismatch, opening, extension, extended != 0, max_cost=max_cost)
+        if not found:
+            return ABOVE_MAX
+        hand_over(found.value().cigar, cigar, cigar_length)
+        return found.value().cost
     except:
         return INVALID_COSTS
+
+
+def plain_bytes(bytes: ImmPointer[UInt8, MutAnyOrigin], length: Int) -> Bool:
+    """Whether no byte is one of the two UTF-8 never holds, which the wavefront's sentinels are."""
+    for index in range(length):
+        if bytes[unsafe_offset=index] >= 0xFE:
+            return False
+    return True
 
 
 def hand_over(

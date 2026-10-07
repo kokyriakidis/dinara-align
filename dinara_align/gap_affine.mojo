@@ -81,6 +81,13 @@ comptime CELLS_PER_STEP = 4
 """Cells of the vectorized full sweep (see `vector_score`) one diagonal step of the three fronts
 costs about as much as: about 1.5 against 0.4 ns."""
 
+comptime MET = 0
+"""`bidirectional`'s answer when the searches proved where an optimal path splits."""
+comptime OVER = 1
+"""Its answer when they proved every path dearer than the ceiling."""
+comptime HALTED = 2
+"""Its answer when they stopped first: a full sweep would be cheaper, or the kept fronts too large."""
+
 comptime FREE_START = 0
 """A search's origin as a whole alignment's: any first move, each at its own cost."""
 comptime IN_FIRST_GAP = 1
@@ -797,18 +804,27 @@ def meet(mut forward: Wavefront, forward_cost: Int, mut backward: Wavefront, bac
 
 def bidirectional[
     record: Bool
-](mut forward: Wavefront, mut backward: Wavefront, mut best: Meeting, give_up: Bool, limit: Int) -> Bool:
+](
+    mut forward: Wavefront,
+    mut backward: Wavefront,
+    mut best: Meeting,
+    give_up: Bool,
+    limit: Int,
+    ceiling: Int = Int.MAX,
+) -> Int:
     """Grows the two searches a cost at a time each in turn, lowering `best` to the cheapest place an
-    optimal path splits between them, until no cheaper one is left unchecked; False once a full sweep
-    would be cheaper, with `give_up`, or, with `record`, once the kept fronts would pass `limit`
-    entries. Either way the searches may resume from where they stopped.
+    optimal path splits between them, until no cheaper one is left unchecked: `MET`. `OVER` once no
+    path can cost `ceiling` or less; `HALTED` once a full sweep would be cheaper, with `give_up`, or,
+    with `record`, once the kept fronts would pass `limit` entries, and the searches may resume.
 
     Each new front is checked against the other side's last `window` costs, which its ring holds. Every
     optimal path has a cell, between two moves or inside a gap, whose costs from the two ends differ by
     at most `window`, the dearest single move: the difference rises from `-cost` to `cost` in steps of
     at most twice that. So once both sides have passed half of `best`, plus a gap opening the two
     halves both paid and `window`, no cheaper path is left unchecked. Each side then grows to about
-    half the optimum, and the two together about half the diagonals one search grows alone.
+    half the optimum, and the two together about half the diagonals one search grows alone. By the
+    same count, once both have passed half of `ceiling` with that margin and found nothing within it,
+    nothing is, and a capped search stops there, short of the optimum.
     """
     var columns = forward.columns
     var rows = forward.rows
@@ -820,8 +836,12 @@ def bidirectional[
     var budget = columns * rows // CELLS_PER_STEP
     var next_check = CHECK_START
     while True:
-        if best.cost != Int.MAX and 2 * min(forward.cost, backward.cost) >= best.cost - 1 + o + window:
-            return True
+        var reached = 2 * min(forward.cost, backward.cost)
+        # The cap first: an optimum just past it proves itself at the same reach.
+        if best.cost > ceiling and reached >= ceiling + o + window:
+            return OVER
+        if best.cost != Int.MAX and reached >= best.cost - 1 + o + window:
+            return MET
         if forward.cost <= backward.cost:
             forward.advance[record]()
             var ahead = forward.cost
@@ -834,7 +854,7 @@ def bidirectional[
                 meet(forward, ahead, backward, behind, best)
         comptime if record:
             if forward.history.kept + backward.history.kept > limit:
-                return False
+                return HALTED
         var spent = forward.cost + backward.cost
         if give_up and spent >= next_check:
             next_check = spent + CHECK_STRIDE
@@ -844,7 +864,7 @@ def bidirectional[
             var ratio = Float64(projected) / Float64(spent)
             var work = forward.work + backward.work
             if Float64(work) * (ratio * ratio - 1.0) > Float64(budget - work):
-                return False
+                return HALTED
 
 
 def wavefront_score(
@@ -856,14 +876,33 @@ def wavefront_score(
     """
     var letters = len(first) + len(second)
     if len(first) == 0 or len(second) == 0:
-        var cost = 0 if letters == 0 else penalties.opening + penalties.extension * letters
-        return penalties.score(cost, letters)
+        return penalties.score(gapped_cost(penalties, letters), letters)
     var forward = Wavefront(Span(first), Span(second), penalties, FREE_START, False, False)
     var backward = Wavefront(Span(first), Span(second), penalties, FREE_START, False, True)
     var best = Meeting.none()
-    if not bidirectional[False](forward, backward, best, give_up, Int.MAX):
+    if bidirectional[False](forward, backward, best, give_up, Int.MAX) != MET:
         return None
     return penalties.score(best.cost, letters)
+
+
+def wavefront_distance(first: Span[UInt8, _], second: Span[UInt8, _], penalties: Penalties, ceiling: Int) -> Int:
+    """The least cost of a global alignment of two encoded sequences, or -1 when every one costs more
+    than `ceiling`: the two searches keeping only their rings, no fronts for a traceback."""
+    if len(first) == 0 or len(second) == 0:
+        var cost = gapped_cost(penalties, len(first) + len(second))
+        return cost if cost <= ceiling else -1
+    var forward = Wavefront(first, second, penalties, FREE_START, False, False)
+    var backward = Wavefront(first, second, penalties, FREE_START, False, True)
+    var best = Meeting.none()
+    if bidirectional[False](forward, backward, best, False, Int.MAX, ceiling) != MET:
+        return -1
+    return best.cost
+
+
+@inline(.always)
+def gapped_cost(penalties: Penalties, letters: Int) -> Int:
+    """The cost of aligning `letters` letters against nothing: one gap, or none for no letters."""
+    return 0 if letters == 0 else penalties.opening + penalties.extension * letters
 
 
 def trace(
@@ -985,9 +1024,11 @@ def solve(
     limit: Int,
     mut moves: List[UInt8],
     keep: Bool = True,
+    ceiling: Int = Int.MAX,
 ) -> Int:
     """Appends an optimal path's moves right to left and returns its cost, from an origin as `start`
-    allows and to a corner the backward search's origin `finish` allows (see `FREE_START`).
+    allows and to a corner the backward search's origin `finish` allows (see `FREE_START`); or, when
+    every path costs more than `ceiling`, appends nothing and returns -1.
 
     With `keep`, both searches keep every cost's fronts while they stay within `limit` entries, and
     the path is traced from where they met: back to the origin through the forward fronts, and to the
@@ -1000,18 +1041,24 @@ def solve(
     var columns = len(first)
     var rows = len(second)
     if columns == 0 or rows == 0:
+        var letters = columns + rows
+        var continued = (start == IN_FIRST_GAP and rows == 0) or (start == IN_SECOND_GAP and columns == 0)
+        var cost = 0 if letters == 0 else penalties.extension * letters + (0 if continued else penalties.opening)
+        if cost > ceiling:
+            return -1
         for _ in range(columns):
             moves.append(UInt8(FIRST_GAP))
         for _ in range(rows):
             moves.append(UInt8(SECOND_GAP))
-        var letters = columns + rows
-        var continued = (start == IN_FIRST_GAP and rows == 0) or (start == IN_SECOND_GAP and columns == 0)
-        return 0 if letters == 0 else penalties.extension * letters + (0 if continued else penalties.opening)
+        return cost
     var forward = Wavefront(first, second, penalties, start, keep, False)
     var backward = Wavefront(first, second, penalties, finish, keep, True)
     var best = Meeting.none()
     if keep:
-        if bidirectional[True](forward, backward, best, False, limit):
+        var status = bidirectional[True](forward, backward, best, False, limit, ceiling)
+        if status == OVER:
+            return -1
+        if status == MET:
             # The backward walk runs from the meeting to the corner, left to right as the forward path goes.
             var behind = List[UInt8](capacity=columns + rows)
             trace(
@@ -1030,7 +1077,8 @@ def solve(
         # Too large to keep: the searches go on from where they stopped keeping only their rings.
         forward.history = History()
         backward.history = History()
-    _ = bidirectional[False](forward, backward, best, False, Int.MAX)
+    if bidirectional[False](forward, backward, best, False, Int.MAX, ceiling) == OVER:
+        return -1
     var column = best.column
     var row = column - best.diagonal
     # A crossing at either end splits nothing: such a pair costs too little for its fronts not to fit.
@@ -1090,6 +1138,45 @@ struct AffineCigar(Copyable, Movable, Writable):
     var cigar: String
 
 
+def affine_penalties(mismatch: Int, opening: Int, extension: Int) raises AlignmentError -> Penalties:
+    """The wavefront's costs for gap-affine costs as WFA counts them, divided by their common factor."""
+    if mismatch <= 0 or extension <= 0 or opening < 0:
+        raise AlignmentError(
+            ErrorKind.INVALID_SCORING,
+            String("costs ", mismatch, ", ", opening, ", ", extension, ": a mismatch and an extension must cost"),
+        )
+    var scale = gcd(gcd(mismatch, extension), opening)
+    return Penalties(mismatch // scale, opening // scale, extension // scale, scale, 0)
+
+
+def affine_distance(
+    first: String, second: String, mismatch: Int, opening: Int, extension: Int
+) raises AlignmentError -> Int:
+    """The least cost of a global alignment of two sequences under gap-affine costs as WFA counts them,
+    a substitution `mismatch` and a gap of `k` letters `opening + k extension`, without the alignment.
+
+    `affine_cigar`'s cost, by the same two searches keeping only their last few costs' fronts: about
+    the same search, none of the traceback, and a few rows of memory however long the pair.
+    """
+    var penalties = affine_penalties(mismatch, opening, extension)
+    return wavefront_distance(first.as_bytes(), second.as_bytes(), penalties, Int.MAX) * penalties.scale
+
+
+def affine_distance(
+    first: String, second: String, mismatch: Int, opening: Int, extension: Int, *, max_cost: Int
+) raises AlignmentError -> Optional[Int]:
+    """`affine_distance`, or None when it would pass `max_cost`: the searches stop once each has grown
+    to about half of `max_cost` without the two meeting within it, so a pair far over costs a fraction
+    of its full search."""
+    var penalties = affine_penalties(mismatch, opening, extension)
+    if max_cost < 0:
+        return None
+    var cost = wavefront_distance(first.as_bytes(), second.as_bytes(), penalties, max_cost // penalties.scale)
+    if cost < 0:
+        return None
+    return cost * penalties.scale
+
+
 def affine_cigar(
     first: String, second: String, mismatch: Int, opening: Int, extension: Int, extended: Bool = True
 ) raises AlignmentError -> AffineCigar:
@@ -1101,22 +1188,46 @@ def affine_cigar(
     alphabet. The two-ended wavefront finds it (see the module): its work grows with the square of
     the cost rather than with the matrix, and its memory stays bounded.
     """
-    if mismatch <= 0 or extension <= 0 or opening < 0:
-        raise AlignmentError(
-            ErrorKind.INVALID_SCORING,
-            String("costs ", mismatch, ", ", opening, ", ", extension, ": a mismatch and an extension must cost"),
-        )
-    var scale = gcd(gcd(mismatch, extension), opening)
-    var penalties = Penalties(mismatch // scale, opening // scale, extension // scale, scale, 0)
+    var found = cigar_within(first, second, affine_penalties(mismatch, opening, extension), extended, Int.MAX)
+    return found.take()
+
+
+def affine_cigar(
+    first: String,
+    second: String,
+    mismatch: Int,
+    opening: Int,
+    extension: Int,
+    extended: Bool = True,
+    *,
+    max_cost: Int,
+) raises AlignmentError -> Optional[AffineCigar]:
+    """`affine_cigar`, or None when the cost would pass `max_cost`, found as `affine_distance` finds
+    that, with no fronts traced."""
+    var penalties = affine_penalties(mismatch, opening, extension)
+    if max_cost < 0:
+        return None
+    return cigar_within(first, second, penalties, extended, max_cost // penalties.scale)
+
+
+def cigar_within(
+    first: String, second: String, penalties: Penalties, extended: Bool, ceiling: Int
+) -> Optional[AffineCigar]:
+    """An optimal alignment's cost and CIGAR, or None when its cost, in `penalties`' units, would pass
+    `ceiling`."""
     var columns = first.byte_length()
     var rows = second.byte_length()
     # UTF-8 never holds the sentinels' bytes, so the text's own bytes serve as codes.
     var moves = List[UInt8](capacity=columns + rows)
-    var cost = solve(first.as_bytes(), second.as_bytes(), penalties, FREE_START, FREE_START, HISTORY_LIMIT, moves)
+    var cost = solve(
+        first.as_bytes(), second.as_bytes(), penalties, FREE_START, FREE_START, HISTORY_LIMIT, moves, True, ceiling
+    )
+    if cost < 0:
+        return None
     # The CIGAR's room is bounded by the edits: every gapped letter, and a substitution per mismatch cost.
     var gapped = 0
     for move in moves:
         if move != UInt8(ALIGNED):
             gapped += 1
     var path = EditPath(moves^, List[UInt8](), columns, rows, gapped + cost // penalties.mismatch)
-    return AffineCigar(cost * scale, cigar_string(first, second, path, extended))
+    return AffineCigar(cost * penalties.scale, cigar_string(first, second, path, extended))
