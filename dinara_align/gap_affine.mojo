@@ -412,10 +412,17 @@ AVX-512's `vpgatherqq` at byte offsets, rather than a scalar compare per lane.""
 
 
 @inline(.always)
-def gathered_words(base: ImmPointer[UInt8, _], offsets: SIMD[DType.int64, LANES]) -> SIMD[DType.uint64, LANES]:
-    """The eight bytes from each of `offsets` past `base`, one AVX-512 gather."""
-    return llvm_intrinsic["llvm.x86.avx512.mask.gather.qpq.512", SIMD[DType.uint64, LANES], has_side_effect=False](
-        SIMD[DType.uint64, LANES](0), base, offsets, SIMD[DType.bool, LANES](fill=True), Int32(1)
+def gathered_words(
+    base: ImmPointer[UInt8, _],
+    offsets: SIMD[DType.int32, LANES],
+    lanes: SIMD[DType.bool, LANES],
+    elsewhere: SIMD[DType.uint64, LANES],
+) -> SIMD[DType.uint64, LANES]:
+    """The eight bytes from each of `offsets` past `base` in the `lanes` chosen, `elsewhere` in the rest,
+    one AVX-512 gather by 32-bit offsets, the lane group's columns as they are, with no widening on
+    the shuffle port. A lane left out reads nothing, so its offset may point anywhere."""
+    return llvm_intrinsic["llvm.x86.avx512.mask.gather.dpq.512", SIMD[DType.uint64, LANES], has_side_effect=False](
+        elsewhere, base, offsets, lanes, Int32(1)
     )
 
 
@@ -425,25 +432,27 @@ def gathered_slides(
     second: ImmPointer[UInt8, _],
     entries: SIMD[DType.int32, LANES],
     diagonals: SIMD[DType.int32, LANES],
-    columns: Int,
-    rows: Int,
 ) -> SIMD[DType.int32, LANES]:
     """`slide` of every reached lane of a group at once: both sequences' next eight letters gathered per
-    lane and compared, an unreached lane pointed at the two sentinels, which differ at once. A lane
-    whose eight all match, rare off the path, finishes by `slide`."""
-    comptime Wide = SIMD[DType.int64, LANES]
+    lane and compared. A lane whose eight all match, rare off the path, finishes by `slide`.
+
+    The gathers take the reached lanes as their mask, worked out from this group alone: an all-lanes
+    mask, which LLVM builds with a `kxnor` that waits on the mask register's last writer, chained
+    every group's gathers to the previous group's, about 21 cycles of latency a group on Skylake.
+    An unreached lane gathers nothing, its two words zero and all ones, which never read as a match.
+    """
+    comptime Wide = SIMD[DType.uint64, LANES]
     var reached = entries.ge(0)
-    var columns_at = entries.cast[DType.int64]()
-    var first_at = reached.select(columns_at, Wide(columns))
-    var second_at = reached.select(columns_at - diagonals.cast[DType.int64](), Wide(rows))
-    var mismatches = gathered_words(first, first_at) ^ gathered_words(second, second_at)
-    var slid = first_at + (count_trailing_zeros(mismatches) >> 3).cast[DType.int64]()
+    var mismatches = gathered_words(first, entries, reached, Wide(0)) ^ gathered_words(
+        second, entries - diagonals, reached, ~Wide(0)
+    )
+    var slid = entries + (count_trailing_zeros(mismatches) >> 3).cast[DType.int32]()
     var whole = mismatches.eq(0)
     if whole.reduce_or():
         comptime for lane in range(LANES):
             if whole[lane]:
-                slid[lane] = Int64(slide(first, second, Int(slid[lane]), Int(diagonals[lane])))
-    return reached.select(slid.cast[DType.int32](), entries)
+                slid[lane] = Int32(slide(first, second, Int(slid[lane]), Int(diagonals[lane])))
+    return reached.select(slid, entries)
 
 
 @inline(.never)
@@ -485,6 +494,9 @@ def step[
     var row_limit = Lanes(Int32(rows))
     var unreached = Lanes(UNREACHED)
     var reach = Int.MIN // 2
+    # The gathered slides keep their furthest anti-diagonals a lane each, reduced once after the loop:
+    # reducing every group put a chain of shuffles and maxima on each one's path.
+    var reaches = Lanes(Int32.MIN // 2)
     var diagonal = low
     while diagonal <= high:
         var diagonals = lane_diagonals + Int32(diagonal)
@@ -503,9 +515,9 @@ def step[
         opened_second.unsafe_offset(diagonal).unsafe_store(second_gap)
         var front = aligned.unsafe_offset(diagonal)
         comptime if GATHERED_SLIDES:
-            var slid = gathered_slides(first, second, max(substituted, gapped), diagonals, columns, rows)
+            var slid = gathered_slides(first, second, max(substituted, gapped), diagonals)
             front.unsafe_store(slid)
-            reach = max(reach, Int((slid + slid - diagonals).reduce_max()))
+            reaches = max(reaches, slid + slid - diagonals)
         else:
             front.unsafe_store(max(substituted, gapped))
             comptime for lane in range(LANES):
@@ -526,7 +538,7 @@ def step[
             ).select(Lanes(Int32(SECOND_OPENED)), Lanes(0))
             flags.unsafe_offset(diagonal).unsafe_store((entry | opened).cast[DType.uint8]())
         diagonal += LANES
-    return reach
+    return max(reach, Int(reaches.reduce_max()))
 
 
 struct Wavefront(Movable):
