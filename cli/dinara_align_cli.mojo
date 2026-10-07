@@ -224,8 +224,20 @@ def run() raises:
             print(USAGE)
             return
         var takes_value = argument in [
-            "-r", "-q", "--pairs", "--costs", "--deletions", "--mode", "--match-score", "--zdrop", "--band",
-            "--max-cost", "--ties", "--format", "--threads", "--max-memory",
+            "-r",
+            "-q",
+            "--pairs",
+            "--costs",
+            "--deletions",
+            "--mode",
+            "--match-score",
+            "--zdrop",
+            "--band",
+            "--max-cost",
+            "--ties",
+            "--format",
+            "--threads",
+            "--max-memory",
         ]
         if takes_value and not has_value:
             fail(String(argument, " needs a value"))
@@ -310,18 +322,26 @@ def run() raises:
         var reads = read_records(positional[1])
         if len(targets) != 1 and len(targets) != len(reads):
             fail("the reference file holds one sequence, or as many as the query file")
-        for read in range(len(reads)):
-            ref target = targets[0 if len(targets) == 1 else read]
-            names.append(reads[read].name)
+        for item in range(len(reads)):
+            ref target = targets[0 if len(targets) == 1 else item]
+            names.append(reads[item].name)
             reference_names.append(target.name)
             references.append(target.sequence)
-            queries.append(reads[read].sequence)
+            queries.append(reads[item].sequence)
     else:
         print(USAGE)
         exit(2)
 
     if cost_only:
-        var found = distances(references, queries, costs, mode, max_cost=max_cost if max_cost >= 0 else Int.MAX, band=band, threads=threads)
+        var found = distances(
+            references,
+            queries,
+            costs,
+            mode,
+            max_cost=max_cost if max_cost >= 0 else Int.MAX,
+            band=band,
+            threads=threads,
+        )
         print("query\treference\tcost")
         for pair in range(len(found)):
             print(names[pair], reference_names[pair], String(found[pair].value()) if found[pair] else "*", sep="\t")
@@ -329,7 +349,15 @@ def run() raises:
 
     var cap = max_cost if max_cost >= 0 else Int.MAX
     var forward = alignments(
-        references, queries, costs, mode, max_cost=cap, band=band, ties=ties, extended=extended, threads=threads,
+        references,
+        queries,
+        costs,
+        mode,
+        max_cost=cap,
+        band=band,
+        ties=ties,
+        extended=extended,
+        threads=threads,
         max_memory=memory,
     ) if not mode.is_scored() else _scored(references, queries, costs, mode, band, ties, extended, threads, memory)
     var reverse = List[Optional[Alignment]]()
@@ -338,7 +366,15 @@ def run() raises:
         for query in queries:
             flipped.append(reverse_complement(query))
         reverse = alignments(
-            references, flipped, costs, mode, max_cost=cap, band=band, ties=ties, extended=extended, threads=threads,
+            references,
+            flipped,
+            costs,
+            mode,
+            max_cost=cap,
+            band=band,
+            ties=ties,
+            extended=extended,
+            threads=threads,
             max_memory=memory,
         ) if not mode.is_scored() else _scored(references, flipped, costs, mode, band, ties, extended, threads, memory)
 
@@ -356,7 +392,11 @@ def run() raises:
         var strand = "+"
         var found = forward[pair].copy()
         var query = queries[pair]
-        if both_strands and reverse[pair] and (not found or better(found.value(), reverse[pair].value(), mode.is_scored())):
+        if (
+            both_strands
+            and reverse[pair]
+            and (not found or better(found.value(), reverse[pair].value(), mode.is_scored()))
+        ):
             found = reverse[pair].copy()
             strand = "-"
             query = flipped[pair]
@@ -370,17 +410,36 @@ def run() raises:
         ref hit = found.value()
         if format == "tsv":
             print(
-                names[pair], reference_names[pair], strand, hit.cost, hit.score, hit.reference_start,
-                hit.reference_end, hit.query_start, hit.query_end, hit.cigar, sep="\t",
+                names[pair],
+                reference_names[pair],
+                strand,
+                hit.cost,
+                hit.score,
+                hit.reference_start,
+                hit.reference_end,
+                hit.query_start,
+                hit.query_end,
+                hit.cigar,
+                sep="\t",
             )
         elif format == "sam":
             var flag = 16 if strand == "-" else 0
             print(
-                names[pair], flag, reference_names[pair], hit.reference_start + 1, 255,
-                hit.clipped_cigar(length) if hit.cigar.byte_length() > 0 else "*", "*", 0, 0, query, "*",
+                names[pair],
+                flag,
+                reference_names[pair],
+                hit.reference_start + 1,
+                255,
+                hit.clipped_cigar(length) if hit.cigar.byte_length() > 0 else "*",
+                "*",
+                0,
+                0,
+                query,
+                "*",
                 String("NM:i:", hit.edit_distance(references[pair], query)),
                 String("MD:Z:", hit.mismatch_string(references[pair], query)),
-                String("AS:i:", hit.score), sep="\t",
+                String("AS:i:", hit.score),
+                sep="\t",
             )
         else:
             var counted = hit.counts(references[pair], query)
@@ -389,10 +448,22 @@ def run() raises:
             var query_start = hit.query_start if strand == "+" else length - hit.query_end
             var query_end = hit.query_end if strand == "+" else length - hit.query_start
             print(
-                names[pair], length, query_start, query_end, strand, reference_names[pair],
-                references[pair].byte_length(), hit.reference_start, hit.reference_end, counted.matches, columns,
-                255, String("NM:i:", hit.edit_distance(references[pair], query)), String("AS:i:", hit.score),
-                String("cg:Z:", hit.cigar), sep="\t",
+                names[pair],
+                length,
+                query_start,
+                query_end,
+                strand,
+                reference_names[pair],
+                references[pair].byte_length(),
+                hit.reference_start,
+                hit.reference_end,
+                counted.matches,
+                columns,
+                255,
+                String("NM:i:", hit.edit_distance(references[pair], query)),
+                String("AS:i:", hit.score),
+                String("cg:Z:", hit.cigar),
+                sep="\t",
             )
 
 
