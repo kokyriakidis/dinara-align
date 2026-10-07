@@ -22,6 +22,7 @@ from dinara_align import (
     Band,
     Costs,
     Mode,
+    Scoring,
     Ties,
     align,
     alignments,
@@ -380,6 +381,108 @@ def random_case() raises -> Case:
     return Case(pair[0], pair[1], costs, mode, band, Ties.RIGHT if chance(0.5) else Ties.LEFT, chance(0.8), memory)
 
 
+def random_scoring(alphabet: String) raises -> Scoring:
+    """A table over `alphabet`, mostly rewarding equal letters and charging unequal ones, at times a
+    uniform one, and affine gap scores, a free extension among them."""
+    var size = alphabet.byte_length()
+    var table = List[Int8](length=size * size, fill=0)
+    var uniform = chance(0.3)
+    var reward = draw(0, 5)
+    var penalty = draw(1, 6)
+    for row in range(size):
+        for column in range(size):
+            if uniform:
+                table[row * size + column] = Int8(reward if row == column else -penalty)
+            elif row == column:
+                table[row * size + column] = Int8(draw(0, 6))
+            else:
+                table[row * size + column] = Int8(draw(0, 9) - 7)
+    var extension = -draw(0, 3) if chance(0.8) else 0
+    var opening = -draw(0, 10)
+    if opening + extension > extension or (extension == 0 and opening == 0):
+        opening = -1
+    return Scoring.tabulated(alphabet, table^, opening, extension)
+
+
+def scoring_mode(columns: Int, rows: Int) raises AlignmentError -> Mode:
+    var kind = draw(0, 6)
+    if kind == 0:
+        return Mode.GLOBAL
+    if kind == 1:
+        return Mode.LOCAL
+    if kind == 2:
+        return [Mode.INFIX, Mode.PREFIX, Mode.SUFFIX, Mode.REFERENCE_IN_QUERY][draw(0, 3)]
+    if kind == 3 or kind == 4:
+        return Mode.ends_free(
+            reference_start=allowance(columns),
+            reference_end=allowance(columns),
+            query_start=allowance(rows),
+            query_end=allowance(rows),
+        )
+    var anchor = Anchor.END if chance(0.5) else Anchor.START
+    if chance(0.3):
+        return Mode.extension(0, anchor, zdrop=draw(0, 40))
+    return Mode.extension(0, anchor)
+
+
+def check_scoring(reference: String, query: String, scoring: Scoring, mode: Mode, extended: Bool) raises:
+    """A `Scoring`'s alignment in any mode: one the mode allows, earning its own score, the optimum,
+    and `score` agreeing."""
+    var size = scoring.alphabet_size()
+    var letters = scoring.alphabet.as_bytes()
+    var table = List[Int](length=256 * 256, fill=-1000)
+    for row in range(size):
+        for column in range(size):
+            table[Int(letters[row]) * 256 + Int(letters[column])] = Int(scoring.substitutions[row * size + column])
+    var opening = Int(scoring.gaps.extend - scoring.gaps.open)
+    var extension = Int(-scoring.gaps.extend)
+    var pieces: List[Tuple[Int, Int]] = [(opening, extension)]
+    var kind = ENDS
+    if mode.kind == Mode.EXTENSION:
+        kind = EXTENSION
+    elif mode.kind == Mode.SMITH_WATERMAN:
+        kind = LOCAL
+    var model = Model(
+        table^,
+        pieces.copy(),
+        pieces^,
+        kind,
+        mode.reference_start,
+        mode.reference_end,
+        mode.query_start,
+        mode.query_end,
+        mode.anchor == Anchor.END,
+        -(1 << 60),
+        1 << 60,
+    )
+    var best = optimum(model, reference, query).value()
+    var found = align(reference, query, scoring, mode, extended=extended)
+    var earned = check_alignment(
+        model,
+        reference,
+        query,
+        found.cigar,
+        found.reference_start,
+        found.reference_end,
+        found.query_start,
+        found.query_end,
+    )
+    if earned.score != found.score:
+        raise Error(String("a Scoring's score ", found.score, " but its CIGAR earns ", earned.score))
+    if mode.zdrop >= 0:
+        if earned.score > best:
+            raise Error(String("a Z-dropped extension earns ", earned.score, " past the best, ", best))
+    elif earned.score != best:
+        raise Error(String("a Scoring's alignment earns ", earned.score, ", the matrix's best is ", best))
+    var scored = score(reference, query, scoring, mode)
+    if scored != found.score:
+        raise Error(String("a Scoring's score ", scored, ", its alignment's ", found.score))
+    if model.kind == ENDS and not mode.is_global():
+        var span = rule_span(model, reference, query, True)
+        if span[0] != found.reference_start or span[1] != found.reference_end or span[2] != found.query_start:
+            raise Error("a Scoring's span is not the rule's")
+
+
 def main() raises:
     var arguments = argv()
     var iterations = Int(String(arguments[1])) if len(arguments) > 1 else 1000
@@ -399,6 +502,25 @@ def main() raises:
             print("  costs", trial.costs, "mode", trial.mode, "band", trial.band, "ties", trial.ties)
             if failures >= 10:
                 break
+        # A Scoring's turn, over its own alphabet.
+        var alphabet = "ACGT" if chance(0.7) else "ACGTN"
+        var scoring = random_scoring(alphabet)
+        var pair = (letters(draw(0, 60), alphabet), String())
+        pair[1] = mutated(pair[0], [0.0, 0.1, 0.4][draw(0, 2)], 4, alphabet) if chance(0.7) else letters(
+            draw(0, 60), alphabet
+        )
+        var mode = scoring_mode(pair[0].byte_length(), pair[1].byte_length())
+        try:
+            check_scoring(pair[0], pair[1], scoring, mode, chance(0.8))
+        except error:
+            failures += 1
+            print("FAIL seed", start, "iteration", iteration, "(Scoring):", error)
+            print("  reference", pair[0])
+            print("  query    ", pair[1])
+            var cells = String()
+            for value in scoring.substitutions:
+                cells += String(Int(value), ",")
+            print("  table", scoring.alphabet, cells, scoring.gaps.open, scoring.gaps.extend, "mode", mode)
         if not sweeps(trial.mode) and trial.band.covers(trial.reference.byte_length(), trial.query.byte_length()):
             if len(batch) == 0 or (batch[0].costs == trial.costs and batch[0].mode == trial.mode):
                 batch.append(trial.copy())

@@ -48,7 +48,9 @@ from .common import (
     uniform_matrix,
 )
 from .errors import AlignmentError, ErrorKind
-from .gap_affine import wavefront_align, wavefront_penalties, wavefront_score
+from .gap_affine import EndsFree, wavefront_align, wavefront_penalties, wavefront_score
+from .modes import Alignment, Anchor, Costs, Mode
+from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, swept_cells
 from .vector_score import optimal_band, uniform_table, vector_align, vector_score
 
 
@@ -455,6 +457,191 @@ def score_on_device[
 
 
 # endregion Routing
+
+# region Every Mode
+
+
+def gap_costs(scoring: Scoring) -> Costs:
+    """A `Scoring`'s gaps as `Costs` price them, the sweep's own terms: a gap of `k` letters scoring
+    `opening + k extension` costs minus that. Its mismatch stands for nothing: a table scores pairs."""
+    return Costs(1, Int(scoring.gaps.extend - scoring.gaps.open), Int(-scoring.gaps.extend), -1, 0)
+
+
+def table_fits[kind: Int](scoring: Scoring, rows: Int, columns: Int) -> Bool:
+    """Whether every score of a sweep under the table fits 16 bits, as `narrow_enough` asks of costs:
+    the best pair over the shorter sequence, and the dearest move over both for a sweep from the edges."""
+    var most = 0
+    var least = 0
+    for value in scoring.substitutions:
+        most = max(most, Int(value))
+        least = min(least, Int(value))
+    var dearest = max(-least, Int(-scoring.gaps.open))
+    var fits = most * (min(rows, columns) + 1) < 32000 and dearest < 4000
+    comptime if kind != ANYWHERE:
+        fits = fits and dearest * (rows + columns + 1) < 8000
+    return fits
+
+
+def tabulated_end[
+    kind: Int
+](
+    first: Span[UInt8, _], second: Span[UInt8, _], scoring: Scoring, ends: EndsFree, highest: Bool, zdrop: Int = -1
+) -> Tuple[Int, Int, Int]:
+    """The best score under `scoring` of an alignment `kind` allows, and where it ends, by the sweep
+    `scored.swept_cells` runs, each pair's score read from the table: `first` and `second` are codes
+    into the alphabet. Lanes along the shorter sequence, 16 bits while the scores fit."""
+    var gaps = gap_costs(scoring)
+    var size = scoring.alphabet_size()
+    var transposed = len(second) < len(first)
+    var unused = List[Int32]()
+    if table_fits[kind](scoring, len(first), len(second)):
+        var table = List[Int16](capacity=len(scoring.substitutions))
+        for value in scoring.substitutions:
+            table.append(Int16(value))
+        if transposed:
+            return swept_cells[1, DType.int16, 32, True, kind, False, True](
+                first, second, gaps, 0, ends, highest, table, size, zdrop, unused
+            )
+        return swept_cells[1, DType.int16, 32, False, kind, False, True](
+            first, second, gaps, 0, ends, highest, table, size, zdrop, unused
+        )
+    var table = List[Int32](capacity=len(scoring.substitutions))
+    for value in scoring.substitutions:
+        table.append(Int32(value))
+    if transposed:
+        return swept_cells[1, DType.int32, 16, True, kind, False, True](
+            first, second, gaps, 0, ends, highest, table, size, zdrop, unused
+        )
+    return swept_cells[1, DType.int32, 16, False, kind, False, True](
+        first, second, gaps, 0, ends, highest, table, size, zdrop, unused
+    )
+
+
+def ends_of(mode: Mode, columns: Int, rows: Int) -> EndsFree:
+    """A mode's free letters, none past its sequence's length."""
+    return EndsFree(
+        min(mode.reference_start, columns),
+        min(mode.reference_end, columns),
+        min(mode.query_start, rows),
+        min(mode.query_end, rows),
+    )
+
+
+def mode_span(
+    first: List[Scalar[SymbolDType]], second: List[Scalar[SymbolDType]], scoring: Scoring, mode: Mode
+) -> Tuple[Int, Int, Int, Int, Int]:
+    """The best score under `scoring` with free ends or as an extension, and the span it covers, as
+    `Costs` place it under `Ties.LEFT` (see `gap_affine.free_ends_alignment`): free ends by a sweep
+    from the edges for the end on the highest diagonal, then one back from it for the start on the
+    highest too; an extension by a sweep from its anchor for the end as late as an equally good one
+    allows. The score, then the start's and the end's letters of each sequence."""
+    var columns = len(first)
+    var rows = len(second)
+    if mode.kind == Mode.EXTENSION:
+        if mode.anchor == Anchor.END:
+            var back_first = List[Scalar[SymbolDType]](capacity=columns)
+            for index in range(columns - 1, -1, -1):
+                back_first.append(first[index])
+            var back_second = List[Scalar[SymbolDType]](capacity=rows)
+            for index in range(rows - 1, -1, -1):
+                back_second.append(second[index])
+            var found = tabulated_end[FROM_ORIGIN](back_first, back_second, scoring, EndsFree(), True, mode.zdrop)
+            return (found[0], columns - found[1], rows - found[2], columns, rows)
+        var found = tabulated_end[FROM_ORIGIN](first, second, scoring, EndsFree(), True, mode.zdrop)
+        return (found[0], 0, 0, found[1], found[2])
+    var ends = ends_of(mode, columns, rows)
+    var forward = tabulated_end[FROM_EDGE](first, second, scoring, ends, True)
+    var end_column = forward[1]
+    var end_row = forward[2]
+    var head = List[Scalar[SymbolDType]](capacity=end_column)
+    for index in range(end_column - 1, -1, -1):
+        head.append(first[index])
+    var lead = List[Scalar[SymbolDType]](capacity=end_row)
+    for index in range(end_row - 1, -1, -1):
+        lead.append(second[index])
+    var back = tabulated_end[FROM_EDGE](head, lead, scoring, EndsFree(0, ends.first_begin, 0, ends.second_begin), False)
+    return (forward[0], end_column - back[1], end_row - back[2], end_column, end_row)
+
+
+def as_alignment(gapped: GappedAlignment, first: String, second: String, whole: Bool, extended: Bool) -> Alignment:
+    """Gotoh's gapped rows as an `Alignment`: spanning both sequences when `whole`, else a local
+    alignment's, placed where its letters lie in each, the last place: any place both lie aligns the
+    same pairs of letters for the same score."""
+    var score = Int(gapped.score)
+    var cigar = gapped.cigar(extended)
+    if whole:
+        return Alignment(-score, score, cigar, 0, first.byte_length(), 0, second.byte_length())
+    var part = gapped.first_gapped.replace("-", "")
+    var piece = gapped.second_gapped.replace("-", "")
+    var first_start = first.rfind(part) if part.byte_length() > 0 else 0
+    var second_start = second.rfind(piece) if piece.byte_length() > 0 else 0
+    return Alignment(
+        -score,
+        score,
+        cigar,
+        first_start,
+        first_start + part.byte_length(),
+        second_start,
+        second_start + piece.byte_length(),
+    )
+
+
+def scoring_alignment(
+    first: String,
+    second: String,
+    scoring: Scoring,
+    mode: Mode,
+    placement: Optional[Placement],
+    stored_budget: Int,
+    extended: Bool,
+) raises -> Alignment:
+    """An optimal alignment under `scoring` as `mode` asks, as an `Alignment`: its CIGAR, its spans and
+    its score, its cost minus the score. Global and local alignments take Gotoh's sweeps on either
+    device (see `align_with`), and a local one's spans are found where its letters lie; free ends and
+    extensions, on the host, find their span by sweep (see `mode_span`) and align it globally."""
+    var columns = first.byte_length()
+    var rows = second.byte_length()
+    if mode.match_score > 0:
+        raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a Scoring's table holds what a match earns")
+    if mode.kind == Mode.SMITH_WATERMAN or mode.is_global():
+        var gapped: GappedAlignment
+        if mode.kind == Mode.SMITH_WATERMAN:
+            gapped = align_with[AlignmentMode.LOCAL](first, second, scoring, placement, stored_budget)
+        else:
+            gapped = align_with[AlignmentMode.GLOBAL](first, second, scoring, placement, stored_budget)
+        return as_alignment(gapped, first, second, mode.is_global(), extended)
+    if placement and placement.value().device == Device.GPU:
+        raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "on the GPU a Scoring aligns globally or locally")
+    var codes_first = translate(first, scoring.alphabet)
+    var codes_second = translate(second, scoring.alphabet)
+    var span = mode_span(codes_first, codes_second, scoring, mode)
+    var start_column = span[1]
+    var start_row = span[2]
+    var end_column = span[3]
+    var end_row = span[4]
+    var inner = align_on_host[AlignmentMode.GLOBAL](
+        Span(codes_first)[start_column:end_column], Span(codes_second)[start_row:end_row], scoring, stored_budget
+    )
+    return Alignment(-span[0], span[0], inner.cigar(extended), start_column, end_column, start_row, end_row)
+
+
+def scoring_score(
+    first: String, second: String, scoring: Scoring, mode: Mode, placement: Optional[Placement]
+) raises -> Int:
+    """The best score under `scoring` as `mode` asks, with no alignment traced: global and local on
+    either device (see `score_with`), free ends and extensions by their sweep on the host."""
+    if mode.match_score > 0:
+        raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a Scoring's table holds what a match earns")
+    if mode.kind == Mode.SMITH_WATERMAN:
+        return Int(score_with[AlignmentMode.LOCAL](first, second, scoring, placement))
+    if mode.is_global():
+        return Int(score_with[AlignmentMode.GLOBAL](first, second, scoring, placement))
+    if placement and placement.value().device == Device.GPU:
+        raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "on the GPU a Scoring aligns globally or locally")
+    return mode_span(translate(first, scoring.alphabet), translate(second, scoring.alphabet), scoring, mode)[0]
+
+
+# endregion Every Mode
 
 # region Entry Points
 

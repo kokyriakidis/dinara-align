@@ -22,7 +22,6 @@ from dinara_align import (
     Band,
     Costs,
     DNA_ALPHABET,
-    GappedAlignment,
     Mode,
     Placement,
     Scoring,
@@ -36,7 +35,7 @@ from dinara_align import (
     score,
     scores,
 )
-from dinara_align.alignment import AlignmentMode
+from dinara_align.alignment import AlignmentMode, GappedAlignment
 from dinara_align.cigar import cigar_runs
 from dinara_align.edit_distance import edit_distance as bit_parallel_distance
 from dinara_align.scored import best_end, end_of
@@ -202,6 +201,22 @@ def brute_optimum(mode: Mode, first: String, second: String, scoring: Scoring) -
     return best
 
 
+def gapped_rows(found: Alignment, first: String, second: String) -> GappedAlignment:
+    """An alignment's two gapped rows and its score, as Gotoh's rows were."""
+    var rows = found.gapped(first, second)
+    return GappedAlignment(Int32(found.score), rows[0], rows[1])
+
+
+def assert_well_formed(mode: Mode, first: String, second: String, found: Alignment, scoring: Scoring) raises:
+    """Both rows have one length, each rebuilds its input or a piece of it, and they earn their score;
+    the spans and the CIGAR read the rows back, and the cost is minus the score."""
+    assert_well_formed(mode, first, second, gapped_rows(found, first, second), scoring)
+    assert_equal(found.cost, -found.score)
+    if mode == GLOBAL:
+        assert_equal(found.reference_start, 0)
+        assert_equal(found.reference_end, first.byte_length())
+
+
 def assert_well_formed(mode: Mode, first: String, second: String, produced: GappedAlignment, scoring: Scoring) raises:
     """Both rows have one length, each rebuilds its input or a piece of it, and they earn their score."""
     assert_equal(produced.first_gapped.byte_length(), produced.second_gapped.byte_length())
@@ -272,22 +287,22 @@ def test_hand_computed_global() raises:
     """Pairs whose optimum can be worked out on paper, strings included."""
     var dna = Scoring.dna()
     var same = align("ACGTACGT", "ACGTACGT", dna)
-    assert_equal(same.first_gapped, "ACGTACGT")
+    assert_equal(same.gapped("ACGTACGT", "ACGTACGT")[0], "ACGTACGT")
     assert_equal(same.score, 16)
 
     # One substitution costs -4, which beats opening two gaps at -6 each.
     var substituted = align("ACGTACGT", "ACGTTCGT", dna)
-    assert_equal(substituted.first_gapped, "ACGTACGT")
-    assert_equal(substituted.second_gapped, "ACGTTCGT")
+    assert_equal(substituted.gapped("ACGTACGT", "ACGTTCGT")[0], "ACGTACGT")
+    assert_equal(substituted.gapped("ACGTACGT", "ACGTTCGT")[1], "ACGTTCGT")
     assert_equal(substituted.score, 7 * 2 - 4)
 
     # A three-base deletion is one gap, scoring -(4 + 2 * 3).
     var deleted = align("ACGTTGCAGGGCATGACGT", "ACGTTGCACATGACGT", dna)
-    assert_equal(deleted.first_gapped, "ACGTTGCAGGGCATGACGT")
-    assert_equal(deleted.second_gapped, "ACGTTGCA---CATGACGT")
-    assert_equal(deleted.cigar(), "8=3D8=")
-    assert_equal(substituted.cigar(), "4=1X3=")
-    assert_equal(substituted.cigar(extended=False), "8M")
+    assert_equal(deleted.gapped("ACGTTGCAGGGCATGACGT", "ACGTTGCACATGACGT")[0], "ACGTTGCAGGGCATGACGT")
+    assert_equal(deleted.gapped("ACGTTGCAGGGCATGACGT", "ACGTTGCACATGACGT")[1], "ACGTTGCA---CATGACGT")
+    assert_equal(deleted.cigar, "8=3D8=")
+    assert_equal(substituted.cigar, "4=1X3=")
+    assert_equal(align("ACGTACGT", "ACGTTCGT", dna, extended=False).cigar, "8M")
     assert_equal(deleted.score, 16 * 2 - 6 - 2 * 2)
     assert_equal(score("ACGTTGCAGGGCATGACGT", "ACGTTGCACATGACGT", dna), 22)
 
@@ -299,8 +314,9 @@ def test_hand_computed_global() raises:
 def test_hand_computed_local() raises:
     """The shared core of two otherwise unrelated sequences, trimmed at both ends."""
     var aligned = align("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC", Scoring.dna(), LOCAL)
-    assert_equal(aligned.first_gapped, "ACGTACGT")
-    assert_equal(aligned.second_gapped, "ACGTACGT")
+    assert_equal(aligned.cigar, "8=")
+    assert_equal(aligned.reference_start, 4)
+    assert_equal(aligned.query_end, 12)
     assert_equal(aligned.score, 16)
     assert_equal(score("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC", Scoring.dna(), LOCAL), 16)
 
@@ -460,7 +476,7 @@ def test_optimum_falls_as_gaps_get_harsher() raises:
     for _ in range(REPETITIONS):
         var first = random_sequence(5, 25, DNA_ALPHABET)
         var second = random_sequence(5, 25, DNA_ALPHABET)
-        var previous = Int32.MAX
+        var previous = Int.MAX
         for opening in [-2, -5, -10, -20, -40]:
             var current = score(first, second, Scoring.uniform(5, -4, opening, -1), GLOBAL)
             assert_true(current <= previous, "a harsher gap raised the optimum")
@@ -512,8 +528,8 @@ def test_batch_matches_single_pairs() raises:
     for index in range(len(firsts)):
         assert_equal(batch_scores[index], score(firsts[index], seconds[index], scoring, GLOBAL))
         var single = align(firsts[index], seconds[index], scoring, LOCAL)
-        assert_equal(batch_alignments[index].first_gapped, single.first_gapped)
-        assert_equal(batch_alignments[index].second_gapped, single.second_gapped)
+        assert_equal(batch_alignments[index].cigar, single.cigar)
+        assert_equal(batch_alignments[index].reference_start, single.reference_start)
         assert_equal(batch_alignments[index].score, single.score)
     assert_equal(len(scores(List[String](), List[String](), scoring, GLOBAL)), 0)
 
@@ -965,8 +981,9 @@ def test_refuses_what_it_cannot_do() raises:
         _ = Scoring.tabulated("AC", List[Int8](length=9, fill=0))
     with assert_raises(contains="do not"):
         _ = scores(["AC", "CA"], ["AC"], dna, GLOBAL)
-    with assert_raises(contains="globally or locally"):
-        _ = score("ACGT", "ACG", dna, Mode.INFIX)
+    var rewarded = Mode.INFIX.with_match_score(2)
+    with assert_raises(contains="holds what a match earns"):
+        _ = score("ACGT", "ACG", dna, rewarded)
     with assert_raises(contains="cannot be served"):
         _ = Costs.affine(0, 6, 2)
     with assert_raises(contains="cannot be served"):
@@ -1073,9 +1090,9 @@ def test_wavefront_matches_the_full_sweep() raises:
                 dna_codes(first), dna_codes(second), Int(scoring.substitutions[0]), Int(scoring.substitutions[1]), gaps
             )
             var produced = align(first, second, scoring, GLOBAL, host)
-            assert_equal(produced.score, expected)
+            assert_equal(produced.score, Int(expected))
             assert_well_formed(GLOBAL, first, second, produced, scoring)
-            assert_equal(score(first, second, scoring, GLOBAL, host), expected)
+            assert_equal(score(first, second, scoring, GLOBAL, host), Int(expected))
 
 
 def test_wavefront_splits_a_pair_too_large_to_keep() raises:

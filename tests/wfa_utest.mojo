@@ -219,7 +219,8 @@ def main() raises:
                 var scoring = Scoring.uniform(mode.reward, -mode.mismatch, -mode.opening, -mode.extension)
                 var aligned = align(first, second, scoring, Mode.GLOBAL, Placement.on_cpu(1))
                 score = Int(aligned.score)
-                cigar = rows_cigar(aligned.first_gapped, aligned.second_gapped)
+                var rows = aligned.gapped(first, second)
+                cigar = rows_cigar(rows[0], rows[1])
             var earned = priced(cigar, first, second, mode)
             if score != want or not earned or earned.value() != want:
                 print("   ", mode.name, "pair", index, ": score", score, "want", want, "CIGAR", cigar)

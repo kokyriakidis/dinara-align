@@ -61,25 +61,28 @@ var near = distances(references, queries, costs, max_cost=7)  # [None, None]: a 
 Free ends minimize the costs alone, as Edlib and WFA2-lib count them; `mode.with_match_score(a)`
 rewards every match instead, as parasail's and hyalite's semi-global modes do.
 
-A `Scoring`, an alphabet's substitution table and gap scores, which an alignment maximizes, aligns by
-Gotoh's Needleman-Wunsch or Smith-Waterman, with the initialization corrections Flouri et al. found
-missing from the 1982 paper, on the CPU or the GPU, its traceback in linear memory when the matrix is
-large:
+A `Scoring`, an alphabet's substitution table and gap scores, which an alignment maximizes, aligns
+globally or locally by Gotoh's Needleman-Wunsch or Smith-Waterman, with the initialization corrections
+Flouri et al. found missing from the 1982 paper, on the CPU or the GPU, its traceback in linear memory
+when the matrix is large; and with free ends or as an extension on the CPU, its span found by sweep
+and aligned globally:
 
 ```mojo
 from dinara_align import Mode, Scoring, align, score
 
 var scoring = Scoring.dna()  # minimap2's: match 2, mismatch -4, a gap of k letters -(4 + 2k)
-var rows = align("ACGTACGTTTGCA", "ACGTCGTTTTGCA", scoring)  # rows.first_gapped, rows.second_gapped
-var spelled = rows.cigar()  # the same alignment as a CIGAR
+var found = align("ACGTACGTTTGCA", "ACGTCGTTTTGCA", scoring)  # an Alignment, its cost minus its score
+var rows = found.gapped("ACGTACGTTTGCA", "ACGTCGTTTTGCA")  # the two gapped rows
 var best = score("TTTTACGTACGTTTTT", "ACGTACGT", scoring, Mode.LOCAL)  # 16
+# Any table, in every mode on the CPU: a read placed in a window, or a seed's extension.
+var placed = align("TTTTACGTACGTTTTT", "ACGTACGT", scoring, Mode.INFIX)  # score 16, reference 4..12
 ```
 
 Ported from AffineGaps by Ash Vardanian, https://github.com/unum-science/AffineGaps, alignment only;
 the edit distance from A*PA by Ragnar Groot Koerkamp and Pesho Ivanov (see NOTICE).
 """
 
-from .alignment import GappedAlignment, colorize
+from .alignment import colorize
 from .api import align, alignments, distance, distances, local_scores, score, scores
 from .common import Device, DeviceScope, GpuSpecs, Placement, hardware_threads
 from .errors import AlignmentError, ErrorKind

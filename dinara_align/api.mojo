@@ -53,11 +53,12 @@ from .modes import Alignment, Anchor, Band, Costs, Mode, Ties
 from .scoring import (
     STORED_MATRIX_BUDGET,
     Scoring,
-    align_with,
     alignments_with,
+    as_alignment,
     paired_length,
-    score_with,
     scores_with,
+    scoring_alignment,
+    scoring_score,
 )
 
 
@@ -424,25 +425,14 @@ def extended_alignment(
 # region Scoring
 
 
-def scoring_mode(mode: Mode) raises AlignmentError -> AlignmentMode:
-    """The recurrence a `Scoring` runs for `mode`: global or local alone."""
-    if mode.kind == Mode.SMITH_WATERMAN:
-        return AlignmentMode.LOCAL
-    if mode.match_score > 0:
-        raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a Scoring's table holds what a match earns")
-    if mode.is_global():
-        return AlignmentMode.GLOBAL
-    raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a Scoring aligns globally or locally alone")
-
-
 def score(
     reference: String, query: String, scoring: Scoring, mode: Mode = Mode.GLOBAL, placement: Optional[Placement] = None
-) raises -> Int32:
-    """The optimal score under `scoring`, `Mode.GLOBAL` or `Mode.LOCAL`, alone, in two rows of memory on
-    either device (see `scoring.score_with`)."""
-    if scoring_mode(mode) == AlignmentMode.LOCAL:
-        return score_with[AlignmentMode.LOCAL](reference, query, scoring, placement)
-    return score_with[AlignmentMode.GLOBAL](reference, query, scoring, placement)
+) raises -> Int:
+    """The optimal score under `scoring`, with no alignment traced: `Mode.GLOBAL` and `Mode.LOCAL` in two
+    rows of memory on either device (see `scoring.score_with`), free ends and extensions by sweep on the
+    host. The table holds what a match earns, so a mode's own match score must be zero:
+    `Mode.extension(0)` for an extension."""
+    return scoring_score(reference, query, scoring, mode, placement)
 
 
 def align(
@@ -452,13 +442,16 @@ def align(
     mode: Mode = Mode.GLOBAL,
     placement: Optional[Placement] = None,
     stored_budget: Int = STORED_MATRIX_BUDGET,
-) raises -> GappedAlignment:
-    """The optimal score under `scoring` and the two gapped rows that earn it, the reference's first,
-    also read as a CIGAR (see `GappedAlignment.cigar`): both sequences whole for `Mode.GLOBAL`,
-    Needleman-Wunsch, or the best-scoring window of each for `Mode.LOCAL`, Smith-Waterman."""
-    if scoring_mode(mode) == AlignmentMode.LOCAL:
-        return align_with[AlignmentMode.LOCAL](reference, query, scoring, placement, stored_budget)
-    return align_with[AlignmentMode.GLOBAL](reference, query, scoring, placement, stored_budget)
+    *,
+    extended: Bool = True,
+) raises -> Alignment:
+    """An optimal alignment under `scoring`, as `Costs` give one (see `Alignment`), its `cost` minus its
+    score: both sequences whole for `Mode.GLOBAL`, Needleman-Wunsch, the best-scoring window of each
+    for `Mode.LOCAL`, Smith-Waterman, on either device; free ends and extensions, with Z-drop as KSW2
+    gauges it, on the host, their span by sweep and the letters between aligned globally (see
+    `scoring.scoring_alignment`). Its rows come back with `Alignment.gapped`. Of equally good
+    alignments, Gotoh's walk picks the CIGAR (see `alignment.reconstruct`), not `Ties`."""
+    return scoring_alignment(reference, query, scoring, mode, placement, stored_budget, extended)
 
 
 def scores(
@@ -467,11 +460,24 @@ def scores(
     scoring: Scoring,
     mode: Mode = Mode.GLOBAL,
     placement: Optional[Placement] = None,
-) raises -> List[Int32]:
+) raises -> List[Int]:
     """`score` for every pair; on the device, every pair one block can carry goes out in one launch."""
-    if scoring_mode(mode) == AlignmentMode.LOCAL:
-        return scores_with[AlignmentMode.LOCAL](references, queries, scoring, placement)
-    return scores_with[AlignmentMode.GLOBAL](references, queries, scoring, placement)
+    var found: List[Int32]
+    var kind = mode.kind
+    if kind == Mode.SMITH_WATERMAN:
+        found = scores_with[AlignmentMode.LOCAL](references, queries, scoring, placement)
+    elif mode.is_global() and mode.match_score == 0:
+        found = scores_with[AlignmentMode.GLOBAL](references, queries, scoring, placement)
+    else:
+        var pairs = paired_length(references, queries)
+        var results = List[Int](capacity=pairs)
+        for index in range(pairs):
+            results.append(score(references[index], queries[index], scoring, mode, placement))
+        return results^
+    var results = List[Int](capacity=len(found))
+    for value in found:
+        results.append(Int(value))
+    return results^
 
 
 def alignments(
@@ -481,11 +487,27 @@ def alignments(
     mode: Mode = Mode.GLOBAL,
     placement: Optional[Placement] = None,
     stored_budget: Int = STORED_MATRIX_BUDGET,
-) raises -> List[GappedAlignment]:
+    *,
+    extended: Bool = True,
+) raises -> List[Alignment]:
     """`align` for every pair; on the device, every pair both bounds admit goes out in one launch."""
-    if scoring_mode(mode) == AlignmentMode.LOCAL:
-        return alignments_with[AlignmentMode.LOCAL](references, queries, scoring, placement, stored_budget)
-    return alignments_with[AlignmentMode.GLOBAL](references, queries, scoring, placement, stored_budget)
+    var pairs = paired_length(references, queries)
+    var gapped: List[GappedAlignment]
+    if mode.kind == Mode.SMITH_WATERMAN and mode.match_score == 0:
+        gapped = alignments_with[AlignmentMode.LOCAL](references, queries, scoring, placement, stored_budget)
+    elif mode.is_global() and mode.match_score == 0:
+        gapped = alignments_with[AlignmentMode.GLOBAL](references, queries, scoring, placement, stored_budget)
+    else:
+        var results = List[Alignment](capacity=pairs)
+        for index in range(pairs):
+            results.append(
+                align(references[index], queries[index], scoring, mode, placement, stored_budget, extended=extended)
+            )
+        return results^
+    var results = List[Alignment](capacity=pairs)
+    for index in range(pairs):
+        results.append(as_alignment(gapped[index], references[index], queries[index], mode.is_global(), extended))
+    return results^
 
 
 # endregion Scoring
