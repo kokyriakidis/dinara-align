@@ -32,6 +32,7 @@ from dinara_align import (
     colorize,
     distance,
     distances,
+    local_scores,
     score,
     scores,
 )
@@ -2583,6 +2584,91 @@ def test_zdrop_gives_up_on_noise() raises:
             assert_equal(extension_price(found.cigar, 2, 4, 6, 2, -1, 0), found.score)
     with assert_raises():
         _ = Mode.extension(1, zdrop=-5)
+
+
+def column_maxima(first: String, second: String, a: Int, x: Int, o: Int, e: Int, o2: Int, e2: Int) -> List[Int]:
+    """Each reference column's best Smith-Waterman score, of every cell with that many reference
+    letters, over the whole matrix; shares no code with the library."""
+    comptime LOW = -(1 << 40)
+    var p = first.as_bytes()
+    var q = second.as_bytes()
+    var n = len(p)
+    var m = len(q)
+    var width = m + 1
+    var best = List[Int](length=(n + 1) * width, fill=0)
+    var layers = List[List[Int]]()
+    for _ in range(4):
+        layers.append(List[Int](length=(n + 1) * width, fill=LOW))
+    var out = List[Int](length=n + 1, fill=0)
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            var at = i * width + j
+            var value = 0
+            for piece in range(2 if o2 >= 0 else 1):
+                var opening = o if piece == 0 else o2
+                var extension = e if piece == 0 else e2
+                layers[2 * piece][at] = max(
+                    best[at - width] - opening - extension, layers[2 * piece][at - width] - extension
+                )
+                layers[2 * piece + 1][at] = max(
+                    best[at - 1] - opening - extension, layers[2 * piece + 1][at - 1] - extension
+                )
+                value = max(value, max(layers[2 * piece][at], layers[2 * piece + 1][at]))
+            value = max(value, best[at - width - 1] + (a if p[i - 1] == q[j - 1] else -x))
+            best[at] = value
+            out[i] = max(out[i], value)
+    return out^
+
+
+def test_scores_without_alignments() raises:
+    """`score` is `align`'s score for every mode, and `local_scores` the local optimum with SSW's second
+    best: the best column more than the window from the best end, the first on a tie."""
+    seed(103)
+    var costs = Costs.affine(4, 6, 2)
+    var modes: List[Mode] = [
+        Mode.GLOBAL,
+        Mode.INFIX,
+        Mode.extension(1),
+        Mode.extension(2, Anchor.END),
+        Mode.local(2),
+        Mode.overlap(2),
+        Mode.INFIX.with_match_score(2),
+        Mode.GLOBAL.with_match_score(1),
+    ]
+    for trial in range(40):
+        var core = random_sequence(1, 200, DNA_ALPHABET)
+        var reference = random_sequence(0, 100, DNA_ALPHABET) + core + random_sequence(0, 100, DNA_ALPHABET)
+        var query = mutated(core, [0.0, 0.05, 0.2][trial % 3], 6)
+        if trial % 4 == 0:
+            # A second copy elsewhere, for a second best worth its name.
+            reference += random_sequence(30, 60, DNA_ALPHABET) + mutated(core, 0.1, 4)
+        for mode in modes:
+            assert_equal(score(reference, query, costs, mode), align(reference, query, costs, mode).score)
+        var found = local_scores(reference, query, costs, Mode.local(2))
+        var maxima = column_maxima(reference, query, 2, 4, 6, 2, -1, 0)
+        assert_equal(found.score, local_optimum(reference, query, 2, 4, 6, 2, -1, 0))
+        var window = max(query.byte_length() // 2, 15)
+        var second = 0
+        var second_end = 0
+        for letters in range(len(maxima)):
+            if abs(letters - found.reference_end) > window and maxima[letters] > second:
+                second = maxima[letters]
+                second_end = letters
+        assert_equal(found.second_score, second)
+        assert_equal(found.second_reference_end, second_end)
+        var aligned = align(reference, query, costs, Mode.local(2), ties=Ties.LEFT)
+        assert_equal(found.reference_end, aligned.reference_end)
+        assert_equal(found.query_end, aligned.query_end)
+        # The shorter sequence as the reference: the lanes run along it, the columns kept by row.
+        var swapped = local_scores(query, reference, costs, Mode.local(2), window=10)
+        var swapped_maxima = column_maxima(query, reference, 2, 4, 6, 2, -1, 0)
+        var swapped_second = 0
+        for letters in range(len(swapped_maxima)):
+            if abs(letters - swapped.reference_end) > 10:
+                swapped_second = max(swapped_second, swapped_maxima[letters])
+        assert_equal(swapped.second_score, swapped_second)
+    with assert_raises():
+        _ = local_scores("ACGT", "ACGT", costs, Mode.GLOBAL)
 
 
 def rebuilt_reference(query: String, cigar: String, md: String) raises -> String:

@@ -47,10 +47,31 @@ def best_end[
     ends: EndsFree = EndsFree(),
     highest: Bool = True,
 ) -> Tuple[Int, Int, Int]:
+    """The best score of an alignment starting and ending where `kind` allows, and where it ends (see
+    `swept_cells`)."""
+    var unused = List[Int32]()
+    return swept_cells[pieces, dtype, width, transposed, kind, False](
+        reference, query, costs, match_score, ends, highest, unused
+    )
+
+
+def swept_cells[
+    pieces: Int, dtype: DType, width: Int, transposed: Bool, kind: Int, columns_kept: Bool
+](
+    reference: Span[UInt8, _],
+    query: Span[UInt8, _],
+    costs: Costs,
+    match_score: Int,
+    ends: EndsFree,
+    highest: Bool,
+    mut kept: List[Int32],
+) -> Tuple[Int, Int, Int]:
     """The best score of an alignment starting and ending where `kind` allows, and the reference's and
     the query's letters up to where it ends: of several such ends, for a local alignment the furthest
     along both together, then along the reference; from the edges the one on the highest diagonal, the
-    furthest along the reference less the query, or with `highest` false the lowest.
+    furthest along the reference less the query, or with `highest` false the lowest. With
+    `columns_kept`, for a local alignment, `kept` holds after it the best score of every column: of
+    the cells with as many reference letters, `len(reference) + 1` of them.
 
     Gotoh's recurrence over scores, a local alignment's every cell floored at zero, swept by
     anti-diagonal as `vector_score` sweeps it: every cell of `d = i + j` reads only diagonals `d - 1`
@@ -108,6 +129,9 @@ def best_end[
     var lane_index = Lanes()
     comptime for lane in range(width):
         lane_index[lane] = Value(lane)
+    # Each column's best as the lanes find it: by the lanes' own row along the reference, or along the
+    # query back from the reference's end, so a lane group's cells are always a run of the store.
+    var column_best = List[Value](length=(len(reference) + 1 + width) if columns_kept else 0, fill=0)
 
     @inline(.always)
     def edge(letters: Int, free: Int) {imm costs} -> Value:
@@ -122,6 +146,8 @@ def best_end[
 
     if rows == 0 or columns == 0:
         comptime if local:
+            comptime if columns_kept:
+                kept = List[Int32](length=len(reference) + 1, fill=0)
             return (0, 0, 0)
         # One sequence empty: the alignment lies along the other's edge, ending within its free letters,
         # the furthest such end on a tie.
@@ -222,6 +248,9 @@ def best_end[
                 var counted = score
                 if row + width - 1 > high:
                     counted = lane_index.lt(Lanes(Value(high - row + 1))).select(score, zero)
+                comptime if columns_kept:
+                    var at = column_best.unsafe_ptr().unsafe_offset((columns - diagonal + row) if transposed else row)
+                    at.unsafe_store(max(at.unsafe_load[width=width](), counted))
                 var later = counted.gt(top) if transposed else counted.ge(top)
                 top = later.select(counted, top)
                 top_step = later.select(Lanes(step), top_step)
@@ -260,6 +289,11 @@ def best_end[
         comptime if two:
             swap(deletes2_back, deletes2)
             swap(inserts2_back, inserts2)
+    comptime if columns_kept:
+        var length = len(reference)
+        kept = List[Int32](length=length + 1, fill=0)
+        for letters in range(length + 1):
+            kept[letters] = Int32(column_best[(columns - letters) if transposed else letters])
     # `best_row` counts the lanes' sequence, the rest of the diagonal the other's.
     if transposed:
         return (best, best_diagonal - best_row, best_row)
@@ -309,6 +343,68 @@ def swept[
     if transposed:
         return best_end[1, DType.int32, 16, True, kind](reference, query, costs, match_score, ends, highest)
     return best_end[1, DType.int32, 16, False, kind](reference, query, costs, match_score, ends, highest)
+
+
+@fieldwise_init
+struct LocalScores(ImplicitlyCopyable, Writable):
+    """A local alignment's best score and where it ends, and the best score of an alignment ending
+    elsewhere, as SSW reports them for a mapping quality: `second_score` the best of any cell whose
+    reference letters lie more than the window from `reference_end`, at `second_reference_end`, the
+    first such column; zero, at zero, when there is none."""
+
+    var score: Int
+    var reference_end: Int
+    var query_end: Int
+    var second_score: Int
+    var second_reference_end: Int
+
+
+def local_scores(
+    reference: Span[UInt8, _], query: Span[UInt8, _], costs: Costs, match_score: Int, window: Int
+) -> LocalScores:
+    """The best local score and where it ends, by the sweep `end_of` runs, and the best of every
+    column more than `window` reference letters from that end (see `LocalScores`), from each column's
+    best the same sweep keeps."""
+    var kept = List[Int32]()
+    var found: Tuple[Int, Int, Int]
+    var flipped = len(query) < len(reference)
+    var two = costs.pieces() == 2
+    var none = EndsFree()
+    # As `swept` dispatches: lanes along the shorter sequence, 16 bits while the scores fit.
+    if narrow_enough[ANYWHERE](costs, match_score, len(reference), len(query)):
+        if two:
+            found = swept_cells[2, DType.int16, 32, True, ANYWHERE, True](
+                reference, query, costs, match_score, none, True, kept
+            ) if flipped else swept_cells[2, DType.int16, 32, False, ANYWHERE, True](
+                reference, query, costs, match_score, none, True, kept
+            )
+        else:
+            found = swept_cells[1, DType.int16, 32, True, ANYWHERE, True](
+                reference, query, costs, match_score, none, True, kept
+            ) if flipped else swept_cells[1, DType.int16, 32, False, ANYWHERE, True](
+                reference, query, costs, match_score, none, True, kept
+            )
+    elif two:
+        found = swept_cells[2, DType.int32, 16, True, ANYWHERE, True](
+            reference, query, costs, match_score, none, True, kept
+        ) if flipped else swept_cells[2, DType.int32, 16, False, ANYWHERE, True](
+            reference, query, costs, match_score, none, True, kept
+        )
+    else:
+        found = swept_cells[1, DType.int32, 16, True, ANYWHERE, True](
+            reference, query, costs, match_score, none, True, kept
+        ) if flipped else swept_cells[1, DType.int32, 16, False, ANYWHERE, True](
+            reference, query, costs, match_score, none, True, kept
+        )
+    var second = 0
+    var second_end = 0
+    for letters in range(len(kept)):
+        if abs(letters - found[1]) <= window:
+            continue
+        if Int(kept[letters]) > second:
+            second = Int(kept[letters])
+            second_end = letters
+    return LocalScores(found[0], found[1], found[2], second, second_end)
 
 
 def end_of(reference: Span[UInt8, _], query: Span[UInt8, _], costs: Costs, match_score: Int) -> Tuple[Int, Int, Int]:

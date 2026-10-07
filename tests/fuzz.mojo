@@ -26,6 +26,7 @@ from dinara_align import (
     align,
     alignments,
     distance,
+    score,
 )
 
 from oracle import ENDS, EXTENSION, LOCAL, Model, check_alignment, optimum, reversed_bytes, rule_span
@@ -222,6 +223,9 @@ def check(trial: Case) raises:
     var expected_score = earned.score if trial.mode.is_scored() else -earned.cost
     if found.score != expected_score:
         raise Error(String("score ", found.score, " but the CIGAR earns ", expected_score))
+    var scored = score(trial.reference, trial.query, trial.costs, trial.mode, band=trial.band)
+    if scored != found.score:
+        raise Error(String("score ", scored, ", align's ", found.score))
     if trial.mode.zdrop >= 0:
         # A Z-drop may give up short of the best: an extension that earns no more than it.
         if earned.score > best.value():

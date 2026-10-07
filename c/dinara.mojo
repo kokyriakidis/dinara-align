@@ -24,11 +24,14 @@ from dinara_align import (
     Band,
     Costs,
     ErrorKind,
+    LocalScores,
     Mode,
     Ties,
     align,
     distance,
     hardware_threads,
+    local_scores,
+    score,
 )
 
 comptime UNSUPPORTED_SYMBOLS = -1
@@ -281,6 +284,74 @@ def dinara_align(
             options_of(options),
             alignment,
         )
+    except error:
+        return failure(error)
+
+
+@export("dinara_score")
+def dinara_score(
+    reference: ImmPointer[UInt8, MutAnyOrigin],
+    reference_length: Int,
+    query: ImmPointer[UInt8, MutAnyOrigin],
+    query_length: Int,
+    costs: OptionalPointer[Int, MutAnyOrigin],
+    mode: OptionalPointer[Int, MutAnyOrigin],
+    options: OptionalPointer[Int, MutAnyOrigin],
+    found: MutPointer[Int, MutAnyOrigin],
+) abi("C") -> Int:
+    """The best score `dinara_align` would return, with no alignment traced (see `score`), into
+    `found`: zero, or a negative code."""
+    if not plain_bytes(reference, reference_length) or not plain_bytes(query, query_length):
+        return UNSUPPORTED_SYMBOLS
+    try:
+        var asked = options_of(options)
+        found[] = score(
+            sequence(reference, reference_length),
+            sequence(query, query_length),
+            costs_of(costs),
+            mode_of(mode),
+            band=asked.band,
+        )
+        return 0
+    except error:
+        return failure(error)
+
+
+@export("dinara_local_scores_of")
+def dinara_local_scores_of(
+    reference: ImmPointer[UInt8, MutAnyOrigin],
+    reference_length: Int,
+    query: ImmPointer[UInt8, MutAnyOrigin],
+    query_length: Int,
+    costs: OptionalPointer[Int, MutAnyOrigin],
+    mode: OptionalPointer[Int, MutAnyOrigin],
+    window: Int,
+    found: MutPointer[Int, MutAnyOrigin],
+) abi("C") -> Int:
+    """A local alignment's best score, its end and SSW's second best (see `local_scores`) into
+    `found`, a `dinara_local_scores`: zero, or a negative code."""
+    if not plain_bytes(reference, reference_length) or not plain_bytes(query, query_length):
+        return UNSUPPORTED_SYMBOLS
+    try:
+        var scores: LocalScores
+        if window >= 0:
+            scores = local_scores(
+                sequence(reference, reference_length),
+                sequence(query, query_length),
+                costs_of(costs),
+                mode_of(mode),
+                window=window,
+            )
+        else:
+            scores = local_scores(
+                sequence(reference, reference_length), sequence(query, query_length), costs_of(costs), mode_of(mode)
+            )
+        found[unsafe_offset=0] = scores.score
+        found[unsafe_offset=1] = scores.reference_end
+        found[unsafe_offset=2] = scores.query_end
+        found[unsafe_offset=3] = scores.second_score
+        found[unsafe_offset=4] = scores.second_reference_end
+        return 0
     except error:
         return failure(error)
 

@@ -129,6 +129,29 @@ int64_t dinara_align(const char *reference, int64_t reference_length, const char
                      const dinara_costs *costs, const dinara_mode *mode, const dinara_options *options,
                      dinara_alignment *alignment);
 
+/* The best score `dinara_align` would return, with no alignment traced, into `*score`: for a mode with
+ * a match score its matches' reward less its costs, else minus the least cost. Zero, or a DINARA_ code.
+ * The options' cap, `extended`, `right_ties` and memory change nothing. */
+int64_t dinara_score(const char *reference, int64_t reference_length, const char *query, int64_t query_length,
+                     const dinara_costs *costs, const dinara_mode *mode, const dinara_options *options, int64_t *score);
+
+/* A local alignment's best score and the reference's and query's letters up to its end, and the best
+ * score of an alignment ending more than a window of reference letters away, as SSW's `score2` and
+ * `ref_end2`; zero at zero when there is none. */
+typedef struct {
+    int64_t score;
+    int64_t reference_end;
+    int64_t query_end;
+    int64_t second_score;
+    int64_t second_reference_end;
+} dinara_local_scores;
+
+/* `dinara_local_scores` for a DINARA_LOCAL mode, the window `window` letters, or for a negative one
+ * half the query and at least 15, as SSW suggests; one sweep, no alignment traced. Zero, or a code. */
+int64_t dinara_local_scores_of(const char *reference, int64_t reference_length, const char *query,
+                               int64_t query_length, const dinara_costs *costs, const dinara_mode *mode,
+                               int64_t window, dinara_local_scores *scores);
+
 /* Frees a CIGAR that `dinara_align` or `dinara_alignments` returned; null is nothing to free. */
 void dinara_free(char *cigar);
 
@@ -345,6 +368,28 @@ inline std::vector<std::optional<Alignment>> alignments(const Batch &batch, cons
     return results;
 }
 }  // namespace detail
+
+/* The best score `align` would return, with no alignment traced. */
+inline int64_t score(std::string_view reference, std::string_view query, const Costs &costs = Costs::edit(),
+                     const Mode &mode = Mode::global(), Band band = {}) {
+    dinara_costs c = detail::c_costs(costs);
+    dinara_options options{band.low, band.high, -1, 1, 0, 0};
+    int64_t found = 0;
+    detail::check(dinara_score(reference.data(), static_cast<int64_t>(reference.size()), query.data(),
+                               static_cast<int64_t>(query.size()), &c, &mode.fields, &options, &found));
+    return found;
+}
+
+/* A local alignment's best score and end, and SSW's second best, more than `window` reference letters
+ * away; a negative window is half the query and at least 15. */
+inline dinara_local_scores local_scores(std::string_view reference, std::string_view query, const Costs &costs,
+                                        const Mode &mode, int64_t window = -1) {
+    dinara_costs c = detail::c_costs(costs);
+    dinara_local_scores found{};
+    detail::check(dinara_local_scores_of(reference.data(), static_cast<int64_t>(reference.size()), query.data(),
+                                         static_cast<int64_t>(query.size()), &c, &mode.fields, window, &found));
+    return found;
+}
 
 /* The least cost of aligning the query to the reference. */
 inline int64_t distance(std::string_view reference, std::string_view query, const Costs &costs = Costs::edit(),

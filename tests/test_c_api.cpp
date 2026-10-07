@@ -162,6 +162,12 @@ int main() {
     dinara::Alignment local = dinara::align("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC", affine, Mode::local(2));
     CHECK(local.score == 16 && local.cigar == "8=" && local.reference_start == 4 && local.query_start == 4);
     CHECK(dinara::align("ACGT", "ACGT", Costs::edit(), Mode::local(1)).score == 4);
+    // A score alone, with no alignment, and SSW's second best: the later copy of the core is the best end.
+    CHECK(dinara::score("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC", affine, Mode::local(2)) == 16);
+    CHECK(dinara::score("ACGTACGTTTGCA", "ACGTCGTTTTGCA", affine) == -12);
+    dinara_local_scores twice = dinara::local_scores("ACGTACGTAC" + std::string(20, 'T') + "ACGTACGTAC", "ACGTACGTAC",
+                                                     affine, Mode::local(2), 5);
+    CHECK(twice.score == 20 && twice.reference_end == 40 && twice.second_score == 20 && twice.second_reference_end == 10);
     // An overlap of two reads, the first's suffix on the second's prefix.
     dinara::Alignment over = dinara::align("TTTTTACGTACGT", "ACGTACGTGGGGG", affine, Mode::overlap(2));
     CHECK(over.score == 16 && over.cigar == "8=" && over.reference_start == 5 && over.query_end == 8);

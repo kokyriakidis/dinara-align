@@ -24,7 +24,16 @@ from .edit_distance import edit_cigar, edit_distance
 from .edit_search import edit_search
 from .errors import AlignmentError, ErrorKind
 from .cigar import cigar_matches, cigar_runs, joined_cigar
-from .scored import global_rewarded, local_alignment, rewarded_alignment
+from .scored import (
+    FROM_EDGE,
+    LocalScores,
+    end_of,
+    global_rewarded,
+    local_alignment,
+    local_scores as local_scores_of,
+    rewarded_alignment,
+    swept,
+)
 from .gap_affine import (
     AffineCigar,
     DEFAULT_MAX_MEMORY,
@@ -32,6 +41,7 @@ from .gap_affine import (
     KEPT_BYTES,
     Spanned,
     cigar_within,
+    extend,
     extension_of,
     free_ends_alignment,
     extension_penalties,
@@ -133,6 +143,74 @@ def align(
     `distance` finds that, with no fronts traced. A mode with a match score, which maximizes a score,
     takes no cap."""
     return aligned_within(reference, query, costs, mode, band, max_cost, ties, extended, max_memory // KEPT_BYTES)
+
+
+def score(
+    reference: String, query: String, costs: Costs, mode: Mode = Mode.GLOBAL, *, band: Band = Band()
+) raises AlignmentError -> Int:
+    """The best score `align` would return, with no alignment traced: for a mode with a match score its
+    matches' reward less its costs, else minus the least cost, `distance`'s. A local alignment or free
+    ends with a reward take the sweep alone, an extension its search alone, and a global alignment
+    with a reward the wavefront's cost with the reward folded in, so each skips the traceback."""
+    if not mode.is_scored():
+        return -distance(reference, query, costs, mode, band=band)
+    var columns = reference.byte_length()
+    var rows = query.byte_length()
+    var two = costs.pieces() == 2
+    _ = penalties_of(costs)
+    var penalties = extension_penalties(
+        mode.match_score,
+        costs.mismatch,
+        costs.opening,
+        costs.extension,
+        costs.opening2 if two else 0,
+        costs.extension2 if two else 0,
+    )
+    if mode.kind == Mode.EXTENSION:
+        if not band.holds(0):
+            raise outside(band)
+        var drop_extension = min(costs.extension, costs.extension2) if two else costs.extension
+        var at_end = mode.anchor == Anchor.END
+        var found = extend[2](
+            reference.as_bytes(), query.as_bytes(), penalties, band, at_end, -1, mode.zdrop, drop_extension
+        ) if two else extend[1](
+            reference.as_bytes(), query.as_bytes(), penalties, band, at_end, -1, mode.zdrop, drop_extension
+        )
+        return penalties.score(found[0], found[1] + found[2])
+    if mode.kind == Mode.ENDS and mode.is_global():
+        var cost = wavefront_distance[2](
+            reference.as_bytes(), query.as_bytes(), penalties, Int.MAX, EndsFree(), band
+        ) if two else wavefront_distance[1](
+            reference.as_bytes(), query.as_bytes(), penalties, Int.MAX, EndsFree(), band
+        )
+        if cost < 0:
+            raise outside(band)
+        return penalties.score(cost, columns + rows)
+    if mode.match_score <= 0:
+        raise AlignmentError(
+            ErrorKind.INVALID_SCORING, "a local alignment under Costs needs a match that earns: Mode.local"
+        )
+    if not band.covers(columns, rows):
+        raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a sweep takes no band: a local alignment or free ends")
+    if mode.kind == Mode.SMITH_WATERMAN:
+        return end_of(reference.as_bytes(), query.as_bytes(), costs, mode.match_score)[0]
+    return swept[FROM_EDGE](
+        reference.as_bytes(), query.as_bytes(), costs, mode.match_score, free_ends(mode, columns, rows)
+    )[0]
+
+
+def local_scores(
+    reference: String, query: String, costs: Costs, mode: Mode, *, window: Optional[Int] = None
+) raises AlignmentError -> LocalScores:
+    """A local alignment's best score and where it ends, with the best score of an alignment ending
+    more than `window` reference letters away, as SSW's `score2` and `ref_end2` report it for a mapping
+    quality (see `LocalScores`): one sweep, with no alignment traced. The window is half the query, and
+    at least 15, by default, as SSW suggests."""
+    if mode.kind != Mode.SMITH_WATERMAN or mode.match_score <= 0:
+        raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "local scores for a local alignment: Mode.local")
+    _ = penalties_of(costs)
+    var span = window.or_else(max(query.byte_length() // 2, 15))
+    return local_scores_of(reference.as_bytes(), query.as_bytes(), costs, mode.match_score, span)
 
 
 def free_ends(mode: Mode, columns: Int, rows: Int) -> EndsFree:
