@@ -1712,11 +1712,12 @@ def extension_penalties(
 
 def extend[
     pieces: Int
-](first: Span[UInt8, _], second: Span[UInt8, _], penalties: Penalties, band: Band, reverse: Bool) -> Tuple[
-    Int, Int, Int
-]:
+](
+    first: Span[UInt8, _], second: Span[UInt8, _], penalties: Penalties, band: Band, reverse: Bool, known: Int = -1
+) -> Tuple[Int, Int, Int]:
     """Where the best-scoring alignment fixed at the origin ends, the end of both sequences with
-    `reverse`: its cost, and the letters of each sequence up to it.
+    `reverse`: its cost, and the letters of each sequence up to it. A `known` best score, when the
+    caller has one, ends the search at the first alignment earning it, the one it would keep.
 
     With the match reward folded into the costs, an alignment of `i` and `j` letters costing `s`
     scores `(reward (i + j) - scale s) / 2`, and the front of each cost holds how far along `i + j`
@@ -1758,6 +1759,8 @@ def extend[
                     best_column = column
                     best_row = column - diagonal
         var next = cost + 1
+        if known >= 0 and best >= 2 * known:
+            break
         if reward * (columns + rows) - scale * next <= best:
             break
         if (2 * reward * shortest - best) * cheapest <= next * (scale * cheapest - reward):
@@ -1768,19 +1771,107 @@ def extend[
     return (best_cost, best_column, best_row)
 
 
+def traced_extension[
+    pieces: Int
+](first: String, second: String, penalties: Penalties, extended: Bool, known: Int) -> Optional[AffineExtension]:
+    """The best extension fixed at both sequences' ends, as `extend` finds it searching back from there
+    with a `known` best score, its fronts kept as it grows and traced back from where it stops, so
+    no second search aligns the letters it covers. None when the kept fronts would pass half of
+    `HISTORY_LIMIT`, for `extension_of`'s search and split instead.
+
+    The trace takes WFA2-lib's rule over the search's own sequences, both reversed, read backwards:
+    the alignment `Ties.LEFT` names. The search stops at the first alignment earning `known`, the one
+    `extend` keeps of several."""
+    var a = first.as_bytes()
+    var b = second.as_bytes()
+    var columns = len(a)
+    var rows = len(b)
+    if columns == 0 or rows == 0 or penalties.reward == 0 or known <= 0:
+        return AffineExtension(0, 0, 0, 0, String())
+    var search = Wavefront[pieces](a, b, penalties, FREE_START, True, True, 0, 0, Band())
+    var reward = penalties.reward
+    var scale = penalties.scale
+    var window = penalties.window[pieces]()
+    var best = 0
+    var best_cost = 0
+    var best_column = 0
+    var best_row = 0
+    while True:
+        var slot = search.fronts.current
+        var cost = search.cost
+        var reach = search.fronts.reach[slot]
+        if reach > Int.MIN // 4 and reward * reach - scale * cost > best:
+            var front = search.fronts.row(slot, ALIGNED)
+            for diagonal in range(search.fronts.lows[slot], search.fronts.highs[slot] + 1):
+                var column = Int(front[unsafe_offset=diagonal])
+                if column < 0:
+                    continue
+                var value = reward * (2 * column - diagonal) - scale * cost
+                if value > best:
+                    best = value
+                    best_cost = cost
+                    best_column = column
+                    best_row = column - diagonal
+        if best >= 2 * known or cost - search.last_reached > window:
+            break
+        if search.history.kept > HISTORY_LIMIT // 2:
+            return None
+        search.advance[True]()
+    var moves = List[UInt8](capacity=best_column + best_row)
+    trace(search.history, penalties, ALIGNED, best_cost, best_column - best_row, best_column, moves)
+    # The search's sequences run back from the end, so the letters it covers are the last of each,
+    # and its moves, right to left over those reversed, read left to right over them as they stand.
+    var covered_first = List[UInt8](capacity=best_column)
+    for index in range(columns - 1, columns - 1 - best_column, -1):
+        covered_first.append(a[index])
+    var covered_second = List[UInt8](capacity=best_row)
+    for index in range(rows - 1, rows - 1 - best_row, -1):
+        covered_second.append(b[index])
+    var matches = 0
+    var column = best_column
+    var row = best_row
+    for move in moves:
+        if move == UInt8(ALIGNED):
+            column -= 1
+            row -= 1
+            if covered_first[column] == covered_second[row]:
+                matches += 1
+        elif move == UInt8(FIRST_GAP):
+            column -= 1
+        else:
+            row -= 1
+    var cigar = cigar_of(
+        String(unsafe_from_utf8=covered_first^),
+        String(unsafe_from_utf8=covered_second^),
+        moves^,
+        best_cost,
+        penalties,
+        extended,
+    )
+    return AffineExtension(penalties.score(best_cost, best_column + best_row), best_column, best_row, matches, cigar^)
+
+
 def extension_of[
     pieces: Int
 ](
-    first: String, second: String, penalties: Penalties, extended: Bool, anchor: Anchor, band: Band, ties: Ties
+    first: String,
+    second: String,
+    penalties: Penalties,
+    extended: Bool,
+    anchor: Anchor,
+    band: Band,
+    ties: Ties,
+    known: Int = -1,
 ) raises AlignmentError -> AffineExtension:
     """The best extension from `anchor` inside `band`, found by `extend` and aligned by `solve` over the
-    letters it covers, as a global alignment of those, so its memory stays bounded however long."""
+    letters it covers, as a global alignment of those, so its memory stays bounded however long. A
+    `known` best score ends the search once it is reached (see `extend`)."""
     if not band.holds(0):
         raise outside(band)
     var a = first.as_bytes()
     var b = second.as_bytes()
     var at_end = anchor == Anchor.END
-    var found = extend[pieces](a, b, penalties, band, at_end)
+    var found = extend[pieces](a, b, penalties, band, at_end, known)
     var columns = found[1]
     var rows = found[2]
     var covered_first = a[len(a) - columns :] if at_end else a[:columns]

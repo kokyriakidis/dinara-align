@@ -8,19 +8,19 @@ It is ends-free alignment with all four ends free, and a reward for every match:
 empty alignment would always win. A wavefront grows by cost, and with a reward and both ends floating
 the cost no longer bounds the score, which is why WFA2-lib offers no local mode and KSW2 a score
 alone. So the end is found by Smith-Waterman's own sweep, every cell's best score floored at zero, by
-anti-diagonal in 16-bit lanes while the scores fit, as SSW and abPOA narrow theirs (see `best_end`),
-and the alignment by an extension back from that end (see
+anti-diagonal in 16-bit lanes along the shorter sequence while the scores fit (see `best_end`), and
+the alignment by an extension back from that end, which stops once it earns the sweep's score (see
 `gap_affine.extension_of`): the best alignment ending there is the local one, exact, its CIGAR chosen
 by the same rule for ties as every other mode's.
 """
 
 from .errors import AlignmentError
-from .gap_affine import extension_of, extension_penalties
+from .gap_affine import AffineExtension, extension_of, extension_penalties, traced_extension
 from .modes import Alignment, Anchor, Band, Costs, Ties
 
 
 def best_end[
-    pieces: Int, dtype: DType, width: Int
+    pieces: Int, dtype: DType, width: Int, transposed: Bool
 ](reference: Span[UInt8, _], query: Span[UInt8, _], costs: Costs, match_score: Int) -> Tuple[Int, Int, Int]:
     """The best local score, and the reference's and the query's letters up to where an alignment
     earning it ends: of several such ends the furthest along both together, then along the reference.
@@ -33,8 +33,12 @@ def best_end[
     comptime Lanes = SIMD[dtype, width]
     comptime Value = Scalar[dtype]
     comptime LOW = Value.MIN // 4
-    var rows = len(reference)
-    var columns = len(query)
+    # The lanes run along the shorter sequence, so the sweep's rows stay in the core's own cache:
+    # along the reference, or with `transposed` along the query.
+    var down_letters = query if transposed else reference
+    var across_letters = reference if transposed else query
+    var rows = len(down_letters)
+    var columns = len(across_letters)
     if rows == 0 or columns == 0:
         return (0, 0, 0)
     comptime two = pieces == 2
@@ -42,10 +46,10 @@ def best_end[
     # so a diagonal's letters load contiguously; both padded past their ends by bytes no text holds.
     var letters = List[UInt8](length=rows + 1 + width, fill=0xFE)
     for index in range(rows):
-        letters[index + 1] = reference[index]
+        letters[index + 1] = down_letters[index]
     var reversed = List[UInt8](length=columns + width, fill=0xFF)
     for index in range(columns):
-        reversed[index] = query[columns - 1 - index]
+        reversed[index] = across_letters[columns - 1 - index]
     var size = rows + 1 + width
     var two_back = List[Value](length=size, fill=0)
     var one_back = List[Value](length=size, fill=0)
@@ -114,7 +118,7 @@ def best_end[
             var counted = score
             if row + width - 1 > high:
                 counted = lane_index.lt(Lanes(Value(high - row + 1))).select(score, zero)
-            var later = counted.ge(top)
+            var later = counted.gt(top) if transposed else counted.ge(top)
             top = later.select(counted, top)
             top_step = later.select(Lanes(step), top_step)
             step += 1
@@ -122,10 +126,11 @@ def best_end[
         # The diagonal's best, placed at its furthest row, when it meets the best so far.
         var most = Int(top.reduce_max())
         if most > 0 and most >= best:
-            var furthest = 0
+            var furthest = 0 if not transposed else Int.MAX
             comptime for lane in range(width):
                 if Int(top[lane]) == most:
-                    furthest = max(furthest, low + Int(top_step[lane]) * width + lane)
+                    var at = low + Int(top_step[lane]) * width + lane
+                    furthest = min(furthest, at) if transposed else max(furthest, at)
             best = most
             best_row = furthest
             best_diagonal = diagonal
@@ -148,6 +153,9 @@ def best_end[
         comptime if two:
             swap(deletes2_back, deletes2)
             swap(inserts2_back, inserts2)
+    # `best_row` counts the lanes' sequence, the rest of the diagonal the other's.
+    if transposed:
+        return (best, best_diagonal - best_row, best_row)
     return (best, best_row, best_diagonal - best_row)
 
 
@@ -163,14 +171,24 @@ def narrow_enough(costs: Costs, match_score: Int, rows: Int, columns: Int) -> Bo
 
 
 def end_of(reference: Span[UInt8, _], query: Span[UInt8, _], costs: Costs, match_score: Int) -> Tuple[Int, Int, Int]:
-    """`best_end` in 16-bit lanes, thirty-two to an AVX-512 register, while the scores fit, else 32-bit."""
+    """`best_end` with its lanes along the shorter sequence, 16 bits to a lane, thirty-two to an AVX-512
+    register, while the scores fit, else 32."""
+    var transposed = len(query) < len(reference)
     if narrow_enough(costs, match_score, len(reference), len(query)):
         if costs.pieces() == 2:
-            return best_end[2, DType.int16, 32](reference, query, costs, match_score)
-        return best_end[1, DType.int16, 32](reference, query, costs, match_score)
+            if transposed:
+                return best_end[2, DType.int16, 32, True](reference, query, costs, match_score)
+            return best_end[2, DType.int16, 32, False](reference, query, costs, match_score)
+        if transposed:
+            return best_end[1, DType.int16, 32, True](reference, query, costs, match_score)
+        return best_end[1, DType.int16, 32, False](reference, query, costs, match_score)
     if costs.pieces() == 2:
-        return best_end[2, DType.int32, 16](reference, query, costs, match_score)
-    return best_end[1, DType.int32, 16](reference, query, costs, match_score)
+        if transposed:
+            return best_end[2, DType.int32, 16, True](reference, query, costs, match_score)
+        return best_end[2, DType.int32, 16, False](reference, query, costs, match_score)
+    if transposed:
+        return best_end[1, DType.int32, 16, True](reference, query, costs, match_score)
+    return best_end[1, DType.int32, 16, False](reference, query, costs, match_score)
 
 
 def reversed_text(text: String) -> String:
@@ -201,14 +219,16 @@ def local_alignment(
 ) raises AlignmentError -> Alignment:
     """The best local alignment, a match earning `match_score` (see `Mode.local`).
 
-    `Ties.RIGHT` ends it as late as an equally good alignment allows (see `best_end`), starts it as
-    late too, and spells its CIGAR by WFA2-lib's rule; `Ties.LEFT` is that over both sequences
-    reversed, read backwards, as for every other mode: everything as early as it goes."""
+    `Ties.LEFT` ends it as late as an equally good alignment allows (see `best_end`), starts it as
+    late too, the shortest, and spells its CIGAR by the left rule, the extension back from its end
+    traced as it searched (see `gap_affine.traced_extension`); `Ties.RIGHT` is that over both
+    sequences reversed, read backwards, as for every other mode: everything as early as it goes, gaps
+    right."""
     var columns = reference.byte_length()
     var rows = query.byte_length()
-    if ties == Ties.LEFT:
+    if ties == Ties.RIGHT:
         var mirrored = local_alignment(
-            reversed_text(reference), reversed_text(query), costs, match_score, Ties.RIGHT, extended
+            reversed_text(reference), reversed_text(query), costs, match_score, Ties.LEFT, extended
         )
         if mirrored.score == 0:
             return mirrored^
@@ -237,10 +257,25 @@ def local_alignment(
     )
     var head = String(StringSlice(unsafe_from_utf8=reference.as_bytes()[:end_column]))
     var lead = String(StringSlice(unsafe_from_utf8=query.as_bytes()[:end_row]))
-    # The best alignment ending at that cell, and starting wherever pays: an extension back from it.
-    var back = extension_of[2](
-        head, lead, penalties, extended, Anchor.END, Band(), Ties.RIGHT
-    ) if two else extension_of[1](head, lead, penalties, extended, Anchor.END, Band(), Ties.RIGHT)
+    # The best alignment ending at that cell, and starting wherever pays: an extension back from it,
+    # which stops on earning the sweep's score, the best any alignment ending there earns.
+    var traced = traced_extension[2](head, lead, penalties, extended, found[0]) if two else traced_extension[1](
+        head, lead, penalties, extended, found[0]
+    )
+    var back: AffineExtension
+    if traced:
+        back = traced.take()
+        back.cigar = reversed_cigar(back.cigar)
+    else:
+        # Too many fronts to keep: the extension's own search and split, by the left rule too, over
+        # both sequences reversed from the end.
+        var mirrored = extension_of[2](
+            reversed_text(head), reversed_text(lead), penalties, extended, Anchor.START, Band(), Ties.RIGHT, found[0]
+        ) if two else extension_of[1](
+            reversed_text(head), reversed_text(lead), penalties, extended, Anchor.START, Band(), Ties.RIGHT, found[0]
+        )
+        mirrored.cigar = reversed_cigar(mirrored.cigar)
+        back = mirrored^
     return Alignment(
         match_score * back.matches - back.score,
         back.score,
