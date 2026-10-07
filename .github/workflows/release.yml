@@ -1,0 +1,59 @@
+# A tag `v*` publishes a GitHub release: its notes the tag's section of CHANGELOG.md, and for each
+# platform the C library built by `pixi run build-c` (see c/dinara.h), the command-line aligner and
+# the Python module, each folder runnable without pixi or Mojo.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      matrix:
+        include:
+          - name: linux-64
+            os: ubuntu-24.04
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+          - name: osx-arm64
+            os: macos-15
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.10
+        with:
+          cache: true
+      - name: Build
+        run: |
+          pixi run build-c
+          pixi run build-cli
+          pixi run build-python
+          mkdir -p dist
+          tar -C build -czf dist/dinara-align-${{ github.ref_name }}-${{ matrix.name }}-c.tar.gz c
+          tar -C build -czf dist/dinara-align-${{ github.ref_name }}-${{ matrix.name }}-cli.tar.gz cli
+          tar -C build -czf dist/dinara-align-${{ github.ref_name }}-${{ matrix.name }}-python.tar.gz python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Notes
+        run: python3 scripts/release_notes.py "${{ github.ref_name }}" > notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: notes.md
+          files: dist/*

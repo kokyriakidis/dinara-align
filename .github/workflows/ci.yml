@@ -1,0 +1,51 @@
+# Every push to main and every pull request: the formatting, the Mojo test suite, the C API's C++
+# test and WFA2-lib's regression set, on x86-64 and AArch64 Linux and on Apple silicon. The runners
+# have no GPU the tests can use, so the device tests skip themselves (see tests/test_alignment.mojo).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-64
+            os: ubuntu-24.04
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+          - name: osx-arm64
+            os: macos-15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: prefix-dev/setup-pixi@v0.8.10
+        with:
+          cache: true
+      - name: Formatting
+        run: |
+          pixi run format
+          git diff --exit-code
+      - name: Mojo tests
+        run: pixi run test
+      - name: Python bindings
+        run: pixi run test-python
+      - name: Command line
+        run: pixi run test-cli
+      - name: C API
+        run: pixi run test-c
+      - name: WFA2-lib regression set
+        run: pixi run test-wfa
+      - name: Fuzzing
+        run: pixi run fuzz 2000

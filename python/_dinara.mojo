@@ -185,9 +185,7 @@ def py_score(
 ) raises -> PythonObject:
     """The score `align` would return, with no alignment traced."""
     var asked = options_of(options)
-    return PythonObject(
-        score(String(py=reference), String(py=query), costs_of(costs), mode_of(mode), band=asked.band)
-    )
+    return PythonObject(score(String(py=reference), String(py=query), costs_of(costs), mode_of(mode), band=asked.band))
 
 
 def py_local_scores(
