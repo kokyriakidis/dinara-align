@@ -1,19 +1,22 @@
 # This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
 # MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """
-Local and overlap alignment under `Costs` with a match reward. Local, Smith-Waterman: the best-scoring alignment of any
-part of the reference against any part of the query, as abPOA's local mode finds it.
+The modes that maximize a score under `Costs`, a match earning a reward: a local alignment,
+Smith-Waterman, and free ends with a reward, semi-global as parasail and hyalite count it, an overlap
+among them.
 
-It is ends-free alignment with all four ends free, and a reward for every match: with costs alone the
-empty alignment would always win. A wavefront grows by cost, and with a reward and both ends floating
-the cost no longer bounds the score, which is why WFA2-lib offers no local mode and KSW2 a score
-alone. So the end is found by Smith-Waterman's own sweep, every cell's best score floored at zero, by
-anti-diagonal in 16-bit lanes along the shorter sequence while the scores fit (see `best_end`), and
-the alignment by an extension back from that end, which stops once it earns the sweep's score (see
-`gap_affine.extension_of`): the best alignment ending there is the local one, exact, its CIGAR chosen
-by the same rule for ties as every other mode's.
+With a reward and an end floating, the cost no longer bounds the score, so a wavefront, which grows
+by cost, cannot search them, which is why WFA2-lib offers no local mode and KSW2 a local score alone.
+Each takes Smith-Waterman's own sweep instead, by anti-diagonal in 16-bit lanes along the shorter
+sequence while the scores fit (see `best_end`), which finds the best score and where it ends, and
+keeps a few rows. The alignment then comes from the wavefront, exact and in bounded memory, its CIGAR
+by the same rule for ties as every other mode's: a local one by the extension back from its end,
+which stops once it earns the sweep's score (see `local_alignment`), and one with free ends by a
+sweep back from its end for its start, the letters between them a global alignment whose reward
+folds into the costs (see `rewarded_alignment`).
 """
 
+from .cigar import cigar_cost, reversed_cigar, reversed_text
 from .errors import AlignmentError
 from .gap_affine import (
     AffineExtension,
@@ -298,29 +301,6 @@ def end_of(reference: Span[UInt8, _], query: Span[UInt8, _], costs: Costs, match
     return swept[ANYWHERE](reference, query, costs, match_score)
 
 
-def reversed_text(text: String) -> String:
-    var bytes = text.as_bytes()
-    var out = List[UInt8](capacity=len(bytes))
-    for index in range(len(bytes) - 1, -1, -1):
-        out.append(bytes[index])
-    return String(unsafe_from_utf8=out^)
-
-
-def reversed_cigar(cigar: String) -> String:
-    """A CIGAR's runs in the other order: the alignment of both sequences reversed."""
-    var bytes = cigar.as_bytes()
-    var runs = List[String]()
-    var start = 0
-    for index in range(len(bytes)):
-        if bytes[index] < UInt8(ord("0")) or bytes[index] > UInt8(ord("9")):
-            runs.append(String(StringSlice(unsafe_from_utf8=bytes[start : index + 1])))
-            start = index + 1
-    var out = String()
-    for index in range(len(runs) - 1, -1, -1):
-        out += runs[index]
-    return out
-
-
 def local_alignment(
     reference: String, query: String, costs: Costs, match_score: Int, ties: Ties, extended: Bool
 ) raises AlignmentError -> Alignment:
@@ -445,62 +425,7 @@ def global_rewarded(
     if not found:
         raise outside(band)
     var cigar = found.take().cigar
-    return (cost_of(reference, query, cigar, costs), cigar^)
-
-
-def cost_of(first: String, second: String, cigar: String, costs: Costs) -> Int:
-    """What a CIGAR of `first` against `second` costs: its substitutions, `M` runs compared letter by
-    letter, and each gap run at the cheaper piece."""
-    var a = first.as_bytes()
-    var b = second.as_bytes()
-    var column = 0
-    var row = 0
-    var length = 0
-    var total = 0
-    for byte in cigar.as_bytes():
-        if byte >= UInt8(ord("0")) and byte <= UInt8(ord("9")):
-            length = length * 10 + Int(byte - UInt8(ord("0")))
-            continue
-        if byte == UInt8(ord("D")) or byte == UInt8(ord("I")):
-            var gap = costs.opening + costs.extension * length
-            if costs.pieces() == 2:
-                gap = min(gap, costs.opening2 + costs.extension2 * length)
-            total += gap
-            if byte == UInt8(ord("D")):
-                column += length
-            else:
-                row += length
-        else:
-            for _ in range(length):
-                if a[column] != b[row]:
-                    total += costs.mismatch
-                column += 1
-                row += 1
-        length = 0
-    return total
-
-
-def matches_of(first: String, second: String, cigar: String) -> Int:
-    """The equal pairs a CIGAR of `first` against `second` aligns, `M` runs compared letter by letter."""
-    var a = first.as_bytes()
-    var b = second.as_bytes()
-    var column = 0
-    var row = 0
-    var length = 0
-    var total = 0
-    for byte in cigar.as_bytes():
-        if byte >= UInt8(ord("0")) and byte <= UInt8(ord("9")):
-            length = length * 10 + Int(byte - UInt8(ord("0")))
-            continue
-        if byte == UInt8(ord("D")):
-            column += length
-        elif byte == UInt8(ord("I")):
-            row += length
-        else:
-            for _ in range(length):
-                if a[column] == b[row]:
-                    total += 1
-                column += 1
-                row += 1
-        length = 0
-    return total
+    var cost = cigar_cost(
+        reference, query, cigar, costs.mismatch, costs.opening, costs.extension, costs.opening2, costs.extension2
+    )
+    return (cost, cigar^)

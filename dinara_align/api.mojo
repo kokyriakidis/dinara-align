@@ -6,8 +6,9 @@ alignment as a CIGAR, for any `Mode`; `distances` and `alignments` take a batch 
 Unit costs, global or with the query found inside or at the start of the reference, take the
 bit-parallel band doubling of A*PA2 (see `edit_distance` and `edit_search`); every other case, and a
 pair holding more symbols than it takes, the gap-affine wavefront from both ends (see `gap_affine`),
-which gives the same alignment at the same costs; a local alignment, Smith-Waterman's sweep and an
-extension back from where it ends (see `local`).
+which gives the same alignment at the same costs. The modes with a match score maximize a score: an
+extension, and a global alignment with a reward, by the wavefront; a local alignment and other free
+ends with a reward by sweep (see `scored`).
 
 Under a `Scoring`, an alphabet's substitution table and gap scores, which an alignment maximizes,
 `score` and `align` take a global or a local alignment, on the host or the device (see `scoring`).
@@ -22,7 +23,8 @@ from .common import Placement, hardware_threads
 from .edit_distance import edit_cigar, edit_distance
 from .edit_search import edit_search
 from .errors import AlignmentError, ErrorKind
-from .local import global_rewarded, local_alignment, matches_of, rewarded_alignment
+from .cigar import cigar_matches, cigar_runs, joined_cigar
+from .scored import global_rewarded, local_alignment, rewarded_alignment
 from .gap_affine import (
     AffineCigar,
     EndsFree,
@@ -119,7 +121,8 @@ def align(
     extended: Bool = True,
 ) raises AlignmentError -> Optional[Alignment]:
     """`align`, or None when the cost would pass `max_cost` or no alignment fits `band`, found as
-    `distance` finds that, with no fronts traced. An extension, which maximizes a score, takes no cap."""
+    `distance` finds that, with no fronts traced. A mode with a match score, which maximizes a score,
+    takes no cap."""
     return aligned_within(reference, query, costs, mode, band, max_cost, ties, extended)
 
 
@@ -133,42 +136,20 @@ def free_ends(mode: Mode, columns: Int, rows: Int) -> EndsFree:
     )
 
 
-def searched_by_sweep(ends: EndsFree, columns: Int, rows: Int) -> Bool:
-    """Whether a bit-parallel sweep serves these free ends: none, the query inside the reference, or at
-    its start."""
-    if ends.second_begin != 0 or ends.second_end != 0:
-        return False
-    if ends.first_begin == 0:
-        return ends.first_end == 0 or ends.first_end == columns
-    return ends.first_begin == columns and ends.first_end == columns
-
-
-def refuse(mode: Mode) raises AlignmentError:
-    """Raises for the modes that maximize a score, where a least cost is asked for."""
-    if mode.is_scored():
-        raise AlignmentError(
-            ErrorKind.INVALID_ARGUMENT, "a mode with a match score maximizes a score, which `align` finds"
-        )
-
-
 def cost_within(
     reference: String, query: String, costs: Costs, mode: Mode, band: Band, max_cost: Int
 ) raises AlignmentError -> Optional[Int]:
     """The least cost, or None when it would pass `max_cost` (`Int.MAX` for no cap) or none fits `band`."""
-    refuse(mode)
+    if mode.is_scored():
+        raise AlignmentError(
+            ErrorKind.INVALID_ARGUMENT, "a mode with a match score maximizes a score, which `align` finds"
+        )
     var columns = reference.byte_length()
     var rows = query.byte_length()
     var ends = free_ends(mode, columns, rows)
-    var scale = costs.unit_scale()
-    if (
-        scale > 0
-        and max_cost == Int.MAX
-        and band.covers(columns, rows)
-        and columns > 0
-        and rows > 0
-        and searched_by_sweep(ends, columns, rows)
-    ):
+    if swept_by_bits(costs, ends, band, max_cost, columns, rows):
         try:
+            var scale = costs.unit_scale()
             if ends.first_begin == 0 and ends.first_end == 0:
                 return edit_distance(reference, query) * scale
             return edit_search(query, reference, ends.first_begin == 0).distance * scale
@@ -201,48 +182,45 @@ def aligned_within(
     extended: Bool,
 ) raises AlignmentError -> Optional[Alignment]:
     """An optimal alignment, or None when its cost would pass `max_cost` (`Int.MAX` for no cap) or none
-    fits `band`."""
+    fits `band`: the least costly one, or for a mode that maximizes a score the best-scoring one."""
+    if not mode.is_scored():
+        return least_costly(reference, query, costs, mode, band, max_cost, ties, extended)
+    if max_cost != Int.MAX:
+        raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a mode with a match score takes no cost cap")
+    _ = penalties_of(costs)
+    return best_scoring(reference, query, costs, mode, band, ties, extended)
+
+
+def swept_by_bits(costs: Costs, ends: EndsFree, band: Band, max_cost: Int, columns: Int, rows: Int) -> Bool:
+    """Whether the bit-parallel sweep serves a pair: unit costs, no cap and no band, both sequences
+    holding a letter, and free ends of none, the query inside the reference, or at its start."""
+    if costs.unit_scale() == 0 or max_cost != Int.MAX or not band.covers(columns, rows) or columns == 0 or rows == 0:
+        return False
+    if ends.second_begin != 0 or ends.second_end != 0:
+        return False
+    if ends.first_begin == 0:
+        return ends.first_end == 0 or ends.first_end == columns
+    return ends.first_begin == columns and ends.first_end == columns
+
+
+def least_costly(
+    reference: String,
+    query: String,
+    costs: Costs,
+    mode: Mode,
+    band: Band,
+    max_cost: Int,
+    ties: Ties,
+    extended: Bool,
+) raises AlignmentError -> Optional[Alignment]:
+    """The least costly alignment with `mode`'s free ends: by the bit-parallel sweep where it serves the
+    pair (see `swept_by_bits`), else by the wavefront, the same alignment at the same costs."""
     var columns = reference.byte_length()
     var rows = query.byte_length()
-    if mode.kind == Mode.EXTENSION:
-        if max_cost != Int.MAX:
-            raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "an extension maximizes a score and takes no cost cap")
-        return extended_alignment(reference, query, costs, mode, band, ties, extended)
-    if mode.kind == Mode.SMITH_WATERMAN:
-        if mode.match_score <= 0:
-            raise AlignmentError(
-                ErrorKind.INVALID_SCORING, "a local alignment under Costs needs a match that earns: Mode.local"
-            )
-        if max_cost != Int.MAX or not band.covers(columns, rows):
-            raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a local alignment takes no cost cap and no band")
-        _ = penalties_of(costs)
-        return local_alignment(reference, query, costs, mode.match_score, ties, extended)
-    if mode.match_score > 0:
-        if max_cost != Int.MAX:
-            raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a mode with a match score takes no cost cap")
-        _ = penalties_of(costs)
-        if mode.is_global():
-            # Every letter aligned, so the reward folds into the costs: the wavefront, band and all.
-            var whole = global_rewarded(reference, query, costs, mode.match_score, band, ties, extended)
-            var score = mode.match_score * matches_of(reference, query, whole[1]) - whole[0]
-            return Alignment(whole[0], score, whole[1], 0, columns, 0, rows)
-        if not band.covers(columns, rows):
-            raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "free ends with a match score take no band")
-        return rewarded_alignment(
-            reference, query, costs, mode.match_score, free_ends(mode, columns, rows), ties, extended
-        )
-    refuse(mode)
     var ends = free_ends(mode, columns, rows)
-    var scale = costs.unit_scale()
-    if (
-        scale > 0
-        and max_cost == Int.MAX
-        and band.covers(columns, rows)
-        and columns > 0
-        and rows > 0
-        and searched_by_sweep(ends, columns, rows)
-    ):
+    if swept_by_bits(costs, ends, band, max_cost, columns, rows):
         try:
+            var scale = costs.unit_scale()
             if ends.first_begin == 0 and ends.first_end == 0:
                 var whole = edit_cigar(reference, query, extended, ties)
                 var cost = whole.distance * scale
@@ -266,6 +244,31 @@ def aligned_within(
     if not found:
         return None
     return trimmed(found.take(), ends, columns, rows)
+
+
+def best_scoring(
+    reference: String, query: String, costs: Costs, mode: Mode, band: Band, ties: Ties, extended: Bool
+) raises AlignmentError -> Alignment:
+    """The best-scoring alignment for a mode with a match score: an extension by the wavefront from its
+    anchor; a global alignment, its letters fixed so the reward folds into the costs, by the wavefront
+    too; a local alignment or other free ends by sweep (see `scored`)."""
+    var columns = reference.byte_length()
+    var rows = query.byte_length()
+    if mode.kind == Mode.EXTENSION:
+        return extended_alignment(reference, query, costs, mode, band, ties, extended)
+    if mode.kind == Mode.ENDS and mode.is_global():
+        var whole = global_rewarded(reference, query, costs, mode.match_score, band, ties, extended)
+        var score = mode.match_score * cigar_matches(reference, query, whole[1]) - whole[0]
+        return Alignment(whole[0], score, whole[1], 0, columns, 0, rows)
+    if mode.match_score <= 0:
+        raise AlignmentError(
+            ErrorKind.INVALID_SCORING, "a local alignment under Costs needs a match that earns: Mode.local"
+        )
+    if not band.covers(columns, rows):
+        raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a sweep takes no band: a local alignment or free ends")
+    if mode.kind == Mode.SMITH_WATERMAN:
+        return local_alignment(reference, query, costs, mode.match_score, ties, extended)
+    return rewarded_alignment(reference, query, costs, mode.match_score, free_ends(mode, columns, rows), ties, extended)
 
 
 def extended_alignment(
@@ -300,21 +303,6 @@ def extended_alignment(
     return Alignment(cost, found.score, found.cigar, 0, found.first_length, 0, found.second_length)
 
 
-def cigar_runs(cigar: String) -> Tuple[List[UInt8], List[Int]]:
-    """A CIGAR's letters and run lengths."""
-    var letters = List[UInt8]()
-    var lengths = List[Int]()
-    var length = 0
-    for byte in cigar.as_bytes():
-        if byte >= UInt8(ord("0")) and byte <= UInt8(ord("9")):
-            length = length * 10 + Int(byte - UInt8(ord("0")))
-            continue
-        letters.append(byte)
-        lengths.append(length)
-        length = 0
-    return (letters^, lengths^)
-
-
 def trimmed(var found: AffineCigar, ends: EndsFree, columns: Int, rows: Int) -> Alignment:
     """An alignment whose free letters, `D` and `I` runs at either end of the wavefront's CIGAR, move
     into the spans: as many as the mode frees, the rest of a run left in the CIGAR, as it is paid."""
@@ -346,11 +334,9 @@ def trimmed(var found: AffineCigar, ends: EndsFree, columns: Int, rows: Int) -> 
             free = min(lengths[last], ends.second_end)
             query_end = rows - free
         lengths[last] -= free
-    var cigar = String()
-    for index in range(count):
-        if lengths[index] > 0:
-            cigar += String(lengths[index], chr(Int(letters[index])))
-    return Alignment(found.cost, -found.cost, cigar^, reference_start, reference_end, query_start, query_end)
+    return Alignment(
+        found.cost, -found.cost, joined_cigar(letters, lengths), reference_start, reference_end, query_start, query_end
+    )
 
 
 # endregion Costs

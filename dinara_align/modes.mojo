@@ -7,6 +7,7 @@ what comes back. The first sequence is always the reference and the second the q
 reads them: `D` a letter of the reference alone, `I` one of the query alone.
 """
 
+from .cigar import cigar_runs
 from .errors import AlignmentError, ErrorKind
 
 
@@ -198,7 +199,7 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         """The best-scoring alignment of any part of the reference against any part of the query,
         Smith-Waterman: a match earns `match_score` and every edit costs what `Costs` charges. It is
         every end free, with a reward: with costs alone, aligning nothing would always win. Its time
-        grows with the matrix, as every local aligner's does (see `local`)."""
+        grows with the matrix, as every local aligner's does (see `scored`)."""
         if match_score <= 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "a local alignment needs a match that earns")
         return Self(Self.SMITH_WATERMAN, 0, 0, 0, 0, match_score, Anchor.START)
@@ -311,18 +312,16 @@ struct Alignment(Copyable, Movable, Writable):
         var second = query.as_bytes()
         var column = self.reference_start
         var row = self.query_start
-        var length = 0
         comptime GAP = UInt8(ord("-"))
-        for byte in self.cigar.as_bytes():
-            if byte >= UInt8(ord("0")) and byte <= UInt8(ord("9")):
-                length = length * 10 + Int(byte - UInt8(ord("0")))
-                continue
-            for _ in range(length):
-                if byte == UInt8(ord("D")):
+        var runs = cigar_runs(self.cigar)
+        for index in range(len(runs[0])):
+            var letter = runs[0][index]
+            for _ in range(runs[1][index]):
+                if letter == UInt8(ord("D")):
                     top.append(first[column])
                     bottom.append(GAP)
                     column += 1
-                elif byte == UInt8(ord("I")):
+                elif letter == UInt8(ord("I")):
                     top.append(GAP)
                     bottom.append(second[row])
                     row += 1
@@ -331,5 +330,4 @@ struct Alignment(Copyable, Movable, Writable):
                     bottom.append(second[row])
                     column += 1
                     row += 1
-            length = 0
         return (String(unsafe_from_utf8=top^), String(unsafe_from_utf8=bottom^))

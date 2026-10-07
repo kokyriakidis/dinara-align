@@ -37,7 +37,7 @@ from dinara_align import (
 )
 from dinara_align.alignment import AlignmentMode
 from dinara_align.edit_distance import edit_distance as bit_parallel_distance
-from dinara_align.local import best_end, end_of
+from dinara_align.scored import best_end, end_of
 from dinara_align.seeds import SEED_COLUMNS
 from dinara_align.bit_parallel import Profile
 from dinara_align.diagonal import DiagonalFronts, diagonal_transition, trace_diagonals
@@ -641,7 +641,7 @@ def test_bit_parallel_band_doubling_is_exact() raises:
     )
 
 
-def test_edit_alignment_is_an_optimal_alignment() raises:
+def test_unit_cost_alignment_is_optimal() raises:
     """The bit-parallel traceback returns rows that rebuild both inputs and cost exactly the distance.
 
     Lengths from empty to a few kbp, divergences from identical to half the bases edited, and a large length difference either way; every distance is
@@ -690,7 +690,7 @@ def semi_global_distance(pattern: String, text: String, prefix: Bool) -> Int:
     return best
 
 
-def test_edit_search_matches_the_dynamic_program() raises:
+def test_infix_and_prefix_match_the_dynamic_program() raises:
     """A pattern found inside a text, or at its start, at the distance the textbook dynamic program
     gives, and aligned to the part of the text reported, which the alignment rebuilds.
 
@@ -851,7 +851,7 @@ def rows_from_cigar(first: String, second: String, cigar: String) raises -> Tupl
     return (String(unsafe_from_utf8=top), String(unsafe_from_utf8=bottom), edits)
 
 
-def test_edit_cigar_spells_the_alignment() raises:
+def test_unit_cost_cigar_spells_the_alignment() raises:
     """At unit costs the CIGAR spells an optimal alignment, run by run.
 
     Pairs settled by one diagonal front, by two, and by a band with seeds, with symbols past `ACGT`,
@@ -1101,7 +1101,7 @@ def test_wavefront_splits_a_pair_too_large_to_keep() raises:
 
 
 def test_affine_cigar_spells_an_optimal_alignment() raises:
-    """`affine_cigar`'s cost is the full sweep's optimum at WFA's costs, and its CIGAR spells an
+    """`align`'s cost under `Costs.affine` is the full sweep's optimum at WFA's costs, and its CIGAR spells an
     alignment of both sequences that costs exactly that, gap runs and all."""
     seed(31)
     for costs in [(4, 6, 2), (1, 0, 1), (3, 10, 1)]:
@@ -1144,7 +1144,7 @@ def test_affine_cigar_spells_an_optimal_alignment() raises:
 
 
 def test_affine_distance_and_its_cap() raises:
-    """`affine_distance` is `affine_cigar`'s cost, and a cap of `max_cost` returns both up to the
+    """`distance` under `Costs.affine` is `align`'s cost, and a cap of `max_cost` returns both up to the
     optimum and neither a unit below it: pairs close and far, empty sides, a cap below zero."""
     seed(37)
     for costs in [(4, 6, 2), (1, 0, 1), (3, 10, 1)]:
@@ -1641,7 +1641,7 @@ def cigar_of_moves(first: String, second: String, moves: List[UInt8]) -> String:
     return out
 
 
-def test_affine2p_matches_the_full_matrix() raises:
+def test_two_piece_matches_the_full_matrix() raises:
     """Two-piece gap costs, a gap the cheaper of two affine costs: the cost is the whole matrix's with
     a layer either way per piece, the CIGAR spells an alignment that costs it, and the cap, the ends
     free and the split of a pair too large to keep all agree, the split's crossings inside a gap of
