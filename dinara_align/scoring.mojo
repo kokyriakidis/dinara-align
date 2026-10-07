@@ -599,8 +599,6 @@ def scoring_alignment(
     its score, its cost minus the score. Global and local alignments take Gotoh's sweeps on either
     device (see `align_with`), and a local one's spans are found where its letters lie; free ends and
     extensions, on the host, find their span by sweep (see `mode_span`) and align it globally."""
-    var columns = first.byte_length()
-    var rows = second.byte_length()
     if mode.match_score > 0:
         raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a Scoring's table holds what a match earns")
     if mode.kind == Mode.SMITH_WATERMAN or mode.is_global():

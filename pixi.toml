@@ -46,6 +46,12 @@ bundle = "bash scripts/bundle.sh"
 build-c = "bash scripts/build_c.sh"
 # Builds the C API and runs its C++ test against it.
 test-c = { cmd = "c++ -std=c++17 -O2 -pthread -I build/c tests/test_c_api.cpp -L build/c -ldinara -Wl,-rpath,$PIXI_PROJECT_ROOT/build/c -o build/test_c_api && ./build/test_c_api", depends-on = ["build-c"] }
+# The Python package (python/dinara_align) in build/python beside its runtime libraries: `pixi run build-python [target-cpu]`.
+build-python = "bash scripts/build_python.sh"
+# The Python package as a wheel in build/dist, for `pip install`.
+build-wheel = { cmd = "python3 scripts/build_wheel.py", depends-on = ["build-python"] }
+# Builds the Python package and runs its tests against it.
+test-python = { cmd = "PYTHONPATH=$PIXI_PROJECT_ROOT/build/python python3 tests/test_python.py", depends-on = ["build-python"] }
 # Regenerates the ported kernels from an AffineGaps checkout: `pixi run port /path/to/AffineGaps`.
 port = "python3 scripts/port_from_affinegaps.py"
 
