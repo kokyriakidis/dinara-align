@@ -489,6 +489,50 @@ def alignments(
 ) raises -> List[Alignment]:
     """`align` for every pair; on the device, every pair both bounds admit goes out in one launch."""
     var pairs = paired_length(references, queries)
+    var resolved = placement.or_else(Placement.default())
+    if resolved.device != Device.GPU:
+        # On the host each pair as `align` takes it, the pairs over the threads asked for.
+        var results = List[Alignment](capacity=pairs)
+        for _ in range(pairs):
+            results.append(Alignment(0, 0, String(), 0, 0, 0, 0))
+        var out = results.unsafe_ptr()
+        var failed = List[Bool](length=pairs, fill=False)
+        var flags = failed.unsafe_ptr()
+        var single = Placement.on_cpu(1)
+        var workers = max(resolved.threads, 1)
+        var chunks = max(min(pairs, workers * 8), 1)
+
+        def align_chunk(
+            chunk: Int,
+        ) {
+            imm references,
+            imm queries,
+            imm scoring,
+            imm mode,
+            imm single,
+            imm stored_budget,
+            imm extended,
+            imm out,
+            imm flags,
+            imm pairs,
+            imm chunks,
+        }:
+            for index in range(pairs * chunk // chunks, pairs * (chunk + 1) // chunks):
+                try:
+                    out[unsafe_offset=index] = scoring_alignment(
+                        references[index], queries[index], scoring, mode, single, stored_budget, extended
+                    )
+                except:
+                    flags[unsafe_offset=index] = True
+
+        parallelize(align_chunk, chunks, workers)
+        # A pair that failed raises here, the same error a serial loop would have raised first.
+        for index in range(pairs):
+            if failed[index]:
+                results[index] = scoring_alignment(
+                    references[index], queries[index], scoring, mode, single, stored_budget, extended
+                )
+        return results^
     var gapped: List[GappedAlignment]
     if mode.kind == Mode.SMITH_WATERMAN and mode.match_score == 0:
         gapped = alignments_with[AlignmentMode.LOCAL](references, queries, scoring, placement, stored_budget)
@@ -501,9 +545,22 @@ def alignments(
                 align(references[index], queries[index], scoring, mode, placement, stored_budget, extended=extended)
             )
         return results^
+    # Each pair's rows read as its CIGAR, on every thread, as the pairs were aligned.
     var results = List[Alignment](capacity=pairs)
-    for index in range(pairs):
-        results.append(as_alignment(gapped[index], references[index], queries[index], mode.is_global(), extended))
+    for _ in range(pairs):
+        results.append(Alignment(0, 0, String(), 0, 0, 0, 0))
+    var out = results.unsafe_ptr()
+    var whole = mode.is_global()
+    var workers = hardware_threads()
+    var chunks = max(min(pairs, workers * 8), 1)
+
+    def convert(
+        chunk: Int,
+    ) {imm gapped, imm references, imm queries, imm out, imm whole, imm extended, imm pairs, imm chunks}:
+        for index in range(pairs * chunk // chunks, pairs * (chunk + 1) // chunks):
+            out[unsafe_offset=index] = as_alignment(gapped[index], references[index], queries[index], whole, extended)
+
+    parallelize(convert, chunks, workers)
     return results^
 
 

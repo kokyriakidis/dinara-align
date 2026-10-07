@@ -372,7 +372,21 @@ struct GappedAlignment(Copyable, Movable):
         comptime GAP = UInt8(ord("-"))
         var top = self.first_gapped.as_bytes()
         var bottom = self.second_gapped.as_bytes()
-        var out = String()
+        # Bytes written straight, each run's digits then its letter: no string per run.
+        var out = List[UInt8](capacity=64)
+
+        def emit(mut out: List[UInt8], run: Int, letter: UInt8):
+            var digits = Array[UInt8, 20](fill=0)
+            var count = 0
+            var value = run
+            while value > 0:
+                digits[count] = UInt8(ord("0")) + UInt8(value % 10)
+                value //= 10
+                count += 1
+            for index in range(count - 1, -1, -1):
+                out.append(digits[index])
+            out.append(letter)
+
         var last = UInt8(0)
         var run = 0
         for column in range(len(top)):
@@ -386,13 +400,13 @@ struct GappedAlignment(Copyable, Movable):
             else:
                 letter = UInt8(ord("=")) if top[column] == bottom[column] else UInt8(ord("X"))
             if letter != last and run > 0:
-                out += String(run, chr(Int(last)))
+                emit(out, run, last)
                 run = 0
             last = letter
             run += 1
         if run > 0:
-            out += String(run, chr(Int(last)))
-        return out
+            emit(out, run, last)
+        return String(unsafe_from_utf8=out^)
 
 
 def serial_score[

@@ -48,7 +48,16 @@ from .common import (
     uniform_matrix,
 )
 from .errors import AlignmentError, ErrorKind
-from .gap_affine import EndsFree, wavefront_align, wavefront_penalties, wavefront_score
+from .gap_affine import (
+    FREE_START,
+    HISTORY_LIMIT,
+    EndsFree,
+    cigar_of,
+    solve,
+    wavefront_align,
+    wavefront_penalties,
+    wavefront_score,
+)
 from .modes import Alignment, Anchor, Costs, Mode
 from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, swept_cells
 from .vector_score import optimal_band, uniform_table, vector_align, vector_score
@@ -604,6 +613,23 @@ def scoring_alignment(
     extensions, on the host, find their span by sweep (see `mode_span`) and align it globally."""
     if mode.match_score > 0:
         raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a Scoring's table holds what a match earns")
+    var on_host = not placement or placement.value().device != Device.GPU
+    if on_host and mode.is_global() and first.byte_length() > 0 and second.byte_length() > 0:
+        # A table of one match and one mismatch score: the wavefront's own moves spell the CIGAR, with
+        # no rows between, the same alignment `align_on_host` would give (see `wavefront_align`).
+        var penalties = wavefront_penalties(
+            scoring.substitutions, scoring.alphabet_size(), Int(scoring.gaps.open), Int(scoring.gaps.extend)
+        )
+        if penalties:
+            var codes_first = translate(first, scoring.alphabet)
+            var codes_second = translate(second, scoring.alphabet)
+            var moves = List[UInt8](capacity=len(codes_first) + len(codes_second))
+            var cost = solve[1](
+                Span(codes_first), Span(codes_second), penalties.value(), FREE_START, FREE_START, HISTORY_LIMIT, moves
+            )
+            var score = penalties.value().score(cost, len(codes_first) + len(codes_second))
+            var cigar = cigar_of(first, second, moves^, cost, penalties.value(), extended)
+            return Alignment(-score, score, cigar, 0, len(codes_first), 0, len(codes_second))
     if mode.kind == Mode.SMITH_WATERMAN or mode.is_global():
         var gapped: GappedAlignment
         if mode.kind == Mode.SMITH_WATERMAN:
