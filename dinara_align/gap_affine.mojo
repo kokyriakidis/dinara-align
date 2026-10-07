@@ -277,6 +277,15 @@ struct History(Movable):
         return self.flags[start >> BLOCK_SHIFT][(start & BLOCK_MASK) + diagonal - self.lows[cost]]
 
 
+comptime ROW_PADDING = 16
+"""Diagonals, one cache line, between the end of one ring row and the start of the next.
+
+The rows' widths double from a power of two, so without it every row of a wide ring started at the
+same place modulo 4 KB: a step's stores and its loads from the sources a few rows away then matched
+in their low twelve address bits, which x86 checks first for a store a load might depend on, and
+the rows shared their L1 sets. On the Skylake-X that blocked 1.5 billion loads over ten 100 kbp
+pairs, as `ld_blocks_partial.address_alias` counts them."""
+
 comptime HISTORY_BLOCK = 1 << 22
 """The most diagonals one block of kept fronts holds, 20 MB, unless one cost needs more."""
 comptime BLOCK_SHIFT = 40
@@ -300,6 +309,8 @@ struct Fronts(Movable):
     var current: Int
     """The slot of the last cost grown."""
     var width: Int
+    var stride: Int
+    """Where each row starts after the last: `width` and a cache line more (see `ROW_PADDING`)."""
     var base: Int
     var buffer: List[Int32]
     var lows: List[Int]
@@ -316,8 +327,9 @@ struct Fronts(Movable):
         self.least = -rows - 2
         self.most = columns + LANES + 2
         self.width = 4 * LANES
+        self.stride = self.width + ROW_PADDING
         self.base = self.width // 2
-        self.buffer = List[Int32](length=3 * slots * self.width, fill=UNREACHED)
+        self.buffer = List[Int32](length=3 * slots * self.stride, fill=UNREACHED)
         self.lows = List[Int](length=slots, fill=1)
         self.highs = List[Int](length=slots, fill=0)
         self.reach = List[Int](length=slots, fill=Int.MIN // 2)
@@ -335,7 +347,7 @@ struct Fronts(Movable):
         return (
             self.buffer.unsafe_ptr()
             .unsafe_origin_cast[MutUntrackedOrigin]()
-            .unsafe_offset((3 * slot + layer) * self.width + self.base)
+            .unsafe_offset((3 * slot + layer) * self.stride + self.base)
         )
 
     def ready(mut self, low: Int, high: Int):
@@ -358,15 +370,17 @@ struct Fronts(Movable):
         var new_size = new_last - new_first + 1
         var shift = first - new_first
         var rows = 3 * self.slots
-        var wider = List[Int32](length=rows * new_size, fill=UNREACHED)
+        var new_stride = new_size + ROW_PADDING
+        var wider = List[Int32](length=rows * new_stride, fill=UNREACHED)
         var source = self.buffer.unsafe_ptr()
         var destination = wider.unsafe_ptr()
         for row in range(rows):
-            Span(unsafe_ptr=destination.unsafe_offset(row * new_size + shift), length=size).copy_from(
-                Span(unsafe_ptr=source.unsafe_offset(row * size), length=size)
+            Span(unsafe_ptr=destination.unsafe_offset(row * new_stride + shift), length=size).copy_from(
+                Span(unsafe_ptr=source.unsafe_offset(row * self.stride), length=size)
             )
         self.buffer = wider^
         self.width = new_size
+        self.stride = new_stride
         self.base = -new_first
 
     def claim(mut self, slot: Int, low: Int, high: Int):
