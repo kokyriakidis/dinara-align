@@ -17,17 +17,38 @@ comptime UNBOUNDED = 1 << 60
 struct Costs(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     """What each edit costs, as WFA and minimap2 count it: a substitution `mismatch`, and a gap of `k`
     letters `opening + k extension`, or with a second piece the less of that and `opening2 + k
-    extension2`. Every alignment minimizes the total, save an extension (see `Mode.extension`).
+    extension2`. A deletion, a run of reference letters alone, may cost otherwise than an insertion,
+    a run of query letters alone, as bwa's `-O del,ins` (see `with_deletions`). Every alignment
+    minimizes the total, save an extension (see `Mode.extension`).
 
     Built through `edit`, `linear`, `affine` or `two_piece`, which refuse costs no search can run by.
     """
 
     var mismatch: Int
     var opening: Int
+    """An insertion's opening, and a deletion's unless `with_deletions` set its own."""
     var extension: Int
     var opening2: Int
     """The second gap piece's opening, -1 when there is none."""
     var extension2: Int
+    var deletion_opening: Int
+    """A deletion's own opening, its extension and its second piece's after it: `opening` and the
+    rest unless `with_deletions` set them."""
+    var deletion_extension: Int
+    var deletion_opening2: Int
+    var deletion_extension2: Int
+
+    def __init__(out self, mismatch: Int, opening: Int, extension: Int, opening2: Int, extension2: Int):
+        """Costs whose deletions cost what insertions do, trusted as given: the factories check them."""
+        self.mismatch = mismatch
+        self.opening = opening
+        self.extension = extension
+        self.opening2 = opening2
+        self.extension2 = extension2
+        self.deletion_opening = opening
+        self.deletion_extension = extension
+        self.deletion_opening2 = opening2
+        self.deletion_extension2 = extension2
 
     @staticmethod
     def edit() -> Self:
@@ -67,16 +88,64 @@ struct Costs(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
             )
         return Self(first.mismatch, first.opening, first.extension, opening2, extension2)
 
+    def with_deletions(
+        self, opening: Int, extension: Int, opening2: Int = -1, extension2: Int = 0
+    ) raises AlignmentError -> Self:
+        """These costs with a deletion, a run of `k` reference letters alone, costing `opening + k
+        extension`, or the less of that and `opening2 + k extension2`, and an insertion as before:
+        bwa's `-O6,5 -E1,2` is `affine(4, 5, 2).with_deletions(6, 1)`, its insertions first. Either side
+        may have a second piece the other lacks: the one without counts its one piece twice."""
+        if extension <= 0 or opening < 0 or (opening2 >= 0 and extension2 <= 0):
+            raise AlignmentError(
+                ErrorKind.INVALID_SCORING,
+                String("deletions ", opening, ", ", extension, ": an extension must cost"),
+            )
+        var out = self
+        out.deletion_opening = opening
+        out.deletion_extension = extension
+        out.deletion_opening2 = opening2 if opening2 >= 0 else opening
+        out.deletion_extension2 = extension2 if opening2 >= 0 else extension
+        if opening2 >= 0 and out.opening2 < 0:
+            # Insertions gain the second piece deletions have, their own once more.
+            out.opening2 = out.opening
+            out.extension2 = out.extension
+        elif opening2 < 0 and out.opening2 < 0:
+            out.deletion_opening2 = -1
+            out.deletion_extension2 = 0
+        return out
+
     def pieces(self) -> Int:
-        """How many gap pieces the costs have."""
+        """How many gap pieces the costs have, either side."""
         return 2 if self.opening2 >= 0 else 1
+
+    def symmetric(self) -> Bool:
+        """Whether a deletion costs what an insertion does."""
+        return (
+            self.deletion_opening == self.opening
+            and self.deletion_extension == self.extension
+            and self.deletion_opening2 == self.opening2
+            and self.deletion_extension2 == self.extension2
+        )
 
     def unit_scale(self) -> Int:
         """The factor these costs are of unit costs, zero when they are not: a pair's edit distance
         times it is then their least cost, which the bit-parallel search finds."""
-        if self.opening2 >= 0 or self.opening != 0 or self.mismatch != self.extension:
+        if self.opening2 >= 0 or self.opening != 0 or self.mismatch != self.extension or not self.symmetric():
             return 0
         return self.mismatch
+
+    def gap(self, letters: Int, deleted: Bool) -> Int:
+        """What a gap of `letters` letters costs, a deletion or an insertion, at its cheaper piece."""
+        if letters == 0:
+            return 0
+        var opening = self.deletion_opening if deleted else self.opening
+        var extension = self.deletion_extension if deleted else self.extension
+        var cost = opening + extension * letters
+        if self.opening2 >= 0:
+            var opening2 = self.deletion_opening2 if deleted else self.opening2
+            var extension2 = self.deletion_extension2 if deleted else self.extension2
+            cost = min(cost, opening2 + extension2 * letters)
+        return cost
 
 
 @fieldwise_init

@@ -44,8 +44,11 @@ extern "C" {
 
 /*
  * What each edit costs: a substitution `mismatch`, a gap of `k` letters `opening + k * extension`, or
- * with `opening2` zero or more the less of that and `opening2 + k * extension2`. A null pointer is unit
- * costs, the edit distance, {1, 0, 1, -1, 0}.
+ * with `opening2` zero or more the less of that and `opening2 + k * extension2`. With
+ * `deletion_extension` above zero, a deletion, a run of reference letters alone, costs by the
+ * `deletion_` fields instead, as bwa's `-O del,ins`, and the others are an insertion's; zero leaves
+ * deletions costing what insertions do. A null pointer is unit costs, the edit distance,
+ * {1, 0, 1, -1, 0}.
  */
 typedef struct {
     int64_t mismatch;
@@ -53,6 +56,10 @@ typedef struct {
     int64_t extension;
     int64_t opening2;
     int64_t extension2;
+    int64_t deletion_opening;
+    int64_t deletion_extension;
+    int64_t deletion_opening2;
+    int64_t deletion_extension2;
 } dinara_costs;
 
 #define DINARA_ENDS_FREE 0
@@ -199,6 +206,7 @@ struct OutsideBand : std::invalid_argument {
 /* What each edit costs (see `dinara_costs`). */
 struct Costs {
     int64_t mismatch = 1, opening = 0, extension = 1, opening2 = -1, extension2 = 0;
+    int64_t deletion_opening = 0, deletion_extension = 0, deletion_opening2 = -1, deletion_extension2 = 0;
     /* Unit costs: the edit distance. */
     static Costs edit() { return {}; }
     /* A substitution `mismatch` and every gapped letter `gap`. */
@@ -211,6 +219,17 @@ struct Costs {
     static Costs two_piece(int64_t mismatch, int64_t opening, int64_t extension, int64_t opening2,
                            int64_t extension2) {
         return {mismatch, opening, extension, opening2, extension2};
+    }
+    /* These costs with deletions of their own, the others an insertion's: bwa's `-O6,5 -E1,2` is
+     * `affine(4, 5, 2).with_deletions(6, 1)`. */
+    Costs with_deletions(int64_t del_opening, int64_t del_extension, int64_t del_opening2 = -1,
+                         int64_t del_extension2 = 0) const {
+        Costs out = *this;
+        out.deletion_opening = del_opening;
+        out.deletion_extension = del_extension;
+        out.deletion_opening2 = del_opening2;
+        out.deletion_extension2 = del_extension2;
+        return out;
     }
 };
 
@@ -282,7 +301,9 @@ inline void check(int64_t result) {
 }
 
 inline dinara_costs c_costs(const Costs &costs) {
-    return {costs.mismatch, costs.opening, costs.extension, costs.opening2, costs.extension2};
+    return {costs.mismatch,          costs.opening,          costs.extension,
+            costs.opening2,          costs.extension2,       costs.deletion_opening,
+            costs.deletion_extension, costs.deletion_opening2, costs.deletion_extension2};
 }
 
 inline int64_t distance(std::string_view reference, std::string_view query, const Costs &costs, const Mode &mode,

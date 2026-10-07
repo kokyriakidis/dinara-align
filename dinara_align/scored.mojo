@@ -14,14 +14,14 @@ sweep back from its end for its start, the span the one `Ties` names, the letter
 alignment whose reward folds into the costs (see `rewarded_alignment`).
 """
 
-from .cigar import cigar_cost, reversed_cigar, reversed_text
+from .cigar import cigar_matches, cigar_runs, reversed_cigar, reversed_text
 from .errors import AlignmentError
 from .gap_affine import (
     AffineExtension,
     EndsFree,
     cigar_within,
     extension_of,
-    extension_penalties,
+    rewarded_penalties,
     outside,
     traced_extension,
 )
@@ -132,11 +132,24 @@ def swept_cells[
     var deletes2 = List[Value](length=size if two else 0, fill=LOW)
     var inserts2_back = List[Value](length=size if two else 0, fill=LOW)
     var inserts2 = List[Value](length=size if two else 0, fill=LOW)
-    # A gap's first letter pays the opening and its extension, each further letter the extension.
-    var first = Lanes(Value(costs.opening + costs.extension))
-    var further = Lanes(Value(costs.extension))
-    var first2 = Lanes(Value(costs.opening2 + costs.extension2) if two else 0)
-    var further2 = Lanes(Value(costs.extension2) if two else 0)
+    # A gap's first letter pays the opening and its extension, each further letter the extension: a
+    # gap down the lanes is of the lanes' letters, the reference's a deletion's, across them the other's.
+    var down_opening = costs.opening if transposed else costs.deletion_opening
+    var down_extension = costs.extension if transposed else costs.deletion_extension
+    var down_opening2 = costs.opening2 if transposed else costs.deletion_opening2
+    var down_extension2 = costs.extension2 if transposed else costs.deletion_extension2
+    var across_opening = costs.deletion_opening if transposed else costs.opening
+    var across_extension = costs.deletion_extension if transposed else costs.extension
+    var across_opening2 = costs.deletion_opening2 if transposed else costs.opening2
+    var across_extension2 = costs.deletion_extension2 if transposed else costs.extension2
+    var first = Lanes(Value(down_opening + down_extension))
+    var further = Lanes(Value(down_extension))
+    var first2 = Lanes(Value(down_opening2 + down_extension2) if two else 0)
+    var further2 = Lanes(Value(down_extension2) if two else 0)
+    var first_across = Lanes(Value(across_opening + across_extension))
+    var further_across = Lanes(Value(across_extension))
+    var first2_across = Lanes(Value(across_opening2 + across_extension2) if two else 0)
+    var further2_across = Lanes(Value(across_extension2) if two else 0)
     var matched = Lanes(Value(match_score))
     var mismatched = Lanes(-Value(costs.mismatch))
     var zero = Lanes(0)
@@ -151,15 +164,13 @@ def swept_cells[
     var column_best = List[Value](length=(len(reference) + 1 + width) if columns_kept else 0, fill=0)
 
     @inline(.always)
-    def edge(letters: Int, free: Int) {imm costs} -> Value:
-        """A cell on the first row or column, `letters` in: nothing within the `free` letters, past them
-        a gap from where they end, at the cheaper piece."""
+    def edge(letters: Int, free: Int, down: Bool) {imm costs} -> Value:
+        """A cell on the first column, `letters` of the lanes' sequence in with `down`, or on the first row,
+        of the other's: nothing within the `free` letters, past them a gap from where they end, at the
+        cheaper piece, a deletion's costs for the reference's letters."""
         if letters <= free:
             return 0
-        var paid = -(costs.opening + costs.extension * (letters - free))
-        comptime if two:
-            paid = max(paid, -(costs.opening2 + costs.extension2 * (letters - free)))
-        return Value(paid)
+        return Value(-costs.gap(letters - free, down != transposed))
 
     if rows == 0 or columns == 0:
         comptime if anywhere_end:
@@ -178,7 +189,7 @@ def swept_cells[
         for letters in range(length + 1):
             if length - letters > finish:
                 continue
-            var value = Int(edge(letters, start))
+            var value = Int(edge(letters, start, rows > 0))
             if value > top or (value == top and (along_reference == highest)):
                 top = value
                 reach = letters
@@ -218,8 +229,8 @@ def swept_cells[
                 best_diagonal = diagonal
 
     # Diagonal one, beside the origin: a letter of either sequence against nothing.
-    one_back[0] = edge(1, across_start)
-    one_back[1] = edge(1, down_start)
+    one_back[0] = edge(1, across_start, False)
+    one_back[1] = edge(1, down_start, True)
     comptime if not anywhere_end:
         ending(one_back, 1, best, best_row, best_diagonal)
     for diagonal in range(2, rows + columns + 1):
@@ -241,7 +252,8 @@ def swept_cells[
                 above - first, deletes_back.unsafe_ptr().unsafe_offset(row - 1).unsafe_load[width=width]() - further
             )
             var insertion = max(
-                left - first, inserts_back.unsafe_ptr().unsafe_offset(row).unsafe_load[width=width]() - further
+                left - first_across,
+                inserts_back.unsafe_ptr().unsafe_offset(row).unsafe_load[width=width]() - further_across,
             )
             var substituted: Lanes
             comptime if tabulated:
@@ -262,7 +274,8 @@ def swept_cells[
                     deletes2_back.unsafe_ptr().unsafe_offset(row - 1).unsafe_load[width=width]() - further2,
                 )
                 var insertion2 = max(
-                    left - first2, inserts2_back.unsafe_ptr().unsafe_offset(row).unsafe_load[width=width]() - further2
+                    left - first2_across,
+                    inserts2_back.unsafe_ptr().unsafe_offset(row).unsafe_load[width=width]() - further2_across,
                 )
                 score = max(score, max(deletion2, insertion2))
                 deletes2.unsafe_ptr().unsafe_offset(row).unsafe_store(deletion2)
@@ -306,12 +319,12 @@ def swept_cells[
         # The border cells of this diagonal, written after the lanes that may have run over them: free
         # within the letters free there, past them a gap. No interior cell reads a border's gap layers.
         if diagonal <= columns:
-            current[0] = edge(diagonal, across_start)
+            current[0] = edge(diagonal, across_start, False)
             deletes[0] = LOW
             comptime if two:
                 deletes2[0] = LOW
         if diagonal <= rows:
-            current[diagonal] = edge(diagonal, down_start)
+            current[diagonal] = edge(diagonal, down_start, True)
             inserts[diagonal] = LOW
             comptime if two:
                 inserts2[diagonal] = LOW
@@ -341,9 +354,13 @@ def narrow_enough[kind: Int](costs: Costs, match_score: Int, rows: Int, columns:
     move, as each cell takes the best of its moves from cells of zero or more; an overlap's none falls
     below every letter of both paying the dearest move. Nor does a gap's sentinel, a quarter of the
     way down, fall further than one extension below it."""
-    var dearest = max(costs.mismatch, costs.opening + costs.extension)
+    var dearest = max(
+        costs.mismatch, max(costs.opening + costs.extension, costs.deletion_opening + costs.deletion_extension)
+    )
     if costs.pieces() == 2:
-        dearest = max(dearest, costs.opening2 + costs.extension2)
+        dearest = max(
+            dearest, max(costs.opening2 + costs.extension2, costs.deletion_opening2 + costs.deletion_extension2)
+        )
     var fits = match_score * (min(rows, columns) + 1) < 32000 and dearest < 4000
     comptime if kind != ANYWHERE:
         fits = fits and dearest * (rows + columns + 1) < 8000
@@ -461,14 +478,7 @@ def latest_local(
     var end_column = found[1]
     var end_row = found[2]
     var two = costs.pieces() == 2
-    var penalties = extension_penalties(
-        match_score,
-        costs.mismatch,
-        costs.opening,
-        costs.extension,
-        costs.opening2 if two else 0,
-        costs.extension2 if two else 0,
-    )
+    var penalties = rewarded_penalties(match_score, costs)
     var head = String(StringSlice(unsafe_from_utf8=reference.as_bytes()[:end_column]))
     var lead = String(StringSlice(unsafe_from_utf8=query.as_bytes()[:end_row]))
     # The best alignment ending at that cell, and starting wherever pays: an extension back from it,
@@ -624,21 +634,28 @@ def global_rewarded(
     wavefront finds it, inside `band`, split past `limit` kept diagonals: its cost and CIGAR, or raises
     when none fits the band."""
     var two = costs.pieces() == 2
-    var penalties = extension_penalties(
-        match_score,
-        costs.mismatch,
-        costs.opening,
-        costs.extension,
-        costs.opening2 if two else 0,
-        costs.extension2 if two else 0,
-    )
+    var penalties = rewarded_penalties(match_score, costs)
     var found = cigar_within[2](
         reference, query, penalties, extended, Int.MAX, band, ties, limit
     ) if two else cigar_within[1](reference, query, penalties, extended, Int.MAX, band, ties, limit)
     if not found:
         raise outside(band)
     var cigar = found.take().cigar
-    var cost = cigar_cost(
-        reference, query, cigar, costs.mismatch, costs.opening, costs.extension, costs.opening2, costs.extension2
-    )
+    var cost = costs_of_cigar(reference, query, cigar, costs)
     return (cost, cigar^)
+
+
+def costs_of_cigar(reference: String, query: String, cigar: String, costs: Costs) -> Int:
+    """What a CIGAR of `reference` against `query` costs: its substitutions, `M` runs compared letter
+    by letter, and each gap run at its direction's cheaper piece."""
+    var runs = cigar_runs(cigar)
+    var aligned = 0
+    var gaps = 0
+    for index in range(len(runs[0])):
+        var letter = runs[0][index]
+        var length = runs[1][index]
+        if letter == UInt8(ord("D")) or letter == UInt8(ord("I")):
+            gaps += costs.gap(length, letter == UInt8(ord("D")))
+        else:
+            aligned += length
+    return (aligned - cigar_matches(reference, query, cigar)) * costs.mismatch + gaps

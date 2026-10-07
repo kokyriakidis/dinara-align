@@ -71,33 +71,3 @@ def cigar_matches(first: String, second: String, cigar: String) -> Int:
                 column += 1
                 row += 1
     return total
-
-
-def cigar_cost(
-    first: String,
-    second: String,
-    cigar: String,
-    mismatch: Int,
-    opening: Int,
-    extension: Int,
-    opening2: Int = -1,
-    extension2: Int = 0,
-) -> Int:
-    """What a CIGAR of `first` against `second` costs: its substitutions, `M` runs compared letter by
-    letter, and each gap run at the cheaper piece, the second only with `opening2` not negative."""
-    var runs = cigar_runs(cigar)
-    var gaps = 0
-    for index in range(len(runs[0])):
-        var letter = runs[0][index]
-        var length = runs[1][index]
-        if letter == UInt8(ord("D")) or letter == UInt8(ord("I")):
-            var gap = opening + extension * length
-            if opening2 >= 0:
-                gap = min(gap, opening2 + extension2 * length)
-            gaps += gap
-    var aligned = 0
-    for index in range(len(runs[0])):
-        var letter = runs[0][index]
-        if letter != UInt8(ord("D")) and letter != UInt8(ord("I")):
-            aligned += runs[1][index]
-    return (aligned - cigar_matches(first, second, cigar)) * mismatch + gaps

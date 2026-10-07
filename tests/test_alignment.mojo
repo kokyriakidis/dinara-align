@@ -2688,6 +2688,30 @@ def test_scores_without_alignments() raises:
         _ = local_scores("ACGT", "ACGT", costs, Mode.GLOBAL)
 
 
+def test_deletions_cost_their_own() raises:
+    """Deletions and insertions priced apart, as bwa's `-O del,ins`: the dearer side is avoided where
+    the other serves, every mode prices its CIGAR by side, and costs equal both ways are the costs
+    they always were."""
+    var dear_deletions = Costs.affine(4, 2, 1).with_deletions(20, 5)
+    assert_equal(align("ACGTACGT", "ACGACGT", dear_deletions).cost, 25)
+    assert_equal(align("ACGACGT", "ACGTACGT", dear_deletions).cigar, "3=1I4=")
+    assert_equal(distance("ACGACGT", "ACGTACGT", dear_deletions), 3)
+    assert_true(dear_deletions.symmetric() == False)
+    assert_true(Costs.affine(4, 6, 2).with_deletions(6, 2).symmetric())
+    assert_equal(dear_deletions.unit_scale(), 0)
+    # Two pieces on one side alone: the other counts its one piece twice.
+    var long_deletions = Costs.affine(4, 6, 2).with_deletions(6, 2, 24, 1)
+    assert_equal(long_deletions.pieces(), 2)
+    assert_equal(long_deletions.gap(30, True), 54)
+    assert_equal(long_deletions.gap(30, False), 66)
+    var gapped = "GATTACAGCTTGCA" + "C" * 30 + "TGGACCATGAGTCA"
+    var plain = "GATTACAGCTTGCA" + "TGGACCATGAGTCA"
+    assert_equal(distance(gapped, plain, long_deletions), 54)
+    assert_equal(distance(plain, gapped, long_deletions), 66)
+    with assert_raises():
+        _ = Costs.affine(4, 6, 2).with_deletions(6, 0)
+
+
 def rebuilt_reference(query: String, cigar: String, md: String) raises -> String:
     """The reference's aligned part from the query's, the CIGAR and the `MD` string, as SAM readers
     rebuild it: the query's letters through matches and substitutions, those `MD` names replaced, and

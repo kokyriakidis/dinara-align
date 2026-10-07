@@ -123,6 +123,12 @@ int main() {
     CHECK(!dinara::distance_within(gapped, plain, 61, two_piece));
     CHECK(!dinara::align_within(gapped, plain, 61, two_piece));
     CHECK(dinara::align("TTTTACGTACGTTTTT", "ACGTACGT", two_piece, Mode::infix()).cost == 0);
+    // Deletions dearer than insertions: a letter missing from the query costs a deletion's 20 + 5, one
+    // extra in it an insertion's 2 + 1.
+    Costs dear_deletions = Costs::affine(4, 2, 1).with_deletions(20, 5);
+    CHECK(dinara::align("ACGTACGT", "ACGACGT", dear_deletions).cost == 25);
+    CHECK(dinara::align("ACGACGT", "ACGTACGT", dear_deletions).cost == 3);
+    CHECK(dinara::align("ACGACGT", "ACGTACGT", dear_deletions).cigar == "3=1I4=");
     // A band of the one diagonal: substitutions only, where a gap either way would be cheaper.
     CHECK(dinara::align("ACGTACGT", "ACGAACGT", affine, Mode::global(), dinara::Band{0, 0}).cigar == "3=1X4=");
     CHECK(dinara::distance("AAAACCCC", "CCCCAAAA", affine, Mode::global(), dinara::Band::around(0)) == 32);
@@ -191,13 +197,13 @@ int main() {
     CHECK(dinara_align("ACGTACGTTTGCA", 13, "ACGTCGTTTTGCA", 13, nullptr, nullptr, nullptr, &raw) == 0);
     CHECK(raw.cost == 2 && std::string(raw.cigar) == "4=1D2=1I6=" && raw.cigar_length == 10);
     dinara_free(raw.cigar);
-    dinara_costs c_affine{4, 6, 2, -1, 0};
+    dinara_costs c_affine{4, 6, 2, -1, 0, 0, 0, -1, 0};
     dinara_mode c_infix{DINARA_ENDS_FREE, DINARA_ALL, DINARA_ALL, 0, 0, 0, 0, 0};
     CHECK(dinara_distance("TTTTACGTACGTTTTT", 16, "ACGTACGT", 8, &c_affine, &c_infix, nullptr) == 0);
     dinara_options capped{INT64_MIN, INT64_MAX, 11, 1, 0, 0};
     CHECK(dinara_distance("ACGTACGTTTGCA", 13, "ACGTCGTTTTGCA", 13, &c_affine, nullptr, &capped) == DINARA_ABOVE_MAX);
     CHECK(dinara_align("ACGTACGTTTGCA", 13, "ACGTCGTTTTGCA", 13, &c_affine, nullptr, &capped, &raw) == DINARA_ABOVE_MAX);
-    dinara_costs c_free{0, 6, 2, -1, 0};
+    dinara_costs c_free{0, 6, 2, -1, 0, 0, 0, -1, 0};
     CHECK(dinara_distance("A", 1, "C", 1, &c_free, nullptr, nullptr) == DINARA_INVALID_COSTS);
 
     std::mt19937 random(7);

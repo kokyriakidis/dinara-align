@@ -19,6 +19,8 @@ var placed = align("TTTTACGTACGTTTTT", "ACGTACGT", costs, Mode.INFIX)  # cost 0,
 # Two-piece gap costs, as minimap2's -O and -E take two values each: a gap of k letters the less of
 # 6 + 2k and 24 + k.
 var long_gap = Costs.two_piece(4, 6, 2, 24, 1)
+# Deletions priced apart from insertions, as bwa's -O del,ins: a run of k reference letters 6 + k.
+var lopsided = Costs.affine(4, 5, 2).with_deletions(6, 1)
 # Of equally good alignments a fixed rule picks one: indels placed left, as minimap2 places them, or
 # right, WFA2-lib's CIGARs byte for byte.
 var left = align("ACGTTTTACG", "ACGTTTACG", costs)  # "3=1D6="

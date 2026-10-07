@@ -44,7 +44,7 @@ from .gap_affine import (
     extend,
     extension_of,
     free_ends_alignment,
-    extension_penalties,
+    rewarded_penalties,
     outside,
     penalties_of,
     wavefront_distance,
@@ -159,18 +159,11 @@ def score(
     var rows = query.byte_length()
     var two = costs.pieces() == 2
     _ = penalties_of(costs)
-    var penalties = extension_penalties(
-        mode.match_score,
-        costs.mismatch,
-        costs.opening,
-        costs.extension,
-        costs.opening2 if two else 0,
-        costs.extension2 if two else 0,
-    )
+    var penalties = rewarded_penalties(mode.match_score, costs)
     if mode.kind == Mode.EXTENSION:
         if not band.holds(0):
             raise outside(band)
-        var drop_extension = min(costs.extension, costs.extension2) if two else costs.extension
+        var drop_extension = cheapest_extension(costs)
         var at_end = mode.anchor == Anchor.END
         var found = extend[2](
             reference.as_bytes(), query.as_bytes(), penalties, band, at_end, -1, mode.zdrop, drop_extension
@@ -212,6 +205,15 @@ def local_scores(
     _ = penalties_of(costs)
     var span = window.or_else(max(query.byte_length() // 2, 15))
     return local_scores_of(reference.as_bytes(), query.as_bytes(), costs, mode.match_score, span)
+
+
+def cheapest_extension(costs: Costs) -> Int:
+    """The cheapest a gap grows a letter, either way, at either piece: a Z-drop's slack a diagonal, as
+    KSW2 charges a long gap."""
+    var cheapest = min(costs.extension, costs.deletion_extension)
+    if costs.pieces() == 2:
+        cheapest = min(cheapest, min(costs.extension2, costs.deletion_extension2))
+    return cheapest
 
 
 def free_ends(mode: Mode, columns: Int, rows: Int) -> EndsFree:
@@ -389,16 +391,9 @@ def extended_alignment(
 ) raises AlignmentError -> Alignment:
     """The best extension from `mode`'s anchor (see `Mode.extension`)."""
     var two = costs.pieces() == 2
-    var penalties = extension_penalties(
-        mode.match_score,
-        costs.mismatch,
-        costs.opening,
-        costs.extension,
-        costs.opening2 if two else 0,
-        costs.extension2 if two else 0,
-    )
+    var penalties = rewarded_penalties(mode.match_score, costs)
     # The Z-drop's slack a diagonal is the cheapest extension, as KSW2 charges a long gap.
-    var drop_extension = min(costs.extension, costs.extension2) if two else costs.extension
+    var drop_extension = cheapest_extension(costs)
     var found = extension_of[2](
         reference, query, penalties, extended, mode.anchor, band, ties, -1, limit, mode.zdrop, drop_extension
     ) if two else extension_of[1](

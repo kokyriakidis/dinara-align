@@ -89,6 +89,18 @@ def sequences() -> Tuple[String, String]:
 
 
 def random_costs() raises AlignmentError -> Costs:
+    var costs = symmetric_costs()
+    if chance(0.25):
+        # Deletions of their own, one piece or two, as bwa's -O del,ins.
+        var opening = draw(0, 12)
+        var extension = draw(1, 5)
+        if chance(0.4):
+            return costs.with_deletions(opening, extension, opening + draw(1, 30), draw(1, extension))
+        return costs.with_deletions(opening, extension)
+    return costs
+
+
+def symmetric_costs() raises AlignmentError -> Costs:
     var kind = draw(0, 3)
     if kind == 0:
         return Costs.edit()
@@ -147,6 +159,10 @@ def model_of(costs: Costs, mode: Mode, band: Band) -> Model:
     pieces.append((costs.opening, costs.extension))
     if costs.pieces() == 2:
         pieces.append((costs.opening2, costs.extension2))
+    var deletions = List[Tuple[Int, Int]]()
+    deletions.append((costs.deletion_opening, costs.deletion_extension))
+    if costs.pieces() == 2:
+        deletions.append((costs.deletion_opening2, costs.deletion_extension2))
     var kind = ENDS
     if mode.kind == Mode.EXTENSION:
         kind = EXTENSION
@@ -154,7 +170,7 @@ def model_of(costs: Costs, mode: Mode, band: Band) -> Model:
         kind = LOCAL
     return Model(
         Model.uniform(mode.match_score, costs.mismatch),
-        pieces.copy(),
+        deletions^,
         pieces^,
         kind,
         mode.reference_start,

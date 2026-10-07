@@ -74,15 +74,20 @@ def plain_bytes(bytes: ImmPointer[UInt8, MutAnyOrigin], length: Int) -> Bool:
 
 def costs_of(fields: OptionalPointer[Int, MutAnyOrigin]) raises AlignmentError -> Costs:
     """`dinara_costs`: mismatch, opening, extension, opening2, extension2, a negative opening2 for one
-    piece. Null is unit costs."""
+    piece, then a deletion's four, which count only with its extension above zero. Null is unit costs."""
     if not fields:
         return Costs.edit()
     var at = fields.value()
+    var costs: Costs
     if at[unsafe_offset=3] < 0:
-        return Costs.affine(at[unsafe_offset=0], at[unsafe_offset=1], at[unsafe_offset=2])
-    return Costs.two_piece(
-        at[unsafe_offset=0], at[unsafe_offset=1], at[unsafe_offset=2], at[unsafe_offset=3], at[unsafe_offset=4]
-    )
+        costs = Costs.affine(at[unsafe_offset=0], at[unsafe_offset=1], at[unsafe_offset=2])
+    else:
+        costs = Costs.two_piece(
+            at[unsafe_offset=0], at[unsafe_offset=1], at[unsafe_offset=2], at[unsafe_offset=3], at[unsafe_offset=4]
+        )
+    if at[unsafe_offset=6] > 0:
+        costs = costs.with_deletions(at[unsafe_offset=5], at[unsafe_offset=6], at[unsafe_offset=7], at[unsafe_offset=8])
+    return costs
 
 
 def mode_of(fields: OptionalPointer[Int, MutAnyOrigin]) raises AlignmentError -> Mode:

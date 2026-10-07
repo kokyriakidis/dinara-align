@@ -158,10 +158,11 @@ comptime OPENING = 8
 the piece before a split inside that gap, which must end in it."""
 
 
-@fieldwise_init
 struct Penalties(ImplicitlyCopyable, TrivialRegisterPassable):
     """The wavefront's costs for one scoring, and what turns a cost back into a score. A second gap
-    piece, `opening2` and `extension2`, counts only where a search runs two (see `MAX_PIECES`)."""
+    piece, `opening2` and `extension2`, counts only where a search runs two (see `MAX_PIECES`). A gap
+    of the first sequence's letters, a deletion, has its own costs, the `deletion_` ones, which are an
+    insertion's unless set otherwise; each gap layer reads its own (see `opening_of`)."""
 
     var mismatch: Int
     var opening: Int
@@ -173,31 +174,141 @@ struct Penalties(ImplicitlyCopyable, TrivialRegisterPassable):
     """The match score, which every letter of both sequences earns half of before the costs."""
     var opening2: Int
     var extension2: Int
+    var deletion_opening: Int
+    var deletion_extension: Int
+    var deletion_opening2: Int
+    var deletion_extension2: Int
+    var layer_openings: SIMD[DType.int32, 8]
+    """Each gap layer's opening, at the layer's index, so a walk over layers reads one lane."""
+    var layer_extensions: SIMD[DType.int32, 8]
+
+    def __init__(
+        out self,
+        mismatch: Int,
+        opening: Int,
+        extension: Int,
+        scale: Int,
+        reward: Int,
+        opening2: Int,
+        extension2: Int,
+    ):
+        """Costs whose deletions cost what insertions do."""
+        self.mismatch = mismatch
+        self.opening = opening
+        self.extension = extension
+        self.scale = scale
+        self.reward = reward
+        self.opening2 = opening2
+        self.extension2 = extension2
+        self.deletion_opening = opening
+        self.deletion_extension = extension
+        self.deletion_opening2 = opening2
+        self.deletion_extension2 = extension2
+        self.layer_openings = SIMD[DType.int32, 8](0)
+        self.layer_extensions = SIMD[DType.int32, 8](0)
+        self.tabulate()
+
+    def set_deletions(mut self, opening: Int, extension: Int, opening2: Int, extension2: Int):
+        """A deletion's own costs, a gap of the first sequence's letters."""
+        self.deletion_opening = opening
+        self.deletion_extension = extension
+        self.deletion_opening2 = opening2
+        self.deletion_extension2 = extension2
+        self.tabulate()
+
+    def tabulate(mut self):
+        """Each gap layer's opening and extension at its index (see `gap_layer`)."""
+        self.layer_openings[gap_layer(0, True)] = Int32(self.deletion_opening)
+        self.layer_openings[gap_layer(0, False)] = Int32(self.opening)
+        self.layer_openings[gap_layer(1, True)] = Int32(self.deletion_opening2)
+        self.layer_openings[gap_layer(1, False)] = Int32(self.opening2)
+        self.layer_extensions[gap_layer(0, True)] = Int32(self.deletion_extension)
+        self.layer_extensions[gap_layer(0, False)] = Int32(self.extension)
+        self.layer_extensions[gap_layer(1, True)] = Int32(self.deletion_extension2)
+        self.layer_extensions[gap_layer(1, False)] = Int32(self.extension2)
 
     def score(self, cost: Int, letters: Int) -> Int:
         """The Gotoh score of an alignment over `letters` letters in all, costing `cost`."""
         return (self.reward * letters - cost * self.scale) // 2
 
     @always_inline
-    def opening_of(self, piece: Int) -> Int:
-        return self.opening if piece == 0 else self.opening2
+    def opening_of(self, layer: Int) -> Int:
+        """A gap layer's opening: its piece's, for its direction."""
+        return Int(self.layer_openings[layer])
 
     @always_inline
-    def extension_of(self, piece: Int) -> Int:
-        return self.extension if piece == 0 else self.extension2
+    def extension_of(self, layer: Int) -> Int:
+        """A gap layer's extension: its piece's, for its direction."""
+        return Int(self.layer_extensions[layer])
 
     def window[pieces: Int](self) -> Int:
-        """The dearest single move: a substitution, or a gap's first letter in any piece."""
-        var dearest = max(self.mismatch, self.opening + self.extension)
-        comptime if pieces == 2:
-            dearest = max(dearest, self.opening2 + self.extension2)
+        """The dearest single move: a substitution, or a gap's first letter in any piece either way."""
+        var dearest = self.mismatch
+        comptime for layer in range(1, layers_of[pieces]()):
+            dearest = max(dearest, self.opening_of(layer) + self.extension_of(layer))
         return dearest
 
     def widest_opening[pieces: Int](self) -> Int:
         """The dearest opening, what a meeting inside a gap pays once for both halves at most."""
-        comptime if pieces == 2:
-            return max(self.opening, self.opening2)
-        return self.opening
+        var widest = 0
+        comptime for layer in range(1, layers_of[pieces]()):
+            widest = max(widest, self.opening_of(layer))
+        return widest
+
+    def cheapest_extension[pieces: Int](self) -> Int:
+        """The cheapest extension, what each letter a path strays off a diagonal pays at least."""
+        var cheapest = Int.MAX
+        comptime for layer in range(1, layers_of[pieces]()):
+            cheapest = min(cheapest, self.extension_of(layer))
+        return cheapest
+
+
+def scaled_penalties(costs: Costs, reward: Int, folded: Bool) raises AlignmentError -> Penalties:
+    """The wavefront's costs for `costs`, deletions and insertions each their own, with `folded` a match
+    earning `reward` folded in as for a global alignment or an extension (see the module's notes), all
+    divided by their common factor."""
+    if reward < 0 or costs.mismatch <= 0:
+        raise AlignmentError(
+            ErrorKind.INVALID_SCORING, "a match earns at least nothing, and a mismatch and an extension must cost"
+        )
+    var two = costs.pieces() == 2
+    var values: List[Int] = [
+        2 * (reward + costs.mismatch) if folded else costs.mismatch,
+        costs.opening,
+        costs.extension,
+        costs.deletion_opening,
+        costs.deletion_extension,
+    ]
+    if two:
+        values.append(costs.opening2)
+        values.append(costs.extension2)
+        values.append(costs.deletion_opening2)
+        values.append(costs.deletion_extension2)
+    for index in range(1, len(values)):
+        if values[index] < 0 or (index % 2 == 0 and values[index] <= 0):
+            raise AlignmentError(
+                ErrorKind.INVALID_SCORING,
+                String("costs ", costs, ": an extension must cost, an opening no less than nothing"),
+            )
+        if folded:
+            # A gap's opening doubles, its extension doubles and pays half the reward a letter.
+            values[index] = 2 * values[index] + (reward if index % 2 == 0 else 0)
+    var scale = 0
+    for value in values:
+        scale = gcd(scale, value)
+    var out = Penalties(
+        values[0] // scale,
+        values[1] // scale,
+        values[2] // scale,
+        scale,
+        reward,
+        values[5] // scale if two else 0,
+        values[6] // scale if two else 0,
+    )
+    out.set_deletions(
+        values[3] // scale, values[4] // scale, values[7] // scale if two else 0, values[8] // scale if two else 0
+    )
+    return out
 
 
 @fieldwise_init
@@ -505,9 +616,11 @@ def step[
 ](
     mismatched: ImmPointer[Int32, _],
     opening: ImmPointer[Int32, _],
+    opening_second: ImmPointer[Int32, _],
     first_gaps: ImmPointer[Int32, _],
     second_gaps: ImmPointer[Int32, _],
     opening2: ImmPointer[Int32, _],
+    opening_second2: ImmPointer[Int32, _],
     first_gaps2: ImmPointer[Int32, _],
     second_gaps2: ImmPointer[Int32, _],
     aligned: Slot,
@@ -527,8 +640,9 @@ def step[
     """One cost's fronts on diagonals `low ..= high`, every pointer indexed by diagonal, and with
     `record` each diagonal's alignment column again in `kept` and its flag (see `ENTRY_MASK`).
 
-    `mismatched` is the alignment front a mismatch back, `opening` the one an opened gap back, and
-    the gap fronts are their own layers an extension back. A letter of the first sequence against
+    `mismatched` is the alignment front a mismatch back, `opening` the one an opened gap of the first
+    sequence's letters back and `opening_second` the one an opened gap of the second's back, the same
+    front when both cost alike, and the gap fronts are their own layers an extension back. A letter of the first sequence against
     a gap comes from the diagonal below and moves one column; one of the second, from the diagonal
     above, stays in its column and moves one row. Each only where it stays inside the matrix. With
     two `pieces` the second piece's sources and layers, the ones ending in `2`, step the same way;
@@ -554,7 +668,7 @@ def step[
         var same = mismatched.unsafe_offset(diagonal).unsafe_load[width=LANES]()
         var opened_below = opening.unsafe_offset(diagonal - 1).unsafe_load[width=LANES]()
         var extended_below = first_gaps.unsafe_offset(diagonal - 1).unsafe_load[width=LANES]()
-        var opened_above = opening.unsafe_offset(diagonal + 1).unsafe_load[width=LANES]()
+        var opened_above = opening_second.unsafe_offset(diagonal + 1).unsafe_load[width=LANES]()
         var extended_above = second_gaps.unsafe_offset(diagonal + 1).unsafe_load[width=LANES]()
         var below = max(opened_below, extended_below)
         var above = max(opened_above, extended_above)
@@ -573,7 +687,7 @@ def step[
         comptime if pieces == 2:
             opened_below2 = opening2.unsafe_offset(diagonal - 1).unsafe_load[width=LANES]()
             extended_below2 = first_gaps2.unsafe_offset(diagonal - 1).unsafe_load[width=LANES]()
-            opened_above2 = opening2.unsafe_offset(diagonal + 1).unsafe_load[width=LANES]()
+            opened_above2 = opening_second2.unsafe_offset(diagonal + 1).unsafe_load[width=LANES]()
             extended_above2 = second_gaps2.unsafe_offset(diagonal + 1).unsafe_load[width=LANES]()
             var below2 = max(opened_below2, extended_below2)
             var above2 = max(opened_above2, extended_above2)
@@ -748,19 +862,20 @@ struct Wavefront[pieces: Int](Movable):
         if cost >= x and self.fronts.lows[mismatch_slot] <= self.fronts.highs[mismatch_slot]:
             low = min(low, self.fronts.lows[mismatch_slot])
             high = max(high, self.fronts.highs[mismatch_slot])
-        # Each piece's opening and extension sources, their gaps a diagonal either side.
-        var opening_slots = Array[Int, MAX_PIECES](fill=0)
-        var extension_slots = Array[Int, MAX_PIECES](fill=0)
-        comptime for piece in range(Self.pieces):
-            var o = self.penalties.opening_of(piece)
-            var e = self.penalties.extension_of(piece)
-            opening_slots[piece] = self.fronts.back(o + e)
-            extension_slots[piece] = self.fronts.back(e)
-            var source = opening_slots[piece]
+        # Each gap layer's opening and extension sources, its gaps a diagonal either side.
+        comptime layers = layers_of[Self.pieces]()
+        var opening_slots = Array[Int, layers_of[MAX_PIECES]()](fill=0)
+        var extension_slots = Array[Int, layers_of[MAX_PIECES]()](fill=0)
+        comptime for layer in range(1, layers):
+            var o = self.penalties.opening_of(layer)
+            var e = self.penalties.extension_of(layer)
+            opening_slots[layer] = self.fronts.back(o + e)
+            extension_slots[layer] = self.fronts.back(e)
+            var source = opening_slots[layer]
             if cost >= o + e and self.fronts.lows[source] <= self.fronts.highs[source]:
                 low = min(low, self.fronts.lows[source] - 1)
                 high = max(high, self.fronts.highs[source] + 1)
-            source = extension_slots[piece]
+            source = extension_slots[layer]
             if cost >= e and self.fronts.lows[source] <= self.fronts.highs[source]:
                 low = min(low, self.fronts.lows[source] - 1)
                 high = max(high, self.fronts.highs[source] + 1)
@@ -768,9 +883,8 @@ struct Wavefront[pieces: Int](Movable):
         var opened = 0
         var opened_layer = self.origin - OPENING
         if self.origin > OPENING:
-            var piece = piece_of(opened_layer)
             var diagonal = 1 if along_first(opened_layer) else -1
-            var due = self.penalties.opening_of(piece) + self.penalties.extension_of(piece)
+            var due = self.penalties.opening_of(opened_layer) + self.penalties.extension_of(opened_layer)
             if cost == due and self.band_low <= diagonal and diagonal <= self.band_high:
                 opened = diagonal
                 low = min(low, opened)
@@ -793,14 +907,18 @@ struct Wavefront[pieces: Int](Movable):
             flags = room[1]
         # With one piece the second's sources and layers stand for the first's, and the step reads none.
         comptime last = Self.pieces - 1
+        comptime first_last = gap_layer(last, True)
+        comptime second_last = gap_layer(last, False)
         var reach = step[record, Self.pieces](
             self.fronts.row(mismatch_slot, ALIGNED),
-            self.fronts.row(opening_slots[0], ALIGNED),
-            self.fronts.row(extension_slots[0], FIRST_GAP),
-            self.fronts.row(extension_slots[0], SECOND_GAP),
-            self.fronts.row(opening_slots[last], ALIGNED),
-            self.fronts.row(extension_slots[last], gap_layer(last, True)),
-            self.fronts.row(extension_slots[last], gap_layer(last, False)),
+            self.fronts.row(opening_slots[FIRST_GAP], ALIGNED),
+            self.fronts.row(opening_slots[SECOND_GAP], ALIGNED),
+            self.fronts.row(extension_slots[FIRST_GAP], FIRST_GAP),
+            self.fronts.row(extension_slots[SECOND_GAP], SECOND_GAP),
+            self.fronts.row(opening_slots[first_last], ALIGNED),
+            self.fronts.row(opening_slots[second_last], ALIGNED),
+            self.fronts.row(extension_slots[first_last], first_last),
+            self.fronts.row(extension_slots[second_last], second_last),
             front,
             self.fronts.row(slot, FIRST_GAP),
             self.fronts.row(slot, SECOND_GAP),
@@ -868,7 +986,7 @@ struct Wavefront[pieces: Int](Movable):
     def prune(mut self, slot: Int, cost: Int, guide: History, total: Int):
         """Unreaches every diagonal of the fronts of `cost`, in `slot`, that no path costing `total`
         passes, as the other side's kept fronts tell: one passes the front on diagonal `k` only where
-        the other side comes back as far at the rest of `total`, or that and a gap piece's opening, for
+        the other side comes back as far at the rest of `total`, or that and a gap layer's opening, for
         a gap both halves opened.
 
         What is left still holds every front a backtrace by `Ties` reaches on any optimal path, at its
@@ -883,13 +1001,20 @@ struct Wavefront[pieces: Int](Movable):
             return
         # The other side's kept fronts that could meet these, each as a row indexed by its diagonal.
         var front = self.fronts.row(slot, ALIGNED)
-        var row_lows = Array[Int, 1 + MAX_PIECES](fill=1)
-        var row_highs = Array[Int, 1 + MAX_PIECES](fill=0)
-        var row_columns = Array[Slot, 1 + MAX_PIECES](fill=front)
+        comptime layers = layers_of[Self.pieces]()
+        var row_lows = Array[Int, layers_of[MAX_PIECES]()](fill=1)
+        var row_highs = Array[Int, layers_of[MAX_PIECES]()](fill=0)
+        var row_columns = Array[Slot, layers_of[MAX_PIECES]()](fill=front)
+        var row_costs = Array[Int, layers_of[MAX_PIECES]()](fill=-1)
         var count = 0
-        comptime for piece in range(-1, Self.pieces):
-            var back = rest if piece < 0 else rest + self.penalties.opening_of(piece)
-            if back <= last and guide.lows[back] <= guide.highs[back]:
+        comptime for layer in range(layers):
+            var back = rest if layer == ALIGNED else rest + self.penalties.opening_of(layer)
+            # Each cost once: gap layers that open alike meet the same front.
+            var seen = False
+            for index in range(count):
+                seen = seen or row_costs[index] == back
+            if not seen and back <= last and guide.lows[back] <= guide.highs[back]:
+                row_costs[count] = back
                 var start = guide.starts[back]
                 row_lows[count] = guide.lows[back]
                 row_highs[count] = guide.highs[back]
@@ -1030,7 +1155,7 @@ def meet[
         if total < best.cost and column + Int(back_aligned[unsafe_offset=mirrored]) >= columns:
             best = Meeting(total, ALIGNED, diagonal, column, forward_cost, backward_cost)
         comptime for layer in range(1, layers_of[pieces]()):
-            var joined = total - penalties.opening_of(piece_of(layer))
+            var joined = total - penalties.opening_of(layer)
             if joined < best.cost:
                 var gap = Int(aligned[unsafe_offset=layer * stride + diagonal])
                 var back_gap = Int(back_aligned[unsafe_offset=layer * back_stride + mirrored])
@@ -1148,7 +1273,7 @@ def wavefront_score(
     """
     var letters = len(first) + len(second)
     if len(first) == 0 or len(second) == 0:
-        return penalties.score(gapped_cost[1](penalties, letters), letters)
+        return penalties.score(gapped_cost[1](penalties, letters, len(second) == 0), letters)
     var forward = Wavefront[1](Span(first), Span(second), penalties, FREE_START, False, False)
     var backward = Wavefront[1](Span(first), Span(second), penalties, FREE_START, False, True)
     var best = Meeting.none()
@@ -1174,7 +1299,7 @@ def wavefront_distance[
     var rows = len(second)
     if columns == 0 or rows == 0:
         var letters = unpaid_letters(columns, rows, ends_free, band)
-        var cost = gapped_cost[pieces](penalties, letters)
+        var cost = gapped_cost[pieces](penalties, letters, rows == 0)
         return cost if letters >= 0 and cost <= ceiling else -1
     var forward = Wavefront[pieces](
         first, second, penalties, FREE_START, False, False, ends_free.first_begin, ends_free.second_begin, band
@@ -1214,15 +1339,17 @@ def unpaid_letters(columns: Int, rows: Int, ends_free: EndsFree, band: Band) -> 
 
 
 @inline(.always)
-def gapped_cost[pieces: Int](penalties: Penalties, letters: Int, continued: Int = -1) -> Int:
-    """The cost of aligning `letters` letters against nothing: one gap of the cheaper piece, or none
-    for no letters; or, with `continued` a piece, the extensions alone of the gap the letters continue
-    if that is cheaper."""
+def gapped_cost[pieces: Int](penalties: Penalties, letters: Int, deleted: Bool, continued: Int = -1) -> Int:
+    """The cost of aligning `letters` letters against nothing, the first sequence's with `deleted`, else
+    the second's: one gap of the cheaper piece that way, or none for no letters; or, with `continued` a
+    gap layer, the extensions alone of the gap the letters continue if that is cheaper."""
     if letters == 0:
         return 0
-    var cost = penalties.opening + penalties.extension * letters
+    var layer = gap_layer(0, deleted)
+    var cost = penalties.opening_of(layer) + penalties.extension_of(layer) * letters
     comptime if pieces == 2:
-        cost = min(cost, penalties.opening2 + penalties.extension2 * letters)
+        var second = gap_layer(1, deleted)
+        cost = min(cost, penalties.opening_of(second) + penalties.extension_of(second) * letters)
     if continued >= 0:
         cost = min(cost, penalties.extension_of(continued) * letters)
     return cost
@@ -1247,7 +1374,7 @@ def trace(
     alignment layer that is a substitution from the front `x` back, or a gap layer at the same cost,
     entered after the matches back to its column when the cell lies past it. A gap cell came by a
     letter of its sequence from the diagonal beside it, opened from the alignment front `o + e` back
-    or extended from its own layer `e` back, at its piece's `o` and `e`. A cell on the first row or
+    or extended from its own layer `e` back, at its layer's `o` and `e`. A cell on the first row or
     column has one path left, a gap along it.
     """
     var x = penalties.mismatch
@@ -1281,8 +1408,8 @@ def trace(
                 entry = history.column(spent - x, k) + 1
             else:
                 # A gap layer's column is where its run opened, and one letter on per extension.
-                var o = penalties.opening_of(piece_of(source))
-                var e = penalties.extension_of(piece_of(source))
+                var o = penalties.opening_of(source)
+                var e = penalties.extension_of(source)
                 var opened = opened_bit(source)
                 var step = 1 if along_first(source) else -1
                 var gap_cost = spent
@@ -1310,7 +1437,6 @@ def trace(
             else:
                 current = source
         else:
-            var piece = piece_of(current)
             var opened = history.flag(spent, k) & opened_bit(current) != 0
             if along_first(current):
                 moves.append(UInt8(FIRST_GAP))
@@ -1328,10 +1454,10 @@ def trace(
                         moves.append(UInt8(FIRST_GAP))
                     return
             if opened:
-                spent -= penalties.opening_of(piece) + penalties.extension_of(piece)
+                spent -= penalties.opening_of(current) + penalties.extension_of(current)
                 current = ALIGNED
             else:
-                spent -= penalties.extension_of(piece)
+                spent -= penalties.extension_of(current)
 
 
 def canonical[
@@ -1392,9 +1518,9 @@ def solve[
         # An origin inside a gap along the letters left continues it without a second opening.
         var continued = -1
         if start != FREE_START and start < OPENING and along_first(start) == (rows == 0):
-            continued = piece_of(start)
+            continued = start
         var letters = unpaid_letters(columns, rows, EndsFree(), band)
-        var cost = gapped_cost[pieces](penalties, letters, continued)
+        var cost = gapped_cost[pieces](penalties, letters, rows == 0, continued)
         if letters < 0 or cost > ceiling:
             return -1
         for _ in range(columns):
@@ -1526,10 +1652,14 @@ def affine_penalties(mismatch: Int, opening: Int, extension: Int) raises Alignme
 
 
 def penalties_of(costs: Costs) raises AlignmentError -> Penalties:
-    """The wavefront's costs for `costs`, one gap piece or two, divided by their common factor."""
-    if costs.pieces() == 2:
-        return affine2p_penalties(costs.mismatch, costs.opening, costs.extension, costs.opening2, costs.extension2)
-    return affine_penalties(costs.mismatch, costs.opening, costs.extension)
+    """The wavefront's costs for `costs`, one gap piece or two, either way, divided by their common factor."""
+    return scaled_penalties(costs, 0, False)
+
+
+def rewarded_penalties(match_score: Int, costs: Costs) raises AlignmentError -> Penalties:
+    """The wavefront's costs for a match earning `match_score` under `costs`, the reward folded in (see
+    the module's notes), deletions and insertions each their own."""
+    return scaled_penalties(costs, match_score, True)
 
 
 def affine2p_penalties(
@@ -1758,7 +1888,7 @@ def free_ends_alignment[
         if not found:
             return None
         var letters = found.value()[1] - found.value()[0]
-        if gapped_cost[pieces](penalties, letters) > ceiling:
+        if gapped_cost[pieces](penalties, letters, rows == 0) > ceiling:
             return None
         start_column = found.value()[0] if rows == 0 else 0
         end_column = found.value()[1] if rows == 0 else 0
@@ -1924,9 +2054,7 @@ def extend[
     var search = Wavefront[pieces](first, second, penalties, FREE_START, False, reverse, 0, 0, band)
     var reward = penalties.reward
     var scale = penalties.scale
-    var cheapest = penalties.extension
-    comptime if pieces == 2:
-        cheapest = min(cheapest, penalties.extension2)
+    var cheapest = penalties.cheapest_extension[pieces]()
     var shortest = min(columns, rows)
     var window = penalties.window[pieces]()
     # Twice the best score so far, the empty alignment's nothing to begin with.
