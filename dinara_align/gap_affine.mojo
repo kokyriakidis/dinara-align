@@ -33,6 +33,7 @@ searches find keeping only their last few costs, and each piece is aligned the s
 """
 
 from std.bit import count_trailing_zeros
+from std.math import gcd
 
 from .errors import AlignmentError, ErrorKind
 from .slides import GATHERED_SLIDES, gathered_slides, slide
@@ -112,16 +113,6 @@ struct Penalties(ImplicitlyCopyable, TrivialRegisterPassable):
         return (self.reward * letters - cost * self.scale) // 2
 
 
-def greatest_common_divisor(first: Int, second: Int) -> Int:
-    var a = first
-    var b = second
-    while b != 0:
-        var rest = a % b
-        a = b
-        b = rest
-    return a
-
-
 def wavefront_penalties(
     substitutions: List[Scalar[DType.int8]], alphabet_size: Int, open: Int, extend: Int
 ) -> Optional[Penalties]:
@@ -148,7 +139,7 @@ def wavefront_penalties(
     var e = 2 * gap_extension + reward
     if x <= 0 or e <= 0 or o < 0:
         return None
-    var scale = greatest_common_divisor(greatest_common_divisor(x, e), o)
+    var scale = gcd(gcd(x, e), o)
     return Penalties(x // scale, o // scale, e // scale, scale, reward)
 
 
@@ -405,10 +396,10 @@ struct Fronts(Movable):
 def step[
     record: Bool
 ](
-    mismatched: Slot,
-    opening: Slot,
-    first_gaps: Slot,
-    second_gaps: Slot,
+    mismatched: ImmPointer[Int32, _],
+    opening: ImmPointer[Int32, _],
+    first_gaps: ImmPointer[Int32, _],
+    second_gaps: ImmPointer[Int32, _],
     aligned: Slot,
     opened_first: Slot,
     opened_second: Slot,
@@ -1115,7 +1106,7 @@ def affine_cigar(
             ErrorKind.INVALID_SCORING,
             String("costs ", mismatch, ", ", opening, ", ", extension, ": a mismatch and an extension must cost"),
         )
-    var scale = greatest_common_divisor(greatest_common_divisor(mismatch, extension), opening)
+    var scale = gcd(gcd(mismatch, extension), opening)
     var penalties = Penalties(mismatch // scale, opening // scale, extension // scale, scale, 0)
     var columns = first.byte_length()
     var rows = second.byte_length()
