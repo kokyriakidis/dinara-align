@@ -14,6 +14,11 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
   noise (measured best of five beside the owner's jobs). One sixteen-lane group did about as well on
   the long reads but cost up to 2% on short divergent pairs; on the M2 both were slower, so NEON and
   AVX2 keep one group.
+- [ ] **Three eight-lane groups at a time on AVX-512.** llvm-mca puts the paired sweep's steady loop at
+  24 cycles a column against a throughput bound of 11, latency-bound on each column's lane rotation,
+  and a third group, which still fits AVX-512's 32 registers unspilled, at 30 cycles for three: 15%
+  less a group. Measured on the Skylake-X it changed nothing within 1.5% on the long reads and pairs
+  (2026-10-06): the bands it needs, 24 words and more, are rare once pruning narrows them. Left.
 - [ ] **Seed setup.** Still 34 to 45% of a long pair's time on the Skylake-X and 9 to 32% on the M2
   (2026-10-06, `197656a`): on genvar 157 ms of inexact matching, 94 of local pruning and 19 of layers
   in 698; on 100 kbp pairs at 15% 27, 16 and 1 in 104; on ont-500k 64, 69 and 10 in 468.

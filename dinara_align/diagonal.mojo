@@ -13,6 +13,7 @@ of its distance, which becomes the band's first bound (see `band.band_doubling`)
 from std.bit import count_trailing_zeros
 from std.math import sqrt
 
+from .slides import GATHERED_SLIDES, gathered_slides, slide
 from .bit_parallel import (
     advance,
     CODE_PADDING,
@@ -281,24 +282,6 @@ def step_budget(columns: Int, step_tenths: Int, estimate: Int) -> Int:
     return setup + columns * step_tenths // 10 + columns * estimate // EDITS_PER_STEP
 
 
-@inline(.always)
-def slide_from(first: ImmPointer[UInt8, _], second: ImmPointer[UInt8, _], start: Int, diagonal: Int) -> Int:
-    """How far matches carry column `start` of `diagonal`, eight bases at a time, to the sentinels."""
-    var column = start
-    var lag = second.unsafe_offset(-diagonal)
-    var mismatches = (
-        first.unsafe_offset(column).unsafe_bitcast[UInt64]().unsafe_load()
-        ^ lag.unsafe_offset(column).unsafe_bitcast[UInt64]().unsafe_load()
-    )
-    while mismatches == 0:
-        column += 8
-        mismatches = (
-            first.unsafe_offset(column).unsafe_bitcast[UInt64]().unsafe_load()
-            ^ lag.unsafe_offset(column).unsafe_bitcast[UInt64]().unsafe_load()
-        )
-    return column + (Int(count_trailing_zeros(mismatches)) >> 3)
-
-
 @inline(.never)
 def step_front[
     measure: Bool
@@ -327,6 +310,7 @@ def step_front[
     var column_limit = Lanes(Int32(columns))
     var row_limit = Lanes(Int32(rows))
     var unreached = Lanes(UNREACHED_OFFSET)
+    var reaches = Lanes(0)
     var diagonal = low
     while diagonal <= high:
         var diagonals = lane_diagonals + Int32(diagonal)
@@ -338,10 +322,23 @@ def step_front[
         var deleted = below.lt(column_limit).select(below + 1, unreached)
         # A base of the second sequence against a gap, from the diagonal above.
         var inserted = (above - diagonals).le(row_limit).select(above, unreached)
-        current.unsafe_offset(diagonal).unsafe_store(max(substituted, max(deleted, inserted)))
+        var entry = max(substituted, max(deleted, inserted))
+        comptime if GATHERED_SLIDES:
+            # Each lane group slides as it is computed, both sequences' next eight bases gathered per lane.
+            # A lane past `high` reads the previous front past its padding, an older front's values,
+            # so it slides nothing: the gather would read wherever such a column points.
+            var inside = diagonals.le(Int32(high))
+            var slid = gathered_slides(first, second, inside.select(entry, unreached), diagonals)
+            current.unsafe_offset(diagonal).unsafe_store(slid)
+            comptime if measure:
+                reaches = max(reaches, inside.select(slid + slid - diagonals, Lanes(0)))
+        else:
+            current.unsafe_offset(diagonal).unsafe_store(entry)
         diagonal += FRONT_LANES
     for index in range(FRONT_PADDING):
         current[unsafe_offset=high + 1 + index] = UNREACHED_OFFSET
+    comptime if GATHERED_SLIDES:
+        return Int(reaches.reduce_max())
 
     # Then each slides over its matches, eight bases at a time; the sentinels stop it at the edge.
     # Two diagonals a turn, so their loads overlap and they share the loop's bookkeeping.
@@ -351,12 +348,12 @@ def step_front[
         var left = Int(current[unsafe_offset=diagonal])
         var right = Int(current[unsafe_offset=diagonal + 1])
         if left >= 0:
-            left = slide_from(first, second, left, diagonal)
+            left = slide(first, second, left, diagonal)
             current[unsafe_offset=diagonal] = Int32(left)
             comptime if measure:
                 furthest = max(furthest, 2 * left - diagonal)
         if right >= 0:
-            right = slide_from(first, second, right, diagonal + 1)
+            right = slide(first, second, right, diagonal + 1)
             current[unsafe_offset=diagonal + 1] = Int32(right)
             comptime if measure:
                 furthest = max(furthest, 2 * right - diagonal - 1)
@@ -364,7 +361,7 @@ def step_front[
     if diagonal <= high:
         var column = Int(current[unsafe_offset=diagonal])
         if column >= 0:
-            column = slide_from(first, second, column, diagonal)
+            column = slide(first, second, column, diagonal)
             current[unsafe_offset=diagonal] = Int32(column)
             comptime if measure:
                 furthest = max(furthest, 2 * column - diagonal)
