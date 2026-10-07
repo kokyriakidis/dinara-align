@@ -55,7 +55,7 @@ from pathlib import Path
 from urllib.request import urlretrieve
 
 import run
-from run import CACHE, HERE, RESULTS, RIVALS, build_note, cargo_runner, duration, fetch, mojo_runner, nightly_environment
+from run import CACHE, HERE, RESULTS, RIVALS, build_note, cargo_runner, duration, fetch, mojo_runner, nightly_environment, set_cpu
 
 DATA = CACHE / "data" / "pa-bench"
 PUBLISHED = CACHE / "astarpa2-evals"
@@ -455,7 +455,7 @@ def main() -> None:
     )
     parser.add_argument("--cpu", default="native", help="the CPU every tool is built for (default: the host's)")
     options = parser.parse_args()
-    run.set_cpu(options.cpu)
+    set_cpu(options.cpu)
     bases = int(options.bases)
 
     download()
