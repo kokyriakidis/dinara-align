@@ -450,8 +450,42 @@ def distances(
     next pair of the batch, longest first, as soon as it is free (see `longest_first`). A pair that
     fails raises, after the rest, the same error a serial loop would have raised first.
     """
+    var found = capped_distances(references, queries, costs, mode, band, Int.MAX, threads)
+    var results = List[Int](capacity=len(found))
+    for index in range(len(found)):
+        results.append(found[index].value())
+    return results^
+
+
+def distances(
+    references: List[String],
+    queries: List[String],
+    costs: Costs = Costs.edit(),
+    mode: Mode = Mode.GLOBAL,
+    *,
+    max_cost: Int,
+    band: Band = Band(),
+    threads: Optional[Int] = None,
+) raises AlignmentError -> List[Optional[Int]]:
+    """Every pair's `distance` under `max_cost`, None for a pair past it or with no alignment inside
+    `band`, the pairs spread over threads as the uncapped `distances` spreads them: a batch of
+    candidates filtered by cost, the far ones costing a fraction of their full search."""
+    return capped_distances(references, queries, costs, mode, band, max_cost, threads)
+
+
+def capped_distances(
+    references: List[String],
+    queries: List[String],
+    costs: Costs,
+    mode: Mode,
+    band: Band,
+    max_cost: Int,
+    threads: Optional[Int],
+) raises AlignmentError -> List[Optional[Int]]:
+    """Every pair's `cost_within`, on every thread asked for, longest first. With no cap, a pair no
+    alignment inside `band` fits raises as a failed pair does, in the batch's order."""
     var pairs = paired_length(references, queries)
-    var results = List[Int](length=pairs, fill=0)
+    var results = List[Optional[Int]](length=pairs, fill=None)
     if pairs == 0:
         return results^
     var workers = max(threads.or_else(hardware_threads()), 1)
@@ -463,21 +497,35 @@ def distances(
 
     def distance_worker(
         worker: Int,
-    ) {mut taken, imm order, imm references, imm queries, imm out, imm flags, imm pairs, imm costs, imm mode, imm band}:
+    ) {
+        mut taken,
+        imm order,
+        imm references,
+        imm queries,
+        imm out,
+        imm flags,
+        imm pairs,
+        imm costs,
+        imm mode,
+        imm band,
+        imm max_cost,
+    }:
         while True:
             var dealt = Int(taken.fetch_add(1))
             if dealt >= pairs:
                 return
             var index = order[dealt]
             try:
-                out[unsafe_offset=index] = distance(references[index], queries[index], costs, mode, band=band)
+                out[unsafe_offset=index] = cost_within(references[index], queries[index], costs, mode, band, max_cost)
             except:
                 flags[unsafe_offset=index] = True
 
     parallelize(distance_worker, min(workers, pairs), min(workers, pairs))
     for index in range(pairs):
         if failed[index]:
-            results[index] = distance(references[index], queries[index], costs, mode, band=band)
+            results[index] = cost_within(references[index], queries[index], costs, mode, band, max_cost)
+        if not results[index] and max_cost == Int.MAX:
+            raise outside(band)
     return results^
 
 
@@ -493,10 +541,47 @@ def alignments(
     threads: Optional[Int] = None,
 ) raises AlignmentError -> List[Alignment]:
     """Every pair's `align`, the pairs spread over threads as `distances` spreads them."""
+    var found = capped_alignments(references, queries, costs, mode, band, Int.MAX, ties, extended, threads)
+    var results = List[Alignment](capacity=len(found))
+    for index in range(len(found)):
+        results.append(found[index].take())
+    return results^
+
+
+def alignments(
+    references: List[String],
+    queries: List[String],
+    costs: Costs = Costs.edit(),
+    mode: Mode = Mode.GLOBAL,
+    *,
+    max_cost: Int,
+    band: Band = Band(),
+    ties: Ties = Ties.LEFT,
+    extended: Bool = True,
+    threads: Optional[Int] = None,
+) raises AlignmentError -> List[Optional[Alignment]]:
+    """Every pair's `align` under `max_cost`, None for a pair past it or with no alignment inside
+    `band`, the pairs spread over threads as `distances` spreads them."""
+    return capped_alignments(references, queries, costs, mode, band, max_cost, ties, extended, threads)
+
+
+def capped_alignments(
+    references: List[String],
+    queries: List[String],
+    costs: Costs,
+    mode: Mode,
+    band: Band,
+    max_cost: Int,
+    ties: Ties,
+    extended: Bool,
+    threads: Optional[Int],
+) raises AlignmentError -> List[Optional[Alignment]]:
+    """Every pair's `aligned_within`, on every thread asked for, longest first. With no cap, a pair no
+    alignment inside `band` fits raises as a failed pair does, in the batch's order."""
     var pairs = paired_length(references, queries)
-    var results = List[Alignment](capacity=pairs)
+    var results = List[Optional[Alignment]](capacity=pairs)
     for _ in range(pairs):
-        results.append(Alignment(0, 0, String(), 0, 0, 0, 0))
+        results.append(None)
     if pairs == 0:
         return results^
     var workers = max(threads.or_else(hardware_threads()), 1)
@@ -519,6 +604,7 @@ def alignments(
         imm costs,
         imm mode,
         imm band,
+        imm max_cost,
         imm ties,
         imm extended,
     }:
@@ -528,8 +614,8 @@ def alignments(
                 return
             var index = order[dealt]
             try:
-                out[unsafe_offset=index] = align(
-                    references[index], queries[index], costs, mode, band=band, ties=ties, extended=extended
+                out[unsafe_offset=index] = aligned_within(
+                    references[index], queries[index], costs, mode, band, max_cost, ties, extended
                 )
             except:
                 flags[unsafe_offset=index] = True
@@ -537,9 +623,11 @@ def alignments(
     parallelize(alignment_worker, min(workers, pairs), min(workers, pairs))
     for index in range(pairs):
         if failed[index]:
-            results[index] = align(
-                references[index], queries[index], costs, mode, band=band, ties=ties, extended=extended
+            results[index] = aligned_within(
+                references[index], queries[index], costs, mode, band, max_cost, ties, extended
             )
+        if not results[index] and max_cost == Int.MAX:
+            raise outside(band)
     return results^
 
 

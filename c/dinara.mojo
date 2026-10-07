@@ -11,9 +11,24 @@ be called from many threads at once, and reports failure as a negative result (`
 header).
 """
 
+from std.atomic import Atomic
 from std.ffi import external_call
 
-from dinara_align import Alignment, AlignmentError, Anchor, Band, Costs, ErrorKind, Mode, Ties, align, distance
+from max.algorithm import parallelize
+
+from dinara_align import (
+    Alignment,
+    AlignmentError,
+    Anchor,
+    Band,
+    Costs,
+    ErrorKind,
+    Mode,
+    Ties,
+    align,
+    distance,
+    hardware_threads,
+)
 
 comptime UNSUPPORTED_SYMBOLS = -1
 """A 0xFE or 0xFF byte, which the wavefront's sentinels are and UTF-8 never holds."""
@@ -122,27 +137,23 @@ def failure(error: AlignmentError) -> Int:
     return UNSUPPORTED_SYMBOLS
 
 
-@export("dinara_distance")
-def dinara_distance(
+def distance_code(
     reference: ImmPointer[UInt8, MutAnyOrigin],
     reference_length: Int,
     query: ImmPointer[UInt8, MutAnyOrigin],
     query_length: Int,
-    costs: OptionalPointer[Int, MutAnyOrigin],
-    mode: OptionalPointer[Int, MutAnyOrigin],
-    options: OptionalPointer[Int, MutAnyOrigin],
-) abi("C") -> Int:
-    """The least cost of aligning the query to the reference (see `distance`), or a negative code:
-    `ABOVE_MAX` when it passes a `max_cost` of zero or more, `OUTSIDE_BAND` when no alignment fits the
-    band, or under a cap `ABOVE_MAX` again. The options' `extended` and `right_ties` change nothing."""
+    costs: Costs,
+    mode: Mode,
+    asked: Options,
+) -> Int:
+    """One pair's least cost, or its code (see `dinara_distance`)."""
     if not plain_bytes(reference, reference_length) or not plain_bytes(query, query_length):
         return UNSUPPORTED_SYMBOLS
-    var asked = options_of(options)
     try:
         var first = sequence(reference, reference_length)
         var second = sequence(query, query_length)
         var cap = asked.max_cost if asked.max_cost >= 0 else Int.MAX
-        var found = distance(first, second, costs_of(costs), mode_of(mode), max_cost=cap, band=asked.band)
+        var found = distance(first, second, costs, mode, max_cost=cap, band=asked.band)
         if not found:
             # Under a cap, a band no alignment fits also leaves nothing within it.
             return OUTSIDE_BAND if cap == Int.MAX else ABOVE_MAX
@@ -151,41 +162,33 @@ def dinara_distance(
         return failure(error)
 
 
-@export("dinara_align")
-def dinara_align(
+def align_into(
     reference: ImmPointer[UInt8, MutAnyOrigin],
     reference_length: Int,
     query: ImmPointer[UInt8, MutAnyOrigin],
     query_length: Int,
-    costs: OptionalPointer[Int, MutAnyOrigin],
-    mode: OptionalPointer[Int, MutAnyOrigin],
-    options: OptionalPointer[Int, MutAnyOrigin],
+    costs: Costs,
+    mode: Mode,
+    asked: Options,
     alignment: MutPointer[Int, MutAnyOrigin],
-) abi("C") -> Int:
-    """An optimal alignment of the query to the reference (see `align`) into `alignment`, a
-    `dinara_alignment`: its cost, score, the reference's and the query's aligned spans, and the CIGAR,
-    NUL-terminated, in memory from C's `malloc` as its length is known only once the alignment is, which
-    the caller frees with `dinara_free`. Returns zero, or a negative code, and then no CIGAR."""
+) -> Int:
+    """One pair's optimal alignment into `alignment`, zero, or its code (see `dinara_align`)."""
     if not plain_bytes(reference, reference_length) or not plain_bytes(query, query_length):
         return UNSUPPORTED_SYMBOLS
-    var asked = options_of(options)
     try:
         var first = sequence(reference, reference_length)
         var second = sequence(query, query_length)
-        var wanted_mode = mode_of(mode)
         var found: Optional[Alignment]
-        if asked.max_cost < 0 or wanted_mode.kind != Mode.ENDS:
+        if asked.max_cost < 0 or mode.kind != Mode.ENDS:
             if asked.max_cost >= 0:
                 return INVALID_MODE
-            found = align(
-                first, second, costs_of(costs), wanted_mode, band=asked.band, ties=asked.ties, extended=asked.extended
-            )
+            found = align(first, second, costs, mode, band=asked.band, ties=asked.ties, extended=asked.extended)
         else:
             found = align(
                 first,
                 second,
-                costs_of(costs),
-                wanted_mode,
+                costs,
+                mode,
                 max_cost=asked.max_cost,
                 band=asked.band,
                 ties=asked.ties,
@@ -208,6 +211,171 @@ def dinara_align(
         return 0
     except error:
         return failure(error)
+
+
+comptime ALIGNMENT_FIELDS = 8
+"""`int64_t`s a `dinara_alignment` spans, its CIGAR's pointer one of them."""
+
+
+@export("dinara_distance")
+def dinara_distance(
+    reference: ImmPointer[UInt8, MutAnyOrigin],
+    reference_length: Int,
+    query: ImmPointer[UInt8, MutAnyOrigin],
+    query_length: Int,
+    costs: OptionalPointer[Int, MutAnyOrigin],
+    mode: OptionalPointer[Int, MutAnyOrigin],
+    options: OptionalPointer[Int, MutAnyOrigin],
+) abi("C") -> Int:
+    """The least cost of aligning the query to the reference (see `distance`), or a negative code:
+    `ABOVE_MAX` when it passes a `max_cost` of zero or more, `OUTSIDE_BAND` when no alignment fits the
+    band, or under a cap `ABOVE_MAX` again. The options' `extended` and `right_ties` change nothing."""
+    try:
+        return distance_code(
+            reference, reference_length, query, query_length, costs_of(costs), mode_of(mode), options_of(options)
+        )
+    except error:
+        return failure(error)
+
+
+@export("dinara_align")
+def dinara_align(
+    reference: ImmPointer[UInt8, MutAnyOrigin],
+    reference_length: Int,
+    query: ImmPointer[UInt8, MutAnyOrigin],
+    query_length: Int,
+    costs: OptionalPointer[Int, MutAnyOrigin],
+    mode: OptionalPointer[Int, MutAnyOrigin],
+    options: OptionalPointer[Int, MutAnyOrigin],
+    alignment: MutPointer[Int, MutAnyOrigin],
+) abi("C") -> Int:
+    """An optimal alignment of the query to the reference (see `align`) into `alignment`, a
+    `dinara_alignment`: its cost, score, the reference's and the query's aligned spans, and the CIGAR,
+    NUL-terminated, in memory from C's `malloc` as its length is known only once the alignment is, which
+    the caller frees with `dinara_free`. Returns zero, or a negative code, and then no CIGAR."""
+    try:
+        return align_into(
+            reference,
+            reference_length,
+            query,
+            query_length,
+            costs_of(costs),
+            mode_of(mode),
+            options_of(options),
+            alignment,
+        )
+    except error:
+        return failure(error)
+
+
+comptime CSequences = ImmPointer[ImmPointer[UInt8, MutAnyOrigin], MutAnyOrigin]
+"""A C array of sequences' first bytes."""
+
+
+def workers_for(pairs: Int, threads: Int) -> Int:
+    """Threads for a batch of `pairs`: `threads`, or every thread this process may use for zero or
+    fewer, and no more than there are pairs."""
+    var workers = threads if threads > 0 else hardware_threads()
+    return max(min(workers, pairs), 1)
+
+
+@export("dinara_distances")
+def dinara_distances(
+    pairs: Int,
+    references: CSequences,
+    reference_lengths: CInts,
+    queries: CSequences,
+    query_lengths: CInts,
+    costs: OptionalPointer[Int, MutAnyOrigin],
+    mode: OptionalPointer[Int, MutAnyOrigin],
+    options: OptionalPointer[Int, MutAnyOrigin],
+    threads: Int,
+    results: MutPointer[Int, MutAnyOrigin],
+) abi("C") -> Int:
+    """Every pair's `dinara_distance` into `results`, each its least cost or its own code, the pairs
+    spread over `threads` threads; zero, or a code that fails them all, and then no result written."""
+    var wanted_costs: Costs
+    var wanted_mode: Mode
+    try:
+        wanted_costs = costs_of(costs)
+        wanted_mode = mode_of(mode)
+    except error:
+        return failure(error)
+    var asked = options_of(options)
+
+    if pairs <= 0:
+        return 0
+    var taken = Atomic[Int64](0)
+
+    def work(slot: Int) {mut taken, imm}:
+        while True:
+            var index = Int(taken.fetch_add(1))
+            if index >= pairs:
+                return
+            results[unsafe_offset=index] = distance_code(
+                references[unsafe_offset=index],
+                reference_lengths[unsafe_offset=index],
+                queries[unsafe_offset=index],
+                query_lengths[unsafe_offset=index],
+                wanted_costs,
+                wanted_mode,
+                asked,
+            )
+
+    var workers = workers_for(pairs, threads)
+    parallelize(work, workers, workers)
+    return 0
+
+
+@export("dinara_alignments")
+def dinara_alignments(
+    pairs: Int,
+    references: CSequences,
+    reference_lengths: CInts,
+    queries: CSequences,
+    query_lengths: CInts,
+    costs: OptionalPointer[Int, MutAnyOrigin],
+    mode: OptionalPointer[Int, MutAnyOrigin],
+    options: OptionalPointer[Int, MutAnyOrigin],
+    threads: Int,
+    alignments: MutPointer[Int, MutAnyOrigin],
+    statuses: MutPointer[Int, MutAnyOrigin],
+) abi("C") -> Int:
+    """Every pair's `dinara_align` into `alignments`, an array of `dinara_alignment`, and its result
+    into `statuses`: zero and a CIGAR to free, or the pair's code and none. The pairs spread over
+    `threads` threads; returns zero, or a code that fails them all, and then nothing written."""
+    var wanted_costs: Costs
+    var wanted_mode: Mode
+    try:
+        wanted_costs = costs_of(costs)
+        wanted_mode = mode_of(mode)
+    except error:
+        return failure(error)
+    var asked = options_of(options)
+
+    if pairs <= 0:
+        return 0
+    var taken = Atomic[Int64](0)
+
+    def work(slot: Int) {mut taken, imm}:
+        while True:
+            var index = Int(taken.fetch_add(1))
+            if index >= pairs:
+                return
+            statuses[unsafe_offset=index] = align_into(
+                references[unsafe_offset=index],
+                reference_lengths[unsafe_offset=index],
+                queries[unsafe_offset=index],
+                query_lengths[unsafe_offset=index],
+                wanted_costs,
+                wanted_mode,
+                asked,
+                alignments.unsafe_offset(index * ALIGNMENT_FIELDS),
+            )
+
+    var workers = workers_for(pairs, threads)
+    parallelize(work, workers, workers)
+    return 0
 
 
 def copied(text: String) -> OptionalPointer[UInt8, MutAnyOrigin]:

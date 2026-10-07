@@ -35,10 +35,16 @@ var core = align("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC", costs, Mode.local(2))  
 var mapped = align("TTTTACGTACGTTTTT", "ACGTCGT", costs, Mode.INFIX.with_match_score(2))  # score 6
 # Two reads overlapping, every end gap free: the first's suffix on the second's prefix.
 var joined = align("TTTTTACGTACGT", "ACGTACGTGGGGG", costs, Mode.overlap(2))  # score 16, "8=", 5..13
-# A batch, over every thread.
+# What a SAM record holds: the CIGAR with the query's unaligned letters soft-clipped, and the NM and
+# MD tags.
+var sam_cigar = core.clipped_cigar(16)  # "4S8=4S"
+var edits = core.edit_distance("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC")  # NM: 0
+var md = core.mismatch_string("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC")  # MD: "8"
+# A batch, over every thread, and one under a cap, None for a pair past it.
 var references: List[String] = ["ACGTACGT", "TTGCA"]
 var queries: List[String] = ["ACGACGT", "TTGGCA"]
 var batch = distances(references, queries)  # [1, 1]
+var near = distances(references, queries, costs, max_cost=7)  # [None, None]: a gap of one costs 8
 ```
 
 | mode | the reference | the query |
@@ -77,7 +83,7 @@ from .alignment import GappedAlignment, colorize
 from .api import align, alignments, distance, distances, score, scores
 from .common import Device, DeviceScope, GpuSpecs, Placement, hardware_threads
 from .errors import AlignmentError, ErrorKind
-from .modes import Alignment, Anchor, Band, Costs, Mode, Ties
+from .modes import AlignedCounts, Alignment, Anchor, Band, Costs, Mode, Ties
 from .scoring import (
     DEFAULT_GAP_EXTENSION,
     DEFAULT_GAP_OPENING,

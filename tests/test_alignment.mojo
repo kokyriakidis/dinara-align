@@ -36,6 +36,7 @@ from dinara_align import (
     scores,
 )
 from dinara_align.alignment import AlignmentMode
+from dinara_align.cigar import cigar_runs
 from dinara_align.edit_distance import edit_distance as bit_parallel_distance
 from dinara_align.scored import best_end, end_of
 from dinara_align.seeds import SEED_COLUMNS
@@ -2359,6 +2360,146 @@ def test_traced_extension_is_the_searched_one() raises:
 
 
 # endregion Refusals
+
+# region Output
+
+
+def test_sam_fields_describe_the_alignment() raises:
+    """The clipped CIGAR, the edit count, the identity and the `MD` string of known alignments, and on
+    random ones the edit count is the unit cost of the alignment's own edits and the `MD` string
+    rebuilds the reference's aligned part from the query and the CIGAR."""
+    var costs = Costs.affine(4, 6, 2)
+    var core = align("GGGGACGTACGTGGGG", "CCCCACGTTCGTCC", costs, Mode.local(2))
+    assert_equal(core.cigar, "4=1X3=")
+    assert_equal(core.clipped_cigar(14), "4S4=1X3=2S")
+    assert_equal(core.clipped_cigar(14, hard=True), "4H4=1X3=2H")
+    assert_equal(core.edit_distance("GGGGACGTACGTGGGG", "CCCCACGTTCGTCC"), 1)
+    assert_equal(core.mismatch_string("GGGGACGTACGTGGGG", "CCCCACGTTCGTCC"), "4A3")
+    assert_equal(core.identity("GGGGACGTACGTGGGG", "CCCCACGTTCGTCC"), 7.0 / 8.0)
+    var gapped = align("ACGTTTGCAAC", "ACGTGCATAC", Costs.edit(), extended=False)
+    assert_equal(gapped.cigar, "3M2D4M1I2M")
+    assert_equal(gapped.clipped_cigar(10), "3M2D4M1I2M")
+    assert_equal(gapped.mismatch_string("ACGTTTGCAAC", "ACGTGCATAC"), "3^TT6")
+    var counted = gapped.counts("ACGTTTGCAAC", "ACGTGCATAC")
+    assert_equal(counted.matches, 9)
+    assert_equal(counted.mismatches, 0)
+    assert_equal(counted.deleted, 2)
+    assert_equal(counted.inserted, 1)
+    assert_equal(gapped.edit_distance("ACGTTTGCAAC", "ACGTGCATAC"), 3)
+    var empty = Alignment(0, 0, String(), 3, 3, 2, 2)
+    assert_equal(empty.identity("ACGT", "AC"), 0.0)
+    assert_equal(empty.mismatch_string("ACGT", "AC"), "0")
+    assert_equal(empty.clipped_cigar(2), "2S")
+    seed(83)
+    for trial in range(200):
+        var reference = random_sequence(0, 80, DNA_ALPHABET)
+        var query = mutated(reference, 0.2, 4) if trial % 2 == 0 else random_sequence(0, 80, DNA_ALPHABET)
+        var found = align(
+            reference, query, costs, Mode.INFIX if trial % 3 == 0 else Mode.GLOBAL, extended=trial % 5 != 0
+        )
+        var edits = found.edit_distance(reference, query)
+        var part = String(
+            StringSlice(unsafe_from_utf8=reference.as_bytes()[found.reference_start : found.reference_end])
+        )
+        var piece = String(StringSlice(unsafe_from_utf8=query.as_bytes()[found.query_start : found.query_end]))
+        assert_true(edits >= distance(part, piece))
+        assert_equal(rebuilt_reference(piece, found.cigar, found.mismatch_string(reference, query)), part)
+
+
+def test_capped_batches_match_single_pairs() raises:
+    """A batch under a cost cap is each pair's capped `distance` and `align`, None past the cap, on any
+    number of threads; with no cap a pair outside the band raises."""
+    seed(89)
+    var references = List[String]()
+    var queries = List[String]()
+    for trial in range(60):
+        var reference = random_sequence(0, 200, DNA_ALPHABET)
+        references.append(reference)
+        queries.append(mutated(reference, [0.0, 0.05, 0.3][trial % 3], 6))
+    var costs = Costs.affine(4, 6, 2)
+    for threads in [1, 3]:
+        var found = distances(references, queries, costs, max_cost=40, threads=threads)
+        var aligned = alignments(references, queries, costs, Mode.INFIX, max_cost=40, threads=threads)
+        for index in range(len(references)):
+            var expected = distance(references[index], queries[index], costs, max_cost=40)
+            assert_equal(Bool(found[index]), Bool(expected))
+            if expected:
+                assert_equal(found[index].value(), expected.value())
+            var single = align(references[index], queries[index], costs, Mode.INFIX, max_cost=40)
+            assert_equal(Bool(aligned[index]), Bool(single))
+            if single:
+                assert_equal(aligned[index].value().cigar, single.value().cigar)
+                assert_equal(aligned[index].value().reference_start, single.value().reference_start)
+    var outside: List[String] = ["ACGT", "ACGTACGT"]
+    var short: List[String] = ["ACGT", "AC"]
+    with assert_raises():
+        _ = distances(outside, short, costs, band=Band.around(1))
+    var capped = distances(outside, short, costs, max_cost=100, band=Band.around(1))
+    assert_equal(capped[0].value(), 0)
+    assert_false(Bool(capped[1]))
+
+
+def rebuilt_reference(query: String, cigar: String, md: String) raises -> String:
+    """The reference's aligned part from the query's, the CIGAR and the `MD` string, as SAM readers
+    rebuild it: the query's letters through matches and substitutions, those `MD` names replaced, and
+    `MD`'s deleted letters spliced in."""
+    # The `MD` string as a queue of events: matched letters, a substituted letter, or deleted letters.
+    var counts = List[Int]()
+    var letters = List[String]()
+    var deleted = List[Bool]()
+    var bytes = md.as_bytes()
+    var index = 0
+    while index < len(bytes):
+        var number = 0
+        while index < len(bytes) and bytes[index] >= UInt8(ord("0")) and bytes[index] <= UInt8(ord("9")):
+            number = number * 10 + Int(bytes[index] - UInt8(ord("0")))
+            index += 1
+        counts.append(number)
+        if index == len(bytes):
+            letters.append(String())
+            deleted.append(False)
+            break
+        var gap = bytes[index] == UInt8(ord("^"))
+        if gap:
+            index += 1
+        var start = index
+        while index < len(bytes) and (bytes[index] < UInt8(ord("0")) or bytes[index] > UInt8(ord("9"))):
+            index += 1
+            if not gap:
+                break
+        letters.append(String(StringSlice(unsafe_from_utf8=bytes[start:index])))
+        deleted.append(gap)
+    var out = String()
+    var row = 0
+    var event = 0
+    var left = counts[0]
+    var operations = cigar_runs(cigar)
+    for slot in range(len(operations[0])):
+        var operation = operations[0][slot]
+        var length = operations[1][slot]
+        if operation == UInt8(ord("I")):
+            row += length
+        elif operation == UInt8(ord("D")):
+            assert_true(deleted[event])
+            assert_equal(letters[event].byte_length(), length)
+            out += letters[event]
+            event += 1
+            left = counts[event]
+        else:
+            for _ in range(length):
+                if left > 0:
+                    out += String(StringSlice(unsafe_from_utf8=query.as_bytes()[row : row + 1]))
+                    left -= 1
+                else:
+                    assert_false(deleted[event])
+                    out += letters[event]
+                    event += 1
+                    left = counts[event]
+                row += 1
+    return out
+
+
+# endregion Output
 
 # region Device
 

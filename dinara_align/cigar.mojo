@@ -1,5 +1,3 @@
-# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
-# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """
 A CIGAR read back: its runs, reversed, priced and its matches counted, as the modes put alignments
 together from pieces (see `api`, `scored`). Writing one from traceback moves is the traceback's own
@@ -88,7 +86,6 @@ def cigar_cost(
     """What a CIGAR of `first` against `second` costs: its substitutions, `M` runs compared letter by
     letter, and each gap run at the cheaper piece, the second only with `opening2` not negative."""
     var runs = cigar_runs(cigar)
-    var mismatches = 0
     var gaps = 0
     for index in range(len(runs[0])):
         var letter = runs[0][index]
@@ -103,5 +100,4 @@ def cigar_cost(
         var letter = runs[0][index]
         if letter != UInt8(ord("D")) and letter != UInt8(ord("I")):
             aligned += runs[1][index]
-    mismatches = aligned - cigar_matches(first, second, cigar)
-    return mismatches * mismatch + gaps
+    return (aligned - cigar_matches(first, second, cigar)) * mismatch + gaps

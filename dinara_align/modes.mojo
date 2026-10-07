@@ -1,5 +1,3 @@
-# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
-# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """
 What an alignment is asked for: `Costs`, the price of each edit, and `Mode`, which ends of the two
 sequences it must reach; `Band` and `Ties` narrow and choose among the alignments, and `Alignment` is
@@ -331,3 +329,105 @@ struct Alignment(Copyable, Movable, Writable):
                     column += 1
                     row += 1
         return (String(unsafe_from_utf8=top^), String(unsafe_from_utf8=bottom^))
+
+    def clipped_cigar(self, query_length: Int, *, hard: Bool = False) -> String:
+        """The CIGAR as a SAM record writes it: the query's letters outside the span clipped, soft (`S`),
+        their letters kept in the record's sequence, or with `hard` hard (`H`), dropped from it. The
+        record's position is `reference_start + 1`; the reference's letters outside the span need no
+        operation."""
+        var clip = "H" if hard else "S"
+        var out = String()
+        if self.query_start > 0:
+            out += String(self.query_start, clip)
+        out += self.cigar
+        if query_length > self.query_end:
+            out += String(query_length - self.query_end, clip)
+        return out
+
+    def counts(self, reference: String, query: String) -> AlignedCounts:
+        """How many letters the alignment pairs equal and unequal, and leaves gapped either way, `M` runs
+        compared letter by letter."""
+        var first = reference.as_bytes()
+        var second = query.as_bytes()
+        var column = self.reference_start
+        var row = self.query_start
+        var counted = AlignedCounts(0, 0, 0, 0)
+        var runs = cigar_runs(self.cigar)
+        for index in range(len(runs[0])):
+            var letter = runs[0][index]
+            var length = runs[1][index]
+            if letter == UInt8(ord("D")):
+                counted.deleted += length
+                column += length
+            elif letter == UInt8(ord("I")):
+                counted.inserted += length
+                row += length
+            else:
+                for _ in range(length):
+                    if first[column] == second[row]:
+                        counted.matches += 1
+                    else:
+                        counted.mismatches += 1
+                    column += 1
+                    row += 1
+        return counted
+
+    def edit_distance(self, reference: String, query: String) -> Int:
+        """The alignment's edits, SAM's `NM` tag: its substitutions and gapped letters."""
+        var counted = self.counts(reference, query)
+        return counted.mismatches + counted.deleted + counted.inserted
+
+    def identity(self, reference: String, query: String) -> Float64:
+        """The matches over the alignment's columns, BLAST's identity: one for an exact match, zero for
+        an empty alignment."""
+        var counted = self.counts(reference, query)
+        var columns = counted.matches + counted.mismatches + counted.deleted + counted.inserted
+        if columns == 0:
+            return 0
+        return Float64(counted.matches) / Float64(columns)
+
+    def mismatch_string(self, reference: String, query: String) -> String:
+        """SAM's `MD` tag: the reference's letters the alignment does not match, each substitution's
+        letter after the matches before it and each deletion's after a `^`, so the reference can be
+        rebuilt from the query and the CIGAR; insertions leave no mark."""
+        var first = reference.as_bytes()
+        var second = query.as_bytes()
+        var column = self.reference_start
+        var row = self.query_start
+        var out = String()
+        var matched = 0
+        var runs = cigar_runs(self.cigar)
+        for index in range(len(runs[0])):
+            var letter = runs[0][index]
+            var length = runs[1][index]
+            if letter == UInt8(ord("I")):
+                row += length
+            elif letter == UInt8(ord("D")):
+                out += String(matched, "^")
+                matched = 0
+                out += String(StringSlice(unsafe_from_utf8=first[column : column + length]))
+                column += length
+            else:
+                for _ in range(length):
+                    if first[column] == second[row]:
+                        matched += 1
+                    else:
+                        out += String(matched)
+                        matched = 0
+                        out += String(StringSlice(unsafe_from_utf8=first[column : column + 1]))
+                    column += 1
+                    row += 1
+        out += String(matched)
+        return out
+
+
+@fieldwise_init
+struct AlignedCounts(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
+    """An alignment's columns by kind (see `Alignment.counts`)."""
+
+    var matches: Int
+    var mismatches: Int
+    var deleted: Int
+    """Reference letters against a gap, `D`."""
+    var inserted: Int
+    """Query letters against a gap, `I`."""

@@ -1,5 +1,3 @@
-# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
-# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """
 The modes that maximize a score under `Costs`, a match earning a reward: a local alignment,
 Smith-Waterman, and free ends with a reward, semi-global as parasail and hyalite count it, an overlap

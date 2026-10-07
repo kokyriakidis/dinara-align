@@ -1,6 +1,6 @@
 // The C API through its C++ wrapper (see c/dinara.h), and once through C's own structs: known distances
 // and CIGARs, empty sequences, symbols past ACGT, every mode, long pairs whose CIGAR spells the distance,
-// and four threads at once.
+// four threads at once, and batches.
 //
 //     pixi run test-c
 #include <cstdio>
@@ -217,6 +217,44 @@ int main() {
         });
     for (auto &thread : threads) thread.join();
     for (auto &worker : seen) CHECK(worker == distances);
+
+    // A batch over every thread, and over two, agrees with the pairs one at a time.
+    std::vector<std::string_view> firsts, seconds;
+    for (auto &pair : pairs) firsts.push_back(pair.first), seconds.push_back(pair.second);
+    CHECK(dinara::distances(firsts, seconds) == distances);
+    CHECK(dinara::distances(firsts, seconds, Costs::edit(), Mode::global(), {}, 2) == distances);
+    std::vector<dinara::Alignment> batch = dinara::alignments(firsts, seconds);
+    for (size_t index = 0; index < batch.size(); ++index) {
+        CHECK(batch[index].cost == distances[index]);
+        CHECK(batch[index].cigar == dinara::align(pairs[index].first, pairs[index].second).cigar);
+    }
+    // Under a cap, the pairs past it come back empty, the rest as they were.
+    int64_t cap = distances[1];
+    std::vector<std::optional<int64_t>> within = dinara::distances_within(firsts, seconds, cap);
+    std::vector<std::optional<dinara::Alignment>> capped_aligned = dinara::alignments_within(firsts, seconds, cap);
+    for (size_t index = 0; index < pairs.size(); ++index) {
+        CHECK(within[index].has_value() == (distances[index] <= cap));
+        CHECK(capped_aligned[index].has_value() == (distances[index] <= cap));
+        if (within[index]) CHECK(*within[index] == distances[index]);
+        if (capped_aligned[index]) CHECK(capped_aligned[index]->cigar == batch[index].cigar);
+    }
+    // A pair's own failure stays its own: a sentinel byte fails that pair alone.
+    std::vector<std::string_view> odd_firsts{"ACGT", "\xfe", "ACGA"}, odd_seconds{"ACGT", "A", "ACGT"};
+    std::vector<int64_t> codes(3);
+    dinara::detail::Batch odd(odd_firsts, odd_seconds);
+    CHECK(dinara_distances(3, odd.references.data(), odd.reference_lengths.data(), odd.queries.data(),
+                           odd.query_lengths.data(), nullptr, nullptr, nullptr, 0, codes.data()) == 0);
+    CHECK(codes[0] == 0 && codes[1] == DINARA_UNSUPPORTED_SYMBOLS && codes[2] == 1);
+    bool batch_refused = false;
+    try {
+        dinara::distances(odd_firsts, odd_seconds);
+    } catch (const dinara::UnsupportedSymbols &) {
+        batch_refused = true;
+    }
+    CHECK(batch_refused);
+    CHECK(dinara_distances(3, odd.references.data(), odd.reference_lengths.data(), odd.queries.data(),
+                           odd.query_lengths.data(), &c_free, nullptr, nullptr, 0, codes.data()) ==
+          DINARA_INVALID_COSTS);
 
     if (failures) {
         std::fprintf(stderr, "%d checks failed\n", failures);

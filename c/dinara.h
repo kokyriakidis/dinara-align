@@ -125,8 +125,28 @@ int64_t dinara_align(const char *reference, int64_t reference_length, const char
                      const dinara_costs *costs, const dinara_mode *mode, const dinara_options *options,
                      dinara_alignment *alignment);
 
-/* Frees a CIGAR that `dinara_align` returned; null is nothing to free. */
+/* Frees a CIGAR that `dinara_align` or `dinara_alignments` returned; null is nothing to free. */
 void dinara_free(char *cigar);
+
+/*
+ * A batch: pair `i` is `references[i]` of `reference_lengths[i]` bytes against `queries[i]` of
+ * `query_lengths[i]`, all under the same costs, mode and options, spread over `threads` threads, every
+ * thread the process may use for zero. Each thread takes the next pair as soon as it is free. Both
+ * return zero, or a DINARA_ code that fails the whole batch (costs or a mode no pair can take), and
+ * then write nothing.
+ */
+
+/* Every pair's `dinara_distance` into `results[i]`: its least cost, or its own DINARA_ code. */
+int64_t dinara_distances(int64_t pairs, const char *const *references, const int64_t *reference_lengths,
+                         const char *const *queries, const int64_t *query_lengths, const dinara_costs *costs,
+                         const dinara_mode *mode, const dinara_options *options, int64_t threads, int64_t *results);
+
+/* Every pair's `dinara_align` into `alignments[i]`, its result into `statuses[i]`: zero and a CIGAR
+ * the caller frees, or the pair's DINARA_ code and no CIGAR. */
+int64_t dinara_alignments(int64_t pairs, const char *const *references, const int64_t *reference_lengths,
+                          const char *const *queries, const int64_t *query_lengths, const dinara_costs *costs,
+                          const dinara_mode *mode, const dinara_options *options, int64_t threads,
+                          dinara_alignment *alignments, int64_t *statuses);
 
 #ifdef __cplusplus
 }
@@ -135,6 +155,7 @@ void dinara_free(char *cigar);
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace dinara {
 
@@ -260,6 +281,63 @@ inline std::optional<Alignment> align(std::string_view reference, std::string_vi
     dinara_free(found.cigar);
     return result;
 }
+
+/* A batch's sequences as C takes them: each sequence's first byte and its length. */
+struct Batch {
+    std::vector<const char *> references, queries;
+    std::vector<int64_t> reference_lengths, query_lengths;
+
+    Batch(const std::vector<std::string_view> &firsts, const std::vector<std::string_view> &seconds) {
+        if (firsts.size() != seconds.size()) throw std::invalid_argument("dinara: a batch's sides differ in length");
+        for (size_t index = 0; index < firsts.size(); ++index) {
+            references.push_back(firsts[index].data());
+            reference_lengths.push_back(static_cast<int64_t>(firsts[index].size()));
+            queries.push_back(seconds[index].data());
+            query_lengths.push_back(static_cast<int64_t>(seconds[index].size()));
+        }
+    }
+    int64_t size() const { return static_cast<int64_t>(references.size()); }
+};
+
+inline std::vector<int64_t> distances(const Batch &batch, const Costs &costs, const Mode &mode, Band band,
+                                      int64_t max_cost, int threads) {
+    dinara_costs c = c_costs(costs);
+    dinara_options options{band.low, band.high, max_cost, 1, 0};
+    std::vector<int64_t> results(batch.references.size());
+    check(dinara_distances(batch.size(), batch.references.data(), batch.reference_lengths.data(),
+                           batch.queries.data(), batch.query_lengths.data(), &c, &mode.fields, &options, threads,
+                           results.data()));
+    return results;
+}
+
+inline std::vector<std::optional<Alignment>> alignments(const Batch &batch, const Costs &costs, const Mode &mode,
+                                                        Band band, int64_t max_cost, Ties ties, bool extended,
+                                                        int threads) {
+    dinara_costs c = c_costs(costs);
+    dinara_options options{band.low, band.high, max_cost, extended ? 1 : 0, ties == Ties::right ? 1 : 0};
+    std::vector<dinara_alignment> found(batch.references.size());
+    std::vector<int64_t> statuses(batch.references.size());
+    check(dinara_alignments(batch.size(), batch.references.data(), batch.reference_lengths.data(),
+                            batch.queries.data(), batch.query_lengths.data(), &c, &mode.fields, &options, threads,
+                            found.data(), statuses.data()));
+    std::vector<std::optional<Alignment>> results;
+    int64_t failed = 0;
+    for (size_t index = 0; index < found.size(); ++index) {
+        if (statuses[index] != 0) {
+            if (statuses[index] != DINARA_ABOVE_MAX && !failed) failed = statuses[index];
+            results.emplace_back();
+            continue;
+        }
+        results.push_back(Alignment{found[index].cost, found[index].score,
+                                    std::string(found[index].cigar, static_cast<size_t>(found[index].cigar_length)),
+                                    found[index].reference_start, found[index].reference_end,
+                                    found[index].query_start, found[index].query_end});
+        dinara_free(found[index].cigar);
+    }
+    // Every CIGAR freed first, the first failure is raised as a single pair's would be.
+    if (failed) check(failed);
+    return results;
+}
 }  // namespace detail
 
 /* The least cost of aligning the query to the reference. */
@@ -291,6 +369,58 @@ inline std::optional<Alignment> align_within(std::string_view reference, std::st
                                              Band band = {}, Ties ties = Ties::left, bool extended = true) {
     if (max_cost < 0) return std::nullopt;
     return detail::align(reference, query, costs, mode, band, max_cost, ties, extended);
+}
+
+/* Every pair's least cost, `firsts[i]` against `seconds[i]`, over `threads` threads (zero: every
+ * thread); raises as the first failing pair's `distance` would. */
+inline std::vector<int64_t> distances(const std::vector<std::string_view> &references,
+                                      const std::vector<std::string_view> &queries,
+                                      const Costs &costs = Costs::edit(), const Mode &mode = Mode::global(),
+                                      Band band = {}, int threads = 0) {
+    std::vector<int64_t> results = detail::distances(detail::Batch(references, queries), costs, mode, band, -1, threads);
+    for (int64_t result : results) detail::check(result);
+    return results;
+}
+
+/* Every pair's least cost, or nothing for a pair past `max_cost`. */
+inline std::vector<std::optional<int64_t>> distances_within(const std::vector<std::string_view> &references,
+                                                            const std::vector<std::string_view> &queries,
+                                                            int64_t max_cost, const Costs &costs = Costs::edit(),
+                                                            const Mode &mode = Mode::global(), Band band = {},
+                                                            int threads = 0) {
+    std::vector<std::optional<int64_t>> results;
+    if (max_cost < 0) return std::vector<std::optional<int64_t>>(references.size());
+    for (int64_t result :
+         detail::distances(detail::Batch(references, queries), costs, mode, band, max_cost, threads)) {
+        detail::check(result);
+        results.push_back(result == DINARA_ABOVE_MAX ? std::nullopt : std::optional<int64_t>(result));
+    }
+    return results;
+}
+
+/* Every pair's optimal alignment over `threads` threads; raises as the first failing pair's `align` would. */
+inline std::vector<Alignment> alignments(const std::vector<std::string_view> &references,
+                                         const std::vector<std::string_view> &queries,
+                                         const Costs &costs = Costs::edit(), const Mode &mode = Mode::global(),
+                                         Band band = {}, Ties ties = Ties::left, bool extended = true,
+                                         int threads = 0) {
+    std::vector<Alignment> results;
+    for (auto &found :
+         detail::alignments(detail::Batch(references, queries), costs, mode, band, -1, ties, extended, threads))
+        results.push_back(std::move(*found));
+    return results;
+}
+
+/* Every pair's optimal alignment, or nothing for a pair whose cost passes `max_cost`. */
+inline std::vector<std::optional<Alignment>> alignments_within(const std::vector<std::string_view> &references,
+                                                               const std::vector<std::string_view> &queries,
+                                                               int64_t max_cost, const Costs &costs = Costs::edit(),
+                                                               const Mode &mode = Mode::global(), Band band = {},
+                                                               Ties ties = Ties::left, bool extended = true,
+                                                               int threads = 0) {
+    if (max_cost < 0) return std::vector<std::optional<Alignment>>(references.size());
+    return detail::alignments(detail::Batch(references, queries), costs, mode, band, max_cost, ties, extended,
+                              threads);
 }
 
 }  // namespace dinara
