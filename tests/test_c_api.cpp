@@ -58,8 +58,8 @@ static std::string mutated(const std::string &text, double rate, std::mt19937 &r
 int main() {
     CHECK(dinara::edit_distance("ACGTACGTTTGCA", "ACGTCGTTTTGCA") == 2);
     dinara::Alignment aligned = dinara::edit_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA");
-    CHECK(aligned.distance == 2 && aligned.cigar == "4=1D5=1I3=");
-    CHECK(dinara::edit_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", false).cigar == "4M1D5M1I3M");
+    CHECK(aligned.distance == 2 && aligned.cigar == "4=1D2=1I6=");
+    CHECK(dinara::edit_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", false).cigar == "4M1D2M1I6M");
 
     CHECK(dinara::edit_cigar("", "ACG").cigar == "3I");
     CHECK(dinara::edit_cigar("ACG", "").cigar == "3D");
@@ -125,6 +125,7 @@ int main() {
     // A gap in a run of repeats: at its left end by default, as minimap2 places it, at its right end
     // under WFA2-lib's rule.
     CHECK(dinara::affine_cigar("ACGTTTTACG", "ACGTTTACG", 4, 6, 2).cigar == "3=1D6=");
+    CHECK(dinara::edit_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", true, dinara::Ties::right).cigar == "4=1D5=1I3=");
     CHECK(dinara::affine_cigar("ACGTTTTACG", "ACGTTTACG", 4, 6, 2, true, {}, {}, dinara::Ties::right).cigar ==
           "6=1D3=");
     // An extension stops where the read stops matching, from either end.

@@ -70,14 +70,21 @@ def dinara_edit_cigar(
     second: ImmPointer[UInt8, MutAnyOrigin],
     second_length: Int,
     extended: Int32,
+    right_ties: Int32,
     cigar: MutPointer[MutPointer[UInt8, MutAnyOrigin], MutAnyOrigin],
     cigar_length: MutPointer[Int, MutAnyOrigin],
 ) abi("C") -> Int:
     """The global edit distance and an optimal alignment's CIGAR, `=` and `X` when `extended` is nonzero,
-    else `M`. The CIGAR, NUL-terminated, is allocated with C's `malloc`, as its length is known only once
+    else `M`; of equally good alignments the one with indels placed left, or with `right_ties` nonzero
+    right, as WFA2-lib's edit CIGAR. The CIGAR, NUL-terminated, is allocated with C's `malloc`, as its length is known only once
     the alignment is, and goes to the caller, who frees it with `dinara_free`."""
     try:
-        var aligned = edit_cigar(sequence(first, first_length), sequence(second, second_length), extended != 0)
+        var aligned = edit_cigar(
+            sequence(first, first_length),
+            sequence(second, second_length),
+            extended != 0,
+            Ties.RIGHT if right_ties != 0 else Ties.LEFT,
+        )
         hand_over(aligned.cigar, cigar, cigar_length)
         return aligned.distance
     except:

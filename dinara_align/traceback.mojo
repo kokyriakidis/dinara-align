@@ -4,14 +4,15 @@
 # Ported from `pa-bitpacking` in A*PA (https://github.com/RagnarGrootKoerkamp/astar-pairwise-aligner,
 # commit bf2e14e), by Ragnar Groot Koerkamp and Pesho Ivanov, itself translated from Edlib.
 """
-An optimal alignment from a band's recorded tile edges, retraced a tile at a time from the corner (see
-`trace_back`), and written out as two gapped rows or as a CIGAR.
+An optimal alignment from a band's recorded tile edges, retraced a tile at a time from the corner by
+WFA2-lib's rule for ties (see `trace_back`), and written out as two gapped rows or as a CIGAR.
 """
 
-from std.bit import count_leading_zeros, count_trailing_zeros
+from std.bit import count_trailing_zeros
 from std.math import ceildiv, clamp
 
 from .alignment import AlignmentResult
+from .diagonal import slide_forward
 from .bit_parallel import (
     advance,
     ALL_ONES,
@@ -25,76 +26,44 @@ from .bit_parallel import (
     WORD_BITS,
     word_value,
 )
-from .seeds import differing
 
 
 comptime WAVEFRONT_FLOOR = 32
-"""The fewest edits a tile's wavefront search may spend before the tile is recomputed instead."""
+"""The fewest costs a tile's forward search may climb before the tile is recomputed instead."""
+
+comptime TILE_WORK = 1 << 16
+"""Diagonals a tile's forward search may step before it hands the tile to the recompute."""
 
 
-comptime TRACE_PADDING = 2
-"""Unreached diagonals stored either side of a traceback front, so the next reads its neighbours unchecked."""
+struct TileFronts(Movable):
+    """A tile's forward search, kept across tiles so a tile allocates nothing: for each cost from
+    `base`, the furthest column every live diagonal reaches, from `starts[s]` of `columns`."""
 
-
-comptime FRONT_DROP = 20
-"""
-How far behind the furthest front, in column plus row, a front may fall before the search drops it;
-about ten diagonal steps, A*PA2's `fr_drop`.
-"""
-
-
-struct Wavefronts(Movable):
-    """The wavefront search's buffers, kept across tiles so a tile allocates nothing.
-
-    Cost `s` keeps its diagonals from offset `lows[s]` from the start's, padding included, at position
-    `starts[s]` of the flat buffers on.
-    """
-
-    var landed: List[Int]
-    var reached: List[Int]
-    var how: List[UInt8]
+    var columns: List[Int]
     var starts: List[Int]
     var lows: List[Int]
+    var highs: List[Int]
+    var entries: List[Int]
+    """Where each cost's left-edge starts begin in `order`, by cost from `base`."""
+    var entry_diagonals: List[Int]
+    var entry_costs: List[Int]
+    var order: List[Int]
+    """The starts' diagonals sorted by cost."""
+    var placed: List[Int]
 
     def __init__(out self):
-        # Room for a typical tile up front: growing from empty cost more than the search itself.
-        comptime DIAGONALS = 1024
-        comptime COSTS = 64
-        self.landed = List[Int](capacity=DIAGONALS)
-        self.reached = List[Int](capacity=DIAGONALS)
-        self.how = List[UInt8](capacity=DIAGONALS)
-        self.starts = List[Int](capacity=COSTS)
-        self.lows = List[Int](capacity=COSTS)
+        self.columns = List[Int](capacity=1024)
+        self.starts = List[Int](capacity=64)
+        self.lows = List[Int](capacity=64)
+        self.highs = List[Int](capacity=64)
+        self.entries = List[Int](capacity=64)
+        self.entry_diagonals = List[Int](capacity=256)
+        self.entry_costs = List[Int](capacity=256)
+        self.order = List[Int](capacity=256)
+        self.placed = List[Int](capacity=64)
 
 
-@inline(.always)
-def slide(
-    first: ImmPointer[UInt8, _], second: ImmPointer[UInt8, _], column: Int, diagonal: Int, first_column: Int
-) -> Int:
-    """How far back along a diagonal matches carry `column`, eight bases at a time while both have eight.
-
-    The eight bases ending just before the position are loaded from each sequence as one word; their
-    XOR is zero in every matching byte, so the matching run is the count of zero bytes from the top.
-    """
-    var at = column
-    var row = at + diagonal
-    while at - first_column >= 8 and row >= 8:
-        var mismatches = (
-            first.unsafe_offset(at - 8).unsafe_bitcast[UInt64]().unsafe_load()
-            ^ second.unsafe_offset(row - 8).unsafe_bitcast[UInt64]().unsafe_load()
-        )
-        if mismatches != 0:
-            var run = Int(count_leading_zeros(mismatches)) // 8
-            return at - run
-        at -= 8
-        row -= 8
-    while at > first_column and row > 0 and first[unsafe_offset=at - 1] == second[unsafe_offset=row - 1]:
-        at -= 1
-        row -= 1
-    return at
-
-
-def wavefront_segment(
+def forward_segment(
     profile: Profile,
     edge: Edge,
     first_column: Int,
@@ -102,185 +71,197 @@ def wavefront_segment(
     end_row: Int,
     score: Int,
     limit: Int,
-    mut fronts: Wavefronts,
+    mut fronts: TileFronts,
     mut moves: List[UInt8],
 ) -> Int:
-    """Traces from `(end_column, end_row)`, scoring `score`, back to the tile's left edge by wavefront.
+    """Traces from `(end_column, end_row)`, scoring `score`, back to the tile's left edge by WFA2-lib's
+    rule, a wavefront grown forward across the tile from its left edge; appends the moves right to
+    left and returns the left-edge row, or -1 when the search would cost more than `limit` costs or
+    `TILE_WORK` diagonals, and the tile is recomputed instead.
 
-    Diagonal transition run backwards, as A*PA2's trace does: for each cost `s`, the furthest a path
-    of `s` edits reaches back along every live diagonal, sliding over matches for free. A path is
-    accepted only when it reaches the left edge at a row whose score plus `s` is `score`, so it is
-    optimal and joins the trace exactly.
-
-    As in A*PA2, the live diagonals shrink from both ends while the outermost front has fallen more
-    than `FRONT_DROP` behind the furthest or already stands on the left edge, and the search gives up
-    when half its budget has not carried any front halfway across. Each only ever turns a success
-    into a miss, and a miss falls back to recomputing the tile. Appends the segment's moves right to
-    left and returns its left-edge row, or -1 on a miss.
+    Each left-edge row starts at its recorded score, which is exact on every optimal path and never
+    below the truth elsewhere; so a front, the furthest column reached at no more than its cost,
+    never reaches past the truth, and reaches it wherever an optimal path passes. A diagonal is kept
+    only while its cost plus how far it lies from the traced cell's leaves room to get there, and
+    only rows that could start such a path start at all: walking out from the traced cell's
+    diagonal, a row's score plus its distance never falls, so the first row too dear ends the walk.
+    The backtrace then takes at each cell the furthest source an optimal path passes, as a
+    wavefront's backtrace does, and stops where its matches reach the left edge.
     """
     var first = profile.column_codes.unsafe_ptr()
     var second = profile.row_codes.unsafe_ptr()
-    var home = end_row - end_column
-    # Unreached reads as a column far left of any tile, so every move from it fails its own test
-    # unchecked; each stored row carries `TRACE_PADDING` of it either side, so the next row reads its
-    # neighbours without range checks.
+    var target = end_column - end_row
     comptime UNREACHED = -(1 << 40)
-    comptime NONE = Int.MAX
+    var low_row = edge.low_row
+    var high_row = min(edge.high_row, end_row)
+    if low_row > high_row:
+        return -1
+    # The left-edge rows a path to the traced cell within `score` could start from.
+    fronts.entry_diagonals.clear()
+    fronts.entry_costs.clear()
+    var base = Int.MAX
+    var middle = clamp(first_column - target, low_row, high_row)
+    var row = middle
+    while row >= low_row:
+        var cost = edge.score(row)
+        if cost + abs(first_column - row - target) > score:
+            break
+        fronts.entry_diagonals.append(first_column - row)
+        fronts.entry_costs.append(cost)
+        base = min(base, cost)
+        row -= 1
+    row = middle + 1
+    while row <= high_row:
+        var cost = edge.score(row)
+        if cost + abs(first_column - row - target) > score:
+            break
+        fronts.entry_diagonals.append(first_column - row)
+        fronts.entry_costs.append(cost)
+        base = min(base, cost)
+        row += 1
+    var levels = score - base + 1
+    if len(fronts.entry_costs) == 0 or levels > limit:
+        return -1
+    # The starts grouped by cost, a counting sort.
+    var count = len(fronts.entry_costs)
+    fronts.entries.resize(levels + 1, 0)
+    for level in range(levels + 1):
+        fronts.entries[level] = 0
+    for index in range(count):
+        fronts.entries[fronts.entry_costs[index] - base + 1] += 1
+    for level in range(levels):
+        fronts.entries[level + 1] += fronts.entries[level]
+    fronts.order.resize(count, 0)
+    fronts.placed.resize(levels, 0)
+    for level in range(levels):
+        fronts.placed[level] = 0
+    for index in range(count):
+        var level = fronts.entry_costs[index] - base
+        fronts.order[fronts.entries[level] + fronts.placed[level]] = fronts.entry_diagonals[index]
+        fronts.placed[level] += 1
+    var order = fronts.order.unsafe_ptr()
 
-    fronts.landed.clear()
-    fronts.reached.clear()
-    fronts.how.clear()
+    fronts.columns.clear()
     fronts.starts.clear()
     fronts.lows.clear()
+    fronts.highs.clear()
 
     @inline(.always)
-    def ends_here(column: Int, offset: Int, cost: Int) {imm edge, imm first_column, imm score, imm home} -> Bool:
-        if column != first_column:
-            return False
-        var row = column + home + offset
-        return row >= edge.low_row and row <= edge.high_row and edge.score(row) + cost == score
+    def at(fronts: TileFronts, level: Int, diagonal: Int) -> Int:
+        if level < 0 or diagonal < fronts.lows[level] or diagonal > fronts.highs[level]:
+            return UNREACHED
+        return fronts.columns[fronts.starts[level] + diagonal - fronts.lows[level]]
 
-    @inline(.always)
-    def row(mut fronts: Wavefronts, low: Int, high: Int) -> Int:
-        """Lays out the next cost's row over diagonals `low ..= high`, its padding unreached, and
-        returns where the row's diagonal zero would sit, so diagonal `k` is that plus `k`."""
-        var start = len(fronts.reached)
-        var width = high - low + 1 + 2 * TRACE_PADDING
+    comptime PAD = 2
+    var work = 0
+    var low = Int.MAX
+    var high = Int.MIN
+    for level in range(levels):
+        var cost = base + level
+        var new_low = low - 1
+        var new_high = high + 1
+        for index in range(fronts.entries[level], fronts.entries[level + 1]):
+            new_low = min(new_low, order[unsafe_offset=index])
+            new_high = max(new_high, order[unsafe_offset=index])
+        # Room to reach the traced cell: no more diagonals off than costs left.
+        new_low = max(new_low, target - (score - cost))
+        new_high = min(new_high, target + (score - cost))
+        if new_low > new_high:
+            fronts.starts.append(len(fronts.columns) + PAD)
+            fronts.lows.append(1)
+            fronts.highs.append(0)
+            low = Int.MAX
+            high = Int.MIN
+            continue
+        work += new_high - new_low + 1
+        if work > TILE_WORK:
+            return -1
+        # Each row carries `PAD` unreached diagonals either side, so the next reads its neighbours unchecked.
+        var start = len(fronts.columns) + PAD
+        fronts.columns.resize(start + new_high - new_low + 1 + PAD, UNREACHED)
+        for index in range(start - PAD, start):
+            fronts.columns[index] = UNREACHED
         fronts.starts.append(start)
-        fronts.lows.append(low - TRACE_PADDING)
-        fronts.reached.resize(unsafe_uninit_length=start + width)
-        fronts.landed.resize(unsafe_uninit_length=start + width)
-        fronts.how.resize(unsafe_uninit_length=start + width)
-        var zero = start + TRACE_PADDING - low
-        var reached = fronts.reached.unsafe_ptr()
-        for index in range(1, TRACE_PADDING + 1):
-            reached[unsafe_offset=zero + low - index] = UNREACHED
-            reached[unsafe_offset=zero + high + index] = UNREACHED
-        return zero
-
-    var finish_cost = -1
-    var finish_offset = 0
-    var zero = row(fronts, 0, 0)
-    fronts.landed[zero] = end_column
-    fronts.reached[zero] = slide(first, second, end_column, home, first_column)
-    fronts.how[zero] = DIAGONAL
-    if ends_here(fronts.reached[zero], 0, 0):
-        finish_cost = 0
-    var low = 0
-    var high = 0
-    var cost = 1
-    var halfway = (first_column + end_column) // 2
-    while finish_cost < 0 and cost <= limit:
-        low -= 1
-        high += 1
-        var current_zero = row(fronts, low, high)
-        # The previous row is laid out from its own first stored diagonal, unreached outside its live ones.
-        var previous = fronts.reached.unsafe_ptr().unsafe_offset(zero)
-        var current = fronts.reached.unsafe_ptr().unsafe_offset(current_zero)
-        var landed = fronts.landed.unsafe_ptr().unsafe_offset(current_zero)
-        var how = fronts.how.unsafe_ptr().unsafe_offset(current_zero)
-        zero = current_zero
-        var furthest = NONE
-        var nearest_column = NONE
-        for offset in range(low, high + 1):
-            var same = previous[unsafe_offset=offset]
-            var below = previous[unsafe_offset=offset - 1]
-            var above = previous[unsafe_offset=offset + 1]
-            var best = NONE
-            var move = DIAGONAL
-            var diagonal = home + offset
-            # Substitution, along the same diagonal.
-            if same > first_column and same + diagonal > 0:
-                best = same - 1
-            # A base of the first sequence against a gap, from the diagonal below.
-            if below > first_column and below - 1 < best:
-                best = below - 1
-                move = LEFT
-            # A base of the second sequence against a gap, from the diagonal above.
-            if above + diagonal + 1 > 0 and above < best:
-                best = above
-                move = UP
-            how[unsafe_offset=offset] = move
-            if best == NONE:
-                landed[unsafe_offset=offset] = UNREACHED
-                current[unsafe_offset=offset] = UNREACHED
+        fronts.lows.append(new_low)
+        fronts.highs.append(new_high)
+        var row_values = fronts.columns.unsafe_ptr().unsafe_offset(start - new_low)
+        var previous = row_values
+        var previous_low = 1
+        var previous_high = 0
+        if level > 0 and fronts.lows[level - 1] <= fronts.highs[level - 1]:
+            previous_low = fronts.lows[level - 1]
+            previous_high = fronts.highs[level - 1]
+            previous = fronts.columns.unsafe_ptr().unsafe_offset(fronts.starts[level - 1] - previous_low)
+        for diagonal in range(new_low, new_high + 1):
+            # The furthest column at no more than the cost before, then one more edit from it.
+            var same = UNREACHED
+            var below = UNREACHED
+            var above = UNREACHED
+            if diagonal >= previous_low - 1 and diagonal <= previous_high + 1:
+                same = previous[unsafe_offset=diagonal]
+                below = previous[unsafe_offset=diagonal - 1]
+                above = previous[unsafe_offset=diagonal + 1]
+            var reach = same
+            var best = UNREACHED
+            if same >= first_column and same < end_column and same - diagonal < end_row:
+                best = same + 1
+            if below >= first_column and below < end_column:
+                best = max(best, below + 1)
+            if above >= first_column and above - diagonal - 1 < end_row:
+                best = max(best, above)
+            if best >= first_column:
+                var stop = min(end_column, end_row + diagonal)
+                reach = max(reach, min(slide_forward(first, second, best, best - diagonal), stop))
+            row_values[unsafe_offset=diagonal] = reach
+        for index in range(fronts.entries[level], fronts.entries[level + 1]):
+            var diagonal = order[unsafe_offset=index]
+            if diagonal < new_low or diagonal > new_high:
                 continue
-            landed[unsafe_offset=offset] = best
-            var slid = slide(first, second, best, diagonal, first_column)
-            current[unsafe_offset=offset] = slid
-            furthest = min(furthest, 2 * slid - offset)
-            nearest_column = min(nearest_column, slid)
-            if finish_cost < 0 and ends_here(slid, offset, cost):
-                finish_cost = cost
-                finish_offset = offset
-        if finish_cost >= 0:
-            break
-        if furthest == NONE:
-            return -1
-        if 2 * cost >= limit and nearest_column > halfway:
-            return -1
-
-        @inline(.always)
-        def dropped(offset: Int) {imm current, imm furthest, imm first_column} -> Bool:
-            var at = current[unsafe_offset=offset]
-            return at <= first_column or 2 * at - offset > furthest + FRONT_DROP
-
-        # Shrink the live diagonals from both ends, marking the dropped ones unreached in place.
-        var new_low = low
-        var new_high = high
-        while new_low < new_high and dropped(new_low):
-            current[unsafe_offset=new_low] = UNREACHED
-            new_low += 1
-        while new_high > new_low and dropped(new_high):
-            current[unsafe_offset=new_high] = UNREACHED
-            new_high -= 1
-        if dropped(new_low):
-            return -1
+            var stop = min(end_column, end_row + diagonal)
+            var slid = min(slide_forward(first, second, first_column, first_column - diagonal), stop)
+            row_values[unsafe_offset=diagonal] = max(row_values[unsafe_offset=diagonal], slid)
         low = new_low
         high = new_high
-        cost += 1
-    if finish_cost < 0:
+    if at(fronts, levels - 1, target) != end_column:
         return -1
 
-    # Walk the costs back down, left to right: once to size the segment, an edit per cost plus the
-    # matches each slid over, then again writing its moves from the block's far end, since they go
-    # after the moves already traced right to left.
-    var length = finish_cost
-    var offset = finish_offset
-    var at_cost = finish_cost
-    while True:
-        var index = fronts.starts[at_cost] + offset - fronts.lows[at_cost]
-        length += fronts.landed[index] - fronts.reached[index]
-        if at_cost == 0:
-            break
-        var move = fronts.how[index]
-        if move == LEFT:
-            offset -= 1
-        elif move == UP:
-            offset += 1
-        at_cost -= 1
+    # The backtrace: at each cell's own cost, the furthest source, a substitution before a base of
+    # the first sequence alone before one of the second; matches back to the left edge end the tile.
     var block = len(moves)
-    moves.resize(unsafe_uninit_length=block + length)
-    var out = moves.unsafe_ptr().unsafe_offset(block + length)
-    offset = finish_offset
-    at_cost = finish_cost
+    var diagonal = target
+    var column = end_column
+    var level = levels - 1
     while True:
-        var index = fronts.starts[at_cost] + offset - fronts.lows[at_cost]
-        var run = fronts.landed[index] - fronts.reached[index]
-        out = out.unsafe_offset(-run)
-        for step in range(run):
-            out[unsafe_offset=step] = DIAGONAL
-        if at_cost == 0:
-            break
-        var move = fronts.how[index]
-        out = out.unsafe_offset(-1)
-        out[] = move
-        if move == LEFT:
-            offset -= 1
-        elif move == UP:
-            offset += 1
-        at_cost -= 1
-    return first_column + home + finish_offset
+        while level > 0 and at(fronts, level - 1, diagonal) >= column:
+            level -= 1
+        var same = at(fronts, level - 1, diagonal)
+        var below = at(fronts, level - 1, diagonal - 1)
+        var above = at(fronts, level - 1, diagonal + 1)
+        var substituted = same + 1 if same >= first_column and same < end_column else UNREACHED
+        var deleted = below + 1 if below >= first_column and below < end_column else UNREACHED
+        var inserted = above if above >= first_column else UNREACHED
+        var entry = min(column, max(substituted, max(deleted, inserted)))
+        if entry <= first_column:
+            for _ in range(column - first_column):
+                moves.append(DIAGONAL)
+            return first_column - diagonal
+        for _ in range(column - entry):
+            moves.append(DIAGONAL)
+        if substituted >= entry:
+            moves.append(DIAGONAL)
+            column = entry - 1
+        elif deleted >= entry:
+            moves.append(LEFT)
+            column = entry - 1
+            diagonal -= 1
+        else:
+            moves.append(UP)
+            column = entry
+            diagonal += 1
+        level -= 1
+        if level < 0:
+            moves.resize(block, 0)
+            return -1
 
 
 comptime RECOMPUTE_WORDS = 4
@@ -294,11 +275,18 @@ struct Recompute(Movable):
     var plus: List[UInt64]
     var minus: List[UInt64]
     var bases: List[Int]
+    var low_plus: List[UInt64]
+    """The same window swept again from a top row that falls by one a column, a floor under every score."""
+    var low_minus: List[UInt64]
+    var low_bases: List[Int]
 
     def __init__(out self):
         self.plus = List[UInt64]()
         self.minus = List[UInt64]()
         self.bases = List[Int]()
+        self.low_plus = List[UInt64]()
+        self.low_minus = List[UInt64]()
+        self.low_bases = List[Int]()
 
 
 def recomputed_segment(
@@ -352,32 +340,37 @@ def window_segment[
     mut buffers: Recompute,
     mut moves: List[UInt8],
 ) -> Int:
-    """`recomputed_segment` over words `[first_word, end_word)` alone, or -1 when they do not hold the path.
+    """`recomputed_segment` over words `[first_word, end_word)` alone, or -1 when they cannot settle it.
 
-    The window's left edge comes from the recorded one, and its top reads `+1` from above, as a
-    band's top does, so every score is a real path's and never below the true one. When the
-    recomputed score at the traced cell is its exact `score`, a path back to the left edge along
-    those scores is optimal; the window falls short when the scores differ, or when the path would
-    leave through its top. Below the band's own top, which is the full recompute, neither can happen.
+    The path is WFA2-lib's, as `Ties.RIGHT` names it: from the traced cell back, an edit into the cell
+    whenever one is optimal, a substitution before a letter of the first sequence alone before one of
+    the second, and a match only when none is; which is the furthest-reaching source a wavefront's
+    backtrace takes, cell by cell. So every candidate's own score is needed, not only the path's.
+
+    The window's left edge comes from the recorded one. Its top reads `+1` a column from above, as a
+    band's top does, so every score is a real path's and never below the true one; a second sweep
+    from a top falling by one a column, as no score can fall faster along a row, gives a floor. A
+    candidate is optimal when its score is the one the path needs, and is not when even its floor
+    exceeds that; in between, a taller window must tell. Over the band's whole height every optimal
+    cell lies inside the band and reads true, so its scores alone decide.
     """
     var first_column = trail.first_columns[tile]
     var top = first_word
     var count = end_word - first_word
     var width = end_column - first_column
+    var whole = first_word == trail.tops[tile]
     var offset = trail.offsets[tile] + first_word - trail.tops[tile]
+    var sweeps = 1 if whole else 2
     buffers.plus.resize(unsafe_uninit_length=(width + 1) * count)
     buffers.minus.resize(unsafe_uninit_length=(width + 1) * count)
     buffers.bases.resize(unsafe_uninit_length=(width + 1) * (count + 1))
-    var plus = buffers.plus.unsafe_ptr()
-    var minus = buffers.minus.unsafe_ptr()
-    var bases = buffers.bases.unsafe_ptr()
+    buffers.low_plus.resize(unsafe_uninit_length=(width + 1) * count)
+    buffers.low_minus.resize(unsafe_uninit_length=(width + 1) * count)
+    buffers.low_bases.resize(unsafe_uninit_length=(width + 1) * (count + 1))
     # The left edge's score at the window's top, carried down from the band's.
     var anchor = trail.anchors[tile]
     for word in range(trail.offsets[tile], offset):
         anchor += word_value(trail.edge_plus[word], trail.edge_minus[word])
-    for word in range(count):
-        plus[unsafe_offset=word] = trail.edge_plus[offset + word]
-        minus[unsafe_offset=word] = trail.edge_minus[offset + word]
     var column_low = profile.column_low.unsafe_ptr().unsafe_offset(COLUMN_PADDING + first_column - 1)
     var column_high = profile.column_high.unsafe_ptr().unsafe_offset(COLUMN_PADDING + first_column - 1)
     var row_low = profile.row_low.unsafe_ptr().unsafe_offset(top)
@@ -385,32 +378,42 @@ def window_segment[
     # The third plane exists only for symbols past `ACGT` (see `Profile.extended`).
     var column_extra = profile.column_extra.unsafe_ptr().unsafe_offset(COLUMN_PADDING + first_column - 1)
     var row_extra = profile.row_extra.unsafe_ptr().unsafe_offset(top)
-    for step in range(1, width + 1):
-        var horizontal_plus = UInt64(1)
-        var horizontal_minus = UInt64(0)
-        var low = column_low[unsafe_offset=step]
-        var high = column_high[unsafe_offset=step]
-        var extra = column_extra[unsafe_offset=step] if extended else UInt64(0)
+    for sweep in range(sweeps):
+        var floor = sweep == 1
+        var plus = (buffers.low_plus if floor else buffers.plus).unsafe_ptr()
+        var minus = (buffers.low_minus if floor else buffers.minus).unsafe_ptr()
+        var bases = (buffers.low_bases if floor else buffers.bases).unsafe_ptr()
         for word in range(count):
-            var vertical_plus = plus[unsafe_offset=(step - 1) * count + word]
-            var vertical_minus = minus[unsafe_offset=(step - 1) * count + word]
-            var matches = (low ^ row_low[unsafe_offset=word]) & (high ^ row_high[unsafe_offset=word])
-            comptime if extended:
-                matches &= extra ^ row_extra[unsafe_offset=word]
-            advance[1](horizontal_plus, horizontal_minus, vertical_plus, vertical_minus, matches)
-            plus[unsafe_offset=step * count + word] = vertical_plus
-            minus[unsafe_offset=step * count + word] = vertical_minus
-
-    # Scores at each word's top on every column: the window's top scores the anchor plus one per column.
-    for step in range(width + 1):
-        var running = anchor + step
-        bases[unsafe_offset=step * (count + 1)] = running
-        for word in range(count):
-            running += word_value(plus[unsafe_offset=step * count + word], minus[unsafe_offset=step * count + word])
-            bases[unsafe_offset=step * (count + 1) + word + 1] = running
+            plus[unsafe_offset=word] = trail.edge_plus[offset + word]
+            minus[unsafe_offset=word] = trail.edge_minus[offset + word]
+        for step in range(1, width + 1):
+            # The top row's score rises by one a column, or for the floor falls by one.
+            var horizontal_plus = UInt64(0) if floor else UInt64(1)
+            var horizontal_minus = UInt64(1) if floor else UInt64(0)
+            var low = column_low[unsafe_offset=step]
+            var high = column_high[unsafe_offset=step]
+            var extra = column_extra[unsafe_offset=step] if extended else UInt64(0)
+            for word in range(count):
+                var vertical_plus = plus[unsafe_offset=(step - 1) * count + word]
+                var vertical_minus = minus[unsafe_offset=(step - 1) * count + word]
+                var matches = (low ^ row_low[unsafe_offset=word]) & (high ^ row_high[unsafe_offset=word])
+                comptime if extended:
+                    matches &= extra ^ row_extra[unsafe_offset=word]
+                advance[1](horizontal_plus, horizontal_minus, vertical_plus, vertical_minus, matches)
+                plus[unsafe_offset=step * count + word] = vertical_plus
+                minus[unsafe_offset=step * count + word] = vertical_minus
+        # Scores at each word's top on every column, from the window's top row.
+        for step in range(width + 1):
+            var running = anchor - step if floor else anchor + step
+            bases[unsafe_offset=step * (count + 1)] = running
+            for word in range(count):
+                running += word_value(plus[unsafe_offset=step * count + word], minus[unsafe_offset=step * count + word])
+                bases[unsafe_offset=step * (count + 1) + word + 1] = running
 
     @inline(.always)
-    def score_at(step: Int, row: Int) {imm bases, imm plus, imm minus, imm count, imm top} -> Int:
+    def score_in(
+        plus: ImmPointer[UInt64, _], minus: ImmPointer[UInt64, _], bases: ImmPointer[Int, _], step: Int, row: Int
+    ) {imm count, imm top} -> Int:
         var word = (row - 1) // WORD_BITS - top if row > top * WORD_BITS else 0
         if row == top * WORD_BITS:
             return bases[unsafe_offset=step * (count + 1)]
@@ -420,35 +423,86 @@ def window_segment[
             plus[unsafe_offset=step * count + word] & kept, minus[unsafe_offset=step * count + word] & kept
         )
 
-    var whole = first_word == trail.tops[tile]
-    if not whole and score_at(width, end_row) != score:
+    var plus = buffers.plus.unsafe_ptr()
+    var minus = buffers.minus.unsafe_ptr()
+    var bases = buffers.bases.unsafe_ptr()
+    var low_plus = buffers.low_plus.unsafe_ptr()
+    var low_minus = buffers.low_minus.unsafe_ptr()
+    var low_bases = buffers.low_bases.unsafe_ptr()
+
+    @inline(.always)
+    def optimal(
+        step: Int, row: Int, needed: Int
+    ) {imm plus, imm minus, imm bases, imm low_plus, imm low_minus, imm low_bases, imm whole, imm score_in} -> Int:
+        """1 when the cell's score is `needed`, so a path of it joins the trace optimally; 0 when it
+        cannot be; -1 when this window cannot tell."""
+        if score_in(plus, minus, bases, step, row) == needed:
+            return 1
+        if whole or score_in(low_plus, low_minus, low_bases, step, row) > needed:
+            return 0
+        return -1
+
+    if not whole and score_in(plus, minus, bases, width, end_row) != score:
         return -1
     var lowest = top * WORD_BITS
     var start = len(moves)
     var step = width
     var row = end_row
     var current = score
+
+    @inline(.always)
+    def give_up(mut moves: List[UInt8]) {imm start}:
+        moves.resize(start, 0)
+
     while step > 0:
         var column = first_column + step - 1
-        if row > lowest:
-            var change = 0 if profile.column_codes[column] == profile.row_codes[row - 1] else 1
-            if score_at(step - 1, row - 1) + change == current:
+        var inside = row > lowest
+        var differs = inside and profile.column_codes[column] != profile.row_codes[row - 1]
+        if differs:
+            var found = optimal(step - 1, row - 1, current - 1)
+            if found < 0:
+                give_up(moves)
+                return -1
+            if found == 1:
                 moves.append(DIAGONAL)
-                current -= change
+                current -= 1
                 step -= 1
                 row -= 1
                 continue
-        if score_at(step - 1, row) + 1 == current:
+        var found = optimal(step - 1, row, current - 1)
+        if found < 0:
+            give_up(moves)
+            return -1
+        if found == 1:
             moves.append(LEFT)
             current -= 1
             step -= 1
             continue
-        if not whole and row == lowest:
-            # The path leaves through the window's top: a taller window must hold it.
-            moves.resize(start, 0)
+        if not inside:
+            if not whole:
+                # A gap through the window's top may be the one to take: a taller window must tell.
+                give_up(moves)
+                return -1
+            # The band's top: the path keeps to the band, so it goes on up the gap.
+            moves.append(UP)
+            current -= 1
+            row -= 1
+            continue
+        found = optimal(step, row - 1, current - 1)
+        if found < 0:
+            give_up(moves)
             return -1
-        moves.append(UP)
-        current -= 1
+        if found == 1:
+            moves.append(UP)
+            current -= 1
+            row -= 1
+            continue
+        # No edit enters the cell optimally, so it is a match the path came along.
+        if differs or optimal(step - 1, row - 1, current) != 1:
+            give_up(moves)
+            return -1
+        moves.append(DIAGONAL)
+        step -= 1
         row -= 1
     return row
 
@@ -458,11 +512,12 @@ def trace_back(profile: Profile, trail: Trail, start_column: Int, start_row: Int
 
     One tile at a time from the last: each segment ends at a left-edge row whose recorded score is
     exact, because it plus the segment's cost is the exact score it started from, so the next tile
-    starts from a known score. The wavefront search allows a few times the tile's share of the
-    score in edits before handing the tile to the recompute.
+    starts from a known score. Each tile is traced by WFA2-lib's rule, by a forward wavefront across it
+    (see `forward_segment`), or, when that would cost too much, swept again and traced cell by cell
+    (see `window_segment`): the same path either way, whichever band found the distance.
     """
     var edge = Edge()
-    var fronts = Wavefronts()
+    var fronts = TileFronts()
     var buffers = Recompute()
     var column = start_column
     var row = start_row
@@ -472,7 +527,7 @@ def trace_back(profile: Profile, trail: Trail, start_column: Int, start_row: Int
         edge.load(trail, tile, profile.rows)
         var share = ceildiv(score * (column - first_column), max(start_column, 1))
         var limit = max(WAVEFRONT_FLOOR, 3 * share)
-        var left = wavefront_segment(profile, edge, first_column, column, row, current, limit, fronts, moves)
+        var left = forward_segment(profile, edge, first_column, column, row, current, limit, fronts, moves)
         if left < 0:
             left = recomputed_segment(profile, trail, tile, column, row, current, buffers, moves)
         # Exact, since it plus the segment's cost is the exact score the segment started from.

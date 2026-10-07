@@ -11,9 +11,9 @@ afresh. WFA2-lib's own CIGARs are priced the same way, which checks the pricing.
 Every gap-affine mode must also give WFA2-lib's CIGAR byte for byte under `Ties.RIGHT`, its own rule
 for ties: the indel distance as costs (3, 0, 1), which give it exactly and never a substitution, and the
 modes with a match reward by the costs WFA2-lib folds the reward into. Those run with no memory limit,
-so no pair is split (see `gap_affine.solve`). The edit distance, a different algorithm with no such
-rule, is held to the score and a valid CIGAR alone. Its approximate heuristic modes, which dinara-align
-does not offer, are left out.
+so no pair is split (see `gap_affine.solve`); and the edit distance's `edit_cigar` with `Ties.RIGHT`,
+whichever of its searches finds the distance. Its approximate heuristic modes, which dinara-align does
+not offer, are left out.
 """
 
 from std.sys import argv
@@ -197,6 +197,10 @@ def main() raises:
             var cigar: String
             if mode.kind == EDIT:
                 var aligned = edit_cigar(first, second)
+                var exact = edit_cigar(first, second, ties=Ties.RIGHT).cigar.replace("=", "M")
+                if exact != theirs:
+                    print("   ", mode.name, "pair", index, ": Ties.RIGHT gives", exact, "where WFA2-lib gives", theirs)
+                    wrong += 1
                 score = aligned.distance
                 cigar = aligned.cigar
             elif mode.kind == GAP_AFFINE:
@@ -263,7 +267,7 @@ def main() raises:
             "pairs agree;",
             differing,
             "default CIGARs differ from WFA2-lib's at the same score",
-            "(no rule of its own for ties)" if mode.kind == EDIT else "(gaps placed left), none under Ties.RIGHT",
+            "(gaps placed left), none under Ties.RIGHT",
         )
         failures += wrong
     if failures:

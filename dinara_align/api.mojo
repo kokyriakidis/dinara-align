@@ -49,7 +49,7 @@ from .common import (
 )
 from .edit_distance import edit_alignment, edit_distance
 from .errors import AlignmentError, ErrorKind
-from .gap_affine import AffineCigar, affine_cigar, wavefront_align, wavefront_penalties, wavefront_score
+from .gap_affine import AffineCigar, Ties, affine_cigar, wavefront_align, wavefront_penalties, wavefront_score
 from .vector_score import optimal_band, uniform_table, vector_align, vector_score
 
 from std.atomic import Atomic
@@ -699,7 +699,7 @@ def edit_distances(firsts: List[String], seconds: List[String], threads: Optiona
 
 
 def edit_alignments(
-    firsts: List[String], seconds: List[String], threads: Optional[Int] = None
+    firsts: List[String], seconds: List[String], threads: Optional[Int] = None, ties: Ties = Ties.LEFT
 ) raises -> List[AlignmentResult]:
     """Every pair's edit distance and an optimal alignment, as `edit_alignment` gives them, the pairs
     spread over threads as `edit_distances` spreads them."""
@@ -718,21 +718,21 @@ def edit_alignments(
 
     def alignment_worker(
         worker: Int,
-    ) {mut taken, imm order, imm firsts, imm seconds, imm out, imm flags, imm pairs}:
+    ) {mut taken, imm order, imm firsts, imm seconds, imm out, imm flags, imm pairs, imm ties}:
         while True:
             var dealt = Int(taken.fetch_add(1))
             if dealt >= pairs:
                 return
             var index = order[dealt]
             try:
-                out[unsafe_offset=index] = edit_alignment(firsts[index], seconds[index])
+                out[unsafe_offset=index] = edit_alignment(firsts[index], seconds[index], ties)
             except:
                 flags[unsafe_offset=index] = True
 
     parallelize(alignment_worker, min(workers, pairs), min(workers, pairs))
     for index in range(pairs):
         if failed[index]:
-            results[index] = edit_alignment(firsts[index], seconds[index])
+            results[index] = edit_alignment(firsts[index], seconds[index], ties)
     return results^
 
 

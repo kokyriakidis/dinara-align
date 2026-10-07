@@ -762,57 +762,134 @@ def two_ended_gives_up(total: Int, reached: Int, columns: Int, rows: Int, step_t
     return -1
 
 
-def trace_from(
-    fronts: DiagonalFronts,
-    columns: Int,
-    rows: Int,
-    score: Int,
-    start_diagonal: Int,
-    start_column: Int,
-    mut moves: List[UInt8],
-):
-    """An optimal path from the origin to any cell a front of `score` reached, as moves right to left.
+def grow_to(profile: Profile, mut ahead: DiagonalFronts, behind: DiagonalFronts, distance: Int):
+    """Grows the forward fronts `ahead` kept on to `distance`, which the two-ended search proved, each
+    score kept only on the diagonals an optimal path passes: where the backward fronts `behind` kept,
+    at the rest of the distance, come back as far. So `trace_diagonals` then traces the path WFA2-lib's
+    rule picks, whose every step takes the furthest source, which an optimal path passes too and the
+    pruning keeps, while each score grows only the few diagonals left. The last front the search kept
+    is pruned the same way first, so the first score grown is as narrow as the rest."""
+    var columns = profile.columns
+    var rows = profile.rows
+    var target = columns - rows
+    var first = profile.column_codes.unsafe_ptr()
+    var second = profile.row_codes.unsafe_ptr()
+    var last = len(behind.lows) - 1
 
-    Edit costs never fall along a diagonal, so a cell's cost is the least score whose front on its
-    diagonal reaches it, and every cell a front of score `s` reaches costs at most `s`. At a cell of
-    cost `s`, an edit can enter it from a cell of cost `s - 1` only up to the furthest of the
-    previous front's three starts there; past that, the cells of cost `s` are reached by matches
-    alone. So each step slides back to `min(cell, furthest start)` and takes an edit whose source
-    reaches that far, landing on a cell of cost at most `s - 1`; the cell need not be a front's
-    furthest, as where two fronts met.
-    """
-    var diagonal = start_diagonal
-    var column = start_column
-    var level = score
-    while True:
-        while level > 0 and fronts.at(level - 1, diagonal) >= column:
-            level -= 1
-        if level == 0:
-            break
-        var same = fronts.at(level - 1, diagonal)
-        var below = fronts.at(level - 1, diagonal - 1)
-        var above = fronts.at(level - 1, diagonal + 1)
-        # One more edit after the previous front, only where it stays inside the matrix.
-        var substituted = same + 1 if same >= 0 and same < columns and same - diagonal < rows else -1
-        var deleted = below + 1 if below >= 0 and below < columns else -1
-        var inserted = above if above >= 0 and above - diagonal - 1 < rows else -1
-        var entry = min(column, max(substituted, max(deleted, inserted)))
-        for _ in range(column - entry):
-            moves.append(DIAGONAL)
-        if substituted >= entry and entry >= 1 and entry - diagonal >= 1:
-            moves.append(DIAGONAL)
-            column = entry - 1
-        elif deleted >= entry and entry >= 1:
-            moves.append(LEFT)
-            column = entry - 1
-            diagonal -= 1
-        else:
-            moves.append(UP)
-            column = entry
+    var top = len(ahead.lows) - 1
+    if top >= distance:
+        return
+    # The last kept front, pruned in place: what it loses reads unreached, and its range narrows. Only
+    # diagonals the backward front of the rest also holds can meet it, eight at a time.
+    var low = ahead.lows[top]
+    var high = ahead.highs[top]
+    var row = ahead.offsets.unsafe_ptr().unsafe_offset(ahead.starts[top] + FRONT_PADDING - low)
+    var kept_low = high + 1
+    var kept_high = low - 1
+    var rest = distance - top
+    if rest <= last:
+        var back_low = behind.lows[rest]
+        var back_high = behind.highs[rest]
+        var back = behind.offsets.unsafe_ptr().unsafe_offset(behind.starts[rest] + FRONT_PADDING - back_low)
+        var from_diagonal = max(low, target - back_high)
+        var to_diagonal = min(high, target - back_low)
+        comptime Lanes = SIMD[DType.int32, FRONT_LANES]
+        var needed = Lanes(Int32(columns))
+        var diagonal = from_diagonal
+        while diagonal <= to_diagonal:
+            if diagonal + FRONT_LANES - 1 <= to_diagonal:
+                var reached = row.unsafe_offset(diagonal).unsafe_load[width=FRONT_LANES]()
+                var behind_reached = (
+                    back.unsafe_offset(target - diagonal - FRONT_LANES + 1).unsafe_load[width=FRONT_LANES]().reversed()
+                )
+                var live = reached.ge(Lanes(0)) & behind_reached.ge(Lanes(0)) & (reached + behind_reached).ge(needed)
+                if live.reduce_or():
+                    for lane in range(FRONT_LANES):
+                        if live[lane]:
+                            kept_low = min(kept_low, diagonal + lane)
+                            kept_high = diagonal + lane
+                row.unsafe_offset(diagonal).unsafe_store(live.select(reached, Lanes(UNREACHED_OFFSET)))
+                diagonal += FRONT_LANES
+                continue
+            var column = Int(row[unsafe_offset=diagonal])
+            var behind_column = Int(back[unsafe_offset=target - diagonal])
+            if column >= 0 and behind_column >= 0 and column + behind_column >= columns:
+                kept_low = min(kept_low, diagonal)
+                kept_high = diagonal
+            else:
+                row[unsafe_offset=diagonal] = UNREACHED_OFFSET
             diagonal += 1
-        level -= 1
-    for _ in range(column):
-        moves.append(DIAGONAL)
+        for dead in range(low, min(from_diagonal, high + 1)):
+            row[unsafe_offset=dead] = UNREACHED_OFFSET
+        for dead in range(max(to_diagonal + 1, low), high + 1):
+            row[unsafe_offset=dead] = UNREACHED_OFFSET
+    else:
+        kept_low = low
+        kept_high = high
+    if kept_low > kept_high:
+        kept_low = low
+        kept_high = low - 1
+    ahead.starts[top] += kept_low - low
+    ahead.lows[top] = kept_low
+    ahead.highs[top] = kept_high
+    # Room for every score to come at once, so the rows grow without copying what is kept.
+    var scores = distance - top
+    ahead.offsets.reserve(len(ahead.offsets) + scores * (8 + 2 * FRONT_PADDING) + kept_high - kept_low + 1)
+    ahead.starts.reserve(len(ahead.starts) + scores)
+    ahead.lows.reserve(len(ahead.lows) + scores)
+    ahead.highs.reserve(len(ahead.highs) + scores)
+    for score in range(top + 1, distance + 1):
+        var previous_low = ahead.lows[score - 1]
+        var previous_high = ahead.highs[score - 1]
+        var previous = ahead.offsets.unsafe_ptr().unsafe_offset(ahead.starts[score - 1] + FRONT_PADDING - previous_low)
+        var new_low = max(previous_low - 1, -rows)
+        var new_high = min(previous_high + 1, columns)
+        var row_start = len(ahead.offsets)
+        # Room for the row and its padding, every slot written below; the row is narrowed to what
+        # lives once it is grown.
+        ahead.offsets.resize(unsafe_uninit_length=row_start + max(new_high - new_low + 1, 0) + 2 * FRONT_PADDING)
+        var current = ahead.offsets.unsafe_ptr().unsafe_offset(row_start + FRONT_PADDING - new_low)
+        for pad in range(1, FRONT_PADDING + 1):
+            current[unsafe_offset=new_low - pad] = UNREACHED_OFFSET
+            current[unsafe_offset=new_high + pad] = UNREACHED_OFFSET
+        rest = distance - score
+        # The backward front of the rest, as a row of the forward diagonals it mirrors.
+        var back_low = behind.lows[rest]
+        var back_high = behind.highs[rest]
+        var back = behind.offsets.unsafe_ptr().unsafe_offset(behind.starts[rest] + FRONT_PADDING - back_low)
+        kept_low = new_high + 1
+        kept_high = new_low - 1
+        for diagonal in range(new_low, new_high + 1):
+            # A diagonal the backward front of the rest does not reach meets nothing there.
+            var mirrored = target - diagonal
+            if mirrored < back_low or mirrored > back_high or back[unsafe_offset=mirrored] < 0:
+                current[unsafe_offset=diagonal] = UNREACHED_OFFSET
+                continue
+            # One more edit after the previous front, as `best_source` takes it; the previous row's
+            # padding reads unreached either side.
+            var best = -1
+            var same = Int(previous[unsafe_offset=diagonal])
+            if same >= 0 and same < columns and same - diagonal < rows:
+                best = same + 1
+            var left = Int(previous[unsafe_offset=diagonal - 1])
+            if left >= 0 and left < columns and left + 1 > best:
+                best = left + 1
+            var up = Int(previous[unsafe_offset=diagonal + 1])
+            if up >= 0 and up - diagonal - 1 < rows and up > best:
+                best = up
+            var column = slide_forward(first, second, best, best - diagonal) if best >= 0 else -1
+            if column >= 0 and column + Int(back[unsafe_offset=mirrored]) >= columns:
+                current[unsafe_offset=diagonal] = Int32(column)
+                kept_low = min(kept_low, diagonal)
+                kept_high = diagonal
+            else:
+                current[unsafe_offset=diagonal] = UNREACHED_OFFSET
+        if kept_low > kept_high:
+            kept_low = new_low
+            kept_high = new_low - 1
+        ahead.starts.append(row_start + kept_low - new_low)
+        ahead.lows.append(kept_low)
+        ahead.highs.append(kept_high)
 
 
 def trace_diagonals(profile: Profile, fronts: DiagonalFronts, distance: Int, mut moves: List[UInt8]):

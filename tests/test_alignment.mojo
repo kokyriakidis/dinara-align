@@ -51,6 +51,9 @@ from dinara_align import (
     smith_waterman_gotoh_score,
 )
 from dinara_align.seeds import SEED_COLUMNS
+from dinara_align.bit_parallel import Profile
+from dinara_align.diagonal import DiagonalFronts, diagonal_transition, trace_diagonals
+from dinara_align.traceback import EditPath, cigar_string
 from dinara_align.gap_affine import (
     ALIGNED,
     FIRST_GAP,
@@ -1753,6 +1756,44 @@ def test_ties_follow_a_fixed_rule() raises:
     # A gap in a run of repeats sits at its left end by default, at its right end for WFA2-lib's rule.
     assert_equal(affine_cigar("ACGTTTTACG", "ACGTTTACG", 4, 6, 2).cigar, "3=1D6=")
     assert_equal(affine_cigar("ACGTTTTACG", "ACGTTTACG", 4, 6, 2, ties=Ties.RIGHT).cigar, "6=1D3=")
+
+
+def test_edit_ties_follow_a_fixed_rule() raises:
+    """`edit_cigar`'s alignment is the one `Ties` names whichever search finds the distance: near
+    pairs settled from one end, moderate ones from both, divergent ones by band doubling. `Ties.RIGHT`
+    is one front from the start traced back from the corner, WFA2-lib's, and `Ties.LEFT` the right
+    rule's CIGAR of both sequences reversed, read backwards; the gapped rows agree with the CIGAR."""
+    seed(61)
+    for trial in range(90):
+        var unit = random_sequence(1, 4, DNA_ALPHABET)
+        var core = random_sequence(20, [300, 3000, 12000][trial % 3], DNA_ALPHABET)
+        for _ in range(Int(random_ui64(0, 8))):
+            core += unit * 2 + random_sequence(0, 30, DNA_ALPHABET)
+        var first = core
+        var second = mutated(core, [0.01, 0.06, 0.15, 0.3][(trial // 3) % 4], [1, 3, 12][(trial // 12) % 3])
+        if second.byte_length() == 0:
+            second = "A"
+        var profile = Profile(first, second)
+        var fronts = DiagonalFronts()
+        var reference = diagonal_transition(profile, 1 << 30, fronts)
+        var right = edit_cigar(first, second, ties=Ties.RIGHT)
+        if reference.distance >= 0:
+            var moves = List[UInt8]()
+            trace_diagonals(profile, fronts, reference.distance, moves)
+            var path = EditPath(moves^, List[UInt8](), first.byte_length(), second.byte_length(), reference.distance)
+            assert_equal(right.distance, reference.distance)
+            assert_equal(right.cigar, cigar_string(first, second, path, True), String("the right rule, trial ", trial))
+        var left = edit_cigar(first, second)
+        var mirrored = edit_cigar(reversed_text(first), reversed_text(second), ties=Ties.RIGHT)
+        assert_equal(left.distance, right.distance)
+        assert_equal(left.cigar, reversed_cigar(mirrored.cigar), String("the left rule, trial ", trial))
+        var rows = edit_alignment(first, second)
+        var spelled = rows_from_cigar(first, second, left.cigar)
+        assert_equal(rows.first_gapped, spelled[0])
+        assert_equal(rows.second_gapped, spelled[1])
+    # A gap in a run of repeats: at its left end by default, at its right end under WFA2-lib's rule.
+    assert_equal(edit_cigar("ACGTTTTACG", "ACGTTTACG").cigar, "3=1D6=")
+    assert_equal(edit_cigar("ACGTTTTACG", "ACGTTTACG", ties=Ties.RIGHT).cigar, "6=1D3=")
 
 
 def test_affine_extension_matches_the_full_matrix() raises:

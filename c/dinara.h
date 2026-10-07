@@ -39,11 +39,13 @@ int64_t dinara_edit_distance(const char *first, int64_t first_length, const char
 
 /*
  * The global edit distance, or a DINARA_ code, and an optimal alignment's CIGAR: `=` and `X` when
- * `extended` is nonzero, else `M`. On success `*cigar` holds the CIGAR, NUL-terminated and
- * `*cigar_length` bytes long, which the caller frees with `dinara_free`.
+ * `extended` is nonzero, else `M`. Of equally good alignments, the one with indels placed left, as
+ * minimap2 places them, or with `right_ties` nonzero right, WFA2-lib's edit CIGAR byte for byte. On
+ * success `*cigar` holds the CIGAR, NUL-terminated and `*cigar_length` bytes long, which the caller
+ * frees with `dinara_free`.
  */
 int64_t dinara_edit_cigar(const char *first, int64_t first_length, const char *second, int64_t second_length,
-                          int extended, char **cigar, int64_t *cigar_length);
+                          int extended, int right_ties, char **cigar, int64_t *cigar_length);
 
 /*
  * The least global cost under gap-affine costs as WFA counts them, a substitution `mismatch` and a
@@ -126,6 +128,10 @@ void dinara_free(char *cigar);
 
 namespace dinara {
 
+/* Which of several equally good alignments a CIGAR spells: indels placed left, as minimap2 places them,
+ * or right, WFA2-lib's CIGAR byte for byte. */
+enum class Ties { left, right };
+
 /* The global edit distance and an optimal alignment as a CIGAR. */
 struct Alignment {
     int64_t distance;
@@ -151,11 +157,11 @@ struct AffineAlignment {
 };
 
 /* `extended` writes `=` and `X`; false writes `M` for both. */
-inline Alignment edit_cigar(std::string_view first, std::string_view second, bool extended = true) {
+inline Alignment edit_cigar(std::string_view first, std::string_view second, bool extended = true, Ties ties = Ties::left) {
     char *text = nullptr;
     int64_t length = 0;
     int64_t distance = dinara_edit_cigar(first.data(), static_cast<int64_t>(first.size()), second.data(),
-                                         static_cast<int64_t>(second.size()), extended ? 1 : 0, &text, &length);
+                                         static_cast<int64_t>(second.size()), extended ? 1 : 0, ties == Ties::right ? 1 : 0, &text, &length);
     if (distance < 0) throw UnsupportedSymbols();
     Alignment result{distance, std::string(text, static_cast<size_t>(length))};
     dinara_free(text);
@@ -192,9 +198,6 @@ struct OutsideBand : std::invalid_argument {
 /* Which end of both sequences an extension is fixed at. */
 enum class Anchor { start, end };
 
-/* Which of several equally good alignments a CIGAR spells: indels placed left, as minimap2 places them,
- * or right, WFA2-lib's CIGAR byte for byte. */
-enum class Ties { left, right };
 
 /* The best extension's score, the letters of each sequence it covers from its anchor, and its CIGAR. */
 struct Extension {

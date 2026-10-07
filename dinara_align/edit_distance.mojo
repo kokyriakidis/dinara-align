@@ -12,7 +12,7 @@ A pair first goes through diagonal transition (see `diagonal`), which settles ne
 projects any other's distance. Band doubling (see `band`) then sweeps only the cells a path within a
 bound could cross, its rows pruned with the seed heuristic on long pairs (see `seeds`), with the
 bit-parallel kernels of `bit_parallel`; a pair too divergent for a band is swept whole. The alignment
-is traced back from the band's tile edges (see `traceback`).
+is traced back by a fixed rule for ties, whichever search found the distance (see `edit_path`).
 
 Each pair runs on one thread; `edit_distances` and `edit_alignments` in `api` spread a batch over
 threads a pair at a time.
@@ -28,13 +28,14 @@ from .diagonal import (
     reversed_codes,
     STEP_TENTHS_ALIGNMENT,
     STEP_TENTHS_DISTANCE,
+    grow_to,
     trace_diagonals,
-    trace_from,
     two_ended,
     two_ended_distance,
     TWO_ENDED_SETUP,
 )
 from .errors import AlignmentError
+from .gap_affine import Ties
 from .traceback import cigar_string, EditPath, gapped_rows, trace_back
 
 
@@ -76,88 +77,85 @@ struct EditCigar(Copyable, Movable, Writable):
     var cigar: String
 
 
-def edit_alignment(first: String, second: String) raises AlignmentError -> AlignmentResult:
+def edit_alignment(first: String, second: String, ties: Ties = Ties.LEFT) raises AlignmentError -> AlignmentResult:
     """The global edit distance between two sequences, and an optimal alignment as two gapped rows;
     symbols past `ACGT` as `edit_distance` takes them. The score is the distance, as
-    `levenshtein_alignment` reports it."""
-    var path = edit_path(first, second)
+    `levenshtein_alignment` reports it. Of several optimal alignments, the one `ties` names (see
+    `edit_cigar`)."""
+    var path = edit_path(first, second, ties)
     return gapped_rows(first, second, path.prefix, path.middle_column, path.middle_row, path.suffix, path.distance)
 
 
-def edit_cigar(first: String, second: String, extended: Bool = True) raises AlignmentError -> EditCigar:
+def edit_cigar(
+    first: String, second: String, extended: Bool = True, ties: Ties = Ties.LEFT
+) raises AlignmentError -> EditCigar:
     """The global edit distance between two sequences, and an optimal alignment as a CIGAR string, `=`
     and `X` for matches and substitutions, or with `extended` false `M` for both (see `EditCigar`);
-    the same alignment `edit_alignment` writes out, without the gapped rows."""
-    var path = edit_path(first, second)
+    the same alignment `edit_alignment` writes out, without the gapped rows.
+
+    Of several optimal alignments the CIGAR is always the one `ties` names, as for the gap-affine
+    alignment (see `Ties`): by default every edit as far left as it goes, indels placed as minimap2
+    places them, or with `Ties.RIGHT` as far right, WFA2-lib's edit CIGAR byte for byte; whichever of
+    the searches below found the distance."""
+    var path = edit_path(first, second, ties)
     return EditCigar(path.distance, cigar_string(first, second, path, extended))
 
 
-def edit_path(first: String, second: String) raises AlignmentError -> EditPath:
-    """The global edit distance between two sequences and an optimal alignment's moves.
+def edit_path(first: String, second: String, ties: Ties = Ties.LEFT) raises AlignmentError -> EditPath:
+    """The global edit distance between two sequences and the optimal alignment `ties` names.
 
-    The distance comes from `edit_distance`'s band doubling, recording each tile's left edge in the
-    round that succeeds; the alignment is then traced back tile by tile from those edges (see
-    `trace_back`). Where the two-ended diagonal transition settles the distance, its fronts give the
-    path, traced to the start and on to the end from where they met.
+    The right rule is WFA2-lib's backtrace from the corner (see `right_moves`); the left rule is that
+    over both sequences reversed, its moves read the other way."""
+    var moves = List[UInt8](capacity=first.byte_length() + second.byte_length())
+    if ties == Ties.RIGHT:
+        var distance = right_moves(first, second, False, moves)
+        return EditPath(moves^, List[UInt8](), first.byte_length(), second.byte_length(), distance)
+    var distance = right_moves(first, second, True, moves)
+    # The reversed pair's moves, right to left over it, run left to right over the pair.
+    return EditPath(List[UInt8](), moves^, 0, 0, distance)
+
+
+def right_moves(first: String, second: String, reverse: Bool, mut moves: List[UInt8]) raises AlignmentError -> Int:
+    """The global edit distance between two sequences, both back to front with `reverse`, appending an
+    optimal alignment's moves right to left from the corner, by WFA2-lib's rule for ties: from the corner back, an edit into each cell whenever
+    one is optimal, a substitution before a base of the first sequence alone before one of the second.
+
+    A near-identical pair is settled by diagonal transition from the start, kept whole, and traced back
+    from the corner, which is that rule. Otherwise diagonal transition from both ends finds the distance
+    while it is cheaper than a band, and the forward fronts then grow on to it, pruned to the diagonals
+    an optimal path passes (see `grow_to`), to be traced back the same way. A pair too far apart for
+    either goes to band doubling, recording each tile's left edge in the round that succeeds, and each
+    tile is swept again and traced cell by cell by the same rule (see `trace_back`).
     """
-    var profile = Profile(first, second)
+    var profile = Profile(first, second, reverse)
     var columns = profile.columns
     var rows = profile.rows
-    # Moves right to left, from the corner, or from where the fronts met, back to the origin.
-    var forward_moves = List[UInt8](capacity=columns + rows)
-    # Moves left to right, from where the fronts met to the corner; none without meeting.
-    var backward_moves = List[UInt8]()
-    var distance: Int
     if columns == 0 or rows == 0:
-        distance = columns + rows
         for _ in range(rows):
-            forward_moves.append(UP)
+            moves.append(UP)
         for _ in range(columns):
-            forward_moves.append(LEFT)
-    else:
-        # A near-identical pair: one front, kept whole, settles it before both ends' setup would pay.
-        var near = DiagonalFronts()
-        var close = diagonal_transition(profile, STEP_TENTHS_ALIGNMENT, near, switch_setup=TWO_ENDED_SETUP)
-        if close.distance >= 0:
-            trace_diagonals(profile, near, close.distance, forward_moves)
-            return EditPath(forward_moves^, backward_moves^, columns, rows, close.distance)
-        # Diagonal transition from both ends, keeping every front, while it is cheaper than a band:
-        # where the fronts meet, the path is traced back to the start through the forward fronts
-        # and on to the end through the backward ones.
-        var first_back = reversed_codes(profile.column_codes, columns, FIRST_SENTINEL)
-        var second_back = reversed_codes(profile.row_codes, rows, SECOND_SENTINEL)
-        var ahead = FrontPair(record=True)
-        var behind = FrontPair(record=True)
-        var meeting = two_ended(profile, first_back, second_back, STEP_TENTHS_ALIGNMENT, ahead, behind)
-        if meeting.probe.distance >= 0:
-            var middle_column = meeting.column
-            var middle_row = meeting.column - meeting.diagonal
-            trace_from(
-                ahead.history,
-                columns,
-                rows,
-                meeting.forward_score,
-                meeting.diagonal,
-                middle_column,
-                forward_moves,
-            )
-            # The backward fronts' trace runs from the meeting cell, mirrored, to the end, and its
-            # moves right to left over the reversed sequences are the suffix left to right.
-            backward_moves = List[UInt8](capacity=columns + rows - middle_column - middle_row)
-            trace_from(
-                behind.history,
-                columns,
-                rows,
-                meeting.backward_score,
-                (columns - rows) - meeting.diagonal,
-                columns - middle_column,
-                backward_moves,
-            )
-            return EditPath(forward_moves^, backward_moves^, middle_column, middle_row, meeting.probe.distance)
-        var probe = meeting.probe
-        var trusted = True
-        var heuristic = band_start(profile, meeting.probe, probe, trusted)
-        var trail = Trail(columns)
-        distance = band_doubling[True](profile, False, probe, trail, heuristic, trusted)
-        trace_back(profile, trail, columns, rows, distance, forward_moves)
-    return EditPath(forward_moves^, backward_moves^, columns, rows, distance)
+            moves.append(LEFT)
+        return columns + rows
+    # A near-identical pair: one front, kept whole, settles it before both ends' setup would pay.
+    var near = DiagonalFronts()
+    var close = diagonal_transition(profile, STEP_TENTHS_ALIGNMENT, near, switch_setup=TWO_ENDED_SETUP)
+    if close.distance >= 0:
+        trace_diagonals(profile, near, close.distance, moves)
+        return close.distance
+    var first_back = reversed_codes(profile.column_codes, columns, FIRST_SENTINEL)
+    var second_back = reversed_codes(profile.row_codes, rows, SECOND_SENTINEL)
+    var ahead = FrontPair(record=True)
+    var behind = FrontPair(record=True)
+    var meeting = two_ended(profile, first_back, second_back, STEP_TENTHS_ALIGNMENT, ahead, behind)
+    if meeting.probe.distance >= 0:
+        var distance = meeting.probe.distance
+        grow_to(profile, ahead.history, behind.history, distance)
+        trace_diagonals(profile, ahead.history, distance, moves)
+        return distance
+    var probe = meeting.probe
+    var trusted = True
+    var heuristic = band_start(profile, meeting.probe, probe, trusted)
+    var trail = Trail(columns)
+    var distance = band_doubling[True](profile, False, probe, trail, heuristic, trusted)
+    trace_back(profile, trail, columns, rows, distance, moves)
+    return distance

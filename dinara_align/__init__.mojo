@@ -23,7 +23,7 @@ from dinara_align import edit_alignment, edit_alignments, edit_cigar, edit_dista
 
 var distance = edit_distance("ACGTACGTTTGCA", "ACGTCGTTTTGCA")
 var aligned = edit_alignment("ACGTACGTTTGCA", "ACGTCGTTTTGCA")
-var cigar = edit_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA").cigar  # "4=1D5=1I3=", the first the reference
+var cigar = edit_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA").cigar  # "4=1D2=1I6=", the first the reference
 var firsts: List[String] = ["ACGTACGT", "TTGCA"]
 var seconds: List[String] = ["ACGACGT", "TTGGCA"]
 var distances = edit_distances(firsts, seconds)

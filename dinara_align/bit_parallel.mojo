@@ -787,6 +787,27 @@ def folded(codes: List[UInt8]) -> List[UInt8]:
     return out^
 
 
+def reverse_in_place(codes: MutPointer[UInt8, _], count: Int):
+    """`count` codes back to front, sixteen from each end at a time."""
+    comptime CHUNK = 16
+    var low = 0
+    var high = count
+    while high - low >= 2 * CHUNK:
+        var front = codes.unsafe_offset(low).unsafe_load[width=CHUNK]()
+        var back = codes.unsafe_offset(high - CHUNK).unsafe_load[width=CHUNK]()
+        codes.unsafe_offset(low).unsafe_store(back.reversed())
+        codes.unsafe_offset(high - CHUNK).unsafe_store(front.reversed())
+        low += CHUNK
+        high -= CHUNK
+    high -= 1
+    while low < high:
+        var swapped = codes[unsafe_offset=low]
+        codes[unsafe_offset=low] = codes[unsafe_offset=high]
+        codes[unsafe_offset=high] = swapped
+        low += 1
+        high -= 1
+
+
 struct Profile(Movable):
     """Both sequences as codes, and once a band needs them, as the bit planes `Sweep` reads; see
     `Sweep` for the encoding."""
@@ -814,9 +835,10 @@ struct Profile(Movable):
     var row_codes: List[UInt8]
     """The second sequence as codes."""
 
-    def __init__(out self, first: String, second: String) raises AlignmentError:
+    def __init__(out self, first: String, second: String, reverse: Bool = False) raises AlignmentError:
         """Both sequences as codes: `A`, `C`, `G` and `T` zero to three, and up to four other bytes the
-        codes four to seven, in the order they first appear, each matching only itself."""
+        codes four to seven, in the order they first appear, each matching only itself; with
+        `reverse`, both back to front, the profile of the reversed pair."""
         self.columns = first.byte_length()
         self.rows = second.byte_length()
         self.words = ceildiv(self.rows, WORD_BITS)
@@ -867,6 +889,9 @@ struct Profile(Movable):
             row += 1
         if self.extended:
             symbol_codes(first, second, self.column_codes, self.row_codes)
+        if reverse:
+            reverse_in_place(self.column_codes.unsafe_ptr(), self.columns)
+            reverse_in_place(self.row_codes.unsafe_ptr(), self.rows)
         # Past the last base of each, sentinels that match nothing, the two of them distinct, so a
         # match extension stops at the matrix's edge without checking it (see `slide_forward`).
         for _ in range(CODE_PADDING):
