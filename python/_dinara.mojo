@@ -29,6 +29,7 @@ from dinara_align import (
     distances,
     local_scores,
     score,
+    search,
 )
 
 comptime C_ENDS_FREE = 0
@@ -49,6 +50,7 @@ def PyInit__dinara() abi("C") -> PythonObject:
         module.def_function[py_alignments]("alignments")
         module.def_function[py_scoring_align]("scoring_align")
         module.def_function[py_scoring_score]("scoring_score")
+        module.def_function[py_search]("search")
         return module.finalize()
     except error:
         abort(String("dinara_align: the extension failed to load: ", error))
@@ -325,3 +327,33 @@ def py_scoring_score(
 ) raises -> PythonObject:
     """The best score under a `Scoring`, with no alignment traced."""
     return PythonObject(score(String(py=reference), String(py=query), scoring_of(table), mode_of(mode)))
+
+
+def py_search(
+    query: PythonObject,
+    references: PythonObject,
+    costs: PythonObject,
+    mode: PythonObject,
+    options: PythonObject,
+    settings: PythonObject,
+) raises -> PythonObject:
+    """`(index, score, alignment or None)` for each hit, the best first; `settings` is `(best, aligned,
+    threads)`, a best of zero or less for every hit."""
+    var asked = options_of(options)
+    var best = Int(py=settings[0])
+    var hits = search(
+        String(py=query),
+        strings(references),
+        costs_of(costs),
+        mode_of(mode),
+        best=Optional[Int](best) if best > 0 else None,
+        max_cost=Optional[Int](asked.max_cost) if asked.max_cost >= 0 else None,
+        aligned=Bool(py=settings[1]),
+        ties=asked.ties,
+        threads=threads_of(settings[2]),
+    )
+    var out = Python.list()
+    for hit in hits:
+        var alignment = alignment_tuple(hit.alignment.value()) if hit.alignment else Python.none()
+        out.append(Python.tuple(PythonObject(hit.index), PythonObject(hit.score), alignment))
+    return out

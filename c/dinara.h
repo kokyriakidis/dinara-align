@@ -159,6 +159,16 @@ int64_t dinara_local_scores_of(const char *reference, int64_t reference_length, 
                                int64_t query_length, const dinara_costs *costs, const dinara_mode *mode,
                                int64_t window, dinara_local_scores *scores);
 
+/* The query against `count` references, a database search: the hits, best first, ties by order, their
+ * places into `indices` and their scores (minus their costs with no reward) into `scores`, each with
+ * room for `count`; returns how many, or a DINARA_ code. `best` above zero keeps that many, and the
+ * options' `max_cost` drops what passes it. A local search scores many references at once, one to a
+ * SIMD lane. */
+int64_t dinara_search(const char *query, int64_t query_length, int64_t count, const char *const *references,
+                      const int64_t *reference_lengths, const dinara_costs *costs, const dinara_mode *mode,
+                      const dinara_options *options, int64_t best, int64_t threads, int64_t *indices,
+                      int64_t *scores);
+
 /* Frees a CIGAR that `dinara_align` or `dinara_alignments` returned; null is nothing to free. */
 void dinara_free(char *cigar);
 
@@ -410,6 +420,30 @@ inline dinara_local_scores local_scores(std::string_view reference, std::string_
     detail::check(dinara_local_scores_of(reference.data(), static_cast<int64_t>(reference.size()), query.data(),
                                          static_cast<int64_t>(query.size()), &c, &mode.fields, window, &found));
     return found;
+}
+
+/* One hit of a `search`: the reference's place in the list, and its score. */
+struct Hit {
+    int64_t index;
+    int64_t score;
+};
+
+/* The query against every reference, the best first; `best` above zero keeps that many. */
+inline std::vector<Hit> search(std::string_view query, const std::vector<std::string_view> &references,
+                               const Costs &costs = Costs::edit(), const Mode &mode = Mode::global(),
+                               int64_t best = 0, int threads = 0) {
+    std::vector<const char *> texts;
+    std::vector<int64_t> lengths;
+    for (auto reference : references) texts.push_back(reference.data()), lengths.push_back(static_cast<int64_t>(reference.size()));
+    std::vector<int64_t> indices(references.size()), scores(references.size());
+    dinara_costs c = detail::c_costs(costs);
+    int64_t found = dinara_search(query.data(), static_cast<int64_t>(query.size()), static_cast<int64_t>(references.size()),
+                                  texts.data(), lengths.data(), &c, &mode.fields, nullptr, best, threads, indices.data(),
+                                  scores.data());
+    detail::check(found);
+    std::vector<Hit> hits;
+    for (int64_t rank = 0; rank < found; ++rank) hits.push_back({indices[rank], scores[rank]});
+    return hits;
 }
 
 /* The least cost of aligning the query to the reference. */

@@ -130,6 +130,8 @@ def main() -> None:
         ]
     capped = da.distances(references, queries, affine, max_cost=30)
     assert all((c is None) == (da.distance(r, q, affine) > 30) for c, r, q in zip(capped, references, queries))
+    hits = da.search("ACGTACGTACGT", ["TTTT", "ACGTACGTACGT", "ACGTTCGTACGT"], affine, da.Mode.local(2), best=2, aligned=True)
+    assert [hit.index for hit in hits] == [1, 2] and hits[0].score == 24 and hits[0].alignment.cigar == "12="
     print(f"Python package: every check passed, {tried} examples of its own among them")
 
 

@@ -213,6 +213,18 @@ def scores(references: List[String], queries: List[String], scoring: Scoring, mo
 
 `score` for every pair; on the device, every pair one block can carry goes out in one launch.
 
+### `search`
+
+```mojo
+def search(query: String, references: List[String], costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, best: Optional[Int] = None, max_cost: Optional[Int] = None, aligned: Bool = False, ties: Ties = Ties.LEFT, threads: Optional[Int] = None) -> List[Hit]
+```
+
+The query against every reference, a database search: each reference's `Hit`, its score, the best first, ties by the references' order; with `best` that many alone, with `max_cost` (a mode with no reward) those within it alone, and with `aligned` each kept hit's alignment too.
+
+A local alignment scores a block of references at once, one to a SIMD lane, as SWIPE does (see
+`search`); a mode with no reward takes `distances`, under the cap when there is one; any other mode
+each pair's `score`. Every kept hit is then aligned on its own, when asked for, by `align`.
+
 ### `hardware_threads`
 
 ```mojo
@@ -780,6 +792,20 @@ A local alignment's best score and where it ends, and the best score of an align
 | `query_end` | `Int` |  |
 | `second_score` | `Int` |  |
 | `second_reference_end` | `Int` |  |
+
+### `Hit`
+
+```mojo
+struct Hit
+```
+
+One reference's result in a search: its place in the list searched, its best score (minus its least cost for a mode with no reward), and its alignment when asked for.
+
+| field | type | |
+| :-- | :-- | :-- |
+| `index` | `Int` |  |
+| `score` | `Int` |  |
+| `alignment` | `Optional[Alignment]` |  |
 
 ### `Scoring`
 

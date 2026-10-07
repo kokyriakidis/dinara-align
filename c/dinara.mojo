@@ -32,6 +32,7 @@ from dinara_align import (
     hardware_threads,
     local_scores,
     score,
+    search,
 )
 
 comptime UNSUPPORTED_SYMBOLS = -1
@@ -489,3 +490,47 @@ def dinara_free(text: OptionalPointer[UInt8, MutAnyOrigin]) abi("C"):
     """Frees a CIGAR a function here allocated, with the C library's `free` that matches its `malloc`;
     null is nothing to free."""
     external_call["free", NoneType](text)
+
+
+@export("dinara_search")
+def dinara_search(
+    query: ImmPointer[UInt8, MutAnyOrigin],
+    query_length: Int,
+    count: Int,
+    references: CSequences,
+    reference_lengths: CInts,
+    costs: OptionalPointer[Int, MutAnyOrigin],
+    mode: OptionalPointer[Int, MutAnyOrigin],
+    options: OptionalPointer[Int, MutAnyOrigin],
+    best: Int,
+    threads: Int,
+    indices: MutPointer[Int, MutAnyOrigin],
+    scores: MutPointer[Int, MutAnyOrigin],
+) abi("C") -> Int:
+    """The query against `count` references (see `search`): the hits, best first, their places into
+    `indices` and their scores into `scores`, each with room for `count`, and their number back, or a
+    negative code. `best` above zero keeps that many; the options' cap drops what passes it."""
+    if not plain_bytes(query, query_length):
+        return UNSUPPORTED_SYMBOLS
+    try:
+        var asked = options_of(options)
+        var texts = List[String](capacity=count)
+        for index in range(count):
+            if not plain_bytes(references[unsafe_offset=index], reference_lengths[unsafe_offset=index]):
+                return UNSUPPORTED_SYMBOLS
+            texts.append(sequence(references[unsafe_offset=index], reference_lengths[unsafe_offset=index]))
+        var hits = search(
+            sequence(query, query_length),
+            texts,
+            costs_of(costs),
+            mode_of(mode),
+            best=Optional[Int](best) if best > 0 else None,
+            max_cost=Optional[Int](asked.max_cost) if asked.max_cost >= 0 else None,
+            threads=Optional[Int](threads) if threads > 0 else None,
+        )
+        for rank in range(len(hits)):
+            indices[unsafe_offset=rank] = hits[rank].index
+            scores[unsafe_offset=rank] = hits[rank].score
+        return len(hits)
+    except error:
+        return failure(error)

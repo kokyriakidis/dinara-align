@@ -41,6 +41,8 @@ __all__ = [
     "distances",
     "local_scores",
     "score",
+    "search",
+    "Hit",
 ]
 
 UNBOUNDED = 1 << 60
@@ -484,3 +486,41 @@ def alignments(
         threads,
     )
     return [None if item is None else Alignment(*item) for item in found]
+
+
+@dataclass(frozen=True)
+class Hit:
+    """One reference's result in a `search`: its place in the list, its best score (minus its least
+    cost with no reward), and its alignment when asked for."""
+
+    index: int
+    score: int
+    alignment: Optional[Alignment] = None
+
+
+def search(
+    query: Text,
+    references: Sequence[Text],
+    costs: Costs = Costs(),
+    mode: Mode = Mode.GLOBAL,
+    *,
+    best: Optional[int] = None,
+    max_cost: Optional[int] = None,
+    aligned: bool = False,
+    ties: str = "left",
+    threads: int = 0,
+) -> list:
+    """The query against every reference, the best first: each reference's `Hit`; with `best` that
+    many alone, with `max_cost` those within it, with `aligned` their alignments. A local search scores
+    a block of references at once, one to a SIMD lane."""
+    options = _options(None, max_cost, True, ties, None)
+    found = _call(
+        _dinara.search,
+        _text(query),
+        [_text(item) for item in references],
+        costs._fields(),
+        mode._fields(),
+        options,
+        (best or 0, aligned, threads),
+    )
+    return [Hit(index, score, None if alignment is None else Alignment(*alignment)) for index, score, alignment in found]

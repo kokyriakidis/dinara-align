@@ -24,6 +24,7 @@ from .edit_distance import edit_cigar, edit_distance
 from .edit_search import edit_search
 from .errors import AlignmentError, ErrorKind
 from .cigar import cigar_matches, cigar_runs, joined_cigar
+from .search import Hit, local_scores_by_block
 from .scored import (
     FROM_EDGE,
     LocalScores,
@@ -735,6 +736,84 @@ def capped_alignments(
         if not results[index] and max_cost == Int.MAX:
             raise outside(band)
     return results^
+
+
+def search(
+    query: String,
+    references: List[String],
+    costs: Costs = Costs.edit(),
+    mode: Mode = Mode.GLOBAL,
+    *,
+    best: Optional[Int] = None,
+    max_cost: Optional[Int] = None,
+    aligned: Bool = False,
+    ties: Ties = Ties.LEFT,
+    threads: Optional[Int] = None,
+) raises AlignmentError -> List[Hit]:
+    """The query against every reference, a database search: each reference's `Hit`, its score, the
+    best first, ties by the references' order; with `best` that many alone, with `max_cost` (a mode
+    with no reward) those within it alone, and with `aligned` each kept hit's alignment too.
+
+    A local alignment scores a block of references at once, one to a SIMD lane, as SWIPE does (see
+    `search`); a mode with no reward takes `distances`, under the cap when there is one; any other mode
+    each pair's `score`. Every kept hit is then aligned on its own, when asked for, by `align`."""
+    var count = len(references)
+    var workers = max(threads.or_else(hardware_threads()), 1)
+    var scores = List[Int](length=count, fill=Int.MIN)
+    if mode.kind == Mode.SMITH_WATERMAN and mode.match_score > 0:
+        _ = penalties_of(costs)
+        scores = local_scores_by_block(query, references, costs, mode.match_score, workers)
+    elif not mode.is_scored():
+        var queries = List[String](length=count, fill=query)
+        var found = capped_distances(
+            references, queries, costs, mode, Band(), max_cost.or_else(Int.MAX), Optional[Int](workers)
+        )
+        for index in range(count):
+            if found[index]:
+                scores[index] = -found[index].value()
+    else:
+        if max_cost:
+            raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a mode with a match score takes no cost cap")
+        var out = scores.unsafe_ptr()
+        var failed = List[Bool](length=count, fill=False)
+        var flags = failed.unsafe_ptr()
+        var taken = Atomic[Int64](0)
+
+        def work(slot: Int) {mut taken, imm}:
+            while True:
+                var index = Int(taken.fetch_add(1))
+                if index >= count:
+                    return
+                try:
+                    out[unsafe_offset=index] = score(references[index], query, costs, mode)
+                except:
+                    flags[unsafe_offset=index] = True
+
+        parallelize(work, min(workers, max(count, 1)), min(workers, max(count, 1)))
+        for index in range(count):
+            if failed[index]:
+                scores[index] = score(references[index], query, costs, mode)
+    # The best first, ties by the references' order; a reference past the cap is no hit.
+    var order = List[Int](capacity=count)
+    for index in range(count):
+        if scores[index] != Int.MIN:
+            order.append(index)
+
+    def ahead(left: Int, right: Int) {imm scores} -> Bool:
+        if scores[left] != scores[right]:
+            return scores[left] > scores[right]
+        return left < right
+
+    sort(order, ahead)
+    var kept = min(len(order), best.or_else(len(order)))
+    var hits = List[Hit](capacity=kept)
+    for rank in range(kept):
+        var index = order[rank]
+        var alignment = Optional[Alignment]()
+        if aligned:
+            alignment = align(references[index], query, costs, mode, ties=ties)
+        hits.append(Hit(index, scores[index], alignment^))
+    return hits^
 
 
 # endregion Batches

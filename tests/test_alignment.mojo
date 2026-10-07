@@ -34,6 +34,7 @@ from dinara_align import (
     local_scores,
     score,
     scores,
+    search,
 )
 from dinara_align.alignment import AlignmentMode, GappedAlignment
 from dinara_align.cigar import cigar_runs
@@ -2710,6 +2711,55 @@ def test_deletions_cost_their_own() raises:
     assert_equal(distance(plain, gapped, long_deletions), 66)
     with assert_raises():
         _ = Costs.affine(4, 6, 2).with_deletions(6, 0)
+
+
+def test_search_ranks_every_reference() raises:
+    """A search's every hit scores what `score` gives its pair, the best first, ties by the
+    references' order; `best` keeps that many, a cap drops what passes it, and `aligned` aligns the
+    kept hits. Local scores come from blocks of references one to a lane, of every length, a block
+    shorter than a lane's width among them."""
+    seed(107)
+    var query = random_sequence(80, 160, DNA_ALPHABET)
+    var references = List[String]()
+    for index in range(77):
+        var kind = index % 4
+        if kind == 0:
+            references.append(random_sequence(0, 300, DNA_ALPHABET))
+        elif kind == 1:
+            references.append(
+                random_sequence(0, 100, DNA_ALPHABET) + mutated(query, 0.1, 4) + random_sequence(0, 100, DNA_ALPHABET)
+            )
+        elif kind == 2:
+            references.append(mutated(query, 0.3, 6))
+        else:
+            references.append(random_sequence(0, 20, DNA_ALPHABET))
+    for costs in [Costs.affine(4, 6, 2), Costs.two_piece(4, 6, 2, 24, 1), Costs.affine(2, 3, 1).with_deletions(9, 2)]:
+        for mode in [Mode.local(2), Mode.INFIX, Mode.GLOBAL, Mode.overlap(1)]:
+            var hits = search(query, references, costs, mode)
+            assert_equal(len(hits), len(references))
+            for rank in range(len(hits)):
+                assert_equal(hits[rank].score, score(references[hits[rank].index], query, costs, mode))
+                if rank > 0:
+                    var before = hits[rank - 1].score
+                    assert_true(
+                        before > hits[rank].score
+                        or (before == hits[rank].score and hits[rank - 1].index < hits[rank].index)
+                    )
+            var top = search(query, references, costs, mode, best=5, aligned=True, threads=3)
+            assert_equal(len(top), 5)
+            for rank in range(5):
+                assert_equal(top[rank].index, hits[rank].index)
+                assert_equal(top[rank].alignment.value().score, top[rank].score)
+    var capped = search(query, references, Costs.affine(4, 6, 2), Mode.INFIX, max_cost=60)
+    for hit in capped:
+        assert_true(-hit.score <= 60)
+    var whole = search(query, references, Costs.affine(4, 6, 2), Mode.INFIX)
+    var within = 0
+    for hit in whole:
+        if -hit.score <= 60:
+            within += 1
+    assert_equal(len(capped), within)
+    assert_equal(len(search(query, List[String](), Costs.affine(4, 6, 2), Mode.local(2))), 0)
 
 
 def rebuilt_reference(query: String, cigar: String, md: String) raises -> String:

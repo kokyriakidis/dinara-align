@@ -85,12 +85,13 @@ the edit distance from A*PA by Ragnar Groot Koerkamp and Pesho Ivanov (see NOTIC
 """
 
 from .alignment import colorize
-from .api import align, alignments, distance, distances, local_scores, score, scores
+from .api import align, alignments, distance, distances, local_scores, score, scores, search
 from .common import Device, DeviceScope, GpuSpecs, Placement, hardware_threads
 from .errors import AlignmentError, ErrorKind
 from .gap_affine import DEFAULT_MAX_MEMORY
 from .modes import AlignedCounts, Alignment, Anchor, Band, Costs, Mode, Ties
 from .scored import LocalScores
+from .search import Hit
 from .scoring import (
     DEFAULT_GAP_EXTENSION,
     DEFAULT_GAP_OPENING,
