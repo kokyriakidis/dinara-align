@@ -20,11 +20,15 @@ from dinara_align import (
     AlignmentResult,
     DNA_ALPHABET,
     EndsFree,
+    Anchor,
+    Band,
     affine2p_cigar,
     affine2p_distance,
+    affine2p_extension,
     affine_cigar,
     affine_cigars,
     affine_distance,
+    affine_extension,
     Placement,
     Scoring,
     align,
@@ -1104,13 +1108,22 @@ def test_affine_distance_and_its_cap() raises:
 
 
 def ends_free_optimum(
-    first: String, second: String, x: Int, o: Int, e: Int, ends: EndsFree, o2: Int = -1, e2: Int = 0
+    first: String,
+    second: String,
+    x: Int,
+    o: Int,
+    e: Int,
+    ends: EndsFree,
+    o2: Int = -1,
+    e2: Int = 0,
+    band: Band = Band(),
 ) -> Int:
     """The least gap-affine cost of aligning two sequences with the letters `ends` allows at each end
     left unaligned for nothing, by Gotoh's recurrence over the whole matrix: starts free along the
     first row and column up to the leading allowances, the best end along the last row and column
     within the trailing ones. With `o2` not negative, a gap costs the less of its two pieces, each
-    with a layer either way of its own. Shares no code with the wavefront."""
+    with a layer either way of its own. Cells off `band`'s diagonals, `i - j`, are never reached; `1 <<
+    40` when no end is. Shares no code with the wavefront."""
     comptime HIGH = 1 << 40
     var a = first.as_bytes()
     var b = second.as_bytes()
@@ -1125,6 +1138,8 @@ def ends_free_optimum(
     for i in range(n + 1):
         for j in range(m + 1):
             var at = i * width + j
+            if not band.holds(i - j):
+                continue
             if (j == 0 and i <= ends.first_begin) or (i == 0 and j <= ends.second_begin):
                 best[at] = 0
                 continue
@@ -1237,6 +1252,134 @@ def test_affine_ends_free_matches_the_full_matrix() raises:
     assert_equal(placed.cigar, "4D8=4D")
 
 
+def stays_inside(cigar: String, ends: EndsFree, band: Band) raises -> Bool:
+    """Whether every cell of a CIGAR's path from where it starts to where it stops lies on `band`'s
+    diagonals, its letters left unaligned for nothing at either end, as `ends_free_price` counts them,
+    before its start and after its stop."""
+    var kinds = List[UInt8]()
+    var lengths = List[Int]()
+    var length = 0
+    for byte in cigar.as_bytes():
+        if byte >= UInt8(ord("0")) and byte <= UInt8(ord("9")):
+            length = length * 10 + Int(byte - UInt8(ord("0")))
+            continue
+        kinds.append(byte)
+        lengths.append(length)
+        length = 0
+    var cells = List[Int]()
+    var diagonal = 0
+    var skipped = 0
+    var dropped = 0
+    for index in range(len(kinds)):
+        var deletion = kinds[index] == UInt8(ord("D"))
+        var gap = deletion or kinds[index] == UInt8(ord("I"))
+        if gap and index == 0:
+            skipped = min(lengths[index], ends.first_begin if deletion else ends.second_begin)
+        if gap and index == len(kinds) - 1 and len(kinds) > 1:
+            dropped = min(lengths[index], ends.first_end if deletion else ends.second_end)
+        for _ in range(lengths[index]):
+            if kinds[index] == UInt8(ord("D")):
+                diagonal += 1
+            elif kinds[index] == UInt8(ord("I")):
+                diagonal -= 1
+            cells.append(diagonal)
+    # The start cell, after the letters skipped, and every cell up to the stop.
+    var path = [0] if skipped == 0 else List[Int]()
+    for index in range(max(skipped - 1, 0), len(cells) - dropped):
+        path.append(cells[index])
+    for cell in path:
+        if not band.holds(cell):
+            return False
+    return True
+
+
+def extension_optimum(
+    first: String, second: String, a: Int, x: Int, o: Int, e: Int, o2: Int, e2: Int, band: Band
+) -> Int:
+    """The best score of an alignment from both sequences' first letters to any cell, by Gotoh's
+    recurrence over scores: a match earning `a`, a substitution costing `x` and a gap the less of its
+    pieces, the second's only with `o2` not negative, every cell inside `band`. Aligning nothing scores
+    zero. Shares no code with the wavefront."""
+    comptime LOW = -(1 << 40)
+    var p = first.as_bytes()
+    var q = second.as_bytes()
+    var n = len(p)
+    var m = len(q)
+    var width = m + 1
+    var best = List[Int](length=(n + 1) * width, fill=LOW)
+    var layers = List[List[Int]]()
+    for _ in range(4):
+        layers.append(List[Int](length=(n + 1) * width, fill=LOW))
+    var answer = 0
+    for i in range(n + 1):
+        for j in range(m + 1):
+            var at = i * width + j
+            if not band.holds(i - j):
+                continue
+            if i == 0 and j == 0:
+                best[at] = 0
+                continue
+            var value = LOW
+            for piece in range(2 if o2 >= 0 else 1):
+                var opening = o if piece == 0 else o2
+                var extension = e if piece == 0 else e2
+                if i > 0:
+                    layers[2 * piece][at] = max(
+                        best[at - width] - opening - extension, layers[2 * piece][at - width] - extension
+                    )
+                if j > 0:
+                    layers[2 * piece + 1][at] = max(
+                        best[at - 1] - opening - extension, layers[2 * piece + 1][at - 1] - extension
+                    )
+                value = max(value, max(layers[2 * piece][at], layers[2 * piece + 1][at]))
+            if i > 0 and j > 0:
+                value = max(value, best[at - width - 1] + (a if p[i - 1] == q[j - 1] else -x))
+            best[at] = value
+            answer = max(answer, value)
+    return answer
+
+
+def extension_price(cigar: String, a: Int, x: Int, o: Int, e: Int, o2: Int, e2: Int) -> Int:
+    """What a CIGAR's alignment scores, a match earning `a`."""
+    var total = 0
+    var length = 0
+    for byte in cigar.as_bytes():
+        if byte >= UInt8(ord("0")) and byte <= UInt8(ord("9")):
+            length = length * 10 + Int(byte - UInt8(ord("0")))
+            continue
+        if byte == UInt8(ord("=")):
+            total += a * length
+        elif byte == UInt8(ord("X")):
+            total -= x * length
+        else:
+            total -= min(o + e * length, o2 + e2 * length) if o2 >= 0 else o + e * length
+        length = 0
+    return total
+
+
+def reversed_text(text: String) -> String:
+    var bytes = List[UInt8]()
+    var source = text.as_bytes()
+    for index in range(len(source) - 1, -1, -1):
+        bytes.append(source[index])
+    return String(unsafe_from_utf8=bytes)
+
+
+def reversed_cigar(cigar: String) -> String:
+    """A CIGAR's entries in the other order, the alignment read from its far end."""
+    var entries = List[String]()
+    var start = 0
+    var bytes = cigar.as_bytes()
+    for index in range(len(bytes)):
+        if bytes[index] < UInt8(ord("0")) or bytes[index] > UInt8(ord("9")):
+            entries.append(String(cigar[byte = start : index + 1]))
+            start = index + 1
+    var out = String()
+    for index in range(len(entries) - 1, -1, -1):
+        out += entries[index]
+    return out
+
+
 def cigar_of_moves(first: String, second: String, moves: List[UInt8]) -> String:
     """The CIGAR of moves `solve` appended right to left: 0 two letters aligned, 1 the first's alone, 2 the second's."""
     var a = first.as_bytes()
@@ -1339,6 +1482,191 @@ def test_affine2p_matches_the_full_matrix() raises:
     assert_equal(affine2p_distance("", "A" * 30, 4, 6, 2, 24, 1), 54)
     with assert_raises():
         _ = affine2p_distance("A", "C", 4, 6, 2, 24, 0)
+
+
+def test_affine_band_matches_the_full_matrix() raises:
+    """With a band, the cost is the whole matrix's over its diagonals alone, for one gap piece or two,
+    global or with ends free: the CIGAR costs it and stays inside, the cap agrees, a band no alignment
+    fits raises or comes back empty, and the split of a pair too large to keep, whose pieces see the
+    band from their own origins, finds the same cost."""
+    seed(47)
+    for costs in [(4, 6, 2, -1, 0), (1, 0, 1, -1, 0), (4, 6, 2, 24, 1), (3, 2, 3, 10, 1)]:
+        var x = costs[0]
+        var o = costs[1]
+        var e = costs[2]
+        var o2 = costs[3]
+        var e2 = costs[4]
+        var two = o2 >= 0
+        var penalties = affine2p_penalties(x, o, e, o2, e2) if two else affine_penalties(x, o, e)
+        for trial in range(80):
+            var core = random_sequence(1, 200, DNA_ALPHABET)
+            var first = core
+            var ends = EndsFree()
+            if trial % 3 == 2:
+                first = random_sequence(0, 30, DNA_ALPHABET) + core + random_sequence(0, 30, DNA_ALPHABET)
+                var sizes = [0, 3, 30, 1000]
+                ends = EndsFree(
+                    sizes[trial % 4], sizes[(trial // 4) % 4], sizes[(trial // 2) % 4], sizes[(trial // 3) % 4]
+                )
+            var second = mutated(core, [0.03, 0.15, 0.3][trial % 3], [1, 5, 30][(trial // 3) % 3])
+            if trial % 5 == 0:
+                first, second = second, first
+            var width = Int(random_ui64(0, 40))
+            var shift = Int(random_ui64(0, 20)) - 10
+            var band = Band(-width + shift, width + shift)
+            var expected = ends_free_optimum(first, second, x, o, e, ends, o2 if two else -1, e2, band)
+            if expected >= 1 << 40:
+                with assert_raises(contains="band"):
+                    if two:
+                        _ = affine2p_distance(first, second, x, o, e, o2, e2, ends_free=ends, band=band)
+                    else:
+                        _ = affine_distance(first, second, x, o, e, ends_free=ends, band=band)
+                with assert_raises(contains="band"):
+                    if two:
+                        _ = affine2p_cigar(first, second, x, o, e, o2, e2, ends_free=ends, band=band)
+                    else:
+                        _ = affine_cigar(first, second, x, o, e, ends_free=ends, band=band)
+                assert_false(Bool(affine_cigar(first, second, x, o, e, max_cost=1 << 30, ends_free=ends, band=band)))
+                continue
+            var distance: Int
+            var cigar: String
+            var cost: Int
+            if two:
+                distance = affine2p_distance(first, second, x, o, e, o2, e2, ends_free=ends, band=band)
+                var found = affine2p_cigar(first, second, x, o, e, o2, e2, ends_free=ends, band=band)
+                cost = found.cost
+                cigar = found.cigar
+            else:
+                distance = affine_distance(first, second, x, o, e, ends_free=ends, band=band)
+                var found = affine_cigar(first, second, x, o, e, ends_free=ends, band=band)
+                cost = found.cost
+                cigar = found.cigar
+            assert_equal(distance, expected)
+            assert_equal(cost, expected)
+            var rows = rows_from_cigar(first, second, cigar)
+            assert_equal(rows[0].replace("-", ""), first)
+            assert_equal(rows[1].replace("-", ""), second)
+            assert_equal(ends_free_price(cigar, x, o, e, ends, o2 if two else -1, e2), expected)
+            assert_true(stays_inside(cigar, ends, band), String("the CIGAR leaves the band: ", cigar))
+            if not two:
+                assert_equal(
+                    affine_cigar(first, second, x, o, e, max_cost=expected, ends_free=ends, band=band).value().cost,
+                    expected,
+                )
+                if expected > 0:
+                    assert_false(
+                        Bool(affine_distance(first, second, x, o, e, max_cost=expected - 1, ends_free=ends, band=band))
+                    )
+            for limit in [0, 64]:
+                var moves = List[UInt8]()
+                var split_cost: Int
+                if two:
+                    split_cost = solve[2](
+                        first.as_bytes(),
+                        second.as_bytes(),
+                        penalties,
+                        FREE_START,
+                        FREE_START,
+                        limit,
+                        moves,
+                        True,
+                        Int.MAX,
+                        ends,
+                        band,
+                    )
+                else:
+                    split_cost = solve[1](
+                        first.as_bytes(),
+                        second.as_bytes(),
+                        penalties,
+                        FREE_START,
+                        FREE_START,
+                        limit,
+                        moves,
+                        True,
+                        Int.MAX,
+                        ends,
+                        band,
+                    )
+                assert_equal(split_cost * penalties.scale, expected)
+                var split = cigar_of_moves(first, second, moves)
+                assert_equal(ends_free_price(split, x, o, e, ends, o2 if two else -1, e2), expected)
+                assert_true(stays_inside(split, ends, band), String("the split's CIGAR leaves the band: ", split))
+    # A band of one diagonal admits only the diagonal itself: four substitutions, where a gap either
+    # way would be cheaper.
+    assert_equal(affine_cigar("ACGTACGT", "ACGAACGT", 4, 6, 2, band=Band(0, 0)).cigar, "3=1X4=")
+    assert_equal(affine_cigar("AAAACCCC", "CCCCAAAA", 4, 6, 2, band=Band.around(0)).cost, 32)
+    with assert_raises(contains="band"):
+        _ = affine_distance("ACGT", "AC", 4, 6, 2, band=Band.around(1))
+
+
+def test_affine_extension_matches_the_full_matrix() raises:
+    """An extension fixed at the start or at the end scores the best of every alignment from that end
+    to any cell, for one gap piece or two, with a band or without: its CIGAR spells an alignment of
+    the letters it covers from that end, scores what it claims, and stays inside the band."""
+    seed(53)
+    for scores in [(1, 4, 6, 2, -1, 0), (2, 4, 4, 2, -1, 0), (2, 4, 4, 2, 24, 1), (3, 1, 0, 2, 5, 1)]:
+        var a = scores[0]
+        var x = scores[1]
+        var o = scores[2]
+        var e = scores[3]
+        var o2 = scores[4]
+        var e2 = scores[5]
+        var two = o2 >= 0
+        for trial in range(80):
+            var core = random_sequence(0, 200, DNA_ALPHABET)
+            var first = core + random_sequence(0, 60, DNA_ALPHABET)
+            var second = mutated(core, [0.0, 0.05, 0.2][trial % 3], [1, 5, 30][(trial // 3) % 3]) + random_sequence(
+                0, 60, DNA_ALPHABET
+            )
+            if trial % 7 == 0:
+                first, second = second, first
+            var band = Band()
+            if trial % 2 == 1:
+                band = Band.around(Int(random_ui64(0, 30)))
+            for anchor in [Anchor.START, Anchor.END]:
+                var at_end = anchor == Anchor.END
+                var left = reversed_text(first) if at_end else first
+                var right = reversed_text(second) if at_end else second
+                var expected = extension_optimum(left, right, a, x, o, e, o2, e2, band)
+                var found = affine2p_extension(
+                    left if at_end else first, right if at_end else second, a, x, o, e, o2, e2, band=band
+                ) if two else affine_extension(
+                    left if at_end else first, right if at_end else second, a, x, o, e, band=band
+                )
+                # Asked from the end of the reversed texts, which the oracle reads from their start.
+                if at_end:
+                    found = affine2p_extension(
+                        first, second, a, x, o, e, o2, e2, anchor=Anchor.END, band=band
+                    ) if two else affine_extension(first, second, a, x, o, e, anchor=Anchor.END, band=band)
+                assert_equal(found.score, expected)
+                var covered_first = String(
+                    first[byte = first.byte_length() - found.first_length :]
+                ) if at_end else String(first[byte = : found.first_length])
+                var covered_second = String(
+                    second[byte = second.byte_length() - found.second_length :]
+                ) if at_end else String(second[byte = : found.second_length])
+                if found.first_length + found.second_length > 0:
+                    var rows = rows_from_cigar(covered_first, covered_second, found.cigar)
+                    assert_equal(rows[0].replace("-", ""), covered_first)
+                    assert_equal(rows[1].replace("-", ""), covered_second)
+                else:
+                    assert_equal(found.cigar, "")
+                assert_equal(extension_price(found.cigar, a, x, o, e, o2, e2), expected)
+                var walked = reversed_cigar(found.cigar) if at_end else found.cigar
+                assert_true(
+                    stays_inside(walked, EndsFree(), band), String("the extension leaves the band: ", found.cigar)
+                )
+    # A read that matches its reference for twelve letters, then not at all: the extension stops there.
+    var read = affine_extension("ACGTTGCAAGGC" + "TTTTTTTTTT", "ACGTTGCAAGGC" + "GAGAGAGAGA", 1, 4, 6, 2)
+    assert_equal(read.score, 12)
+    assert_equal(read.cigar, "12=")
+    var back = affine_extension(
+        "TTTTTTTTTT" + "ACGTTGCAAGGC", "GAGAGAGAGA" + "ACGTTGCAAGGC", 1, 4, 6, 2, anchor=Anchor.END
+    )
+    assert_equal(back.score, 12)
+    assert_equal(back.first_length, 12)
+    assert_equal(affine_extension("ACGT", "TGCA", 0, 4, 6, 2).cigar, "")
 
 
 # endregion Refusals

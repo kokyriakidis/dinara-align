@@ -110,6 +110,25 @@ int main() {
     CHECK(!dinara::affine2p_distance_within(gapped, plain, 4, 6, 2, cheap_long, 61));
     CHECK(!dinara::affine2p_cigar_within(gapped, plain, 4, 6, 2, cheap_long, 61));
     CHECK(dinara::affine2p_cigar("TTTTACGTACGTTTTT", "ACGTACGT", 4, 6, 2, cheap_long, true, inside).cost == 0);
+    // A band of the one diagonal: substitutions only, where a gap either way would be cheaper.
+    CHECK(dinara::affine_cigar("ACGTACGT", "ACGAACGT", 4, 6, 2, true, {}, dinara::Band{0, 0}).cigar == "3=1X4=");
+    CHECK(dinara::affine_distance("AAAACCCC", "CCCCAAAA", 4, 6, 2, {}, dinara::Band::around(0)) == 32);
+    CHECK(dinara::affine_distance("AAAACCCC", "CCCCAAAA", 4, 6, 2) < 32);
+    CHECK(!dinara::affine_distance_within("ACGT", "AC", 4, 6, 2, 100, {}, dinara::Band::around(1)));
+    bool outside = false;
+    try {
+        dinara::affine_distance("ACGT", "AC", 4, 6, 2, {}, dinara::Band::around(1));
+    } catch (const dinara::OutsideBand &) {
+        outside = true;
+    }
+    CHECK(outside);
+    // An extension stops where the read stops matching, from either end.
+    dinara::Extension right = dinara::affine_extension("ACGTTGCAAGGCTTTTTTTTTT", "ACGTTGCAAGGCGAGAGAGAGA", 1, 4, 6, 2);
+    CHECK(right.score == 12 && right.cigar == "12=" && right.first_length == 12 && right.second_length == 12);
+    dinara::Extension left =
+        dinara::affine_extension("TTTTTTTTTTACGTTGCAAGGC", "GAGAGAGAGAACGTTGCAAGGC", 1, 4, 6, 2, dinara::Anchor::end);
+    CHECK(left.score == 12 && left.cigar == "12=");
+    CHECK(dinara::affine2p_extension("ACGTTGCAAGGCTTTT", "ACGTTGCAAGGCGAGA", 1, 4, 6, 2, cheap_long).score == 12);
 
     std::mt19937 random(7);
     std::uniform_int_distribution<int> base(0, 3);

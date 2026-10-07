@@ -33,7 +33,8 @@ Gap-affine costs as WFA counts them, a mismatch and a gap's opening and extensio
 from both ends whose work grows with the square of the cost; every byte is a symbol of its own:
 
 ```mojo
-from dinara_align import EndsFree, affine2p_cigar, affine_cigar, affine_cigars, affine_distance
+from dinara_align import Anchor, Band, EndsFree, affine2p_cigar, affine_cigar, affine_cigars, affine_distance
+from dinara_align import affine_extension
 
 var aligned = affine_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2)  # cost 12, CIGAR "4=3X6="
 var firsts: List[String] = ["ACGTACGT", "TTGCA"]
@@ -45,6 +46,11 @@ var capped = affine_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2, max_cost=10
 var placed = affine_cigar("TTTTACGTACGTTTTT", "ACGTACGT", 4, 6, 2, ends_free=EndsFree(16, 16, 0, 0))  # 4D8=4D
 # Two-piece gap costs, WFA's gap-affine-2p: a gap of k letters costs min(6 + 2k, 24 + k).
 var long_gap = affine2p_cigar("ACGTACGTTTTTTTTTTTTTTTTTTTTTTTTTACGTACGT", "ACGTACGTACGTACGT", 4, 6, 2, 24, 1)
+# Exact within a band of diagonals, KSW2's `w`: the best alignment whose every move stays inside.
+var banded = affine_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2, band=Band.around(2))
+# A seed's extension, fixed at one end and stopping where it scores best, a match earning 1.
+var right = affine_extension("ACGTTGCAAGGCTTTT", "ACGTTGCAAGGCGAGA", 1, 4, 6, 2)  # score 12, "12="
+var left = affine_extension("TTTTACGTTGCAAGGC", "GAGAACGTTGCAAGGC", 1, 4, 6, 2, anchor=Anchor.END)
 ```
 
 A pattern can also be found inside a text, Edlib's infix mode, or at its start, its prefix mode:
@@ -84,6 +90,18 @@ from .api import (
 )
 from .edit_distance import EditCigar, edit_alignment, edit_cigar, edit_distance
 from .edit_search import EditHit, edit_search, edit_search_alignment
-from .gap_affine import AffineCigar, EndsFree, affine2p_cigar, affine2p_distance, affine_cigar, affine_distance
+from .gap_affine import (
+    AffineCigar,
+    AffineExtension,
+    Anchor,
+    Band,
+    EndsFree,
+    affine2p_cigar,
+    affine2p_distance,
+    affine2p_extension,
+    affine_cigar,
+    affine_distance,
+    affine_extension,
+)
 from .common import Device, DeviceScope, GpuSpecs, Placement, hardware_threads
 from .errors import AlignmentError, ErrorKind
