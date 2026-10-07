@@ -67,7 +67,8 @@ def costs_of(fields: OptionalPointer[Int, MutAnyOrigin]) raises AlignmentError -
 
 
 def mode_of(fields: OptionalPointer[Int, MutAnyOrigin]) raises AlignmentError -> Mode:
-    """`dinara_mode`: kind, the four free letter counts, the match score and the anchor. Null is global."""
+    """`dinara_mode`: kind, the four free letter counts, the match score and the anchor. Null is global.
+    Free ends with a match score of zero minimize the costs; above zero they maximize the score."""
     if not fields:
         return Mode.GLOBAL
     var at = fields.value()
@@ -84,6 +85,7 @@ def mode_of(fields: OptionalPointer[Int, MutAnyOrigin]) raises AlignmentError ->
         reference_end=at[unsafe_offset=2],
         query_start=at[unsafe_offset=3],
         query_end=at[unsafe_offset=4],
+        match_score=at[unsafe_offset=5],
     )
 
 

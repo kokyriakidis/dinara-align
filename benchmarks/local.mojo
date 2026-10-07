@@ -1,6 +1,7 @@
 """
-dinara-align's side of `local_bench.py`: local alignment, `Mode.local(2)`, or overlap alignment,
-`Mode.overlap(2)`, under `Costs.affine(4, 6, 2)`, each with its CIGAR, one pair at a time on one
+dinara-align's side of `local_bench.py`: local alignment, `Mode.local(2)`, overlap alignment,
+`Mode.overlap(2)`, or a query placed whole in a reference, `Mode.INFIX.with_match_score(2)`, under
+`Costs.affine(4, 6, 2)`, each with its CIGAR, one pair at a time on one
 thread.
 
     mojo build -I . benchmarks/local.mojo -o <binary> && <binary> <workload file>
@@ -29,7 +30,8 @@ def main() raises:
         queries.append(String(fields[2]))
     var costs = Costs.affine(4, 6, 2)
     var overlap = "overlap" in names[0]
-    var mode = Mode.overlap(2) if overlap else Mode.local(2)
+    var infix = "infix" in names[0]
+    var mode = Mode.overlap(2) if overlap else (Mode.INFIX.with_match_score(2) if infix else Mode.local(2))
     var best = Float64.MAX
     var total = 0
     var weighted = 0
@@ -42,5 +44,5 @@ def main() raises:
             total += score
             weighted += (index + 1) * score
         best = min(best, Float64(perf_counter_ns() - started) / 1e9)
-    var task = "overlap" if overlap else "local"
+    var task = "overlap" if overlap else ("infix" if infix else "local")
     print("dinara-align", names[0], task, best / Float64(len(references)), String(total, ":", weighted), sep="\t")

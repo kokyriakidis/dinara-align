@@ -31,6 +31,8 @@ var onward = align("ACGTTGCAAGGCTTTT", "ACGTTGCAAGGCGAGA", costs, Mode.extension
 var back = align("TTTTACGTTGCAAGGC", "GAGAACGTTGCAAGGC", costs, Mode.extension(1, Anchor.END))
 # The best-scoring part of each, Smith-Waterman, a match earning 2.
 var core = align("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC", costs, Mode.local(2))  # score 16, "8=", 4..12
+# A read placed in a window as a mapper scores it, a match earning 2, rather than at the least cost.
+var mapped = align("TTTTACGTACGTTTTT", "ACGTCGT", costs, Mode.INFIX.with_match_score(2))  # score 6
 # Two reads overlapping, every end gap free: the first's suffix on the second's prefix.
 var joined = align("TTTTTACGTACGT", "ACGTACGTGGGGG", costs, Mode.overlap(2))  # score 16, "8=", 5..13
 # A batch, over every thread.
@@ -49,6 +51,9 @@ var batch = distances(references, queries)  # [1, 1]
 | `Mode.REFERENCE_IN_QUERY` | whole | any part |
 | `Mode.local(match_score)` | any part | any part |
 | `Mode.overlap(match_score)` | a prefix or suffix | a suffix or prefix, or whole |
+
+Free ends minimize the costs alone, as Edlib and WFA2-lib count them; `mode.with_match_score(a)`
+rewards every match instead, as parasail's and hyalite's semi-global modes do.
 
 A `Scoring`, an alphabet's substitution table and gap scores, which an alignment maximizes, aligns by
 Gotoh's Needleman-Wunsch or Smith-Waterman, with the initialization corrections Flouri et al. found

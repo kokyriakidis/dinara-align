@@ -65,7 +65,9 @@ typedef struct {
 /*
  * Which alignments count. DINARA_ENDS_FREE: up to so many letters at each end of each sequence left
  * unaligned for nothing; all zero is a global alignment, the reference's two at DINARA_ALL a query
- * placed anywhere in it (infix), its end alone a prefix. DINARA_EXTENSION: fixed at both sequences'
+ * placed anywhere in it (infix), its end alone a prefix. With `match_score` zero the alignment has the
+ * least cost; above zero, the best score, a match earning it, as parasail's and hyalite's semi-global
+ * modes count it. DINARA_EXTENSION: fixed at both sequences'
  * starts, or with `anchor` nonzero their ends, and free to stop anywhere, a match earning
  * `match_score`: a seed's extension, as KSW2's without Z-drop. DINARA_LOCAL: any part of each, a match
  * earning `match_score`, Smith-Waterman, as abPOA's local mode. DINARA_OVERLAP: every end gap free, a
@@ -181,8 +183,15 @@ struct Mode {
     /* The whole reference against wherever in the query it fits best. */
     static Mode reference_in_query() { return ends_free(0, 0, DINARA_ALL, DINARA_ALL); }
     /* Up to so many letters at each end of each sequence left unaligned for nothing. */
-    static Mode ends_free(int64_t reference_start, int64_t reference_end, int64_t query_start, int64_t query_end) {
-        return {{DINARA_ENDS_FREE, reference_start, reference_end, query_start, query_end, 0, 0}};
+    static Mode ends_free(int64_t reference_start, int64_t reference_end, int64_t query_start, int64_t query_end,
+                          int64_t match_score = 0) {
+        return {{DINARA_ENDS_FREE, reference_start, reference_end, query_start, query_end, match_score, 0}};
+    }
+    /* These free ends with a match earning `match_score`: the best score rather than the least cost. */
+    Mode with_match_score(int64_t match_score) const {
+        Mode scored = *this;
+        scored.fields.match_score = match_score;
+        return scored;
     }
     /* The best-scoring alignment from one end, a match earning `match_score`. */
     static Mode extension(int64_t match_score, Anchor anchor = Anchor::start) {

@@ -106,6 +106,9 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     | `extension(...)` | from one end | from the same end | KSW2's extension, without Z-drop |
     | `local(...)`, `LOCAL` | any part | any part | Smith-Waterman, abPOA's local mode |
     | `overlap(...)` | a prefix or suffix | a suffix or prefix | semi-global, parasail's `sg`, hyalite's OV |
+
+    Free ends minimize the costs alone, as Edlib and WFA2-lib count them, unless a match earns
+    something (see `with_match_score`), as parasail's and hyalite's do.
     | `REFERENCE_IN_QUERY` | whole | any part | hyalite's SHW |
     """
 
@@ -116,13 +119,13 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     var query_start: Int
     var query_end: Int
     var match_score: Int
-    """What a match earns in an extension or a local alignment, the modes that maximize a score."""
+    """What a match earns: in an extension or a local alignment, which maximize a score, and with free
+    ends when asked (see `with_match_score`); zero elsewhere, the costs alone minimized."""
     var anchor: Anchor
 
     comptime ENDS = UInt8(0)
     comptime EXTENSION = UInt8(1)
     comptime SMITH_WATERMAN = UInt8(2)
-    comptime OVERLAP = UInt8(3)
 
     comptime GLOBAL = Self(Self.ENDS, 0, 0, 0, 0, 0, Anchor.START)
     """Both sequences end to end."""
@@ -140,14 +143,45 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
 
     @staticmethod
     def ends_free(
-        *, reference_start: Int = 0, reference_end: Int = 0, query_start: Int = 0, query_end: Int = 0
+        *,
+        reference_start: Int = 0,
+        reference_end: Int = 0,
+        query_start: Int = 0,
+        query_end: Int = 0,
+        match_score: Int = 0,
     ) raises AlignmentError -> Self:
         """Up to so many letters at each end of each sequence left unaligned for nothing, as WFA2-lib's
         ends-free alignment counts them; all zero is `GLOBAL`. An overlap of two reads frees one's start
-        and the other's end. Freeing both ends of both lets the empty alignment win, at no cost."""
+        and the other's end. With costs alone, freeing both ends of both lets the empty alignment win,
+        at no cost; a `match_score` makes the alignment the best-scoring one instead (see
+        `with_match_score`)."""
         if min(min(reference_start, reference_end), min(query_start, query_end)) < 0:
             raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a free end of fewer than no letters")
-        return Self(Self.ENDS, reference_start, reference_end, query_start, query_end, 0, Anchor.START)
+        if match_score < 0:
+            raise AlignmentError(ErrorKind.INVALID_SCORING, "a match that costs")
+        return Self(Self.ENDS, reference_start, reference_end, query_start, query_end, match_score, Anchor.START)
+
+    def with_match_score(self, match_score: Int) raises AlignmentError -> Self:
+        """These free ends with every match earning `match_score`: the best-scoring alignment, the
+        reward less the costs, as parasail's and hyalite's semi-global modes count it, rather than the
+        least costly one. With some letters left free the two can differ, as a reward pays for
+        aligning letters a cost alone would leave out. `Mode.INFIX.with_match_score(2)` is a read placed
+        in a window as a mapper scores it. Its time grows with the matrix, as `local`'s does, but for a
+        global alignment, whose letters are all aligned, so the reward folds into the costs and the
+        wavefront finds it."""
+        if self.kind != Self.ENDS:
+            raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a match score for free ends alone")
+        if match_score < 0:
+            raise AlignmentError(ErrorKind.INVALID_SCORING, "a match that costs")
+        return Self(
+            Self.ENDS,
+            self.reference_start,
+            self.reference_end,
+            self.query_start,
+            self.query_end,
+            match_score,
+            Anchor.START,
+        )
 
     @staticmethod
     def extension(match_score: Int, anchor: Anchor = Anchor.START) raises AlignmentError -> Self:
@@ -178,13 +212,18 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         matrix, as `local`'s does."""
         if match_score <= 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "an overlap needs a match that earns")
-        return Self(Self.OVERLAP, 0, 0, 0, 0, match_score, Anchor.START)
+        return Self(Self.ENDS, UNBOUNDED, UNBOUNDED, UNBOUNDED, UNBOUNDED, match_score, Anchor.START)
 
     def is_global(self) -> Bool:
         return (
             self.kind == Self.ENDS
             and (self.reference_start | self.reference_end | self.query_start | self.query_end) == 0
         )
+
+    def is_scored(self) -> Bool:
+        """Whether the alignment maximizes a score: an extension, a local alignment, or free ends with a
+        match that earns."""
+        return self.kind != Self.ENDS or self.match_score > 0
 
 
 @fieldwise_init

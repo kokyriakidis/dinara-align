@@ -1,5 +1,5 @@
-// The C rivals of `local_bench.py`: SSW, parasail and abPOA, local alignment and, where they have it,
-// overlap alignment, each with its CIGAR, at dinara-align's Mode.local(2) and Mode.overlap(2) under
+// The C rivals of `local_bench.py`: SSW, parasail and abPOA, local alignment and, where they have them,
+// overlap alignment and a query placed whole in a reference scored with a reward, each with its CIGAR, at dinara-align's Mode.local(2) and Mode.overlap(2) under
 // Costs.affine(4, 6, 2): a match 2, a mismatch -4, a gap of k letters 6 + 2k, which SSW and parasail
 // take as an opening of 8 and an extension of 2, and abPOA as 6 and 2.
 //
@@ -92,6 +92,16 @@ static long parasail_local(const char *reference, const char *query) {
     return score;
 }
 
+static long parasail_infix(const char *reference, const char *query) {
+    int rlen = strlen(reference), qlen = strlen(query);
+    parasail_result_t *result = parasail_sg_dx_trace_striped_sat(query, qlen, reference, rlen, 8, 2, parasail_dna);
+    parasail_cigar_t *cigar = parasail_result_get_cigar(result, query, qlen, reference, rlen, parasail_dna);
+    long score = parasail_result_get_score(result);
+    parasail_cigar_free(cigar);
+    parasail_result_free(result);
+    return score;
+}
+
 static long parasail_overlap(const char *reference, const char *query) {
     int rlen = strlen(reference), qlen = strlen(query);
     parasail_result_t *result = parasail_sg_trace_striped_sat(query, qlen, reference, rlen, 8, 2, parasail_dna);
@@ -164,6 +174,8 @@ int main(int argc, char **argv) {
     abpoa_post_set_para(abpt);
     if (strstr(pairs.names[0], "overlap")) {
         run("parasail", "overlap", parasail_overlap, &pairs);
+    } else if (strstr(pairs.names[0], "infix")) {
+        run("parasail", "infix", parasail_infix, &pairs);
     } else {
         run("SSW", "local", ssw_local, &pairs);
         run("parasail", "local", parasail_local, &pairs);

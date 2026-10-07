@@ -975,8 +975,12 @@ def test_refuses_what_it_cannot_do() raises:
         _ = Mode.overlap(0)
     with assert_raises(contains="score"):
         _ = distance("ACGT", "ACG", Costs.edit(), Mode.overlap(1))
+    with assert_raises(contains="score"):
+        _ = distance("ACGT", "ACG", Costs.edit(), Mode.INFIX.with_match_score(1))
+    with assert_raises(contains="free ends alone"):
+        _ = Mode.local(1).with_match_score(2)
     var overlap = Mode.overlap(1)
-    with assert_raises(contains="globally or locally"):
+    with assert_raises(contains="table"):
         _ = score("ACGT", "ACG", dna, overlap)
     with assert_raises(contains="score"):
         _ = distance("ACGT", "ACG", Costs.edit(), Mode.extension(1))
@@ -1508,19 +1512,36 @@ def local_optimum(first: String, second: String, a: Int, x: Int, o: Int, e: Int,
     return answer
 
 
-def overlap_optimum(first: String, second: String, a: Int, x: Int, o: Int, e: Int, o2: Int, e2: Int) -> Int:
-    """The best score of an alignment starting on the first row or column and ending on the last, both
-    edges free, by Gotoh's recurrence over the whole matrix; shares no code with the library."""
+def rewarded_optimum(
+    first: String, second: String, a: Int, x: Int, o: Int, e: Int, o2: Int, e2: Int, ends: EndsFree
+) -> Int:
+    """The best score, a match earning `a`, of an alignment with the letters `ends` allows free at either
+    end: it starts on the first row or column, free within those letters and past them paying a gap,
+    and ends on the last row or column within the letters free there. Gotoh's recurrence over the whole
+    matrix; shares no code with the library."""
     comptime LOW = -(1 << 40)
     var p = first.as_bytes()
     var q = second.as_bytes()
     var n = len(p)
     var m = len(q)
     var width = m + 1
+
+    def edge(letters: Int, free: Int) {imm o, imm e, imm o2, imm e2} -> Int:
+        if letters <= free:
+            return 0
+        var paid = o + e * (letters - free)
+        if o2 >= 0:
+            paid = min(paid, o2 + e2 * (letters - free))
+        return -paid
+
     var best = List[Int](length=(n + 1) * width, fill=0)
     var layers = List[List[Int]]()
     for _ in range(4):
         layers.append(List[Int](length=(n + 1) * width, fill=LOW))
+    for i in range(n + 1):
+        best[i * width] = edge(i, ends.first_begin)
+    for j in range(m + 1):
+        best[j] = edge(j, ends.second_begin)
     for i in range(1, n + 1):
         for j in range(1, m + 1):
             var at = i * width + j
@@ -1537,11 +1558,13 @@ def overlap_optimum(first: String, second: String, a: Int, x: Int, o: Int, e: In
                 value = max(value, max(layers[2 * piece][at], layers[2 * piece + 1][at]))
             value = max(value, best[at - width - 1] + (a if p[i - 1] == q[j - 1] else -x))
             best[at] = value
-    var answer = 0
+    var answer = LOW
     for j in range(m + 1):
-        answer = max(answer, best[n * width + j])
+        if m - j <= ends.second_end:
+            answer = max(answer, best[n * width + j])
     for i in range(n + 1):
-        answer = max(answer, best[i * width + m])
+        if n - i <= ends.first_end:
+            answer = max(answer, best[i * width + m])
     return answer
 
 
@@ -2197,20 +2220,57 @@ def test_every_mode_matches_the_full_matrix() raises:
                 else:
                     assert_equal(local.cigar, "")
                     assert_equal(local.reference_end, 0)
-            for ties in [Ties.LEFT, Ties.RIGHT]:
-                var over = align(reference, query, costs, Mode.overlap(2), ties=ties)
-                var most = overlap_optimum(reference, query, 2, x, o, e, o2, e2)
-                assert_equal(over.score, most)
-                assert_equal(extension_price(over.cigar, 2, x, o, e, o2, e2), most)
-                assert_equal(over.cost, 2 * matches_in(over.cigar) - most)
-                assert_true(over.reference_start == 0 or over.query_start == 0)
-                assert_true(over.reference_end == reference.byte_length() or over.query_end == query.byte_length())
-                if over.cigar.byte_length() > 0:
-                    _ = rows_from_cigar(
-                        String(reference[byte = over.reference_start : over.reference_end]),
-                        String(query[byte = over.query_start : over.query_end]),
-                        over.cigar,
+            # Every mode of free ends again with a match earning 2, and the overlap, all four free.
+            var scored: List[Mode] = [Mode.overlap(2)]
+            for mode in modes:
+                scored.append(mode.with_match_score(2))
+            for mode in scored:
+                var ends = EndsFree(
+                    min(mode.reference_start, reference.byte_length()),
+                    min(mode.reference_end, reference.byte_length()),
+                    min(mode.query_start, query.byte_length()),
+                    min(mode.query_end, query.byte_length()),
+                )
+                var most = rewarded_optimum(reference, query, 2, x, o, e, o2, e2, ends)
+                for ties in [Ties.LEFT, Ties.RIGHT]:
+                    var found = align(reference, query, costs, mode, ties=ties)
+                    assert_equal(found.score, most)
+                    assert_equal(extension_price(found.cigar, 2, x, o, e, o2, e2), most)
+                    assert_equal(found.cost, 2 * matches_in(found.cigar) - most)
+                    # It starts within the letters free at the start, and ends having consumed one
+                    # sequence, the other's rest within the letters free at the end.
+                    assert_true(found.reference_start <= ends.first_begin and found.query_start <= ends.second_begin)
+                    assert_true(found.reference_start == 0 or found.query_start == 0)
+                    var reference_rest = reference.byte_length() - found.reference_end
+                    var query_rest = query.byte_length() - found.query_end
+                    assert_true(
+                        (reference_rest == 0 and query_rest <= ends.second_end)
+                        or (query_rest == 0 and reference_rest <= ends.first_end),
+                        String(
+                            "spans ",
+                            found.reference_start,
+                            "..",
+                            found.reference_end,
+                            " of ",
+                            reference.byte_length(),
+                            ", ",
+                            found.query_start,
+                            "..",
+                            found.query_end,
+                            " of ",
+                            query.byte_length(),
+                            ", ends ",
+                            ends,
+                            ", cigar ",
+                            found.cigar,
+                        ),
                     )
+                    if found.cigar.byte_length() > 0:
+                        _ = rows_from_cigar(
+                            String(reference[byte = found.reference_start : found.reference_end]),
+                            String(query[byte = found.query_start : found.query_end]),
+                            found.cigar,
+                        )
             var inside = align(query, reference, costs, Mode.REFERENCE_IN_QUERY)
             var flipped = align(reference, query, costs, Mode.INFIX)
             assert_equal(inside.cost, flipped.cost)

@@ -22,7 +22,7 @@ from .common import Placement, hardware_threads
 from .edit_distance import edit_cigar, edit_distance
 from .edit_search import edit_search
 from .errors import AlignmentError, ErrorKind
-from .local import local_alignment, overlap_alignment
+from .local import global_rewarded, local_alignment, matches_of, rewarded_alignment
 from .gap_affine import (
     AffineCigar,
     EndsFree,
@@ -145,12 +145,10 @@ def searched_by_sweep(ends: EndsFree, columns: Int, rows: Int) -> Bool:
 
 def refuse(mode: Mode) raises AlignmentError:
     """Raises for the modes that maximize a score, where a least cost is asked for."""
-    if mode.kind == Mode.SMITH_WATERMAN or mode.kind == Mode.OVERLAP:
+    if mode.is_scored():
         raise AlignmentError(
-            ErrorKind.INVALID_ARGUMENT, "a local alignment or an overlap maximizes a score, which `align` finds"
+            ErrorKind.INVALID_ARGUMENT, "a mode with a match score maximizes a score, which `align` finds"
         )
-    if mode.kind == Mode.EXTENSION:
-        raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "an extension maximizes a score, which `align` finds")
 
 
 def cost_within(
@@ -219,11 +217,20 @@ def aligned_within(
             raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a local alignment takes no cost cap and no band")
         _ = penalties_of(costs)
         return local_alignment(reference, query, costs, mode.match_score, ties, extended)
-    if mode.kind == Mode.OVERLAP:
-        if max_cost != Int.MAX or not band.covers(columns, rows):
-            raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "an overlap takes no cost cap and no band")
+    if mode.match_score > 0:
+        if max_cost != Int.MAX:
+            raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a mode with a match score takes no cost cap")
         _ = penalties_of(costs)
-        return overlap_alignment(reference, query, costs, mode.match_score, ties, extended)
+        if mode.is_global():
+            # Every letter aligned, so the reward folds into the costs: the wavefront, band and all.
+            var whole = global_rewarded(reference, query, costs, mode.match_score, band, ties, extended)
+            var score = mode.match_score * matches_of(reference, query, whole[1]) - whole[0]
+            return Alignment(whole[0], score, whole[1], 0, columns, 0, rows)
+        if not band.covers(columns, rows):
+            raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "free ends with a match score take no band")
+        return rewarded_alignment(
+            reference, query, costs, mode.match_score, free_ends(mode, columns, rows), ties, extended
+        )
     refuse(mode)
     var ends = free_ends(mode, columns, rows)
     var scale = costs.unit_scale()
@@ -355,8 +362,8 @@ def scoring_mode(mode: Mode) raises AlignmentError -> AlignmentMode:
     """The recurrence a `Scoring` runs for `mode`: global or local alone."""
     if mode.kind == Mode.SMITH_WATERMAN:
         return AlignmentMode.LOCAL
-    if mode.kind == Mode.OVERLAP:
-        raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a Scoring aligns globally or locally alone")
+    if mode.match_score > 0:
+        raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a Scoring's table holds what a match earns")
     if mode.is_global():
         return AlignmentMode.GLOBAL
     raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a Scoring aligns globally or locally alone")

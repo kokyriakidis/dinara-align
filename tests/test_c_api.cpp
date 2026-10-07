@@ -158,6 +158,10 @@ int main() {
     // An overlap of two reads, the first's suffix on the second's prefix.
     dinara::Alignment over = dinara::align("TTTTTACGTACGT", "ACGTACGTGGGGG", affine, Mode::overlap(2));
     CHECK(over.score == 16 && over.cigar == "8=" && over.reference_start == 5 && over.query_end == 8);
+    // A read placed in a window as a mapper scores it, a match earning 2: 7 matches, one gap of 8.
+    dinara::Alignment placed_scored =
+        dinara::align("TTTTACGTACGTTTTT", "ACGTCGT", affine, Mode::infix().with_match_score(2));
+    CHECK(placed_scored.score == 6 && placed_scored.cigar == "4=1D3=" && placed_scored.reference_start == 4);
     // The whole reference inside the query: one gap where it lies at 4, or two mismatches at 8, both 8.
     dinara::Alignment inside = dinara::align("ACGTCGT", "TTTTACGTACGTTTTT", affine, Mode::reference_in_query());
     CHECK(inside.cost == 8 && inside.reference_start == 0 && inside.reference_end == 7);

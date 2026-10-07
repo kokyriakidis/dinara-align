@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Times dinara-align's local and overlap alignment against SSW, parasail, abPOA and hyalite.
+"""Times dinara-align's local, overlap and scored infix alignment against SSW, parasail, abPOA and hyalite.
 
     pixi run bench-local     # builds the rivals the first time, a few minutes; then about a minute
 
@@ -9,7 +9,9 @@ Every tool aligns every pair with its CIGAR at the same scores: a match 2, a mis
 `benchmarks/.cache/`. A tool's time is the faster of two passes over a workload, its mean per pair, on
 one thread; its answer, the sum and position-weighted sum of its scores, must equal every other's on
 the same workload, or the run fails. abPOA aligns to a graph, so its time includes adding the
-reference to one, which any pairwise use of it pays. SSW and abPOA have no overlap mode.
+reference to one, which any pairwise use of it pays. SSW and abPOA have no overlap or infix mode; the
+infix rows score with a reward, `Mode.INFIX.with_match_score(2)`, as parasail's `sg_dx` and hyalite's
+HW do.
 """
 
 import platform
@@ -24,9 +26,9 @@ from run import CACHE, DATA, HERE, RESULTS, ROOT, cargo_runner, fetch, mutate
 
 LOCAL = DATA / "local"
 BUILD = CACHE / "local"
-WORKLOADS = ["local-short", "local-window", "local-long", "overlap-reads"]
-"""Short noisy pairs with planted cores, a 1 kbp read in a 10 kbp window, 10 kbp against 12 kbp, and
-two 2 kbp reads overlapping by 0.5 to 1.5 kbp."""
+WORKLOADS = ["local-short", "local-window", "local-long", "overlap-reads", "infix-reads"]
+"""Short noisy pairs with planted cores, a 1 kbp read in a 10 kbp window, 10 kbp against 12 kbp, two
+2 kbp reads overlapping by 0.5 to 1.5 kbp, and a 1 kbp read placed whole in a 3 kbp window."""
 
 
 def generate() -> None:
@@ -62,6 +64,11 @@ def generate() -> None:
             first = mutate(genome[shift : shift + 2_000], 0.05, "ACGT", rng)
             second = mutate(genome[shift + 2_000 - rng.randint(500, 1_500) :][:2_000], 0.05, "ACGT", rng)
             out.write(f"overlap-reads\t{first}\t{second}\n")
+    with open(LOCAL / "infix-reads.tsv", "w") as out:
+        for _ in range(100):
+            reference = sequence(3_000)
+            start = rng.randint(0, 2_000)
+            out.write(f"infix-reads\t{reference}\t{mutate(reference[start : start + 1000], 0.1, 'ACGT', rng)}\n")
 
 
 def build_rivals() -> Path:

@@ -15,7 +15,15 @@ by the same rule for ties as every other mode's.
 """
 
 from .errors import AlignmentError
-from .gap_affine import AffineExtension, EndsFree, cigar_within, extension_of, extension_penalties, traced_extension
+from .gap_affine import (
+    AffineExtension,
+    EndsFree,
+    cigar_within,
+    extension_of,
+    extension_penalties,
+    outside,
+    traced_extension,
+)
 from .modes import Alignment, Anchor, Band, Costs, Ties
 
 
@@ -23,16 +31,16 @@ comptime ANYWHERE = 0
 """A sweep for a local alignment: it starts at any cell, every cell's best floored at zero, and ends at
 any cell."""
 comptime FROM_EDGE = 1
-"""A sweep for an overlap: it starts anywhere on the first row or column, for nothing, and ends on
-the last row or column."""
-comptime FROM_ORIGIN = 2
-"""A sweep back from an overlap's end: it starts at the origin, a gap along either edge paid, and ends
-on the last row or column."""
+"""A sweep for ends-free alignment with a reward: it starts on the first row or column, for nothing
+within the letters free there and past them paying a gap, and ends on the last row or column within
+the letters free there. With none free at the start it starts at the origin."""
 
 
 def best_end[
     pieces: Int, dtype: DType, width: Int, transposed: Bool, kind: Int = ANYWHERE
-](reference: Span[UInt8, _], query: Span[UInt8, _], costs: Costs, match_score: Int) -> Tuple[Int, Int, Int]:
+](
+    reference: Span[UInt8, _], query: Span[UInt8, _], costs: Costs, match_score: Int, ends: EndsFree = EndsFree()
+) -> Tuple[Int, Int, Int]:
     """The best score of an alignment starting and ending where `kind` allows, and the reference's and
     the query's letters up to where it ends: of several such ends the furthest along both together,
     then along the reference.
@@ -41,8 +49,9 @@ def best_end[
     anti-diagonal as `vector_score` sweeps it: every cell of `d = i + j` reads only diagonals `d - 1`
     and `d - 2`, so a diagonal's cells fill `width` lanes of `dtype`, as narrow as the scores allow
     (see `local_alignment`). For a local alignment each lane keeps its best of the diagonal and the
-    step it came at, and the diagonal's best is placed only when it meets the best so far; an overlap
-    ends on the last row or column, at most two cells a diagonal, read once it is done."""
+    step it came at, and the diagonal's best is placed only when it meets the best so far; one from
+    the edges, `ends` saying which letters at each end are free, ends on the last row or column, at
+    most two cells a diagonal, read once it is done."""
     comptime Lanes = SIMD[dtype, width]
     comptime Value = Scalar[dtype]
     comptime LOW = Value.MIN // 4
@@ -52,10 +61,14 @@ def best_end[
     var across_letters = reference if transposed else query
     var rows = len(down_letters)
     var columns = len(across_letters)
-    if rows == 0 or columns == 0:
-        return (0, 0, 0)
     comptime two = pieces == 2
     comptime local = kind == ANYWHERE
+    # The free letters at either end of the lanes' sequence and the other's; a local alignment's start
+    # is free everywhere.
+    var down_start = Int.MAX if local else (ends.second_begin if transposed else ends.first_begin)
+    var down_end = ends.second_end if transposed else ends.first_end
+    var across_start = Int.MAX if local else (ends.first_begin if transposed else ends.second_begin)
+    var across_end = ends.first_end if transposed else ends.second_end
     # Lane `i` reads the reference's letter `i - 1`, stored one place on, and the query back to front,
     # so a diagonal's letters load contiguously; both padded past their ends by bytes no text holds.
     var letters = List[UInt8](length=rows + 1 + width, fill=0xFE)
@@ -90,9 +103,38 @@ def best_end[
         lane_index[lane] = Value(lane)
 
     @inline(.always)
-    def gap(letters: Int, opening: Int, extension: Int) -> Value:
-        """A gap of `letters` along an edge, as a sweep from the origin pays it."""
-        return -Value(opening + extension * letters)
+    def edge(letters: Int, free: Int) {imm costs} -> Value:
+        """A cell on the first row or column, `letters` in: nothing within the `free` letters, past them
+        a gap from where they end, at the cheaper piece."""
+        if letters <= free:
+            return 0
+        var paid = -(costs.opening + costs.extension * (letters - free))
+        comptime if two:
+            paid = max(paid, -(costs.opening2 + costs.extension2 * (letters - free)))
+        return Value(paid)
+
+    if rows == 0 or columns == 0:
+        comptime if local:
+            return (0, 0, 0)
+        # One sequence empty: the alignment lies along the other's edge, ending within its free letters,
+        # the furthest such end on a tie.
+        var length = rows + columns
+        var start = down_start if rows > 0 else across_start
+        var finish = down_end if rows > 0 else across_end
+        var top = Int.MIN
+        var reach = 0
+        for letters in range(length + 1):
+            if length - letters > finish:
+                continue
+            var value = Int(edge(letters, start))
+            if value >= top:
+                top = value
+                reach = letters
+        var down = reach if rows > 0 else 0
+        var across = reach if columns > 0 else 0
+        if transposed:
+            return (top, across, down)
+        return (top, down, across)
 
     var best = 0 if local else Int.MIN
     var best_row = 0
@@ -101,12 +143,16 @@ def best_end[
     @inline(.always)
     def ending(
         values: List[Value], diagonal: Int, mut best: Int, mut best_row: Int, mut best_diagonal: Int
-    ) {imm rows, imm columns}:
-        """An overlap's ends on `diagonal`: its cells on the last row and the last column, the later
-        diagonal, then the further along the reference, on a tie."""
-        for edge in range(2):
-            var row = rows if edge == 0 else diagonal - columns
+    ) {imm rows, imm columns, imm across_end, imm down_end}:
+        """The ends on `diagonal`: its cells on the last row and the last column within the letters free
+        there, the later diagonal, then the further along the reference, on a tie."""
+        for side in range(2):
+            var row = rows if side == 0 else diagonal - columns
             if row < 0 or row > rows or diagonal - row < 0 or diagonal - row > columns:
+                continue
+            if side == 0 and columns - (diagonal - row) > across_end:
+                continue
+            if side == 1 and rows - row > down_end:
                 continue
             var value = Int(values[row])
             var further = (row < best_row) if transposed else (row > best_row)
@@ -115,17 +161,9 @@ def best_end[
                 best_row = row
                 best_diagonal = diagonal
 
-    comptime if kind == FROM_ORIGIN:
-        # Diagonal one, beside the origin: a letter of either sequence against a gap.
-        one_back[0] = max(
-            gap(1, costs.opening, costs.extension), gap(1, costs.opening2, costs.extension2) if two else LOW
-        )
-        one_back[1] = one_back[0]
-        inserts_back[0] = gap(1, costs.opening, costs.extension)
-        deletes_back[1] = gap(1, costs.opening, costs.extension)
-        comptime if two:
-            inserts2_back[0] = gap(1, costs.opening2, costs.extension2)
-            deletes2_back[1] = gap(1, costs.opening2, costs.extension2)
+    # Diagonal one, beside the origin: a letter of either sequence against nothing.
+    one_back[0] = edge(1, across_start)
+    one_back[1] = edge(1, down_start)
     comptime if not local:
         ending(one_back, 1, best, best_row, best_diagonal)
     for diagonal in range(2, rows + columns + 1):
@@ -188,33 +226,15 @@ def best_end[
                 best = most
                 best_row = furthest
                 best_diagonal = diagonal
-        # The border cells of this diagonal, written after the lanes that may have run over them: the
-        # first row and column score zero, and no gap runs along them, or from the origin a gap does.
+        # The border cells of this diagonal, written after the lanes that may have run over them: free
+        # within the letters free there, past them a gap. No interior cell reads a border's gap layers.
         if diagonal <= columns:
-            comptime if kind == FROM_ORIGIN:
-                var along = gap(diagonal, costs.opening, costs.extension)
-                current[0] = along
-                inserts[0] = along
-                comptime if two:
-                    var along2 = gap(diagonal, costs.opening2, costs.extension2)
-                    current[0] = max(along, along2)
-                    inserts2[0] = along2
-            else:
-                current[0] = 0
+            current[0] = edge(diagonal, across_start)
             deletes[0] = LOW
             comptime if two:
                 deletes2[0] = LOW
         if diagonal <= rows:
-            comptime if kind == FROM_ORIGIN:
-                var down = gap(diagonal, costs.opening, costs.extension)
-                current[diagonal] = down
-                deletes[diagonal] = down
-                comptime if two:
-                    var down2 = gap(diagonal, costs.opening2, costs.extension2)
-                    current[diagonal] = max(down, down2)
-                    deletes2[diagonal] = down2
-            else:
-                current[diagonal] = 0
+            current[diagonal] = edge(diagonal, down_start)
             inserts[diagonal] = LOW
             comptime if two:
                 inserts2[diagonal] = LOW
@@ -250,25 +270,27 @@ def narrow_enough[kind: Int](costs: Costs, match_score: Int, rows: Int, columns:
 
 def swept[
     kind: Int
-](reference: Span[UInt8, _], query: Span[UInt8, _], costs: Costs, match_score: Int) -> Tuple[Int, Int, Int]:
+](
+    reference: Span[UInt8, _], query: Span[UInt8, _], costs: Costs, match_score: Int, ends: EndsFree = EndsFree()
+) -> Tuple[Int, Int, Int]:
     """`best_end` with its lanes along the shorter sequence, 16 bits to a lane, thirty-two to an AVX-512
     register, while the scores fit, else 32."""
     var transposed = len(query) < len(reference)
     if narrow_enough[kind](costs, match_score, len(reference), len(query)):
         if costs.pieces() == 2:
             if transposed:
-                return best_end[2, DType.int16, 32, True, kind](reference, query, costs, match_score)
-            return best_end[2, DType.int16, 32, False, kind](reference, query, costs, match_score)
+                return best_end[2, DType.int16, 32, True, kind](reference, query, costs, match_score, ends)
+            return best_end[2, DType.int16, 32, False, kind](reference, query, costs, match_score, ends)
         if transposed:
-            return best_end[1, DType.int16, 32, True, kind](reference, query, costs, match_score)
-        return best_end[1, DType.int16, 32, False, kind](reference, query, costs, match_score)
+            return best_end[1, DType.int16, 32, True, kind](reference, query, costs, match_score, ends)
+        return best_end[1, DType.int16, 32, False, kind](reference, query, costs, match_score, ends)
     if costs.pieces() == 2:
         if transposed:
-            return best_end[2, DType.int32, 16, True, kind](reference, query, costs, match_score)
-        return best_end[2, DType.int32, 16, False, kind](reference, query, costs, match_score)
+            return best_end[2, DType.int32, 16, True, kind](reference, query, costs, match_score, ends)
+        return best_end[2, DType.int32, 16, False, kind](reference, query, costs, match_score, ends)
     if transposed:
-        return best_end[1, DType.int32, 16, True, kind](reference, query, costs, match_score)
-    return best_end[1, DType.int32, 16, False, kind](reference, query, costs, match_score)
+        return best_end[1, DType.int32, 16, True, kind](reference, query, costs, match_score, ends)
+    return best_end[1, DType.int32, 16, False, kind](reference, query, costs, match_score, ends)
 
 
 def end_of(reference: Span[UInt8, _], query: Span[UInt8, _], costs: Costs, match_score: Int) -> Tuple[Int, Int, Int]:
@@ -372,27 +394,42 @@ def local_alignment(
     )
 
 
-def overlap_alignment(
-    reference: String, query: String, costs: Costs, match_score: Int, ties: Ties, extended: Bool
+def rewarded_alignment(
+    reference: String, query: String, costs: Costs, match_score: Int, ends: EndsFree, ties: Ties, extended: Bool
 ) raises AlignmentError -> Alignment:
-    """The best overlap, a match earning `match_score` (see `Mode.overlap`): every end gap free, so the
-    alignment starts on the first row or column and ends on the last.
+    """The best alignment with the letters `ends` allows free at either end, a match earning
+    `match_score` (see `Mode.ends_free`): semi-global with a reward, and with every end free an
+    overlap.
 
     One sweep from the edges finds the best score and its end, the furthest along both together, then
-    along the reference; one back from that end over both sequences reversed, paying gaps from it,
-    finds the start, chosen the same way there, the earliest; between them the alignment is a global
-    one with a reward, whose letters are fixed, so the reward folds into the costs (see `gap_affine`)
-    and the wavefront aligns it, its CIGAR the one `ties` names."""
-    var forward = swept[FROM_EDGE](reference.as_bytes(), query.as_bytes(), costs, match_score)
+    along the reference; one back from that end over both sequences reversed, from the end itself and
+    to the letters free at the start, finds the start, chosen the same way there, the earliest; between
+    them the alignment is a global one with a reward, whose letters are fixed, so the reward folds into
+    the costs (see `gap_affine`) and the wavefront aligns it, its CIGAR the one `ties` names. A gap past
+    the free letters at either end lies inside the spans, as it is paid."""
+    var forward = swept[FROM_EDGE](reference.as_bytes(), query.as_bytes(), costs, match_score, ends)
     var end_column = forward[1]
     var end_row = forward[2]
-    if forward[0] <= 0 or end_column == 0 or end_row == 0:
-        return Alignment(0, 0, String(), end_column, end_column, end_row, end_row)
     var head = reversed_text(String(StringSlice(unsafe_from_utf8=reference.as_bytes()[:end_column])))
     var lead = reversed_text(String(StringSlice(unsafe_from_utf8=query.as_bytes()[:end_row])))
-    var back = swept[FROM_ORIGIN](head.as_bytes(), lead.as_bytes(), costs, match_score)
+    var back = swept[FROM_EDGE](
+        head.as_bytes(), lead.as_bytes(), costs, match_score, EndsFree(0, ends.first_begin, 0, ends.second_begin)
+    )
     var start_column = end_column - back[1]
     var start_row = end_row - back[2]
+    if start_column == end_column and start_row == end_row:
+        return Alignment(0, forward[0], String(), start_column, end_column, start_row, end_row)
+    var part = String(StringSlice(unsafe_from_utf8=reference.as_bytes()[start_column:end_column]))
+    var piece = String(StringSlice(unsafe_from_utf8=query.as_bytes()[start_row:end_row]))
+    var found = global_rewarded(part, piece, costs, match_score, Band(), ties, extended)
+    return Alignment(found[0], forward[0], found[1], start_column, end_column, start_row, end_row)
+
+
+def global_rewarded(
+    reference: String, query: String, costs: Costs, match_score: Int, band: Band, ties: Ties, extended: Bool
+) raises AlignmentError -> Tuple[Int, String]:
+    """A global alignment with a reward, its letters fixed, so the reward folds into the costs and the
+    wavefront finds it, inside `band`: its cost and CIGAR, or raises when none fits the band."""
     var two = costs.pieces() == 2
     var penalties = extension_penalties(
         match_score,
@@ -402,16 +439,45 @@ def overlap_alignment(
         costs.opening2 if two else 0,
         costs.extension2 if two else 0,
     )
-    var part = String(StringSlice(unsafe_from_utf8=reference.as_bytes()[start_column:end_column]))
-    var piece = String(StringSlice(unsafe_from_utf8=query.as_bytes()[start_row:end_row]))
     var found = cigar_within[2](
-        part, piece, penalties, extended, Int.MAX, EndsFree(), Band(), ties
-    ) if two else cigar_within[1](part, piece, penalties, extended, Int.MAX, EndsFree(), Band(), ties)
+        reference, query, penalties, extended, Int.MAX, EndsFree(), band, ties
+    ) if two else cigar_within[1](reference, query, penalties, extended, Int.MAX, EndsFree(), band, ties)
+    if not found:
+        raise outside(band)
     var cigar = found.take().cigar
-    var matches = matches_of(part, piece, cigar)
-    return Alignment(
-        match_score * matches - forward[0], forward[0], cigar^, start_column, end_column, start_row, end_row
-    )
+    return (cost_of(reference, query, cigar, costs), cigar^)
+
+
+def cost_of(first: String, second: String, cigar: String, costs: Costs) -> Int:
+    """What a CIGAR of `first` against `second` costs: its substitutions, `M` runs compared letter by
+    letter, and each gap run at the cheaper piece."""
+    var a = first.as_bytes()
+    var b = second.as_bytes()
+    var column = 0
+    var row = 0
+    var length = 0
+    var total = 0
+    for byte in cigar.as_bytes():
+        if byte >= UInt8(ord("0")) and byte <= UInt8(ord("9")):
+            length = length * 10 + Int(byte - UInt8(ord("0")))
+            continue
+        if byte == UInt8(ord("D")) or byte == UInt8(ord("I")):
+            var gap = costs.opening + costs.extension * length
+            if costs.pieces() == 2:
+                gap = min(gap, costs.opening2 + costs.extension2 * length)
+            total += gap
+            if byte == UInt8(ord("D")):
+                column += length
+            else:
+                row += length
+        else:
+            for _ in range(length):
+                if a[column] != b[row]:
+                    total += costs.mismatch
+                column += 1
+                row += 1
+        length = 0
+    return total
 
 
 def matches_of(first: String, second: String, cigar: String) -> Int:

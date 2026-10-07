@@ -100,7 +100,7 @@ fn each(pairs: &Pairs, scoring: &Scoring) {
     }
 }
 
-/// `local_bench.py`'s workload, local or overlap alignment with traceback at a match 2, a mismatch -4
+/// `local_bench.py`'s workload, local, overlap or infix (`Mode::Hw`) alignment with traceback at a match 2, a mismatch -4
 /// and a gap of `k` letters `6 + 2k`, which hyalite charges as `8 + 2 (k - 1)`; the faster of two
 /// passes, its mean per pair, and the scores' checksum.
 fn local(path: &str) {
@@ -111,7 +111,14 @@ fn local(path: &str) {
     }
     let scoring = Scoring::new(4, matrix, 8, 2).unwrap();
     let overlap = pairs.names[0].contains("overlap");
-    let mode = if overlap { Mode::Ov } else { Mode::Sw };
+    let infix = pairs.names[0].contains("infix");
+    let mode = if overlap {
+        Mode::Ov
+    } else if infix {
+        Mode::Hw
+    } else {
+        Mode::Sw
+    };
     let mut best = f64::INFINITY;
     let mut scores = Vec::new();
     for _ in 0..2 {
@@ -121,7 +128,13 @@ fn local(path: &str) {
             .collect();
         best = best.min(started.elapsed().as_secs_f64());
     }
-    let task = if overlap { "overlap" } else { "local" };
+    let task = if overlap {
+        "overlap"
+    } else if infix {
+        "infix"
+    } else {
+        "local"
+    };
     println!("hyalite\t{}\t{task}\t{}\t{}", pairs.names[0], best / pairs.names.len() as f64, checksum(&scores));
 }
 
