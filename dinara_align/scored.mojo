@@ -10,8 +10,8 @@ sequence while the scores fit (see `best_end`), which finds the best score and w
 keeps a few rows. The alignment then comes from the wavefront, exact and in bounded memory, its CIGAR
 by the same rule for ties as every other mode's: a local one by the extension back from its end,
 which stops once it earns the sweep's score (see `local_alignment`), and one with free ends by a
-sweep back from its end for its start, the letters between them a global alignment whose reward
-folds into the costs (see `rewarded_alignment`).
+sweep back from its end for its start, the span the one `Ties` names, the letters between them a global
+alignment whose reward folds into the costs (see `rewarded_alignment`).
 """
 
 from .cigar import cigar_cost, reversed_cigar, reversed_text
@@ -40,11 +40,17 @@ the letters free there. With none free at the start it starts at the origin."""
 def best_end[
     pieces: Int, dtype: DType, width: Int, transposed: Bool, kind: Int = ANYWHERE
 ](
-    reference: Span[UInt8, _], query: Span[UInt8, _], costs: Costs, match_score: Int, ends: EndsFree = EndsFree()
+    reference: Span[UInt8, _],
+    query: Span[UInt8, _],
+    costs: Costs,
+    match_score: Int,
+    ends: EndsFree = EndsFree(),
+    highest: Bool = True,
 ) -> Tuple[Int, Int, Int]:
     """The best score of an alignment starting and ending where `kind` allows, and the reference's and
-    the query's letters up to where it ends: of several such ends the furthest along both together,
-    then along the reference.
+    the query's letters up to where it ends: of several such ends, for a local alignment the furthest
+    along both together, then along the reference; from the edges the one on the highest diagonal, the
+    furthest along the reference less the query, or with `highest` false the lowest.
 
     Gotoh's recurrence over scores, a local alignment's every cell floored at zero, swept by
     anti-diagonal as `vector_score` sweeps it: every cell of `d = i + j` reads only diagonals `d - 1`
@@ -122,13 +128,15 @@ def best_end[
         var length = rows + columns
         var start = down_start if rows > 0 else across_start
         var finish = down_end if rows > 0 else across_end
+        # Letters along the reference raise the diagonal, along the query lower it.
+        var along_reference = (rows > 0) != transposed
         var top = Int.MIN
         var reach = 0
         for letters in range(length + 1):
             if length - letters > finish:
                 continue
             var value = Int(edge(letters, start))
-            if value >= top:
+            if value > top or (value == top and (along_reference == highest)):
                 top = value
                 reach = letters
         var down = reach if rows > 0 else 0
@@ -144,9 +152,10 @@ def best_end[
     @inline(.always)
     def ending(
         values: List[Value], diagonal: Int, mut best: Int, mut best_row: Int, mut best_diagonal: Int
-    ) {imm rows, imm columns, imm across_end, imm down_end}:
-        """The ends on `diagonal`: its cells on the last row and the last column within the letters free
-        there, the later diagonal, then the further along the reference, on a tie."""
+    ) {imm rows, imm columns, imm across_end, imm down_end, imm highest}:
+        """The ends on anti-diagonal `diagonal`: its cells on the last row and the last column within the
+        letters free there, the one on the highest diagonal, the reference's letters less the query's, or
+        with `highest` false the lowest, on a tie."""
         for side in range(2):
             var row = rows if side == 0 else diagonal - columns
             if row < 0 or row > rows or diagonal - row < 0 or diagonal - row > columns:
@@ -156,8 +165,11 @@ def best_end[
             if side == 1 and rows - row > down_end:
                 continue
             var value = Int(values[row])
-            var further = (row < best_row) if transposed else (row > best_row)
-            if value > best or (value == best and (diagonal > best_diagonal or further)):
+            # The reference's letters less the query's, from the lanes' row and the rest of the anti-diagonal.
+            var lean = (diagonal - 2 * row) if transposed else (2 * row - diagonal)
+            var best_lean = (best_diagonal - 2 * best_row) if transposed else (2 * best_row - best_diagonal)
+            var beyond = (lean > best_lean) if highest else (lean < best_lean)
+            if value > best or (value == best and beyond):
                 best = value
                 best_row = row
                 best_diagonal = diagonal
@@ -272,7 +284,12 @@ def narrow_enough[kind: Int](costs: Costs, match_score: Int, rows: Int, columns:
 def swept[
     kind: Int
 ](
-    reference: Span[UInt8, _], query: Span[UInt8, _], costs: Costs, match_score: Int, ends: EndsFree = EndsFree()
+    reference: Span[UInt8, _],
+    query: Span[UInt8, _],
+    costs: Costs,
+    match_score: Int,
+    ends: EndsFree = EndsFree(),
+    highest: Bool = True,
 ) -> Tuple[Int, Int, Int]:
     """`best_end` with its lanes along the shorter sequence, 16 bits to a lane, thirty-two to an AVX-512
     register, while the scores fit, else 32."""
@@ -280,18 +297,18 @@ def swept[
     if narrow_enough[kind](costs, match_score, len(reference), len(query)):
         if costs.pieces() == 2:
             if transposed:
-                return best_end[2, DType.int16, 32, True, kind](reference, query, costs, match_score, ends)
-            return best_end[2, DType.int16, 32, False, kind](reference, query, costs, match_score, ends)
+                return best_end[2, DType.int16, 32, True, kind](reference, query, costs, match_score, ends, highest)
+            return best_end[2, DType.int16, 32, False, kind](reference, query, costs, match_score, ends, highest)
         if transposed:
-            return best_end[1, DType.int16, 32, True, kind](reference, query, costs, match_score, ends)
-        return best_end[1, DType.int16, 32, False, kind](reference, query, costs, match_score, ends)
+            return best_end[1, DType.int16, 32, True, kind](reference, query, costs, match_score, ends, highest)
+        return best_end[1, DType.int16, 32, False, kind](reference, query, costs, match_score, ends, highest)
     if costs.pieces() == 2:
         if transposed:
-            return best_end[2, DType.int32, 16, True, kind](reference, query, costs, match_score, ends)
-        return best_end[2, DType.int32, 16, False, kind](reference, query, costs, match_score, ends)
+            return best_end[2, DType.int32, 16, True, kind](reference, query, costs, match_score, ends, highest)
+        return best_end[2, DType.int32, 16, False, kind](reference, query, costs, match_score, ends, highest)
     if transposed:
-        return best_end[1, DType.int32, 16, True, kind](reference, query, costs, match_score, ends)
-    return best_end[1, DType.int32, 16, False, kind](reference, query, costs, match_score, ends)
+        return best_end[1, DType.int32, 16, True, kind](reference, query, costs, match_score, ends, highest)
+    return best_end[1, DType.int32, 16, False, kind](reference, query, costs, match_score, ends, highest)
 
 
 def end_of(reference: Span[UInt8, _], query: Span[UInt8, _], costs: Costs, match_score: Int) -> Tuple[Int, Int, Int]:
@@ -299,33 +316,12 @@ def end_of(reference: Span[UInt8, _], query: Span[UInt8, _], costs: Costs, match
     return swept[ANYWHERE](reference, query, costs, match_score)
 
 
-def local_alignment(
-    reference: String, query: String, costs: Costs, match_score: Int, ties: Ties, extended: Bool
+def latest_local(
+    reference: String, query: String, costs: Costs, match_score: Int, extended: Bool
 ) raises AlignmentError -> Alignment:
-    """The best local alignment, a match earning `match_score` (see `Mode.local`).
-
-    `Ties.LEFT` ends it as late as an equally good alignment allows (see `best_end`), starts it as
-    late too, the shortest, and spells its CIGAR by the left rule, the extension back from its end
-    traced as it searched (see `gap_affine.traced_extension`); `Ties.RIGHT` is that over both
-    sequences reversed, read backwards, as for every other mode: everything as early as it goes, gaps
-    right."""
-    var columns = reference.byte_length()
-    var rows = query.byte_length()
-    if ties == Ties.RIGHT:
-        var mirrored = local_alignment(
-            reversed_text(reference), reversed_text(query), costs, match_score, Ties.LEFT, extended
-        )
-        if mirrored.score == 0:
-            return mirrored^
-        return Alignment(
-            mirrored.cost,
-            mirrored.score,
-            reversed_cigar(mirrored.cigar),
-            columns - mirrored.reference_end,
-            columns - mirrored.reference_start,
-            rows - mirrored.query_end,
-            rows - mirrored.query_start,
-        )
+    """The best local alignment ending as late as an equally good one allows (see `best_end`) and
+    starting as late too, the shortest, its CIGAR by the left rule: the extension back from its end,
+    traced as it searched (see `gap_affine.traced_extension`)."""
     var found = end_of(reference.as_bytes(), query.as_bytes(), costs, match_score)
     if found[0] == 0:
         return Alignment(0, 0, String(), 0, 0, 0, 0)
@@ -372,6 +368,53 @@ def local_alignment(
     )
 
 
+def local_alignment(
+    reference: String, query: String, costs: Costs, match_score: Int, ties: Ties, extended: Bool
+) raises AlignmentError -> Alignment:
+    """The best local alignment, a match earning `match_score` (see `Mode.local`).
+
+    `Ties.LEFT` ends it as late as an equally good alignment allows and starts it as late too, the
+    shortest, its CIGAR by the left rule (see `latest_local`); `Ties.RIGHT` is that over both sequences
+    reversed, read backwards, as for every other mode: it starts and ends as early as it may, gaps
+    right."""
+    if ties == Ties.LEFT:
+        return latest_local(reference, query, costs, match_score, extended)
+    var columns = reference.byte_length()
+    var rows = query.byte_length()
+    var mirrored = latest_local(reversed_text(reference), reversed_text(query), costs, match_score, extended)
+    if mirrored.score == 0:
+        return mirrored^
+    return Alignment(
+        mirrored.cost,
+        mirrored.score,
+        reversed_cigar(mirrored.cigar),
+        columns - mirrored.reference_end,
+        columns - mirrored.reference_start,
+        rows - mirrored.query_end,
+        rows - mirrored.query_start,
+    )
+
+
+def rewarded_span(
+    reference: String, query: String, costs: Costs, match_score: Int, ends: EndsFree
+) -> Tuple[Int, Int, Int, Int, Int]:
+    """The best score with `ends`' letters free and a match earning `match_score`, and the span the rule
+    of `Ties.LEFT` names (see `gap_affine.free_ends_alignment`): its end on the highest diagonal an
+    optimum reaches, by a sweep from the edges, and its start on the highest of those ending there, by
+    a sweep back from that end over both sequences reversed, to the letters free at the start. The
+    score, then the start's and the end's columns and rows."""
+    var forward = swept[FROM_EDGE](reference.as_bytes(), query.as_bytes(), costs, match_score, ends)
+    var end_column = forward[1]
+    var end_row = forward[2]
+    var head = reversed_text(String(StringSlice(unsafe_from_utf8=reference.as_bytes()[:end_column])))
+    var lead = reversed_text(String(StringSlice(unsafe_from_utf8=query.as_bytes()[:end_row])))
+    # From the end, the highest diagonal is the lowest of the reversed sequences'.
+    var back = swept[FROM_EDGE](
+        head.as_bytes(), lead.as_bytes(), costs, match_score, EndsFree(0, ends.first_begin, 0, ends.second_begin), False
+    )
+    return (forward[0], end_column - back[1], end_row - back[2], end_column, end_row)
+
+
 def rewarded_alignment(
     reference: String, query: String, costs: Costs, match_score: Int, ends: EndsFree, ties: Ties, extended: Bool
 ) raises AlignmentError -> Alignment:
@@ -379,28 +422,36 @@ def rewarded_alignment(
     `match_score` (see `Mode.ends_free`): semi-global with a reward, and with every end free an
     overlap.
 
-    One sweep from the edges finds the best score and its end, the furthest along both together, then
-    along the reference; one back from that end over both sequences reversed, from the end itself and
-    to the letters free at the start, finds the start, chosen the same way there, the earliest; between
-    them the alignment is a global one with a reward, whose letters are fixed, so the reward folds into
-    the costs (see `gap_affine`) and the wavefront aligns it, its CIGAR the one `ties` names. A gap past
-    the free letters at either end lies inside the spans, as it is paid."""
-    var forward = swept[FROM_EDGE](reference.as_bytes(), query.as_bytes(), costs, match_score, ends)
-    var end_column = forward[1]
-    var end_row = forward[2]
-    var head = reversed_text(String(StringSlice(unsafe_from_utf8=reference.as_bytes()[:end_column])))
-    var lead = reversed_text(String(StringSlice(unsafe_from_utf8=query.as_bytes()[:end_row])))
-    var back = swept[FROM_EDGE](
-        head.as_bytes(), lead.as_bytes(), costs, match_score, EndsFree(0, ends.first_begin, 0, ends.second_begin)
-    )
-    var start_column = end_column - back[1]
-    var start_row = end_row - back[2]
+    Its span is the one the rule of `ties` names, as for free ends without a reward (see
+    `gap_affine.free_ends_alignment`): for `Ties.LEFT` found by sweeps (see `rewarded_span`), for
+    `Ties.RIGHT` by the same over both sequences reversed. Between its ends the alignment is a global one
+    with a reward, whose letters are fixed, so the reward folds into the costs (see `gap_affine`) and
+    the wavefront aligns it, its CIGAR the one `ties` picks. A gap past the free letters at either end
+    lies inside the span, as it is paid."""
+    var columns = reference.byte_length()
+    var rows = query.byte_length()
+    var span: Tuple[Int, Int, Int, Int, Int]
+    if ties == Ties.RIGHT:
+        var mirrored = rewarded_span(
+            reversed_text(reference),
+            reversed_text(query),
+            costs,
+            match_score,
+            EndsFree(ends.first_end, ends.first_begin, ends.second_end, ends.second_begin),
+        )
+        span = (mirrored[0], columns - mirrored[3], rows - mirrored[4], columns - mirrored[1], rows - mirrored[2])
+    else:
+        span = rewarded_span(reference, query, costs, match_score, ends)
+    var start_column = span[1]
+    var start_row = span[2]
+    var end_column = span[3]
+    var end_row = span[4]
     if start_column == end_column and start_row == end_row:
-        return Alignment(0, forward[0], String(), start_column, end_column, start_row, end_row)
+        return Alignment(0, span[0], String(), start_column, end_column, start_row, end_row)
     var part = String(StringSlice(unsafe_from_utf8=reference.as_bytes()[start_column:end_column]))
     var piece = String(StringSlice(unsafe_from_utf8=query.as_bytes()[start_row:end_row]))
     var found = global_rewarded(part, piece, costs, match_score, Band(), ties, extended)
-    return Alignment(found[0], forward[0], found[1], start_column, end_column, start_row, end_row)
+    return Alignment(found[0], span[0], found[1], start_column, end_column, start_row, end_row)
 
 
 def global_rewarded(
@@ -417,9 +468,9 @@ def global_rewarded(
         costs.opening2 if two else 0,
         costs.extension2 if two else 0,
     )
-    var found = cigar_within[2](
-        reference, query, penalties, extended, Int.MAX, EndsFree(), band, ties
-    ) if two else cigar_within[1](reference, query, penalties, extended, Int.MAX, EndsFree(), band, ties)
+    var found = cigar_within[2](reference, query, penalties, extended, Int.MAX, band, ties) if two else cigar_within[1](
+        reference, query, penalties, extended, Int.MAX, band, ties
+    )
     if not found:
         raise outside(band)
     var cigar = found.take().cigar

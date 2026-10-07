@@ -12,6 +12,7 @@ from std.math import ceildiv
 
 from .bit_parallel import ALL_ONES, BAND_COLUMNS, Frontier, Profile, WORD_BITS, word_value
 from .errors import AlignmentError
+from .modes import Ties
 
 
 @fieldwise_init
@@ -37,10 +38,10 @@ comptime SEARCH_START = 64
 falls within it."""
 
 
-def last_row_scores[free_start: Bool](mut profile: Profile) -> Tuple[Int, Int]:
-    """The least score along the pattern's last row and the first column it falls in, the pattern down
-    the rows, the text across the columns; with `free_start`, the top row is free, a match starting
-    anywhere in the text, else it is the global border.
+def last_row_scores[free_start: Bool](mut profile: Profile, latest: Bool = False) -> Tuple[Int, Int]:
+    """The least score along the pattern's last row and the first column it falls in, or with `latest`
+    the last, the pattern down the rows, the text across the columns; with `free_start`, the top row is
+    free, a match starting anywhere in the text, else it is the global border.
 
     As Edlib searches: a bound guessed and doubled, each try sweeping only the band of rows some score
     within it can still reach (see `banded_last_row`), until the least score falls within the bound,
@@ -51,15 +52,16 @@ def last_row_scores[free_start: Bool](mut profile: Profile) -> Tuple[Int, Int]:
     profile.build_planes()
     var bound = SEARCH_START
     while True:
-        var found = banded_last_row[free_start](profile, bound)
+        var found = banded_last_row[free_start](profile, bound, latest)
         if found[0] <= bound or bound >= profile.rows:
             return found
         bound *= 2
 
 
-def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int) -> Tuple[Int, Int]:
+def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int, latest: Bool = False) -> Tuple[Int, Int]:
     """`last_row_scores` swept only where a score within `bound` can still lie, Ukkonen's cutoff: its
-    least score and first column when that score is within the bound, else some score above it.
+    least score and first column, or with `latest` its last, when that score is within the bound, else
+    some score above it.
 
     A tile at a time, the band runs down to the last row scoring within the bound at the tile's left
     edge, plus the tile's width, since that row moves at most one down a column. Every word but the
@@ -128,7 +130,7 @@ def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int) -> Tuple
                 var plus = vertical_minus | ~(horizontal | vertical_plus)
                 var minus = vertical_plus & horizontal
                 score += Int((plus >> bit) & 1) - Int((minus >> bit) & 1)
-                if score < best:
+                if score < best or (latest and score == best):
                     best = score
                     best_column = column + 1
                 plus = (plus << 1) | incoming_plus
@@ -151,22 +153,36 @@ def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int) -> Tuple
     return (best, best_column)
 
 
-def edit_search(pattern: String, text: String, prefix: Bool = False) raises AlignmentError -> EditHit:
+def edit_search(
+    pattern: String, text: String, prefix: Bool = False, ties: Ties = Ties.LEFT
+) raises AlignmentError -> EditHit:
     """Where `pattern` best matches inside `text` at unit costs, Edlib's infix mode (HW), or with
     `prefix` where it best matches a prefix of the text, its prefix mode (SHW): the least edit distance
     from the pattern to any `text[start:end]`, `start` zero with `prefix`.
 
-    One sweep over the whole matrix finds the distance and the first end reaching it; the same on both
-    reversed, the text cut at that end, finds the latest start reaching it. Symbols as `edit_distance`
-    takes them. The whole matrix is swept, `len(text)` columns of `len(pattern) / 64` words, so this
-    suits a read against a window of reference rather than a genome.
+    Of equally good matches, the span the wavefront's rule picks (see `gap_affine.free_ends_alignment`):
+    with `Ties.LEFT` the last end, then the last start for it; with `Ties.RIGHT` the first start, then
+    the first end for it. One sweep over the whole matrix finds the distance and the end, and one over
+    both reversed, the text cut at that end, the start; for `Ties.RIGHT` the other way round. Symbols
+    as `edit_distance` takes them. The whole matrix is swept, `len(text)` columns of `len(pattern) / 64`
+    words, so this suits a read against a window of reference rather than a genome.
     """
+    var length = text.byte_length()
+    if ties == Ties.RIGHT and not prefix:
+        # The first start: the last end of both reversed, then the first end from that start.
+        var backward = Profile(reversed_text(text, length), reversed_text(pattern, pattern.byte_length()))
+        var found = last_row_scores[True](backward, True)
+        var start = length - found[1]
+        var tail = String(StringSlice(unsafe_from_utf8=text.as_bytes()[start:]))
+        var forward = Profile(tail, pattern)
+        var end_found = last_row_scores[False](forward)
+        return EditHit(found[0], start, start + end_found[1])
     var forward = Profile(text, pattern)
-    var found: Tuple[Int, Int]
+    var latest = ties == Ties.LEFT
     if prefix:
-        found = last_row_scores[False](forward)
+        var found = last_row_scores[False](forward, latest)
         return EditHit(found[0], 0, found[1])
-    found = last_row_scores[True](forward)
+    var found = last_row_scores[True](forward, True)
     var end = found[1]
     var backward = Profile(reversed_text(text, end), reversed_text(pattern, pattern.byte_length()))
     var start_found = last_row_scores[False](backward)

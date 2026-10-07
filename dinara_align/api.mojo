@@ -28,8 +28,10 @@ from .scored import global_rewarded, local_alignment, rewarded_alignment
 from .gap_affine import (
     AffineCigar,
     EndsFree,
+    Spanned,
     cigar_within,
     extension_of,
+    free_ends_alignment,
     extension_penalties,
     outside,
     penalties_of,
@@ -225,7 +227,7 @@ def least_costly(
                 var whole = edit_cigar(reference, query, extended, ties)
                 var cost = whole.distance * scale
                 return Alignment(cost, -cost, whole.cigar, 0, columns, 0, rows)
-            var hit = edit_search(query, reference, ends.first_begin == 0)
+            var hit = edit_search(query, reference, ends.first_begin == 0, ties)
             var part = String(StringSlice(unsafe_from_utf8=reference.as_bytes()[hit.start : hit.end]))
             var found = edit_cigar(part, query, extended, ties)
             var cost = found.distance * scale
@@ -236,14 +238,34 @@ def least_costly(
     var penalties = penalties_of(costs)
     if max_cost < 0:
         return None
-    var found: Optional[AffineCigar]
+    var ceiling = max_cost // penalties.scale
+    if mode.is_global():
+        var found: Optional[AffineCigar]
+        if costs.pieces() == 2:
+            found = cigar_within[2](reference, query, penalties, extended, ceiling, band, ties)
+        else:
+            found = cigar_within[1](reference, query, penalties, extended, ceiling, band, ties)
+        if not found:
+            return None
+        var cost = found.value().cost
+        return Alignment(cost, -cost, found.take().cigar, 0, columns, 0, rows)
+    var spanned: Optional[Spanned]
     if costs.pieces() == 2:
-        found = cigar_within[2](reference, query, penalties, extended, max_cost // penalties.scale, ends, band, ties)
+        spanned = free_ends_alignment[2](reference, query, penalties, extended, ceiling, ends, band, ties)
     else:
-        found = cigar_within[1](reference, query, penalties, extended, max_cost // penalties.scale, ends, band, ties)
-    if not found:
+        spanned = free_ends_alignment[1](reference, query, penalties, extended, ceiling, ends, band, ties)
+    if not spanned:
         return None
-    return trimmed(found.take(), ends, columns, rows)
+    ref found = spanned.value()
+    return Alignment(
+        found.cost,
+        -found.cost,
+        found.cigar,
+        found.first_start,
+        found.first_end,
+        found.second_start,
+        found.second_end,
+    )
 
 
 def best_scoring(
@@ -301,42 +323,6 @@ def extended_alignment(
             rows,
         )
     return Alignment(cost, found.score, found.cigar, 0, found.first_length, 0, found.second_length)
-
-
-def trimmed(var found: AffineCigar, ends: EndsFree, columns: Int, rows: Int) -> Alignment:
-    """An alignment whose free letters, `D` and `I` runs at either end of the wavefront's CIGAR, move
-    into the spans: as many as the mode frees, the rest of a run left in the CIGAR, as it is paid."""
-    var runs = cigar_runs(found.cigar)
-    var letters = runs[0].copy()
-    var lengths = runs[1].copy()
-    var reference_start = 0
-    var reference_end = columns
-    var query_start = 0
-    var query_end = rows
-    comptime DELETED = UInt8(ord("D"))
-    comptime INSERTED = UInt8(ord("I"))
-    var count = len(letters)
-    if count > 0:
-        var free = 0
-        if letters[0] == DELETED:
-            free = min(lengths[0], ends.first_begin)
-            reference_start = free
-        elif letters[0] == INSERTED:
-            free = min(lengths[0], ends.second_begin)
-            query_start = free
-        lengths[0] -= free
-        var last = count - 1
-        free = 0
-        if letters[last] == DELETED:
-            free = min(lengths[last], ends.first_end)
-            reference_end = columns - free
-        elif letters[last] == INSERTED:
-            free = min(lengths[last], ends.second_end)
-            query_end = rows - free
-        lengths[last] -= free
-    return Alignment(
-        found.cost, -found.cost, joined_cigar(letters, lengths), reference_start, reference_end, query_start, query_end
-    )
 
 
 # endregion Costs

@@ -48,6 +48,7 @@ from dinara_align.gap_affine import (
     EndsFree,
     extension_of,
     extension_penalties,
+    free_ends_alignment,
     traced_extension,
     FIRST_GAP,
     FREE_START,
@@ -1375,21 +1376,22 @@ def test_affine_ends_free_matches_the_full_matrix() raises:
                     Bool(distance(first, second, Costs.affine(x, o, e), ends_mode(ends), max_cost=expected - 1))
                 )
             for limit in [0, 64]:
-                var moves = List[UInt8]()
-                var cost = solve[1](
-                    first.as_bytes(),
-                    second.as_bytes(),
-                    penalties,
-                    FREE_START,
-                    FREE_START,
-                    limit,
-                    moves,
-                    True,
-                    Int.MAX,
-                    ends,
+                var split = (
+                    free_ends_alignment[1](first, second, penalties, True, Int.MAX, ends, Band(), Ties.LEFT, limit)
+                    .value()
+                    .copy()
                 )
-                assert_equal(cost * penalties.scale, expected)
-                assert_equal(len(moves) >= max(first.byte_length(), second.byte_length()), True)
+                assert_equal(split.cost, expected)
+                var spanned = Alignment(
+                    split.cost,
+                    -split.cost,
+                    split.cigar,
+                    split.first_start,
+                    split.first_end,
+                    split.second_start,
+                    split.second_end,
+                )
+                assert_equal(ends_free_price(whole(spanned, first, second).cigar, x, o, e, ends), expected)
     var placed = whole(
         align("TTTTACGTACGTTTTT", "ACGTACGT", Costs.affine(4, 6, 2), ends_mode(EndsFree(16, 16, 0, 0))),
         "TTTTACGTACGTTTTT",
@@ -1694,22 +1696,22 @@ def test_two_piece_matches_the_full_matrix() raises:
                     )
                 )
             for limit in [0, 64]:
-                var moves = List[UInt8]()
-                var cost = solve[2](
-                    first.as_bytes(),
-                    second.as_bytes(),
-                    penalties,
-                    FREE_START,
-                    FREE_START,
-                    limit,
-                    moves,
-                    True,
-                    Int.MAX,
-                    ends,
+                var split = (
+                    free_ends_alignment[2](first, second, penalties, True, Int.MAX, ends, Band(), Ties.LEFT, limit)
+                    .value()
+                    .copy()
                 )
-                assert_equal(cost * penalties.scale, expected)
-                var cigar = cigar_of_moves(first, second, moves)
-                assert_equal(ends_free_price(cigar, x, o, e, ends, o2, e2), expected)
+                assert_equal(split.cost, expected)
+                var spanned = Alignment(
+                    split.cost,
+                    -split.cost,
+                    split.cigar,
+                    split.first_start,
+                    split.first_end,
+                    split.second_start,
+                    split.second_end,
+                )
+                assert_equal(ends_free_price(whole(spanned, first, second).cigar, x, o, e, ends, o2, e2), expected)
     # A long gap at the second piece, 24 + 30, and a short one at the first, 6 + 2: 62, where the first
     # piece alone charges 74 and the second 79.
     var gapped = "GATTACAGCTTGCA" + "C" * 30 + "TGGACCATGAGTCA" + "TTGACCAGTCGATC"
@@ -1817,40 +1819,28 @@ def test_affine_band_matches_the_full_matrix() raises:
                         )
                     )
             for limit in [0, 64]:
-                var moves = List[UInt8]()
-                var split_cost: Int
-                if two:
-                    split_cost = solve[2](
-                        first.as_bytes(),
-                        second.as_bytes(),
-                        penalties,
-                        FREE_START,
-                        FREE_START,
-                        limit,
-                        moves,
-                        True,
-                        Int.MAX,
-                        ends,
-                        band,
-                    )
-                else:
-                    split_cost = solve[1](
-                        first.as_bytes(),
-                        second.as_bytes(),
-                        penalties,
-                        FREE_START,
-                        FREE_START,
-                        limit,
-                        moves,
-                        True,
-                        Int.MAX,
-                        ends,
-                        band,
-                    )
-                assert_equal(split_cost * penalties.scale, expected)
-                var split = cigar_of_moves(first, second, moves)
-                assert_equal(ends_free_price(split, x, o, e, ends, o2 if two else -1, e2), expected)
-                assert_true(stays_inside(split, ends, band), String("the split's CIGAR leaves the band: ", split))
+                var split = free_ends_alignment[2](
+                    first, second, penalties, True, Int.MAX, ends, band, Ties.LEFT, limit
+                ) if two else free_ends_alignment[1](
+                    first, second, penalties, True, Int.MAX, ends, band, Ties.LEFT, limit
+                )
+                assert_equal(split.value().cost, expected)
+                ref piece = split.value()
+                var spelled = whole(
+                    Alignment(
+                        piece.cost,
+                        -piece.cost,
+                        piece.cigar,
+                        piece.first_start,
+                        piece.first_end,
+                        piece.second_start,
+                        piece.second_end,
+                    ),
+                    first,
+                    second,
+                ).cigar
+                assert_equal(ends_free_price(spelled, x, o, e, ends, o2 if two else -1, e2), expected)
+                assert_true(stays_inside(spelled, ends, band), String("the split's CIGAR leaves the band: ", spelled))
     # A band of one diagonal admits only the diagonal itself: four substitutions, where a gap either
     # way would be cheaper.
     assert_equal(align("ACGTACGT", "ACGAACGT", Costs.affine(4, 6, 2), band=Band(0, 0)).cigar, "3=1X4=")
@@ -1902,11 +1892,95 @@ def single_search_cigar[
         search.advance[True]()
 
 
+def cost_matrix(
+    first: String, second: String, x: Int, o: Int, e: Int, o2: Int, e2: Int, starts: EndsFree, band: Band
+) -> List[Int]:
+    """Every cell's least gap-affine cost from a start `starts` frees, by Gotoh's recurrence over the
+    whole matrix, `(len(second) + 1)` cells a row of the first's letters; `1 << 40` off `band`."""
+    comptime HIGH = 1 << 40
+    var a = first.as_bytes()
+    var b = second.as_bytes()
+    var n = len(a)
+    var m = len(b)
+    var width = m + 1
+    var best = List[Int](length=(n + 1) * width, fill=HIGH)
+    var layers = List[List[Int]]()
+    for _ in range(4):
+        layers.append(List[Int](length=(n + 1) * width, fill=HIGH))
+    for i in range(n + 1):
+        for j in range(m + 1):
+            var at = i * width + j
+            if not band.holds(i - j):
+                continue
+            if (j == 0 and i <= starts.first_begin) or (i == 0 and j <= starts.second_begin):
+                best[at] = 0
+                continue
+            var value = HIGH
+            for piece in range(2 if o2 >= 0 else 1):
+                var opening = o if piece == 0 else o2
+                var extension = e if piece == 0 else e2
+                if i > 0:
+                    layers[2 * piece][at] = min(
+                        best[at - width] + opening + extension, layers[2 * piece][at - width] + extension
+                    )
+                if j > 0:
+                    layers[2 * piece + 1][at] = min(
+                        best[at - 1] + opening + extension, layers[2 * piece + 1][at - 1] + extension
+                    )
+                value = min(value, min(layers[2 * piece][at], layers[2 * piece + 1][at]))
+            if i > 0 and j > 0:
+                value = min(value, best[at - width - 1] + (0 if a[i - 1] == b[j - 1] else x))
+            best[at] = value
+    return best^
+
+
+def rule_span(
+    first: String, second: String, x: Int, o: Int, e: Int, o2: Int, e2: Int, ends: EndsFree, band: Band
+) -> Tuple[Int, Int, Int, Int]:
+    """The span `Ties.LEFT` names for free ends, from the whole matrix: of the ends an optimal alignment
+    reaches, the one on the highest diagonal, and of the starts an optimal alignment ending there
+    leaves from, the one on the highest diagonal too. Start column and row, end column and row."""
+    var n = first.byte_length()
+    var m = second.byte_length()
+    var width = m + 1
+    var forward = cost_matrix(first, second, x, o, e, o2, e2, ends, band)
+    var least = 1 << 40
+    var end = (0, 0)
+    for i in range(n + 1):
+        for j in range(m + 1):
+            if not ((i == n and m - j <= ends.second_end) or (j == m and n - i <= ends.first_end)):
+                continue
+            var value = forward[i * width + j]
+            if value < least or (value == least and i - j > end[0] - end[1]):
+                least = value
+                end = (i, j)
+    # Back from that end alone over both reversed, to the starts.
+    var head = reversed_text(String(StringSlice(unsafe_from_utf8=first.as_bytes()[: end[0]])))
+    var lead = reversed_text(String(StringSlice(unsafe_from_utf8=second.as_bytes()[: end[1]])))
+    var backward = cost_matrix(head, lead, x, o, e, o2, e2, EndsFree(), band.mirrored(end[0] - end[1]))
+    var start = (-1, -1)
+    var back_width = end[1] + 1
+    for i in range(end[0] + 1):
+        for j in range(end[1] + 1):
+            # The forward cell `(end[0] - i, end[1] - j)`, a start if on an edge within the allowance.
+            var column = end[0] - i
+            var row = end[1] - j
+            if not ((row == 0 and column <= ends.first_begin) or (column == 0 and row <= ends.second_begin)):
+                continue
+            if backward[i * back_width + j] != least:
+                continue
+            if start[0] < 0 or column - row > start[0] - start[1]:
+                start = (column, row)
+    return (start[0], start[1], end[0], end[1])
+
+
 def test_ties_follow_a_fixed_rule() raises:
     """Of several equally good alignments the CIGAR is always the one `Ties` names, however the two
     searches found the cost: `Ties.RIGHT` is one search traced back from the far end, as WFA2-lib's,
     and `Ties.LEFT` the same rule run from the start, the right rule's CIGAR of both sequences
-    reversed, read backwards. For one gap piece or two, global, with ends free, inside a band."""
+    reversed, read backwards. With free ends the span comes first, for the left rule the end and then
+    the start on the highest diagonal an optimum allows (see `rule_span`). For one gap piece or two, global, with ends
+    free, inside a band."""
     seed(59)
     for costs in [(4, 6, 2, -1, 0), (1, 0, 1, -1, 0), (3, 1, 4, -1, 0), (4, 6, 2, 24, 1), (2, 2, 3, 9, 1)]:
         var x = costs[0]
@@ -1986,8 +2060,25 @@ def test_ties_follow_a_fixed_rule() raises:
                     reversed_text(first),
                     reversed_text(second),
                 ).cigar
-            assert_equal(right, reference[1], String("the right rule, trial ", trial))
+            # With free ends the span comes first, by the rule, and the letters between are a global
+            # alignment by the same rule: the left one WFA2-lib's trace over both reversed, read back.
+            var span = rule_span(first, second, x, o, e, o2, e2, ends, band)
+            var part = reversed_text(String(StringSlice(unsafe_from_utf8=first.as_bytes()[span[0] : span[2]])))
+            var piece = reversed_text(String(StringSlice(unsafe_from_utf8=second.as_bytes()[span[1] : span[3]])))
+            var inner_band = band.shifted(span[0] - span[1]).mirrored(part.byte_length() - piece.byte_length())
+            var inner = single_search_cigar[2](
+                part, piece, penalties, EndsFree(), inner_band
+            ) if two else single_search_cigar[1](part, piece, penalties, EndsFree(), inner_band)
+            var expected = whole(
+                Alignment(inner[0], -inner[0], reversed_cigar(inner[1]), span[0], span[2], span[1], span[3]),
+                first,
+                second,
+            ).cigar
+            assert_equal(left, expected, String("the left rule's span, trial ", trial))
             assert_equal(left, reversed_cigar(mirrored), String("the left rule, trial ", trial))
+            if ends.first_begin + ends.first_end + ends.second_begin + ends.second_end > 0:
+                continue
+            assert_equal(right, reference[1], String("WFA2-lib's rule, trial ", trial))
             # The split of a pair too large to keep follows the rule within its pieces; one that fits
             # whole, whatever the limit, follows it throughout.
             for limit in [1 << 20, 1 << 30]:
@@ -2003,7 +2094,6 @@ def test_ties_follow_a_fixed_rule() raises:
                         moves,
                         True,
                         Int.MAX,
-                        ends,
                         band,
                         Ties.RIGHT,
                     )
@@ -2018,7 +2108,6 @@ def test_ties_follow_a_fixed_rule() raises:
                         moves,
                         True,
                         Int.MAX,
-                        ends,
                         band,
                         Ties.RIGHT,
                     )

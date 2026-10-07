@@ -34,7 +34,10 @@ three fronts alone.
 
 A band restricts every move to a range of diagonals (see `Band`): each search clamps its fronts to
 it, the backward one mirrored, so the result is the optimum over the alignments inside it, exact,
-and a search whose fronts die out proves that none is. An extension fixes one end of both sequences
+and a search whose fronts die out proves that none is. Letters left free at the ends start a search
+on every diagonal they allow, as WFA2-lib's ends-free alignment starts; an alignment with free ends
+finds its span first, by one search from the free side and one back from the end it found, and aligns
+the letters between globally (see `free_ends_alignment`). An extension fixes one end of both sequences
 and stops wherever the score, with a reward for every match, is best (see `Mode.extension`): the
 reward folds into the costs as above, each front knows how far along both sequences it reaches,
 and one search from the fixed end finds the best stop, after which the alignment up to it is solved
@@ -209,14 +212,6 @@ struct EndsFree(ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         self.first_end = 0
         self.second_begin = 0
         self.second_end = 0
-
-    def leading(self) -> EndsFree:
-        """The allowances at the start alone, for the piece of a split before its crossing."""
-        return EndsFree(self.first_begin, 0, self.second_begin, 0)
-
-    def trailing(self) -> EndsFree:
-        """The allowances at the end alone, for the piece after it."""
-        return EndsFree(0, self.first_end, 0, self.second_end)
 
 
 def wavefront_penalties(
@@ -1335,52 +1330,17 @@ def trace(
 
 def canonical[
     pieces: Int
-](
-    mut ahead: Wavefront[pieces],
-    guide: Wavefront[pieces],
-    total: Int,
-    free_first: Int,
-    free_second: Int,
-    mirrored: Bool,
-    mut moves: List[UInt8],
-):
+](mut ahead: Wavefront[pieces], guide: Wavefront[pieces], total: Int, mirrored: Bool, mut moves: List[UInt8],):
     """Appends, right to left, the optimal path `Ties` picks, by growing `ahead` on to the cost `total`
     the two searches proved, pruned to the diagonals an optimal path passes (see `Wavefront.prune`),
-    and tracing back from its far end. Of the ends `free_first` and `free_second` allow there, the
-    first reached on the highest diagonal, as WFA2-lib scans them. With `mirrored`, `ahead` is the
-    backward search, whose path runs over both sequences reversed."""
+    and tracing back from its far end, the corner. With `mirrored`, `ahead` is the backward search,
+    whose path runs over both sequences reversed."""
     # The costs still in the ring first, so the costs grown next read narrow fronts.
-    for lag in range(min(ahead.fronts.slots - 1, ahead.cost) + 1):
-        ahead.prune(ahead.fronts.back(lag), ahead.cost - lag, guide.history, total)
-    while ahead.cost < total:
-        ahead.advance[True]()
-        ahead.prune(ahead.fronts.current, ahead.cost, guide.history, total)
+    grown_end[pieces](ahead, guide, total)
     var columns = ahead.columns
     var rows = ahead.rows
-    var end_diagonal = 0
-    var end_column = -1
-    var trailing = 0
-    var along_first = True
-    for diagonal in range(ahead.history.highs[total], ahead.history.lows[total] - 1, -1):
-        var column = ahead.history.column(total, diagonal)
-        if column < 0:
-            continue
-        var row = column - diagonal
-        if row >= rows and columns - column <= free_first:
-            end_diagonal = diagonal
-            end_column = column
-            trailing = columns - column
-            break
-        if column >= columns and rows - row <= free_second:
-            end_diagonal = diagonal
-            end_column = column
-            trailing = rows - row
-            along_first = False
-            break
     var path = List[UInt8](capacity=columns + rows)
-    for _ in range(trailing):
-        path.append(UInt8(FIRST_GAP) if along_first else UInt8(SECOND_GAP))
-    trace(ahead.history, ahead.penalties, ALIGNED, total, end_diagonal, end_column, path)
+    trace(ahead.history, ahead.penalties, ALIGNED, total, columns - rows, columns, path)
     if mirrored:
         for index in range(len(path) - 1, -1, -1):
             moves.append(path[index])
@@ -1400,14 +1360,14 @@ def solve[
     mut moves: List[UInt8],
     keep: Bool = True,
     ceiling: Int = Int.MAX,
-    ends_free: EndsFree = EndsFree(),
     band: Band = Band(),
     ties: Ties = Ties.LEFT,
 ) -> Int:
     """Appends an optimal path's moves right to left and returns its cost, from an origin as `start`
-    allows and to a corner the backward search's origin `finish` allows (see `FREE_START`), the
-    letters `ends_free` allows left unaligned for nothing, inside `band`; or, when every path costs
-    more than `ceiling` or none stays inside, appends nothing and returns -1.
+    allows and to a corner the backward search's origin `finish` allows (see `FREE_START`), a global
+    alignment inside `band`; or, when every path costs more than `ceiling` or none stays inside, appends
+    nothing and returns -1. Free ends take `free_ends_alignment`, which comes here for the letters
+    between its span's ends.
 
     With `keep`, both searches keep every cost's fronts while they stay within `limit` entries. The
     path is then the one `ties` picks, the search from the far end grown on, pruned to an optimal
@@ -1427,7 +1387,7 @@ def solve[
         var continued = -1
         if start != FREE_START and start < OPENING and along_first(start) == (rows == 0):
             continued = piece_of(start)
-        var letters = unpaid_letters(columns, rows, ends_free, band)
+        var letters = unpaid_letters(columns, rows, EndsFree(), band)
         var cost = gapped_cost[pieces](penalties, letters, continued)
         if letters < 0 or cost > ceiling:
             return -1
@@ -1436,20 +1396,8 @@ def solve[
         for _ in range(rows):
             moves.append(UInt8(SECOND_GAP))
         return cost
-    var forward = Wavefront[pieces](
-        first, second, penalties, start, keep, False, ends_free.first_begin, ends_free.second_begin, band
-    )
-    var backward = Wavefront[pieces](
-        first,
-        second,
-        penalties,
-        finish,
-        keep,
-        True,
-        ends_free.first_end,
-        ends_free.second_end,
-        band.mirrored(columns - rows),
-    )
+    var forward = Wavefront[pieces](first, second, penalties, start, keep, False, 0, 0, band)
+    var backward = Wavefront[pieces](first, second, penalties, finish, keep, True, 0, 0, band.mirrored(columns - rows))
     var best = Meeting.none()
     if keep:
         var status = bidirectional[pieces, True](forward, backward, best, False, limit, ceiling)
@@ -1457,11 +1405,9 @@ def solve[
             return -1
         if status == MET and start == FREE_START and finish == FREE_START:
             if ties == Ties.RIGHT:
-                canonical[pieces](forward, backward, best.cost, ends_free.first_end, ends_free.second_end, False, moves)
+                canonical[pieces](forward, backward, best.cost, False, moves)
             else:
-                canonical[pieces](
-                    backward, forward, best.cost, ends_free.first_begin, ends_free.second_begin, True, moves
-                )
+                canonical[pieces](backward, forward, best.cost, True, moves)
             return best.cost
         if status == MET:
             # The backward walk runs from the meeting to the corner, left to right as the forward path goes.
@@ -1488,9 +1434,7 @@ def solve[
     var row = column - best.diagonal
     # A crossing at either end splits nothing: such a pair costs too little for its fronts not to fit.
     if (column == 0 and row == 0) or (column == columns and row == rows):
-        return solve[pieces](
-            first, second, penalties, start, finish, Int.MAX, moves, True, Int.MAX, ends_free, band, ties
-        )
+        return solve[pieces](first, second, penalties, start, finish, Int.MAX, moves, True, Int.MAX, band, ties)
     # A crossing inside a gap: the piece after begins in it, and the piece before must end opening it.
     var after_start = best.layer
     var before_finish = FREE_START if best.layer == ALIGNED else OPENING + best.layer
@@ -1504,7 +1448,6 @@ def solve[
         moves,
         backward.work // 2 <= limit,
         Int.MAX,
-        ends_free.trailing(),
         band.shifted(column - row),
         ties,
     )
@@ -1518,7 +1461,6 @@ def solve[
         moves,
         forward.work // 2 <= limit,
         Int.MAX,
-        ends_free.leading(),
         band,
         ties,
     )
@@ -1624,12 +1566,13 @@ def cigar_within[
     penalties: Penalties,
     extended: Bool,
     ceiling: Int,
-    ends_free: EndsFree = EndsFree(),
     band: Band = Band(),
     ties: Ties = Ties.LEFT,
+    limit: Int = HISTORY_LIMIT,
 ) -> Optional[AffineCigar]:
-    """An optimal alignment's cost and CIGAR, the one `ties` picks, or None when its cost, in
-    `penalties`' units, would pass `ceiling`, or none fits `band`."""
+    """An optimal global alignment's cost and CIGAR, the one `ties` picks, or None when its cost, in
+    `penalties`' units, would pass `ceiling`, or none fits `band`; split past `limit` kept diagonals
+    (see `solve`)."""
     var columns = first.byte_length()
     var rows = second.byte_length()
     # UTF-8 never holds the sentinels' bytes, so the text's own bytes serve as codes.
@@ -1640,11 +1583,10 @@ def cigar_within[
         penalties,
         FREE_START,
         FREE_START,
-        HISTORY_LIMIT,
+        limit,
         moves,
         True,
         ceiling,
-        ends_free,
         band,
         ties,
     )
@@ -1666,6 +1608,239 @@ def cigar_of(
         moves^, List[UInt8](), first.byte_length(), second.byte_length(), gapped + cost // penalties.mismatch
     )
     return cigar_string(first, second, path, extended)
+
+
+@fieldwise_init
+struct Spanned(Copyable, Movable, Writable):
+    """An optimal alignment with free ends: its cost, and its CIGAR over `first[first_start:first_end]`
+    against `second[second_start:second_end]` alone, the letters outside left unaligned for nothing."""
+
+    var cost: Int
+    var cigar: String
+    var first_start: Int
+    var first_end: Int
+    var second_start: Int
+    var second_end: Int
+
+
+def first_reached[
+    pieces: Int
+](
+    first: Span[UInt8, _],
+    second: Span[UInt8, _],
+    penalties: Penalties,
+    reverse: Bool,
+    starts: EndsFree,
+    band: Band,
+    ceiling: Int,
+    highest: Bool,
+) -> Optional[Tuple[Int, Int, Int]]:
+    """The least cost of a path from a start to a stop, both as `starts` allows (its `_begin` letters free
+    at the origin's end, its `_end` letters at the far end), by one search from the starts a cost at a
+    time, and of the stops it reaches at that cost the one on the highest diagonal, or with `highest`
+    false the lowest: the cost, column and row, in the search's own frame, over both sequences reversed
+    with `reverse`. None past `ceiling` or when no path stays inside `band`. Both sequences must hold a
+    letter.
+
+    One search, not two meeting halfway, because the stop must be the furthest any optimal path
+    reaches, which only a front grown to the optimum shows: with wide starts, as a read placed in a
+    reference has, the fronts are as wide at every cost and the one search does the two halves' work;
+    from one start it does twice theirs, on fronts that are narrow."""
+    var columns = len(first)
+    var rows = len(second)
+    var search = Wavefront[pieces](
+        first, second, penalties, FREE_START, False, reverse, starts.first_begin, starts.second_begin, band
+    )
+    var window = penalties.window[pieces]()
+    while True:
+        var slot = search.fronts.current
+        var low = search.fronts.lows[slot]
+        var high = search.fronts.highs[slot]
+        if low <= high:
+            var front = search.fronts.row(slot, ALIGNED)
+            for index in range(high - low + 1):
+                var diagonal = high - index if highest else low + index
+                var column = Int(front[unsafe_offset=diagonal])
+                if column < 0:
+                    continue
+                var row = column - diagonal
+                if (row >= rows and columns - column <= starts.first_end) or (
+                    column >= columns and rows - row <= starts.second_end
+                ):
+                    return (search.cost, column, row)
+        if search.cost >= ceiling or search.cost - search.last_reached > window + 1:
+            return None
+        search.advance[False]()
+
+
+def grown_end[pieces: Int](mut ahead: Wavefront[pieces], guide: Wavefront[pieces], total: Int):
+    """Grows `ahead` on to `total`, pruned to the diagonals a path of that cost passes, as the other
+    side's kept fronts tell (see `Wavefront.prune`)."""
+    for lag in range(min(ahead.fronts.slots - 1, ahead.cost) + 1):
+        ahead.prune(ahead.fronts.back(lag), ahead.cost - lag, guide.history, total)
+    while ahead.cost < total:
+        ahead.advance[True]()
+        ahead.prune(ahead.fronts.current, ahead.cost, guide.history, total)
+
+
+def edge_span(length: Int, along_first: Bool, ends_free: EndsFree, band: Band) -> Optional[Tuple[Int, Int]]:
+    """With one sequence empty, the alignment lies along the other's edge: where on it the span starts
+    and ends, in that sequence's letters, under the rule `free_ends_alignment` follows. The fewest letters
+    paid for, the start within the leading allowance and the end within the trailing one, every cell
+    on the band; then the end on the highest diagonal, then the start. None when no path fits the band.
+    """
+    # A cell `p` letters along lies on diagonal `p` along the first sequence, `-p` along the second.
+    var lowest = max(band.low, 0) if along_first else max(-band.high, 0)
+    var most = min(band.high, length) if along_first else min(-band.low, length)
+    var begin = ends_free.first_begin if along_first else ends_free.second_begin
+    var finish = ends_free.first_end if along_first else ends_free.second_end
+    # The starts allowed, `lowest ..= start_high`, and the stops, `stop_low ..= most`.
+    var start_high = min(begin, most)
+    var stop_low = max(length - finish, lowest)
+    if start_high < lowest or stop_low > most:
+        return None
+    if stop_low > start_high:
+        # Letters to pay for: the fewest is from the last start to the first stop, the only such pair.
+        return (start_high, stop_low)
+    # Nothing to pay: the start and the end one cell, the highest diagonal both allow, the furthest
+    # along the first sequence or the nearest along the second.
+    var cell = start_high if along_first else stop_low
+    return (cell, cell)
+
+
+def free_ends_alignment[
+    pieces: Int
+](
+    first: String,
+    second: String,
+    penalties: Penalties,
+    extended: Bool,
+    ceiling: Int,
+    ends_free: EndsFree,
+    band: Band,
+    ties: Ties,
+    limit: Int = HISTORY_LIMIT,
+) -> Optional[Spanned]:
+    """An optimal alignment with the letters `ends_free` allows left unaligned for nothing at either end,
+    inside `band`, or None past `ceiling`, in `penalties`' units, or when none fits the band.
+
+    Of the equally good alignments the span comes first, by the rule `Ties.LEFT` names, decided from
+    the end back: the end on the highest diagonal an optimal alignment reaches, the furthest along the
+    first sequence less the second, and of those ending there the start on the highest diagonal too;
+    `Ties.RIGHT` is that over both sequences reversed, the start on the lowest diagonal, then the end. The letters between are
+    then a global alignment, its CIGAR the one `ties` picks (see `solve`). A search from the starts finds
+    the end (see `first_reached`), none when it is the corner; one back from that end alone, narrow,
+    finds the start, none when it is the origin; and a global search the CIGAR, which proves the cost
+    when neither search ran. The bit-parallel searches pick the same span (see `edit_search`)."""
+    var a = first.as_bytes()
+    var b = second.as_bytes()
+    var columns = len(a)
+    var rows = len(b)
+    # The rule runs left to right for `Ties.RIGHT`: its own frame is both sequences reversed, its
+    # allowances swapped end for end, and its band seen from the corner.
+    var left = ties == Ties.RIGHT
+    var frame_ends = EndsFree(
+        ends_free.first_end, ends_free.first_begin, ends_free.second_end, ends_free.second_begin
+    ) if left else ends_free
+    var frame_band = band.mirrored(columns - rows) if left else band
+    var start_column: Int
+    var start_row: Int
+    var end_column: Int
+    var end_row: Int
+    if columns == 0 or rows == 0:
+        var found = edge_span(columns + rows, rows == 0, frame_ends, frame_band)
+        if not found:
+            return None
+        var letters = found.value()[1] - found.value()[0]
+        if gapped_cost[pieces](penalties, letters) > ceiling:
+            return None
+        start_column = found.value()[0] if rows == 0 else 0
+        end_column = found.value()[1] if rows == 0 else 0
+        start_row = found.value()[0] if columns == 0 else 0
+        end_row = found.value()[1] if columns == 0 else 0
+    else:
+        # In the rule's frame, both sequences reversed for `Ties.RIGHT`: first the end, a corner when no
+        # letter at the far end is free, else the stop on the highest diagonal of a search from the
+        # starts, narrow when they are one origin; then the start, the origin when no letter there is
+        # free, else the stop on the highest diagonal of a search back from that end alone.
+        var start_fixed = frame_ends.first_begin == 0 and frame_ends.second_begin == 0
+        var cost = -1
+        if frame_ends.first_end == 0 and frame_ends.second_end == 0:
+            end_column = columns
+            end_row = rows
+        else:
+            var reached = first_reached[pieces](a, b, penalties, left, frame_ends, frame_band, ceiling, True)
+            if not reached:
+                return None
+            cost = reached.value()[0]
+            end_column = reached.value()[1]
+            end_row = reached.value()[2]
+        if start_fixed:
+            start_column = 0
+            start_row = 0
+        elif end_column == 0 or end_row == 0:
+            # The end on an edge: the path ran along it, from the edge cell the fewest paid letters allow.
+            var along = edge_span(
+                end_column + end_row,
+                end_row == 0,
+                EndsFree(frame_ends.first_begin, 0, frame_ends.second_begin, 0),
+                frame_band,
+            )
+            if not along:
+                return None
+            start_column = along.value()[0] if end_row == 0 else 0
+            start_row = along.value()[0] if end_column == 0 else 0
+        else:
+            var head = a[columns - end_column :] if left else a[:end_column]
+            var lead = b[rows - end_row :] if left else b[:end_row]
+            var back_starts = EndsFree(0, frame_ends.first_begin, 0, frame_ends.second_begin)
+            var back_band = frame_band.mirrored(end_column - end_row)
+            var back_ceiling = cost if cost >= 0 else ceiling
+            var backward = first_reached[pieces](
+                head, lead, penalties, not left, back_starts, back_band, back_ceiling, False
+            )
+            if not backward or (cost >= 0 and backward.value()[0] != cost):
+                return None
+            start_column = end_column - backward.value()[1]
+            start_row = end_row - backward.value()[2]
+        if left:
+            var mirrored_start = (columns - end_column, rows - end_row)
+            end_column = columns - start_column
+            end_row = rows - start_row
+            start_column = mirrored_start[0]
+            start_row = mirrored_start[1]
+    if left and (columns == 0 or rows == 0):
+        var mirrored_start = (columns - end_column, rows - end_row)
+        end_column = columns - start_column
+        end_row = rows - start_row
+        start_column = mirrored_start[0]
+        start_row = mirrored_start[1]
+    var moves = List[UInt8](capacity=(end_column - start_column) + (end_row - start_row))
+    var cost = solve[pieces](
+        a[start_column:end_column],
+        b[start_row:end_row],
+        penalties,
+        FREE_START,
+        FREE_START,
+        limit,
+        moves,
+        True,
+        Int.MAX,
+        band.shifted(start_column - start_row),
+        ties,
+    )
+    if cost < 0 or cost > ceiling:
+        return None
+    var part = String(StringSlice(unsafe_from_utf8=a[start_column:end_column]))
+    var piece = String(StringSlice(unsafe_from_utf8=b[start_row:end_row]))
+    return Spanned(
+        cost * penalties.scale,
+        cigar_of(part, piece, moves^, cost, penalties, extended),
+        start_column,
+        end_column,
+        start_row,
+        end_row,
+    )
 
 
 @fieldwise_init
@@ -1890,7 +2065,6 @@ def extension_of[
         moves,
         True,
         Int.MAX,
-        EndsFree(),
         covered_band,
         ties,
     )

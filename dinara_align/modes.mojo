@@ -231,7 +231,15 @@ struct Ties(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     each step back the edit that reached furthest, ties going to a substitution, then a letter of the
     reference alone, then one of the query, the second gap piece before the first and a gap's extension
     before its opening; they differ in the end it runs from. So the CIGAR is the same however the search
-    found the cost, whatever the memory limit or band, and whatever the costs' common factor."""
+    found the cost, whatever the band or cap, and whatever the costs' common factor.
+
+    With free ends the span comes first. `LEFT` decides it from the end back, as it places edits: the
+    end on the highest diagonal an equally good alignment reaches, the most reference letters less query
+    letters, the furthest along the reference for a read placed in it, then the start on the highest
+    diagonal of those ending there; `RIGHT` is that over both sequences reversed, the start on the
+    lowest diagonal, then the end. The letters between are then aligned globally by the rule. A local
+    alignment likewise ends as late as an equally good one allows and starts as late too under `LEFT`,
+    and under `RIGHT` starts and ends as early (see `scored`)."""
 
     var identifier: UInt8
     comptime LEFT = Self(0)

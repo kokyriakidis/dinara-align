@@ -97,7 +97,6 @@ def wfa_cigar[pieces: Int](first: String, second: String, penalties: Penalties) 
         moves,
         True,
         Int.MAX,
-        EndsFree(),
         Band(),
         Ties.RIGHT,
     )
