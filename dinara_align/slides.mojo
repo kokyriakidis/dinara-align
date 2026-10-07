@@ -1,3 +1,9 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+# The slide moved here from diagonal.mojo, ported from `pa-bitpacking` in A*PA
+# (https://github.com/RagnarGrootKoerkamp/astar-pairwise-aligner, commit bf2e14e), by Ragnar Groot
+# Koerkamp and Pesho Ivanov; the gathered slides are this repository's.
 """
 How far matches carry a cell along its diagonal: eight letters at a time, by one scalar compare, or on
 AVX-512 for a lane group of diagonals at once by two gathers (see `gathered_slides`). Both sequences
