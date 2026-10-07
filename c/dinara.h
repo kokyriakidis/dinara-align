@@ -66,7 +66,23 @@ int64_t dinara_affine_cigar(const char *first, int64_t first_length, const char 
                             int64_t first_begin_free, int64_t first_end_free, int64_t second_begin_free,
                             int64_t second_end_free, int extended, char **cigar, int64_t *cigar_length);
 
-/* Frees a CIGAR that `dinara_edit_cigar` or `dinara_affine_cigar` returned. */
+/*
+ * `dinara_affine_distance` under two-piece gap-affine costs, WFA's gap-affine-2p: a gap of `k`
+ * letters costs the less of `opening1 + k * extension1` and `opening2 + k * extension2`.
+ */
+int64_t dinara_affine2p_distance(const char *first, int64_t first_length, const char *second, int64_t second_length,
+                                 int64_t mismatch, int64_t opening1, int64_t extension1, int64_t opening2,
+                                 int64_t extension2, int64_t max_cost, int64_t first_begin_free,
+                                 int64_t first_end_free, int64_t second_begin_free, int64_t second_end_free);
+
+/* `dinara_affine_cigar` under two-piece gap-affine costs, as `dinara_affine2p_distance` counts them. */
+int64_t dinara_affine2p_cigar(const char *first, int64_t first_length, const char *second, int64_t second_length,
+                              int64_t mismatch, int64_t opening1, int64_t extension1, int64_t opening2,
+                              int64_t extension2, int64_t max_cost, int64_t first_begin_free, int64_t first_end_free,
+                              int64_t second_begin_free, int64_t second_end_free, int extended, char **cigar,
+                              int64_t *cigar_length);
+
+/* Frees a CIGAR that `dinara_edit_cigar`, `dinara_affine_cigar` or `dinara_affine2p_cigar` returned. */
 void dinara_free(char *cigar);
 
 #ifdef __cplusplus
@@ -123,46 +139,46 @@ struct EndsFree {
     int64_t second_end = 0;
 };
 
+/* A second gap piece: a gap of `k` letters then costs the less of the two pieces' `opening + k * extension`. */
+struct SecondPiece {
+    int64_t opening;
+    int64_t extension;
+};
+
 namespace detail {
 inline void check_affine(int64_t result) {
     if (result == DINARA_INVALID_COSTS) throw std::invalid_argument("dinara: a mismatch and an extension must cost");
     if (result < 0 && result != DINARA_ABOVE_MAX) throw UnsupportedSymbols();
 }
-}  // namespace detail
 
-/* Gap-affine costs as WFA counts them: a substitution `mismatch`, a gap of `k` letters `opening + k * extension`. */
 inline int64_t affine_distance(std::string_view first, std::string_view second, int64_t mismatch, int64_t opening,
-                               int64_t extension, EndsFree ends = {}) {
-    int64_t cost = dinara_affine_distance(first.data(), static_cast<int64_t>(first.size()), second.data(),
-                                          static_cast<int64_t>(second.size()), mismatch, opening, extension, -1,
-                                          ends.first_begin, ends.first_end, ends.second_begin, ends.second_end);
-    detail::check_affine(cost);
+                               int64_t extension, std::optional<SecondPiece> piece, int64_t max_cost, EndsFree ends) {
+    int64_t cost =
+        piece ? dinara_affine2p_distance(first.data(), static_cast<int64_t>(first.size()), second.data(),
+                                         static_cast<int64_t>(second.size()), mismatch, opening, extension,
+                                         piece->opening, piece->extension, max_cost, ends.first_begin, ends.first_end,
+                                         ends.second_begin, ends.second_end)
+              : dinara_affine_distance(first.data(), static_cast<int64_t>(first.size()), second.data(),
+                                       static_cast<int64_t>(second.size()), mismatch, opening, extension, max_cost,
+                                       ends.first_begin, ends.first_end, ends.second_begin, ends.second_end);
+    check_affine(cost);
     return cost;
 }
 
-/* The cost, or nothing when it passes `max_cost`, which the search proves after about half of it. */
-inline std::optional<int64_t> affine_distance_within(std::string_view first, std::string_view second,
-                                                     int64_t mismatch, int64_t opening, int64_t extension,
-                                                     int64_t max_cost, EndsFree ends = {}) {
-    if (max_cost < 0) return std::nullopt;
-    int64_t cost = dinara_affine_distance(first.data(), static_cast<int64_t>(first.size()), second.data(),
-                                          static_cast<int64_t>(second.size()), mismatch, opening, extension, max_cost,
-                                          ends.first_begin, ends.first_end, ends.second_begin, ends.second_end);
-    detail::check_affine(cost);
-    if (cost == DINARA_ABOVE_MAX) return std::nullopt;
-    return cost;
-}
-
-namespace detail {
 inline std::optional<AffineAlignment> affine_cigar(std::string_view first, std::string_view second, int64_t mismatch,
-                                                   int64_t opening, int64_t extension, int64_t max_cost,
-                                                   bool extended, EndsFree ends) {
+                                                   int64_t opening, int64_t extension, std::optional<SecondPiece> piece,
+                                                   int64_t max_cost, bool extended, EndsFree ends) {
     char *text = nullptr;
     int64_t length = 0;
-    int64_t cost = dinara_affine_cigar(first.data(), static_cast<int64_t>(first.size()), second.data(),
-                                       static_cast<int64_t>(second.size()), mismatch, opening, extension, max_cost,
-                                       ends.first_begin, ends.first_end, ends.second_begin, ends.second_end,
-                                       extended ? 1 : 0, &text, &length);
+    int64_t cost =
+        piece ? dinara_affine2p_cigar(first.data(), static_cast<int64_t>(first.size()), second.data(),
+                                      static_cast<int64_t>(second.size()), mismatch, opening, extension,
+                                      piece->opening, piece->extension, max_cost, ends.first_begin, ends.first_end,
+                                      ends.second_begin, ends.second_end, extended ? 1 : 0, &text, &length)
+              : dinara_affine_cigar(first.data(), static_cast<int64_t>(first.size()), second.data(),
+                                    static_cast<int64_t>(second.size()), mismatch, opening, extension, max_cost,
+                                    ends.first_begin, ends.first_end, ends.second_begin, ends.second_end,
+                                    extended ? 1 : 0, &text, &length);
     check_affine(cost);
     if (cost == DINARA_ABOVE_MAX) return std::nullopt;
     AffineAlignment result{cost, std::string(text, static_cast<size_t>(length))};
@@ -171,10 +187,26 @@ inline std::optional<AffineAlignment> affine_cigar(std::string_view first, std::
 }
 }  // namespace detail
 
+/* Gap-affine costs as WFA counts them: a substitution `mismatch`, a gap of `k` letters `opening + k * extension`. */
+inline int64_t affine_distance(std::string_view first, std::string_view second, int64_t mismatch, int64_t opening,
+                               int64_t extension, EndsFree ends = {}) {
+    return detail::affine_distance(first, second, mismatch, opening, extension, std::nullopt, -1, ends);
+}
+
+/* The cost, or nothing when it passes `max_cost`, which the search proves after about half of it. */
+inline std::optional<int64_t> affine_distance_within(std::string_view first, std::string_view second,
+                                                     int64_t mismatch, int64_t opening, int64_t extension,
+                                                     int64_t max_cost, EndsFree ends = {}) {
+    if (max_cost < 0) return std::nullopt;
+    int64_t cost = detail::affine_distance(first, second, mismatch, opening, extension, std::nullopt, max_cost, ends);
+    if (cost == DINARA_ABOVE_MAX) return std::nullopt;
+    return cost;
+}
+
 /* The cost and an optimal alignment's CIGAR. */
 inline AffineAlignment affine_cigar(std::string_view first, std::string_view second, int64_t mismatch, int64_t opening,
                                     int64_t extension, bool extended = true, EndsFree ends = {}) {
-    return *detail::affine_cigar(first, second, mismatch, opening, extension, -1, extended, ends);
+    return *detail::affine_cigar(first, second, mismatch, opening, extension, std::nullopt, -1, extended, ends);
 }
 
 /* The cost and an optimal alignment's CIGAR, or nothing when the cost passes `max_cost`. */
@@ -183,7 +215,36 @@ inline std::optional<AffineAlignment> affine_cigar_within(std::string_view first
                                                           int64_t max_cost, bool extended = true,
                                                           EndsFree ends = {}) {
     if (max_cost < 0) return std::nullopt;
-    return detail::affine_cigar(first, second, mismatch, opening, extension, max_cost, extended, ends);
+    return detail::affine_cigar(first, second, mismatch, opening, extension, std::nullopt, max_cost, extended, ends);
+}
+
+/* Two-piece gap-affine costs, WFA's gap-affine-2p: each of the above with a second gap piece. */
+inline int64_t affine2p_distance(std::string_view first, std::string_view second, int64_t mismatch, int64_t opening,
+                                 int64_t extension, SecondPiece piece, EndsFree ends = {}) {
+    return detail::affine_distance(first, second, mismatch, opening, extension, piece, -1, ends);
+}
+
+inline std::optional<int64_t> affine2p_distance_within(std::string_view first, std::string_view second,
+                                                       int64_t mismatch, int64_t opening, int64_t extension,
+                                                       SecondPiece piece, int64_t max_cost, EndsFree ends = {}) {
+    if (max_cost < 0) return std::nullopt;
+    int64_t cost = detail::affine_distance(first, second, mismatch, opening, extension, piece, max_cost, ends);
+    if (cost == DINARA_ABOVE_MAX) return std::nullopt;
+    return cost;
+}
+
+inline AffineAlignment affine2p_cigar(std::string_view first, std::string_view second, int64_t mismatch,
+                                      int64_t opening, int64_t extension, SecondPiece piece, bool extended = true,
+                                      EndsFree ends = {}) {
+    return *detail::affine_cigar(first, second, mismatch, opening, extension, piece, -1, extended, ends);
+}
+
+inline std::optional<AffineAlignment> affine2p_cigar_within(std::string_view first, std::string_view second,
+                                                            int64_t mismatch, int64_t opening, int64_t extension,
+                                                            SecondPiece piece, int64_t max_cost, bool extended = true,
+                                                            EndsFree ends = {}) {
+    if (max_cost < 0) return std::nullopt;
+    return detail::affine_cigar(first, second, mismatch, opening, extension, piece, max_cost, extended, ends);
 }
 
 }  // namespace dinara

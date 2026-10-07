@@ -3,12 +3,12 @@ WFA2-lib's regression set through dinara-align, run with `pixi run test-wfa` (se
 
 WFA2-lib ships 305 pairs (`tests/wfa.utest.seq`) and its own results for each mode it tests
 (`tests/wfa.utest.check`), a score and a CIGAR a pair. Each mode dinara-align offers is held to them:
-the edit and indel distances, gap-affine costs at four penalties, and three more with a match reward.
-Every score must equal WFA2-lib's, and every CIGAR must consume both sequences exactly, its `M` a match
-and its `X` a mismatch, and cost the expected score when priced afresh, so a tie resolved another way
-passes and a wrong alignment does not. WFA2-lib's own CIGARs are priced the same way, which checks the
-pricing. Its two-piece affine and approximate heuristic modes, which dinara-align does not offer, are
-left out.
+the edit and indel distances, gap-affine costs at four penalties, three more with a match reward, and
+two-piece gap-affine costs. Every score must equal WFA2-lib's, and every CIGAR must consume both
+sequences exactly, its `M` a match and its `X` a mismatch, and cost the expected score when priced
+afresh, so a tie resolved another way passes and a wrong alignment does not. WFA2-lib's own CIGARs are
+priced the same way, which checks the pricing. Its approximate heuristic modes, which dinara-align does
+not offer, are left out.
 
 The indel distance runs as gap-affine costs (2, 0, 1), where a substitution costs what a deletion and
 an insertion do; its CIGARs may write one as `X`, priced as that pair.
@@ -16,13 +16,25 @@ an insertion do; its CIGARs may write one as `X`, priced as that pair.
 
 from std.sys import argv
 
-from dinara_align import AlignmentMode, Placement, Scoring, affine_cigar, affine_distance, align, edit_cigar
+from dinara_align import (
+    AlignmentMode,
+    Placement,
+    Scoring,
+    affine2p_cigar,
+    affine2p_distance,
+    affine_cigar,
+    affine_distance,
+    align,
+    edit_cigar,
+)
 
 comptime EDIT = 0
 comptime GAP_AFFINE = 1
 """A cost: no match reward, so `affine_cigar` serves it."""
 comptime REWARDED = 2
 """A match earns a reward, which `align` takes as a score."""
+comptime TWO_PIECE = 3
+"""A gap costs the less of two affine costs, as `affine2p_cigar` counts them."""
 
 
 @fieldwise_init
@@ -33,6 +45,9 @@ struct Mode(Copyable, Movable):
     var mismatch: Int
     var opening: Int
     var extension: Int
+    var opening2: Int
+    """The second piece's costs, for `TWO_PIECE` alone."""
+    var extension2: Int
 
 
 def lines_of(path: String) raises -> List[String]:
@@ -94,7 +109,10 @@ def priced(cigar: String, first: String, second: String, mode: Mode) -> Optional
                 i += 1
                 j += 1
         elif byte == UInt8(ord("D")) or byte == UInt8(ord("I")):
-            cost += mode.opening + mode.extension * length
+            var gap = mode.opening + mode.extension * length
+            if mode.kind == TWO_PIECE:
+                gap = min(gap, mode.opening2 + mode.extension2 * length)
+            cost += gap
             if byte == UInt8(ord("D")):
                 i += length
             else:
@@ -106,7 +124,7 @@ def priced(cigar: String, first: String, second: String, mode: Mode) -> Optional
         return None
     if mode.kind == EDIT or mode.name == "indel":
         return cost
-    if mode.kind == GAP_AFFINE:
+    if mode.kind == GAP_AFFINE or mode.kind == TWO_PIECE:
         return -cost
     return mode.reward * matches - cost
 
@@ -122,15 +140,17 @@ def main() raises:
     # WFA2-lib's names and penalties, `match,mismatch,opening,extension` with a reward as a negative
     # match, as its `wfa.utest.sh` runs them; a gap of `k` costs `opening + k extension`.
     var modes: List[Mode] = [
-        Mode("edit", EDIT, 0, 1, 0, 1),
-        Mode("indel", GAP_AFFINE, 0, 2, 0, 1),
-        Mode("affine", GAP_AFFINE, 0, 4, 6, 2),
-        Mode("affine.p0", GAP_AFFINE, 0, 1, 2, 1),
-        Mode("affine.p1", GAP_AFFINE, 0, 3, 1, 4),
-        Mode("affine.p2", GAP_AFFINE, 0, 5, 3, 2),
-        Mode("affine.p3", REWARDED, 5, 1, 2, 1),
-        Mode("affine.p4", REWARDED, 2, 3, 1, 4),
-        Mode("affine.p5", REWARDED, 3, 5, 3, 2),
+        Mode("edit", EDIT, 0, 1, 0, 1, 0, 0),
+        Mode("indel", GAP_AFFINE, 0, 2, 0, 1, 0, 0),
+        Mode("affine", GAP_AFFINE, 0, 4, 6, 2, 0, 0),
+        Mode("affine.p0", GAP_AFFINE, 0, 1, 2, 1, 0, 0),
+        Mode("affine.p1", GAP_AFFINE, 0, 3, 1, 4, 0, 0),
+        Mode("affine.p2", GAP_AFFINE, 0, 5, 3, 2, 0, 0),
+        Mode("affine.p3", REWARDED, 5, 1, 2, 1, 0, 0),
+        Mode("affine.p4", REWARDED, 2, 3, 1, 4, 0, 0),
+        Mode("affine.p5", REWARDED, 3, 5, 3, 2, 0, 0),
+        # Its align_benchmark's default two-piece penalties, `0,4,6,2,24,1`.
+        Mode("affine2p", TWO_PIECE, 0, 4, 6, 2, 24, 1),
     ]
     var failures = 0
     for mode in modes:
@@ -159,6 +179,18 @@ def main() raises:
                 cigar = aligned.cigar
                 if affine_distance(first, second, mode.mismatch, mode.opening, mode.extension) != aligned.cost:
                     print("   ", mode.name, "pair", index, ": affine_distance and affine_cigar disagree")
+                    wrong += 1
+            elif mode.kind == TWO_PIECE:
+                var aligned = affine2p_cigar(
+                    first, second, mode.mismatch, mode.opening, mode.extension, mode.opening2, mode.extension2
+                )
+                score = -aligned.cost
+                cigar = aligned.cigar
+                var cost = affine2p_distance(
+                    first, second, mode.mismatch, mode.opening, mode.extension, mode.opening2, mode.extension2
+                )
+                if cost != aligned.cost:
+                    print("   ", mode.name, "pair", index, ": affine2p_distance and affine2p_cigar disagree")
                     wrong += 1
             else:
                 var scoring = Scoring.uniform(

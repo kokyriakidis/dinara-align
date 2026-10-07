@@ -98,6 +98,18 @@ int main() {
     CHECK(placed.cost == 0 && placed.cigar == "4D8=4D");
     CHECK(dinara::affine_distance("TTTTACGTACGTTTTT", "ACGTACGT", 4, 6, 2) > 0);
     CHECK(dinara::affine_distance("TTTTACGTACGTTTTT", "ACGTACGT", 4, 6, 2, inside) == 0);
+    // Two-piece gap costs: a long gap at the second piece, 24 + 30, and a short one at the first, 6 + 2.
+    std::string gapped = "GATTACAGCTTGCA" + std::string(30, 'C') + "TGGACCATGAGTCATTGACCAGTCGATC";
+    std::string plain = "GATTACAGCTTGCATGGACCATGAGTCAGTTGACCAGTCGATC";
+    dinara::SecondPiece cheap_long{24, 1};
+    dinara::AffineAlignment two = dinara::affine2p_cigar(gapped, plain, 4, 6, 2, cheap_long);
+    CHECK(two.cost == 62 && two.cigar == "14=30D14=1I14=");
+    CHECK(dinara::affine_distance(gapped, plain, 4, 6, 2) == 74);
+    CHECK(dinara::affine2p_distance(gapped, plain, 4, 6, 2, cheap_long) == 62);
+    CHECK(dinara::affine2p_distance_within(gapped, plain, 4, 6, 2, cheap_long, 62) == 62);
+    CHECK(!dinara::affine2p_distance_within(gapped, plain, 4, 6, 2, cheap_long, 61));
+    CHECK(!dinara::affine2p_cigar_within(gapped, plain, 4, 6, 2, cheap_long, 61));
+    CHECK(dinara::affine2p_cigar("TTTTACGTACGTTTTT", "ACGTACGT", 4, 6, 2, cheap_long, true, inside).cost == 0);
 
     std::mt19937 random(7);
     std::uniform_int_distribution<int> base(0, 3);

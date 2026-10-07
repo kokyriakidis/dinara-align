@@ -20,6 +20,8 @@ from dinara_align import (
     AlignmentResult,
     DNA_ALPHABET,
     EndsFree,
+    affine2p_cigar,
+    affine2p_distance,
     affine_cigar,
     affine_cigars,
     affine_distance,
@@ -44,7 +46,14 @@ from dinara_align import (
     smith_waterman_gotoh_score,
 )
 from dinara_align.seeds import SEED_COLUMNS
-from dinara_align.gap_affine import FREE_START, affine_penalties, solve, wavefront_align, wavefront_penalties
+from dinara_align.gap_affine import (
+    FREE_START,
+    affine2p_penalties,
+    affine_penalties,
+    solve,
+    wavefront_align,
+    wavefront_penalties,
+)
 from dinara_align.vector_score import vector_score
 
 comptime GLOBAL = AlignmentMode.GLOBAL
@@ -1094,11 +1103,14 @@ def test_affine_distance_and_its_cap() raises:
     assert_equal(affine_distance("", "", 4, 6, 2, max_cost=0).value(), 0)
 
 
-def ends_free_optimum(first: String, second: String, x: Int, o: Int, e: Int, ends: EndsFree) -> Int:
+def ends_free_optimum(
+    first: String, second: String, x: Int, o: Int, e: Int, ends: EndsFree, o2: Int = -1, e2: Int = 0
+) -> Int:
     """The least gap-affine cost of aligning two sequences with the letters `ends` allows at each end
     left unaligned for nothing, by Gotoh's recurrence over the whole matrix: starts free along the
     first row and column up to the leading allowances, the best end along the last row and column
-    within the trailing ones. Shares no code with the wavefront."""
+    within the trailing ones. With `o2` not negative, a gap costs the less of its two pieces, each
+    with a layer either way of its own. Shares no code with the wavefront."""
     comptime HIGH = 1 << 40
     var a = first.as_bytes()
     var b = second.as_bytes()
@@ -1108,6 +1120,8 @@ def ends_free_optimum(first: String, second: String, x: Int, o: Int, e: Int, end
     var best = List[Int](length=(n + 1) * width, fill=HIGH)
     var across = List[Int](length=(n + 1) * width, fill=HIGH)
     var down = List[Int](length=(n + 1) * width, fill=HIGH)
+    var across2 = List[Int](length=(n + 1) * width, fill=HIGH)
+    var down2 = List[Int](length=(n + 1) * width, fill=HIGH)
     for i in range(n + 1):
         for j in range(m + 1):
             var at = i * width + j
@@ -1119,6 +1133,12 @@ def ends_free_optimum(first: String, second: String, x: Int, o: Int, e: Int, end
             if j > 0:
                 down[at] = min(best[at - 1] + o + e, down[at - 1] + e)
             var value = min(across[at], down[at])
+            if o2 >= 0:
+                if i > 0:
+                    across2[at] = min(best[at - width] + o2 + e2, across2[at - width] + e2)
+                if j > 0:
+                    down2[at] = min(best[at - 1] + o2 + e2, down2[at - 1] + e2)
+                value = min(value, min(across2[at], down2[at]))
             if i > 0 and j > 0:
                 value = min(value, best[at - width - 1] + (0 if a[i - 1] == b[j - 1] else x))
             best[at] = value
@@ -1132,8 +1152,9 @@ def ends_free_optimum(first: String, second: String, x: Int, o: Int, e: Int, end
     return answer
 
 
-def ends_free_price(cigar: String, x: Int, o: Int, e: Int, ends: EndsFree) raises -> Int:
-    """What a CIGAR's alignment costs with its leading and trailing gap runs free up to `ends`."""
+def ends_free_price(cigar: String, x: Int, o: Int, e: Int, ends: EndsFree, o2: Int = -1, e2: Int = 0) raises -> Int:
+    """What a CIGAR's alignment costs with its leading and trailing gap runs free up to `ends`, each
+    run at the cheaper piece with `o2` not negative."""
     var kinds = List[UInt8]()
     var lengths = List[Int]()
     var length = 0
@@ -1159,7 +1180,7 @@ def ends_free_price(cigar: String, x: Int, o: Int, e: Int, ends: EndsFree) raise
                 free += ends.first_end if deletion else ends.second_end
             var paid = max(run - free, 0)
             if paid > 0:
-                total += o + e * paid
+                total += min(o + e * paid, o2 + e2 * paid) if o2 >= 0 else o + e * paid
     return total
 
 
@@ -1197,7 +1218,7 @@ def test_affine_ends_free_matches_the_full_matrix() raises:
                 assert_false(Bool(affine_distance(first, second, x, o, e, max_cost=expected - 1, ends_free=ends)))
             for limit in [0, 64]:
                 var moves = List[UInt8]()
-                var cost = solve(
+                var cost = solve[1](
                     first.as_bytes(),
                     second.as_bytes(),
                     penalties,
@@ -1214,6 +1235,110 @@ def test_affine_ends_free_matches_the_full_matrix() raises:
     var placed = affine_cigar("TTTTACGTACGTTTTT", "ACGTACGT", 4, 6, 2, ends_free=EndsFree(16, 16, 0, 0))
     assert_equal(placed.cost, 0)
     assert_equal(placed.cigar, "4D8=4D")
+
+
+def cigar_of_moves(first: String, second: String, moves: List[UInt8]) -> String:
+    """The CIGAR of moves `solve` appended right to left: 0 two letters aligned, 1 the first's alone, 2 the second's."""
+    var a = first.as_bytes()
+    var b = second.as_bytes()
+    var out = String()
+    var last = UInt8(0)
+    var run = 0
+    var i = 0
+    var j = 0
+    for index in range(len(moves) - 1, -1, -1):
+        var move = moves[index]
+        var op: UInt8
+        if move == 0:
+            op = UInt8(ord("=")) if a[i] == b[j] else UInt8(ord("X"))
+            i += 1
+            j += 1
+        elif move == 1:
+            op = UInt8(ord("D"))
+            i += 1
+        else:
+            op = UInt8(ord("I"))
+            j += 1
+        if op != last and run > 0:
+            out += String(run, chr(Int(last)))
+            run = 0
+        last = op
+        run += 1
+    if run > 0:
+        out += String(run, chr(Int(last)))
+    return out
+
+
+def test_affine2p_matches_the_full_matrix() raises:
+    """Two-piece gap costs, a gap the cheaper of two affine costs: the cost is the whole matrix's with
+    a layer either way per piece, the CIGAR spells an alignment that costs it, and the cap, the ends
+    free and the split of a pair too large to keep all agree, the split's crossings inside a gap of
+    either piece included."""
+    seed(43)
+    for costs in [(4, 6, 2, 24, 1), (3, 10, 1, 2, 3), (2, 0, 3, 7, 1), (5, 3, 2, 3, 2)]:
+        var x = costs[0]
+        var o = costs[1]
+        var e = costs[2]
+        var o2 = costs[3]
+        var e2 = costs[4]
+        var penalties = affine2p_penalties(x, o, e, o2, e2)
+        for trial in range(60):
+            var core = random_sequence(1, 200, DNA_ALPHABET)
+            var first = core
+            var ends = EndsFree()
+            if trial % 2 == 1:
+                first = random_sequence(0, 40, DNA_ALPHABET) + core + random_sequence(0, 40, DNA_ALPHABET)
+                var sizes = [0, 3, 40, 1000]
+                ends = EndsFree(
+                    sizes[trial % 4], sizes[(trial // 4) % 4], sizes[(trial // 2) % 4], sizes[(trial // 3) % 4]
+                )
+            var second = mutated(core, [0.0, 0.03, 0.15][trial % 3], [1, 5, 40][(trial // 3) % 3])
+            if trial % 5 == 0:
+                first, second = second, first
+            var expected = ends_free_optimum(first, second, x, o, e, ends, o2, e2)
+            assert_equal(affine2p_distance(first, second, x, o, e, o2, e2, ends_free=ends), expected)
+            var found = affine2p_cigar(first, second, x, o, e, o2, e2, ends_free=ends)
+            assert_equal(found.cost, expected)
+            var rows = rows_from_cigar(first, second, found.cigar)
+            assert_equal(rows[0].replace("-", ""), first)
+            assert_equal(rows[1].replace("-", ""), second)
+            assert_equal(ends_free_price(found.cigar, x, o, e, ends, o2, e2), expected)
+            var capped = affine2p_cigar(first, second, x, o, e, o2, e2, max_cost=expected, ends_free=ends)
+            assert_equal(capped.value().cost, expected)
+            if expected > 0:
+                assert_false(
+                    Bool(affine2p_distance(first, second, x, o, e, o2, e2, max_cost=expected - 1, ends_free=ends))
+                )
+            for limit in [0, 64]:
+                var moves = List[UInt8]()
+                var cost = solve[2](
+                    first.as_bytes(),
+                    second.as_bytes(),
+                    penalties,
+                    FREE_START,
+                    FREE_START,
+                    limit,
+                    moves,
+                    True,
+                    Int.MAX,
+                    ends,
+                )
+                assert_equal(cost * penalties.scale, expected)
+                var cigar = cigar_of_moves(first, second, moves)
+                assert_equal(ends_free_price(cigar, x, o, e, ends, o2, e2), expected)
+    # A long gap at the second piece, 24 + 30, and a short one at the first, 6 + 2: 62, where the first
+    # piece alone charges 74 and the second 79.
+    var gapped = "GATTACAGCTTGCA" + "C" * 30 + "TGGACCATGAGTCA" + "TTGACCAGTCGATC"
+    var plain = "GATTACAGCTTGCA" + "TGGACCATGAGTCA" + "G" + "TTGACCAGTCGATC"
+    var both = affine2p_cigar(gapped, plain, 4, 6, 2, 24, 1)
+    assert_equal(both.cost, 62)
+    assert_equal(both.cigar, "14=30D14=1I14=")
+    assert_equal(affine_distance(gapped, plain, 4, 6, 2), 74)
+    assert_equal(affine_distance(gapped, plain, 4, 24, 1), 79)
+    assert_equal(affine2p_distance("", "ACGT", 4, 6, 2, 24, 1), 14)
+    assert_equal(affine2p_distance("", "A" * 30, 4, 6, 2, 24, 1), 54)
+    with assert_raises():
+        _ = affine2p_distance("A", "C", 4, 6, 2, 24, 0)
 
 
 # endregion Refusals

@@ -24,6 +24,14 @@ and one from the corner over the reversed sequences, a cost at a time each, unti
 overlap proves the optimum (see `bidirectional`). Each grows to about half the cost, so the two
 together step about half the diagonals one search would.
 
+A gap may also cost the least of two affine costs, WFA's two-piece gap-affine model, where one piece
+opens cheaply and extends dearly and the other the reverse, so a long gap costs about its length
+rather than a short gap's extension a letter. Each piece then has its two gap fronts of its own, built
+from its own opening and extension, and the alignment front takes the best of all four; the search,
+the meeting inside a gap, which pays that piece's opening once, and the split are otherwise the same.
+The number of pieces is a parameter of the search (see `Wavefront`), so a single piece compiles to the
+three fronts alone.
+
 For an alignment both searches keep, of every cost, the alignment front's columns and a byte of
 which source won each layer (see `History`), five bytes a diagonal where WFA's high-memory mode
 keeps twelve, and the path is traced from where they met back to each end (see `trace`). A pair
@@ -73,9 +81,38 @@ comptime HISTORY_KEPT_PER_LETTER = 8
 comptime ALIGNED = 0
 """The front ending in two letters aligned, a match or a substitution."""
 comptime FIRST_GAP = 1
-"""The front ending in a letter of the first sequence against a gap."""
+"""The front ending in a letter of the first sequence against a gap of the first piece; a move that
+consumes a letter of the first sequence alone."""
 comptime SECOND_GAP = 2
-"""The front ending in a letter of the second sequence against a gap."""
+"""The front ending in a letter of the second sequence against a gap of the first piece; a move that
+consumes a letter of the second sequence alone."""
+comptime MAX_PIECES = 2
+"""Gap pieces a cost may have: a gap of `k` letters costs the least of `opening + k extension` over them."""
+
+
+@always_inline
+def layers_of[pieces: Int]() -> Int:
+    """Fronts a cost keeps: the alignment front and two gap layers a piece, one each way."""
+    return 1 + 2 * pieces
+
+
+@always_inline
+def gap_layer(piece: Int, along_first: Bool) -> Int:
+    """The layer of `piece`'s gaps of the first sequence's letters, or of the second's: `FIRST_GAP` and
+    `SECOND_GAP` for the first piece, the next two for the second."""
+    return 1 + 2 * piece + (0 if along_first else 1)
+
+
+@always_inline
+def piece_of(layer: Int) -> Int:
+    return (layer - 1) // 2
+
+
+@always_inline
+def along_first(layer: Int) -> Bool:
+    """Whether a gap layer's letters are the first sequence's, its moves `FIRST_GAP`."""
+    return (layer - 1) % 2 == 0
+
 
 comptime CELLS_PER_STEP = 4
 """Cells of the vectorized full sweep (see `vector_score`) one diagonal step of the three fronts
@@ -89,22 +126,18 @@ comptime HALTED = 2
 """Its answer when they stopped first: a full sweep would be cheaper, or the kept fronts too large."""
 
 comptime FREE_START = 0
-"""A search's origin as a whole alignment's: any first move, each at its own cost."""
-comptime IN_FIRST_GAP = 1
-"""The origin inside a gap of the first sequence's letters, which a first move of one continues for
-an extension alone: the piece after a split inside that gap."""
-comptime IN_SECOND_GAP = 2
-"""The origin inside a gap of the second sequence's letters."""
-comptime OPENING_FIRST_GAP = 3
-"""The first move a letter of the first sequence against a gap, opened there: the backward search of
+"""A search's origin as a whole alignment's: any first move, each at its own cost. An origin of a gap
+layer `g` instead lies inside a gap of that layer, which a first move along it continues for an
+extension alone: the piece after a split inside that gap."""
+comptime OPENING = 8
+"""An origin of `OPENING + g` must open a gap of layer `g` with its first move: the backward search of
 the piece before a split inside that gap, which must end in it."""
-comptime OPENING_SECOND_GAP = 4
-"""The first move a letter of the second sequence against a gap, opened there."""
 
 
 @fieldwise_init
 struct Penalties(ImplicitlyCopyable, TrivialRegisterPassable):
-    """The wavefront's costs for one scoring, and what turns a cost back into a score."""
+    """The wavefront's costs for one scoring, and what turns a cost back into a score. A second gap
+    piece, `opening2` and `extension2`, counts only where a search runs two (see `MAX_PIECES`)."""
 
     var mismatch: Int
     var opening: Int
@@ -114,10 +147,33 @@ struct Penalties(ImplicitlyCopyable, TrivialRegisterPassable):
     """The common factor the costs were divided by."""
     var reward: Int
     """The match score, which every letter of both sequences earns half of before the costs."""
+    var opening2: Int
+    var extension2: Int
 
     def score(self, cost: Int, letters: Int) -> Int:
         """The Gotoh score of an alignment over `letters` letters in all, costing `cost`."""
         return (self.reward * letters - cost * self.scale) // 2
+
+    @always_inline
+    def opening_of(self, piece: Int) -> Int:
+        return self.opening if piece == 0 else self.opening2
+
+    @always_inline
+    def extension_of(self, piece: Int) -> Int:
+        return self.extension if piece == 0 else self.extension2
+
+    def window[pieces: Int](self) -> Int:
+        """The dearest single move: a substitution, or a gap's first letter in any piece."""
+        var dearest = max(self.mismatch, self.opening + self.extension)
+        comptime if pieces == 2:
+            dearest = max(dearest, self.opening2 + self.extension2)
+        return dearest
+
+    def widest_opening[pieces: Int](self) -> Int:
+        """The dearest opening, what a meeting inside a gap pays once for both halves at most."""
+        comptime if pieces == 2:
+            return max(self.opening, self.opening2)
+        return self.opening
 
 
 @fieldwise_init
@@ -175,7 +231,7 @@ def wavefront_penalties(
     if x <= 0 or e <= 0 or o < 0:
         return None
     var scale = gcd(gcd(x, e), o)
-    return Penalties(x // scale, o // scale, e // scale, scale, reward)
+    return Penalties(x // scale, o // scale, e // scale, scale, reward, 0, 0)
 
 
 def padded(codes: Span[UInt8, _], sentinel: UInt8, reverse: Bool) -> List[UInt8]:
@@ -199,20 +255,19 @@ def padded(codes: Span[UInt8, _], sentinel: UInt8, reverse: Bool) -> List[UInt8]
     return out^
 
 
-comptime FROM_FIRST_GAP = UInt8(1)
-"""A flag's low two bits: the aligned front's entry came from the first sequence's gap layer; zero
-for a substitution, `FROM_SECOND_GAP` for the second's."""
-comptime FROM_SECOND_GAP = UInt8(2)
-comptime FIRST_OPENED = UInt8(4)
-"""A flag bit: the first sequence's gap layer came from an opening, not an extension."""
-comptime SECOND_OPENED = UInt8(8)
-"""A flag bit: the second sequence's gap layer came from an opening, not an extension."""
+comptime ENTRY_MASK = UInt8(7)
+"""A flag's low three bits: the layer the alignment front's entry came from, zero for a substitution."""
+
+
+@always_inline
+def opened_bit(layer: Int) -> UInt8:
+    """A flag bit: gap layer `layer` came from an opening, not an extension."""
+    return UInt8(1) << UInt8(2 + layer)
 
 
 struct History(Movable):
     """What the traceback needs of every cost's fronts: the alignment front's column on each diagonal
-    kept, and a flag of which source won each layer there (see `FROM_FIRST_GAP` and the bits after
-    it). Cost `s` holds diagonals `lows[s] ..= highs[s]`, its columns and flags from `starts[s]`;
+    kept, and a flag of which source won each layer there (see `ENTRY_MASK` and `opened_bit`). Cost `s` holds diagonals `lows[s] ..= highs[s]`, its columns and flags from `starts[s]`;
     elsewhere it reads as unreached. The step writes both as it goes (see `begin`), so the fronts are
     never copied out of the rings, and they go into blocks that are never moved either: a list grown
     by doubling would copy everything kept so far each time, a tenth of an alignment's time.
@@ -319,11 +374,12 @@ comptime BLOCK_SHIFT = 40
 comptime BLOCK_MASK = (1 << BLOCK_SHIFT) - 1
 
 
-struct Fronts(Movable):
-    """The last `slots` costs' three fronts, in rings indexed by cost, each over the diagonals reached.
+struct Fronts[layers: Int](Movable):
+    """The last `slots` costs' fronts, `layers` a cost, in rings indexed by cost, each over the
+    diagonals reached.
 
     Diagonal `k` holds the cells whose column minus row is `k`, from `-rows` to `columns`, stored
-    at `k + base` of each of the `3 slots` rows of one buffer, a slot's layers side by side. The rows
+    at `k + base` of each of the `layers slots` rows of one buffer, a slot's layers side by side. The rows
     cover only the diagonals the fronts have reached, about `2 s / e` of them at cost `s`, and double
     towards whichever side they outgrow, so the memory grows with the score rather than the
     sequences. A slot holds its cost's values on `lows[slot] ..= highs[slot]` and reads as unreached
@@ -355,7 +411,7 @@ struct Fronts(Movable):
         self.width = 4 * LANES
         self.stride = self.width + ROW_PADDING
         self.base = self.width // 2
-        self.buffer = List[Int32](length=3 * slots * self.stride, fill=UNREACHED)
+        self.buffer = List[Int32](length=Self.layers * slots * self.stride, fill=UNREACHED)
         self.lows = List[Int](length=slots, fill=1)
         self.highs = List[Int](length=slots, fill=0)
         self.reach = List[Int](length=slots, fill=Int.MIN // 2)
@@ -373,7 +429,7 @@ struct Fronts(Movable):
         return (
             self.buffer.unsafe_ptr()
             .unsafe_origin_cast[MutUntrackedOrigin]()
-            .unsafe_offset((3 * slot + layer) * self.stride + self.base)
+            .unsafe_offset((Self.layers * slot + layer) * self.stride + self.base)
         )
 
     def ready(mut self, low: Int, high: Int):
@@ -395,7 +451,7 @@ struct Fronts(Movable):
             new_last = min(max(high, last + size), self.most)
         var new_size = new_last - new_first + 1
         var shift = first - new_first
-        var rows = 3 * self.slots
+        var rows = Self.layers * self.slots
         var new_stride = new_size + ROW_PADDING
         var wider = List[Int32](length=rows * new_stride, fill=UNREACHED)
         var source = self.buffer.unsafe_ptr()
@@ -417,7 +473,7 @@ struct Fronts(Movable):
             # Only the old diagonals outside the new range: the new cost writes over the rest.
             var below_end = min(old_high, low - 1) if low <= high else old_high
             var above_start = max(old_low, high + 1) if low <= high else old_high + 1
-            comptime for layer in range(3):
+            comptime for layer in range(Self.layers):
                 var values = self.row(slot, layer)
                 for diagonal in range(old_low, below_end + 1):
                     values[unsafe_offset=diagonal] = UNREACHED
@@ -429,15 +485,20 @@ struct Fronts(Movable):
 
 @inline(.never)
 def step[
-    record: Bool
+    record: Bool, pieces: Int
 ](
     mismatched: ImmPointer[Int32, _],
     opening: ImmPointer[Int32, _],
     first_gaps: ImmPointer[Int32, _],
     second_gaps: ImmPointer[Int32, _],
+    opening2: ImmPointer[Int32, _],
+    first_gaps2: ImmPointer[Int32, _],
+    second_gaps2: ImmPointer[Int32, _],
     aligned: Slot,
     opened_first: Slot,
     opened_second: Slot,
+    opened_first2: Slot,
+    opened_second2: Slot,
     kept: Slot,
     flags: MutPointer[UInt8, MutUntrackedOrigin],
     first: ImmPointer[UInt8, _],
@@ -447,13 +508,15 @@ def step[
     columns: Int,
     rows: Int,
 ) -> Int:
-    """One cost's three fronts on diagonals `low ..= high`, every pointer indexed by diagonal, and with
-    `record` each diagonal's alignment column again in `kept` and its flag (see `FROM_FIRST_GAP`).
+    """One cost's fronts on diagonals `low ..= high`, every pointer indexed by diagonal, and with
+    `record` each diagonal's alignment column again in `kept` and its flag (see `ENTRY_MASK`).
 
     `mismatched` is the alignment front a mismatch back, `opening` the one an opened gap back, and
     the gap fronts are their own layers an extension back. A letter of the first sequence against
     a gap comes from the diagonal below and moves one column; one of the second, from the diagonal
-    above, stays in its column and moves one row. Each only where it stays inside the matrix.
+    above, stays in its column and moves one row. Each only where it stays inside the matrix. With
+    two `pieces` the second piece's sources and layers, the ones ending in `2`, step the same way;
+    with one they are never read.
 
     Each lane group's alignment front then slides over its matches straight away, the eight slides
     independent of each other, and the furthest anti-diagonal, `2 column - diagonal`, comes back.
@@ -485,6 +548,24 @@ def step[
         var gapped = max(first_gap, second_gap)
         opened_first.unsafe_offset(diagonal).unsafe_store(first_gap)
         opened_second.unsafe_offset(diagonal).unsafe_store(second_gap)
+        var opened_below2 = unreached
+        var extended_below2 = unreached
+        var opened_above2 = unreached
+        var extended_above2 = unreached
+        var first_gap2 = unreached
+        var second_gap2 = unreached
+        comptime if pieces == 2:
+            opened_below2 = opening2.unsafe_offset(diagonal - 1).unsafe_load[width=LANES]()
+            extended_below2 = first_gaps2.unsafe_offset(diagonal - 1).unsafe_load[width=LANES]()
+            opened_above2 = opening2.unsafe_offset(diagonal + 1).unsafe_load[width=LANES]()
+            extended_above2 = second_gaps2.unsafe_offset(diagonal + 1).unsafe_load[width=LANES]()
+            var below2 = max(opened_below2, extended_below2)
+            var above2 = max(opened_above2, extended_above2)
+            first_gap2 = below2.lt(column_limit).select(below2 + 1, unreached)
+            second_gap2 = (above2 - diagonals).le(row_limit).select(above2, unreached)
+            gapped = max(gapped, max(first_gap2, second_gap2))
+            opened_first2.unsafe_offset(diagonal).unsafe_store(first_gap2)
+            opened_second2.unsafe_offset(diagonal).unsafe_store(second_gap2)
         var front = aligned.unsafe_offset(diagonal)
         comptime if GATHERED_SLIDES:
             var slid = gathered_slides(first, second, max(substituted, gapped), diagonals)
@@ -502,21 +583,32 @@ def step[
             kept.unsafe_offset(diagonal).unsafe_store(front.unsafe_load[width=LANES]())
         comptime if record:
             # Worked out in the fronts' own lanes and narrowed once.
-            var entry = substituted.ge(gapped).select(
-                Lanes(0), first_gap.ge(second_gap).select(Lanes(Int32(FROM_FIRST_GAP)), Lanes(Int32(FROM_SECOND_GAP)))
+            @always_inline
+            def bit(won: SIMD[DType.bool, LANES], layer: Int) -> Lanes:
+                return won.select(Lanes(Int32(opened_bit(layer))), Lanes(0))
+
+            var entry = first_gap.ge(second_gap).select(Lanes(Int32(FIRST_GAP)), Lanes(Int32(SECOND_GAP)))
+            var opened = bit(opened_below.ge(extended_below), FIRST_GAP) | bit(
+                opened_above.ge(extended_above), SECOND_GAP
             )
-            var opened = opened_below.ge(extended_below).select(Lanes(Int32(FIRST_OPENED)), Lanes(0)) | opened_above.ge(
-                extended_above
-            ).select(Lanes(Int32(SECOND_OPENED)), Lanes(0))
+            comptime if pieces == 2:
+                var second_entry = first_gap2.ge(second_gap2).select(
+                    Lanes(Int32(gap_layer(1, True))), Lanes(Int32(gap_layer(1, False)))
+                )
+                entry = max(first_gap, second_gap).ge(max(first_gap2, second_gap2)).select(entry, second_entry)
+                opened |= bit(opened_below2.ge(extended_below2), gap_layer(1, True)) | bit(
+                    opened_above2.ge(extended_above2), gap_layer(1, False)
+                )
+            entry = substituted.ge(gapped).select(Lanes(0), entry)
             flags.unsafe_offset(diagonal).unsafe_store((entry | opened).cast[DType.uint8]())
         diagonal += LANES
     return max(reach, Int(reaches.reduce_max()))
 
 
-struct Wavefront(Movable):
-    """One direction's search over two encoded sequences: the three fronts of each cost in turn, from
-    cost zero at the origin, and, for the costs grown recording, what the traceback needs of each
-    (see `History`).
+struct Wavefront[pieces: Int](Movable):
+    """One direction's search over two encoded sequences: the fronts of each cost in turn, from cost
+    zero at the origin, and, for the costs grown recording, what the traceback needs of each (see
+    `History`). A gap costs the least over its `pieces`, one or two (see `MAX_PIECES`).
 
     The backward search is the same search over both sequences reversed, whose origin is the corner.
     """
@@ -526,7 +618,7 @@ struct Wavefront(Movable):
     var columns: Int
     var rows: Int
     var penalties: Penalties
-    var fronts: Fronts
+    var fronts: Fronts[layers_of[Self.pieces]()]
     var history: History
     var cost: Int
     """The last cost whose fronts are grown."""
@@ -562,9 +654,7 @@ struct Wavefront(Movable):
         self.penalties = penalties
         self.origin = origin
         # Every source a cost reads lies at most this far back, and a slot is reused after as many.
-        self.fronts = Fronts(
-            max(penalties.mismatch, penalties.opening + penalties.extension) + 1, self.columns, self.rows
-        )
+        self.fronts = Fronts[layers_of[Self.pieces]()](penalties.window[Self.pieces]() + 1, self.columns, self.rows)
         # A search keeps a few diagonals a letter on close pairs, so its lists rarely grow on them.
         self.history = History(
             min(HISTORY_KEPT_PER_LETTER * (self.columns + self.rows), HISTORY_LIMIT // 2) if record else 0
@@ -573,7 +663,7 @@ struct Wavefront(Movable):
         self.work = 0
         self.furthest = Int.MIN // 2
         self.fronts.ready(-1 - LANES, 1 + LANES)
-        if origin >= OPENING_FIRST_GAP:
+        if origin > OPENING:
             # Nothing at cost zero: the opening gap enters at its own cost (see `advance`). The kept
             # fronts still hold the origin at column zero, where that gap's walk back ends.
             if record:
@@ -596,48 +686,55 @@ struct Wavefront(Movable):
             kept[unsafe_offset=diagonal] = Int32(column)
             reach = max(reach, 2 * column - diagonal)
         # Inside a gap, its layer holds the origin too, which extends without a second opening.
-        if origin == IN_FIRST_GAP:
-            self.fronts.row(0, FIRST_GAP)[unsafe_offset=0] = 0
-        elif origin == IN_SECOND_GAP:
-            self.fronts.row(0, SECOND_GAP)[unsafe_offset=0] = 0
+        if origin != FREE_START:
+            self.fronts.row(0, origin)[unsafe_offset=0] = 0
         self.fronts.reach[0] = reach
         self.furthest = reach
         if record:
             self.history.finish(low, high)
 
     def advance[record: Bool](mut self):
-        """Grows the next cost's three fronts from the ring, and with `record` keeps what the traceback
-        needs of them."""
+        """Grows the next cost's fronts from the ring, and with `record` keeps what the traceback needs
+        of them."""
         self.cost += 1
         var cost = self.cost
         var x = self.penalties.mismatch
-        var o = self.penalties.opening
-        var e = self.penalties.extension
         var columns = self.columns
         var rows = self.rows
         self.fronts.current = self.fronts.back(self.fronts.slots - 1)
         var slot = self.fronts.current
         # A source before the first cost reads a slot no cost has taken yet, which reads as unreached.
         var mismatch_slot = self.fronts.back(x)
-        var opening_slot = self.fronts.back(o + e)
-        var extension_slot = self.fronts.back(e)
         var low = Int.MAX
         var high = Int.MIN
         if cost >= x and self.fronts.lows[mismatch_slot] <= self.fronts.highs[mismatch_slot]:
             low = min(low, self.fronts.lows[mismatch_slot])
             high = max(high, self.fronts.highs[mismatch_slot])
-        if cost >= o + e and self.fronts.lows[opening_slot] <= self.fronts.highs[opening_slot]:
-            low = min(low, self.fronts.lows[opening_slot] - 1)
-            high = max(high, self.fronts.highs[opening_slot] + 1)
-        if cost >= e and self.fronts.lows[extension_slot] <= self.fronts.highs[extension_slot]:
-            low = min(low, self.fronts.lows[extension_slot] - 1)
-            high = max(high, self.fronts.highs[extension_slot] + 1)
+        # Each piece's opening and extension sources, their gaps a diagonal either side.
+        var opening_slots = Array[Int, MAX_PIECES](fill=0)
+        var extension_slots = Array[Int, MAX_PIECES](fill=0)
+        comptime for piece in range(Self.pieces):
+            var o = self.penalties.opening_of(piece)
+            var e = self.penalties.extension_of(piece)
+            opening_slots[piece] = self.fronts.back(o + e)
+            extension_slots[piece] = self.fronts.back(e)
+            var source = opening_slots[piece]
+            if cost >= o + e and self.fronts.lows[source] <= self.fronts.highs[source]:
+                low = min(low, self.fronts.lows[source] - 1)
+                high = max(high, self.fronts.highs[source] + 1)
+            source = extension_slots[piece]
+            if cost >= e and self.fronts.lows[source] <= self.fronts.highs[source]:
+                low = min(low, self.fronts.lows[source] - 1)
+                high = max(high, self.fronts.highs[source] + 1)
         # An origin that must open a gap reaches the gap's first letter at the opening's cost.
         var opened = 0
-        if self.origin >= OPENING_FIRST_GAP and cost == o + e:
-            opened = 1 if self.origin == OPENING_FIRST_GAP else -1
-            low = min(low, opened)
-            high = max(high, opened)
+        var opened_layer = self.origin - OPENING
+        if self.origin > OPENING:
+            var piece = piece_of(opened_layer)
+            if cost == self.penalties.opening_of(piece) + self.penalties.extension_of(piece):
+                opened = 1 if along_first(opened_layer) else -1
+                low = min(low, opened)
+                high = max(high, opened)
         low = max(low, -rows)
         high = min(high, columns)
         if low > high:
@@ -647,8 +744,6 @@ struct Wavefront(Movable):
         self.fronts.ready(low - 1, high + LANES + 1)
         self.fronts.claim(slot, low, high)
         var front = self.fronts.row(slot, ALIGNED)
-        var first_gaps = self.fronts.row(slot, FIRST_GAP)
-        var second_gaps = self.fronts.row(slot, SECOND_GAP)
         # Without `record` the step writes neither, and these stand for nothing.
         var kept = front
         var flags = front.unsafe_bitcast[UInt8]()
@@ -656,14 +751,21 @@ struct Wavefront(Movable):
             var room = self.history.begin(low, high)
             kept = room[0]
             flags = room[1]
-        var reach = step[record](
+        # With one piece the second's sources and layers stand for the first's, and the step reads none.
+        comptime last = Self.pieces - 1
+        var reach = step[record, Self.pieces](
             self.fronts.row(mismatch_slot, ALIGNED),
-            self.fronts.row(opening_slot, ALIGNED),
-            self.fronts.row(extension_slot, FIRST_GAP),
-            self.fronts.row(extension_slot, SECOND_GAP),
+            self.fronts.row(opening_slots[0], ALIGNED),
+            self.fronts.row(extension_slots[0], FIRST_GAP),
+            self.fronts.row(extension_slots[0], SECOND_GAP),
+            self.fronts.row(opening_slots[last], ALIGNED),
+            self.fronts.row(extension_slots[last], gap_layer(last, True)),
+            self.fronts.row(extension_slots[last], gap_layer(last, False)),
             front,
-            first_gaps,
-            second_gaps,
+            self.fronts.row(slot, FIRST_GAP),
+            self.fronts.row(slot, SECOND_GAP),
+            self.fronts.row(slot, gap_layer(last, True)),
+            self.fronts.row(slot, gap_layer(last, False)),
             kept,
             flags,
             self.first.unsafe_ptr(),
@@ -673,22 +775,16 @@ struct Wavefront(Movable):
             columns,
             rows,
         )
-        # The step wrote whole lane groups; past `high` the slot must read unreached again.
-        for diagonal in range(high + 1, high + LANES):
-            front[unsafe_offset=diagonal] = UNREACHED
-            first_gaps[unsafe_offset=diagonal] = UNREACHED
-            second_gaps[unsafe_offset=diagonal] = UNREACHED
+        # The step wrote whole lane groups; past `high` the slot must read unreached again, a lane group
+        # a layer, within the room `ready` made.
+        comptime for layer in range(layers_of[Self.pieces]()):
+            self.fronts.row(slot, layer).unsafe_offset(high + 1).unsafe_store(SIMD[DType.int32, LANES](UNREACHED))
         # The gap an origin must open enters past the step, and slides as the step's columns did.
         if opened != 0:
             var column = 1 if opened == 1 else 0
-            if opened == 1:
-                first_gaps[unsafe_offset=1] = 1
-                comptime if record:
-                    flags[unsafe_offset=1] = FROM_FIRST_GAP | FIRST_OPENED
-            else:
-                second_gaps[unsafe_offset=-1] = 0
-                comptime if record:
-                    flags[unsafe_offset=-1] = FROM_SECOND_GAP | SECOND_OPENED
+            self.fronts.row(slot, opened_layer)[unsafe_offset=opened] = Int32(column)
+            comptime if record:
+                flags[unsafe_offset=opened] = UInt8(opened_layer) | opened_bit(opened_layer)
             if Int(front[unsafe_offset=opened]) < column:
                 column = slide(self.first.unsafe_ptr(), self.second.unsafe_ptr(), column, opened)
                 front[unsafe_offset=opened] = Int32(column)
@@ -701,13 +797,15 @@ struct Wavefront(Movable):
 
         # Diagonals no layer reached at either end are dropped, as WFA trims them, so the range
         # tracks the paths alive rather than every diagonal the gap costs allow.
+        var base = self.fronts.row(slot, ALIGNED)
+        var stride = self.fronts.stride
+
         @inline(.always)
-        def dead(diagonal: Int) {imm front, imm first_gaps, imm second_gaps} -> Bool:
-            return (
-                front[unsafe_offset=diagonal] < 0
-                and first_gaps[unsafe_offset=diagonal] < 0
-                and second_gaps[unsafe_offset=diagonal] < 0
-            )
+        def dead(diagonal: Int) {imm base, imm stride} -> Bool:
+            var reached = base[unsafe_offset=diagonal]
+            comptime for layer in range(1, layers_of[Self.pieces]()):
+                reached = max(reached, base[unsafe_offset=layer * stride + diagonal])
+            return reached < 0
 
         var kept_low = low
         var kept_high = high
@@ -753,7 +851,15 @@ struct Meeting(ImplicitlyCopyable, TrivialRegisterPassable):
         return Meeting(Int.MAX, ALIGNED, 0, 0, 0, 0)
 
 
-def meet(mut forward: Wavefront, forward_cost: Int, mut backward: Wavefront, backward_cost: Int, mut best: Meeting):
+def meet[
+    pieces: Int
+](
+    mut forward: Wavefront[pieces],
+    forward_cost: Int,
+    mut backward: Wavefront[pieces],
+    backward_cost: Int,
+    mut best: Meeting,
+):
     """Lowers `best` to where the forward fronts of one cost and the backward fronts of another
     overlap, if that costs less.
 
@@ -761,13 +867,13 @@ def meet(mut forward: Wavefront, forward_cost: Int, mut backward: Wavefront, bac
     forward's `columns - c`. Two alignment fronts overlap where their columns add up to `columns` or
     more: the forward path reaches a cell the backward one comes back past, and edit costs never fall
     along a diagonal, so the cell costs at most the sum. Two gap fronts of one layer overlap the same
-    way, at a cell inside the gap both may hold, and join into one gap of one opening.
+    way, at a cell inside the gap both may hold, and join into one gap of one opening, its piece's.
     """
     var columns = forward.columns
     var rows = forward.rows
-    var o = forward.penalties.opening
+    var penalties = forward.penalties
     var total = forward_cost + backward_cost
-    if total - o >= best.cost:
+    if total - penalties.widest_opening[pieces]() >= best.cost:
         return
     var ahead = forward.fronts.back(forward.cost - forward_cost)
     var behind = backward.fronts.back(backward.cost - backward_cost)
@@ -778,11 +884,9 @@ def meet(mut forward: Wavefront, forward_cost: Int, mut backward: Wavefront, bac
     var low = max(forward.fronts.lows[ahead], target - backward.fronts.highs[behind])
     var high = min(forward.fronts.highs[ahead], target - backward.fronts.lows[behind])
     var aligned = forward.fronts.row(ahead, ALIGNED)
-    var first_gaps = forward.fronts.row(ahead, FIRST_GAP)
-    var second_gaps = forward.fronts.row(ahead, SECOND_GAP)
     var back_aligned = backward.fronts.row(behind, ALIGNED)
-    var back_first_gaps = backward.fronts.row(behind, FIRST_GAP)
-    var back_second_gaps = backward.fronts.row(behind, SECOND_GAP)
+    var stride = forward.fronts.stride
+    var back_stride = backward.fronts.stride
 
     @inline(.always)
     def check(
@@ -790,16 +894,14 @@ def meet(mut forward: Wavefront, forward_cost: Int, mut backward: Wavefront, bac
     ) {
         mut best,
         imm aligned,
-        imm first_gaps,
-        imm second_gaps,
         imm back_aligned,
-        imm back_first_gaps,
-        imm back_second_gaps,
+        imm stride,
+        imm back_stride,
         imm target,
         imm columns,
         imm rows,
         imm total,
-        imm o,
+        imm penalties,
         imm forward_cost,
         imm backward_cost,
     }:
@@ -807,22 +909,22 @@ def meet(mut forward: Wavefront, forward_cost: Int, mut backward: Wavefront, bac
         var column = Int(aligned[unsafe_offset=diagonal])
         if total < best.cost and column + Int(back_aligned[unsafe_offset=mirrored]) >= columns:
             best = Meeting(total, ALIGNED, diagonal, column, forward_cost, backward_cost)
-        if total - o >= best.cost:
-            return
-        # A cell inside a gap of the first sequence's letters has consumed one of them either way.
-        var gap = Int(first_gaps[unsafe_offset=diagonal])
-        var back_gap = Int(back_first_gaps[unsafe_offset=mirrored])
-        if gap + back_gap >= columns:
-            var cell = min(gap, min(columns - 1, rows + diagonal))
-            if cell >= max(max(1, diagonal), columns - back_gap):
-                best = Meeting(total - o, FIRST_GAP, diagonal, cell, forward_cost, backward_cost)
-        # And inside a gap of the second's, one of its rows either way.
-        gap = Int(second_gaps[unsafe_offset=diagonal])
-        back_gap = Int(back_second_gaps[unsafe_offset=mirrored])
-        if gap + back_gap >= columns:
-            var cell = min(gap, rows + diagonal - 1)
-            if cell >= max(diagonal + 1, columns - back_gap):
-                best = Meeting(total - o, SECOND_GAP, diagonal, cell, forward_cost, backward_cost)
+        comptime for layer in range(1, layers_of[pieces]()):
+            var joined = total - penalties.opening_of(piece_of(layer))
+            if joined < best.cost:
+                var gap = Int(aligned[unsafe_offset=layer * stride + diagonal])
+                var back_gap = Int(back_aligned[unsafe_offset=layer * back_stride + mirrored])
+                if gap + back_gap >= columns:
+                    comptime if along_first(layer):
+                        # A cell inside a gap of the first sequence's letters has consumed one of them either way.
+                        var cell = min(gap, min(columns - 1, rows + diagonal))
+                        if cell >= max(max(1, diagonal), columns - back_gap):
+                            best = Meeting(joined, layer, diagonal, cell, forward_cost, backward_cost)
+                    else:
+                        # And inside a gap of the second's, one of its rows either way.
+                        var cell = min(gap, rows + diagonal - 1)
+                        if cell >= max(diagonal + 1, columns - back_gap):
+                            best = Meeting(joined, layer, diagonal, cell, forward_cost, backward_cost)
 
     # A lane group at a time, and the cells of a group that might meet one by one. An alignment front
     # reaches as far as either gap front of its cost, so where no two alignment fronts overlap, no
@@ -846,10 +948,10 @@ def meet(mut forward: Wavefront, forward_cost: Int, mut backward: Wavefront, bac
 
 
 def bidirectional[
-    record: Bool
+    pieces: Int, record: Bool
 ](
-    mut forward: Wavefront,
-    mut backward: Wavefront,
+    mut forward: Wavefront[pieces],
+    mut backward: Wavefront[pieces],
     mut best: Meeting,
     give_up: Bool,
     limit: Int,
@@ -863,8 +965,8 @@ def bidirectional[
     Each new front is checked against the other side's last `window` costs, which its ring holds. Every
     optimal path has a cell, between two moves or inside a gap, whose costs from the two ends differ by
     at most `window`, the dearest single move: the difference rises from `-cost` to `cost` in steps of
-    at most twice that. So once both sides have passed half of `best`, plus a gap opening the two
-    halves both paid and `window`, no cheaper path is left unchecked. Each side then grows to about
+    at most twice that. So once both sides have passed half of `best`, plus the dearest gap opening the
+    two halves both paid and `window`, no cheaper path is left unchecked. Each side then grows to about
     half the optimum, and the two together about half the diagonals one search grows alone. By the
     same count, once both have passed half of `ceiling` with that margin and found nothing within it,
     nothing is, and a capped search stops there, short of the optimum.
@@ -872,8 +974,8 @@ def bidirectional[
     var columns = forward.columns
     var rows = forward.rows
     var letters = columns + rows
-    var o = forward.penalties.opening
-    var window = max(forward.penalties.mismatch, o + forward.penalties.extension)
+    var o = forward.penalties.widest_opening[pieces]()
+    var window = forward.penalties.window[pieces]()
     if forward.cost == 0 and backward.cost == 0:
         meet(forward, 0, backward, 0, best)
     var budget = columns * rows // CELLS_PER_STEP
@@ -919,16 +1021,18 @@ def wavefront_score(
     """
     var letters = len(first) + len(second)
     if len(first) == 0 or len(second) == 0:
-        return penalties.score(gapped_cost(penalties, letters), letters)
-    var forward = Wavefront(Span(first), Span(second), penalties, FREE_START, False, False)
-    var backward = Wavefront(Span(first), Span(second), penalties, FREE_START, False, True)
+        return penalties.score(gapped_cost[1](penalties, letters), letters)
+    var forward = Wavefront[1](Span(first), Span(second), penalties, FREE_START, False, False)
+    var backward = Wavefront[1](Span(first), Span(second), penalties, FREE_START, False, True)
     var best = Meeting.none()
-    if bidirectional[False](forward, backward, best, give_up, Int.MAX) != MET:
+    if bidirectional[1, False](forward, backward, best, give_up, Int.MAX) != MET:
         return None
     return penalties.score(best.cost, letters)
 
 
-def wavefront_distance(
+def wavefront_distance[
+    pieces: Int
+](
     first: Span[UInt8, _],
     second: Span[UInt8, _],
     penalties: Penalties,
@@ -939,16 +1043,16 @@ def wavefront_distance(
     left unaligned for nothing, or -1 when every one costs more than `ceiling`: the two searches
     keeping only their rings, no fronts for a traceback."""
     if len(first) == 0 or len(second) == 0:
-        var cost = gapped_cost(penalties, unpaid_letters(len(first), len(second), ends_free))
+        var cost = gapped_cost[pieces](penalties, unpaid_letters(len(first), len(second), ends_free))
         return cost if cost <= ceiling else -1
-    var forward = Wavefront(
+    var forward = Wavefront[pieces](
         first, second, penalties, FREE_START, False, False, ends_free.first_begin, ends_free.second_begin
     )
-    var backward = Wavefront(
+    var backward = Wavefront[pieces](
         first, second, penalties, FREE_START, False, True, ends_free.first_end, ends_free.second_end
     )
     var best = Meeting.none()
-    if bidirectional[False](forward, backward, best, False, Int.MAX, ceiling) != MET:
+    if bidirectional[pieces, False](forward, backward, best, False, Int.MAX, ceiling) != MET:
         return -1
     return best.cost
 
@@ -963,9 +1067,18 @@ def unpaid_letters(columns: Int, rows: Int, ends_free: EndsFree) -> Int:
 
 
 @inline(.always)
-def gapped_cost(penalties: Penalties, letters: Int) -> Int:
-    """The cost of aligning `letters` letters against nothing: one gap, or none for no letters."""
-    return 0 if letters == 0 else penalties.opening + penalties.extension * letters
+def gapped_cost[pieces: Int](penalties: Penalties, letters: Int, continued: Int = -1) -> Int:
+    """The cost of aligning `letters` letters against nothing: one gap of the cheaper piece, or none
+    for no letters; or, with `continued` a piece, the extensions alone of the gap the letters continue
+    if that is cheaper."""
+    if letters == 0:
+        return 0
+    var cost = penalties.opening + penalties.extension * letters
+    comptime if pieces == 2:
+        cost = min(cost, penalties.opening2 + penalties.extension2 * letters)
+    if continued >= 0:
+        cost = min(cost, penalties.extension_of(continued) * letters)
+    return cost
 
 
 def trace(
@@ -987,12 +1100,10 @@ def trace(
     alignment layer that is a substitution from the front `x` back, or a gap layer at the same cost,
     entered after the matches back to its column when the cell lies past it. A gap cell came by a
     letter of its sequence from the diagonal beside it, opened from the alignment front `o + e` back
-    or extended from its own layer `e` back. A cell on the first row or column has one path left, a
-    gap along it.
+    or extended from its own layer `e` back, at its piece's `o` and `e`. A cell on the first row or
+    column has one path left, a gap along it.
     """
     var x = penalties.mismatch
-    var o = penalties.opening
-    var e = penalties.extension
     var spent = cost
     var current = layer
     var k = diagonal
@@ -1016,73 +1127,69 @@ def trace(
                     moves.append(UInt8(ALIGNED))
                 c = start
                 continue
-            var source = history.flag(spent, k) & 3
+            var source = Int(history.flag(spent, k) & ENTRY_MASK)
             # The column the winning source brought the front to, before its matches.
             var entry: Int
-            if source == 0:
+            if source == ALIGNED:
                 entry = history.column(spent - x, k) + 1
             else:
                 # A gap layer's column is where its run opened, and one letter on per extension.
+                var o = penalties.opening_of(piece_of(source))
+                var e = penalties.extension_of(piece_of(source))
+                var opened = opened_bit(source)
+                var step = 1 if along_first(source) else -1
                 var gap_cost = spent
                 var gap_diagonal = k
                 var letters = 0
                 # A run that reaches cost zero continues a gap the origin was inside, at column zero.
-                if source == FROM_FIRST_GAP:
-                    while gap_cost > 0 and history.flag(gap_cost, gap_diagonal) & FIRST_OPENED == 0:
-                        gap_cost -= e
-                        gap_diagonal -= 1
-                        letters += 1
-                    if gap_cost == 0:
-                        entry = letters
-                    else:
-                        entry = history.column(gap_cost - o - e, gap_diagonal - 1) + letters + 1
+                while gap_cost > 0 and history.flag(gap_cost, gap_diagonal) & opened == 0:
+                    gap_cost -= e
+                    gap_diagonal -= step
+                    letters += 1
+                if along_first(source):
+                    entry = (
+                        letters if gap_cost == 0 else history.column(gap_cost - o - e, gap_diagonal - 1) + letters + 1
+                    )
                 else:
-                    while gap_cost > 0 and history.flag(gap_cost, gap_diagonal) & SECOND_OPENED == 0:
-                        gap_cost -= e
-                        gap_diagonal += 1
                     entry = 0 if gap_cost == 0 else history.column(gap_cost - o - e, gap_diagonal + 1)
             if entry <= c:
                 for _ in range(c - entry):
                     moves.append(UInt8(ALIGNED))
                 c = entry
-            if source == 0:
+            if source == ALIGNED:
                 moves.append(UInt8(ALIGNED))
                 c -= 1
                 spent -= x
-            elif source == FROM_FIRST_GAP:
-                current = FIRST_GAP
             else:
-                current = SECOND_GAP
-        elif current == FIRST_GAP:
-            var opened = history.flag(spent, k) & FIRST_OPENED != 0
-            moves.append(UInt8(FIRST_GAP))
-            c -= 1
-            k -= 1
-            if c == 0:
-                for _ in range(-k):
-                    moves.append(UInt8(SECOND_GAP))
-                return
-            if opened:
-                spent -= o + e
-                current = ALIGNED
-            else:
-                spent -= e
+                current = source
         else:
-            var opened = history.flag(spent, k) & SECOND_OPENED != 0
-            moves.append(UInt8(SECOND_GAP))
-            k += 1
-            if c - k == 0:
-                for _ in range(c):
-                    moves.append(UInt8(FIRST_GAP))
-                return
+            var piece = piece_of(current)
+            var opened = history.flag(spent, k) & opened_bit(current) != 0
+            if along_first(current):
+                moves.append(UInt8(FIRST_GAP))
+                c -= 1
+                k -= 1
+                if c == 0:
+                    for _ in range(-k):
+                        moves.append(UInt8(SECOND_GAP))
+                    return
+            else:
+                moves.append(UInt8(SECOND_GAP))
+                k += 1
+                if c - k == 0:
+                    for _ in range(c):
+                        moves.append(UInt8(FIRST_GAP))
+                    return
             if opened:
-                spent -= o + e
+                spent -= penalties.opening_of(piece) + penalties.extension_of(piece)
                 current = ALIGNED
             else:
-                spent -= e
+                spent -= penalties.extension_of(piece)
 
 
-def solve(
+def solve[
+    pieces: Int
+](
     first: Span[UInt8, _],
     second: Span[UInt8, _],
     penalties: Penalties,
@@ -1104,15 +1211,17 @@ def solve(
     corner through the backward ones. A pair too large is split instead where an optimal path
     crosses, which the two searches find keeping only their rings, as BiWFA does; a crossing inside a
     gap leaves the piece before it to end in that gap and the piece after it to begin there, the
-    opening paid once. A piece is about a quarter of the pair, its two searches about half of the
+    opening paid once, its piece's. A piece is about a quarter of the pair, its two searches about half of the
     diagonals the pair's search grew from its end, so one that cannot fit skips keeping at once.
     """
     var columns = len(first)
     var rows = len(second)
     if columns == 0 or rows == 0:
-        var continued = (start == IN_FIRST_GAP and rows == 0) or (start == IN_SECOND_GAP and columns == 0)
-        var paid = unpaid_letters(columns, rows, ends_free)
-        var cost = 0 if paid == 0 else penalties.extension * paid + (0 if continued else penalties.opening)
+        # An origin inside a gap along the letters left continues it without a second opening.
+        var continued = -1
+        if start != FREE_START and start < OPENING and along_first(start) == (rows == 0):
+            continued = piece_of(start)
+        var cost = gapped_cost[pieces](penalties, unpaid_letters(columns, rows, ends_free), continued)
         if cost > ceiling:
             return -1
         for _ in range(columns):
@@ -1120,11 +1229,15 @@ def solve(
         for _ in range(rows):
             moves.append(UInt8(SECOND_GAP))
         return cost
-    var forward = Wavefront(first, second, penalties, start, keep, False, ends_free.first_begin, ends_free.second_begin)
-    var backward = Wavefront(first, second, penalties, finish, keep, True, ends_free.first_end, ends_free.second_end)
+    var forward = Wavefront[pieces](
+        first, second, penalties, start, keep, False, ends_free.first_begin, ends_free.second_begin
+    )
+    var backward = Wavefront[pieces](
+        first, second, penalties, finish, keep, True, ends_free.first_end, ends_free.second_end
+    )
     var best = Meeting.none()
     if keep:
-        var status = bidirectional[True](forward, backward, best, False, limit, ceiling)
+        var status = bidirectional[pieces, True](forward, backward, best, False, limit, ceiling)
         if status == OVER:
             return -1
         if status == MET:
@@ -1146,22 +1259,17 @@ def solve(
         # Too large to keep: the searches go on from where they stopped keeping only their rings.
         forward.history = History()
         backward.history = History()
-    if bidirectional[False](forward, backward, best, False, Int.MAX, ceiling) == OVER:
+    if bidirectional[pieces, False](forward, backward, best, False, Int.MAX, ceiling) == OVER:
         return -1
     var column = best.column
     var row = column - best.diagonal
     # A crossing at either end splits nothing: such a pair costs too little for its fronts not to fit.
     if (column == 0 and row == 0) or (column == columns and row == rows):
-        return solve(first, second, penalties, start, finish, Int.MAX, moves, True, Int.MAX, ends_free)
-    var before_finish = FREE_START
-    var after_start = FREE_START
-    if best.layer == FIRST_GAP:
-        before_finish = OPENING_FIRST_GAP
-        after_start = IN_FIRST_GAP
-    elif best.layer == SECOND_GAP:
-        before_finish = OPENING_SECOND_GAP
-        after_start = IN_SECOND_GAP
-    _ = solve(
+        return solve[pieces](first, second, penalties, start, finish, Int.MAX, moves, True, Int.MAX, ends_free)
+    # A crossing inside a gap: the piece after begins in it, and the piece before must end opening it.
+    var after_start = best.layer
+    var before_finish = FREE_START if best.layer == ALIGNED else OPENING + best.layer
+    _ = solve[pieces](
         first[column:],
         second[row:],
         penalties,
@@ -1173,7 +1281,7 @@ def solve(
         Int.MAX,
         ends_free.trailing(),
     )
-    _ = solve(
+    _ = solve[pieces](
         first[:column],
         second[:row],
         penalties,
@@ -1195,7 +1303,7 @@ def wavefront_align(
     it, keeping at most `limit` entries of fronts at once (see `solve`)."""
     var letters = len(first) + len(second)
     var moves = List[UInt8](capacity=letters)
-    var cost = solve(Span(first), Span(second), penalties, FREE_START, FREE_START, limit, moves)
+    var cost = solve[1](Span(first), Span(second), penalties, FREE_START, FREE_START, limit, moves)
     comptime GAP = UInt8(ord("-"))
     var symbols = alphabet.as_bytes()
     var top = List[UInt8](capacity=len(moves))
@@ -1237,7 +1345,35 @@ def affine_penalties(mismatch: Int, opening: Int, extension: Int) raises Alignme
             String("costs ", mismatch, ", ", opening, ", ", extension, ": a mismatch and an extension must cost"),
         )
     var scale = gcd(gcd(mismatch, extension), opening)
-    return Penalties(mismatch // scale, opening // scale, extension // scale, scale, 0)
+    return Penalties(mismatch // scale, opening // scale, extension // scale, scale, 0, 0, 0)
+
+
+def affine2p_penalties(
+    mismatch: Int, opening1: Int, extension1: Int, opening2: Int, extension2: Int
+) raises AlignmentError -> Penalties:
+    """The wavefront's costs for two-piece gap-affine costs as WFA counts them, divided by their common
+    factor."""
+    if mismatch <= 0 or extension1 <= 0 or extension2 <= 0 or opening1 < 0 or opening2 < 0:
+        raise AlignmentError(
+            ErrorKind.INVALID_SCORING,
+            String(
+                "costs ",
+                mismatch,
+                ", ",
+                opening1,
+                ", ",
+                extension1,
+                ", ",
+                opening2,
+                ", ",
+                extension2,
+                ": a mismatch and an extension must cost",
+            ),
+        )
+    var scale = gcd(gcd(gcd(mismatch, extension1), gcd(opening1, extension2)), opening2)
+    return Penalties(
+        mismatch // scale, opening1 // scale, extension1 // scale, scale, 0, opening2 // scale, extension2 // scale
+    )
 
 
 def affine_distance(
@@ -1257,7 +1393,7 @@ def affine_distance(
     the same search, none of the traceback, and a few rows of memory however long the pair.
     """
     var penalties = affine_penalties(mismatch, opening, extension)
-    return wavefront_distance(first.as_bytes(), second.as_bytes(), penalties, Int.MAX, ends_free) * penalties.scale
+    return wavefront_distance[1](first.as_bytes(), second.as_bytes(), penalties, Int.MAX, ends_free) * penalties.scale
 
 
 def affine_distance(
@@ -1273,15 +1409,7 @@ def affine_distance(
     """`affine_distance`, or None when it would pass `max_cost`: the searches stop once each has grown
     to about half of `max_cost` without the two meeting within it, so a pair far over costs a fraction
     of its full search."""
-    var penalties = affine_penalties(mismatch, opening, extension)
-    if max_cost < 0:
-        return None
-    var cost = wavefront_distance(
-        first.as_bytes(), second.as_bytes(), penalties, max_cost // penalties.scale, ends_free
-    )
-    if cost < 0:
-        return None
-    return cost * penalties.scale
+    return distance_within[1](first, second, affine_penalties(mismatch, opening, extension), max_cost, ends_free)
 
 
 def affine_cigar(
@@ -1306,7 +1434,7 @@ def affine_cigar(
     At costs (2, 0, 1) the cost is the indel distance, but a substitution costs there what a deletion
     and an insertion do, and the CIGAR may write one as `X` where an indel alignment has `1D1I`.
     """
-    var found = cigar_within(
+    var found = cigar_within[1](
         first, second, affine_penalties(mismatch, opening, extension), extended, Int.MAX, ends_free
     )
     return found.take()
@@ -1328,10 +1456,105 @@ def affine_cigar(
     var penalties = affine_penalties(mismatch, opening, extension)
     if max_cost < 0:
         return None
-    return cigar_within(first, second, penalties, extended, max_cost // penalties.scale, ends_free)
+    return cigar_within[1](first, second, penalties, extended, max_cost // penalties.scale, ends_free)
 
 
-def cigar_within(
+def affine2p_distance(
+    first: String,
+    second: String,
+    mismatch: Int,
+    opening1: Int,
+    extension1: Int,
+    opening2: Int,
+    extension2: Int,
+    *,
+    ends_free: EndsFree = EndsFree(),
+) raises AlignmentError -> Int:
+    """The least cost of a global alignment of two sequences under two-piece gap-affine costs as WFA
+    counts them, a substitution `mismatch` and a gap of `k` letters the least of `opening1 + k
+    extension1` and `opening2 + k extension2`, without the alignment; the letters `ends_free` allows
+    at either end left unaligned for nothing.
+
+    Usually one piece opens cheaply and extends dearly and the other the reverse, so a long gap costs
+    less than one affine cost would charge it. The same two searches as `affine_distance`'s, each
+    cost with two more fronts.
+    """
+    var penalties = affine2p_penalties(mismatch, opening1, extension1, opening2, extension2)
+    return wavefront_distance[2](first.as_bytes(), second.as_bytes(), penalties, Int.MAX, ends_free) * penalties.scale
+
+
+def affine2p_distance(
+    first: String,
+    second: String,
+    mismatch: Int,
+    opening1: Int,
+    extension1: Int,
+    opening2: Int,
+    extension2: Int,
+    *,
+    max_cost: Int,
+    ends_free: EndsFree = EndsFree(),
+) raises AlignmentError -> Optional[Int]:
+    """`affine2p_distance`, or None when it would pass `max_cost`, as `affine_distance` caps it."""
+    var penalties = affine2p_penalties(mismatch, opening1, extension1, opening2, extension2)
+    return distance_within[2](first, second, penalties, max_cost, ends_free)
+
+
+def affine2p_cigar(
+    first: String,
+    second: String,
+    mismatch: Int,
+    opening1: Int,
+    extension1: Int,
+    opening2: Int,
+    extension2: Int,
+    extended: Bool = True,
+    *,
+    ends_free: EndsFree = EndsFree(),
+) raises AlignmentError -> AffineCigar:
+    """`affine2p_distance` and an optimal alignment as a CIGAR string, written as `affine_cigar`'s is."""
+    var penalties = affine2p_penalties(mismatch, opening1, extension1, opening2, extension2)
+    var found = cigar_within[2](first, second, penalties, extended, Int.MAX, ends_free)
+    return found.take()
+
+
+def affine2p_cigar(
+    first: String,
+    second: String,
+    mismatch: Int,
+    opening1: Int,
+    extension1: Int,
+    opening2: Int,
+    extension2: Int,
+    extended: Bool = True,
+    *,
+    max_cost: Int,
+    ends_free: EndsFree = EndsFree(),
+) raises AlignmentError -> Optional[AffineCigar]:
+    """`affine2p_cigar`, or None when the cost would pass `max_cost`, as `affine_cigar` caps it."""
+    var penalties = affine2p_penalties(mismatch, opening1, extension1, opening2, extension2)
+    if max_cost < 0:
+        return None
+    return cigar_within[2](first, second, penalties, extended, max_cost // penalties.scale, ends_free)
+
+
+def distance_within[
+    pieces: Int
+](first: String, second: String, penalties: Penalties, max_cost: Int, ends_free: EndsFree) -> Optional[Int]:
+    """The least cost in the caller's units, or None when it would pass `max_cost`."""
+    if max_cost < 0:
+        return None
+    var cost = wavefront_distance[pieces](
+        first.as_bytes(), second.as_bytes(), penalties, max_cost // penalties.scale, ends_free
+    )
+    if cost < 0:
+        return None
+    return cost * penalties.scale
+
+
+def cigar_within[
+    pieces: Int
+](
     first: String,
     second: String,
     penalties: Penalties,
@@ -1345,7 +1568,7 @@ def cigar_within(
     var rows = second.byte_length()
     # UTF-8 never holds the sentinels' bytes, so the text's own bytes serve as codes.
     var moves = List[UInt8](capacity=columns + rows)
-    var cost = solve(
+    var cost = solve[pieces](
         first.as_bytes(),
         second.as_bytes(),
         penalties,
