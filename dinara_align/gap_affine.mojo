@@ -120,6 +120,34 @@ struct Penalties(ImplicitlyCopyable, TrivialRegisterPassable):
         return (self.reward * letters - cost * self.scale) // 2
 
 
+@fieldwise_init
+struct EndsFree(ImplicitlyCopyable, TrivialRegisterPassable, Writable):
+    """How many letters at each end of each sequence an alignment may leave unaligned for nothing, as
+    WFA2-lib's ends-free alignment counts them: all zero is a global alignment, the first sequence's
+    both ends at its length a read placed anywhere inside it, and one sequence's end with the other's
+    start an overlap. Letters past an allowance pay as a gap would."""
+
+    var first_begin: Int
+    var first_end: Int
+    var second_begin: Int
+    var second_end: Int
+
+    def __init__(out self):
+        """A global alignment: every letter aligned or paid for."""
+        self.first_begin = 0
+        self.first_end = 0
+        self.second_begin = 0
+        self.second_end = 0
+
+    def leading(self) -> EndsFree:
+        """The allowances at the start alone, for the piece of a split before its crossing."""
+        return EndsFree(self.first_begin, 0, self.second_begin, 0)
+
+    def trailing(self) -> EndsFree:
+        """The allowances at the end alone, for the piece after it."""
+        return EndsFree(0, self.first_end, 0, self.second_end)
+
+
 def wavefront_penalties(
     substitutions: List[Scalar[DType.int8]], alphabet_size: Int, open: Int, extend: Int
 ) -> Optional[Penalties]:
@@ -517,10 +545,16 @@ struct Wavefront(Movable):
         origin: Int,
         record: Bool,
         reverse: Bool,
+        free_first: Int = 0,
+        free_second: Int = 0,
     ):
         """The fronts of cost zero over two encoded sequences, both back to front with `reverse`: the
         matches from the origin, unless its first move must open a gap, kept with `record`. Both
-        sequences must hold a letter."""
+        sequences must hold a letter.
+
+        With up to `free_first` letters of the first sequence or `free_second` of the second left
+        unaligned at the origin's end for nothing, cost zero holds every diagonal such a start lies
+        on, each from its cell on the first row or column, as WFA2-lib's ends-free alignment starts."""
         self.columns = len(first)
         self.rows = len(second)
         self.first = padded(first, FIRST_SENTINEL, reverse)
@@ -539,7 +573,6 @@ struct Wavefront(Movable):
         self.work = 0
         self.furthest = Int.MIN // 2
         self.fronts.ready(-1 - LANES, 1 + LANES)
-        var front = self.fronts.row(0, ALIGNED)
         if origin >= OPENING_FIRST_GAP:
             # Nothing at cost zero: the opening gap enters at its own cost (see `advance`). The kept
             # fronts still hold the origin at column zero, where that gap's walk back ends.
@@ -547,20 +580,30 @@ struct Wavefront(Movable):
                 self.history.begin(0, 0)[0][unsafe_offset=0] = 0
                 self.history.finish(0, 0)
             return
-        self.fronts.claim(0, 0, 0)
-        var start = slide(self.first.unsafe_ptr(), self.second.unsafe_ptr(), 0, 0)
-        front[unsafe_offset=0] = Int32(start)
+        var low = -min(free_second, self.rows)
+        var high = min(free_first, self.columns)
+        self.fronts.ready(low - 1 - LANES, high + 1 + LANES)
+        var front = self.fronts.row(0, ALIGNED)
+        self.fronts.claim(0, low, high)
+        # The flags of cost zero are never read: the traceback stops there.
+        var kept = front
+        if record:
+            kept = self.history.begin(low, high)[0]
+        var reach = Int.MIN // 2
+        for diagonal in range(low, high + 1):
+            var column = slide(self.first.unsafe_ptr(), self.second.unsafe_ptr(), max(diagonal, 0), diagonal)
+            front[unsafe_offset=diagonal] = Int32(column)
+            kept[unsafe_offset=diagonal] = Int32(column)
+            reach = max(reach, 2 * column - diagonal)
         # Inside a gap, its layer holds the origin too, which extends without a second opening.
         if origin == IN_FIRST_GAP:
             self.fronts.row(0, FIRST_GAP)[unsafe_offset=0] = 0
         elif origin == IN_SECOND_GAP:
             self.fronts.row(0, SECOND_GAP)[unsafe_offset=0] = 0
-        self.fronts.reach[0] = 2 * start
-        self.furthest = 2 * start
+        self.fronts.reach[0] = reach
+        self.furthest = reach
         if record:
-            # The origin's flag is never read: the traceback stops at cost zero.
-            self.history.begin(0, 0)[0][unsafe_offset=0] = Int32(start)
-            self.history.finish(0, 0)
+            self.history.finish(low, high)
 
     def advance[record: Bool](mut self):
         """Grows the next cost's three fronts from the ring, and with `record` keeps what the traceback
@@ -885,18 +928,38 @@ def wavefront_score(
     return penalties.score(best.cost, letters)
 
 
-def wavefront_distance(first: Span[UInt8, _], second: Span[UInt8, _], penalties: Penalties, ceiling: Int) -> Int:
-    """The least cost of a global alignment of two encoded sequences, or -1 when every one costs more
-    than `ceiling`: the two searches keeping only their rings, no fronts for a traceback."""
+def wavefront_distance(
+    first: Span[UInt8, _],
+    second: Span[UInt8, _],
+    penalties: Penalties,
+    ceiling: Int,
+    ends_free: EndsFree = EndsFree(),
+) -> Int:
+    """The least cost of a global alignment of two encoded sequences, the letters `ends_free` allows
+    left unaligned for nothing, or -1 when every one costs more than `ceiling`: the two searches
+    keeping only their rings, no fronts for a traceback."""
     if len(first) == 0 or len(second) == 0:
-        var cost = gapped_cost(penalties, len(first) + len(second))
+        var cost = gapped_cost(penalties, unpaid_letters(len(first), len(second), ends_free))
         return cost if cost <= ceiling else -1
-    var forward = Wavefront(first, second, penalties, FREE_START, False, False)
-    var backward = Wavefront(first, second, penalties, FREE_START, False, True)
+    var forward = Wavefront(
+        first, second, penalties, FREE_START, False, False, ends_free.first_begin, ends_free.second_begin
+    )
+    var backward = Wavefront(
+        first, second, penalties, FREE_START, False, True, ends_free.first_end, ends_free.second_end
+    )
     var best = Meeting.none()
     if bidirectional[False](forward, backward, best, False, Int.MAX, ceiling) != MET:
         return -1
     return best.cost
+
+
+@inline(.always)
+def unpaid_letters(columns: Int, rows: Int, ends_free: EndsFree) -> Int:
+    """The letters a pair with one side empty must pay a gap for: the other side's, less what its two
+    ends may leave unaligned."""
+    if rows == 0:
+        return max(columns - ends_free.first_begin - ends_free.first_end, 0)
+    return max(rows - ends_free.second_begin - ends_free.second_end, 0)
 
 
 @inline(.always)
@@ -946,9 +1009,13 @@ def trace(
                     moves.append(UInt8(FIRST_GAP))
                 return
             if spent == 0:
-                for _ in range(c):
+                # Matches back to where the diagonal starts on the first row or column, whose free
+                # letters the walk then takes along that edge.
+                var start = max(k, 0)
+                for _ in range(c - start):
                     moves.append(UInt8(ALIGNED))
-                return
+                c = start
+                continue
             var source = history.flag(spent, k) & 3
             # The column the winning source brought the front to, before its matches.
             var entry: Int
@@ -1025,10 +1092,12 @@ def solve(
     mut moves: List[UInt8],
     keep: Bool = True,
     ceiling: Int = Int.MAX,
+    ends_free: EndsFree = EndsFree(),
 ) -> Int:
     """Appends an optimal path's moves right to left and returns its cost, from an origin as `start`
-    allows and to a corner the backward search's origin `finish` allows (see `FREE_START`); or, when
-    every path costs more than `ceiling`, appends nothing and returns -1.
+    allows and to a corner the backward search's origin `finish` allows (see `FREE_START`), the
+    letters `ends_free` allows left unaligned for nothing; or, when every path costs more than
+    `ceiling`, appends nothing and returns -1.
 
     With `keep`, both searches keep every cost's fronts while they stay within `limit` entries, and
     the path is traced from where they met: back to the origin through the forward fronts, and to the
@@ -1041,9 +1110,9 @@ def solve(
     var columns = len(first)
     var rows = len(second)
     if columns == 0 or rows == 0:
-        var letters = columns + rows
         var continued = (start == IN_FIRST_GAP and rows == 0) or (start == IN_SECOND_GAP and columns == 0)
-        var cost = 0 if letters == 0 else penalties.extension * letters + (0 if continued else penalties.opening)
+        var paid = unpaid_letters(columns, rows, ends_free)
+        var cost = 0 if paid == 0 else penalties.extension * paid + (0 if continued else penalties.opening)
         if cost > ceiling:
             return -1
         for _ in range(columns):
@@ -1051,8 +1120,8 @@ def solve(
         for _ in range(rows):
             moves.append(UInt8(SECOND_GAP))
         return cost
-    var forward = Wavefront(first, second, penalties, start, keep, False)
-    var backward = Wavefront(first, second, penalties, finish, keep, True)
+    var forward = Wavefront(first, second, penalties, start, keep, False, ends_free.first_begin, ends_free.second_begin)
+    var backward = Wavefront(first, second, penalties, finish, keep, True, ends_free.first_end, ends_free.second_end)
     var best = Meeting.none()
     if keep:
         var status = bidirectional[True](forward, backward, best, False, limit, ceiling)
@@ -1083,7 +1152,7 @@ def solve(
     var row = column - best.diagonal
     # A crossing at either end splits nothing: such a pair costs too little for its fronts not to fit.
     if (column == 0 and row == 0) or (column == columns and row == rows):
-        return solve(first, second, penalties, start, finish, Int.MAX, moves)
+        return solve(first, second, penalties, start, finish, Int.MAX, moves, True, Int.MAX, ends_free)
     var before_finish = FREE_START
     var after_start = FREE_START
     if best.layer == FIRST_GAP:
@@ -1092,8 +1161,30 @@ def solve(
     elif best.layer == SECOND_GAP:
         before_finish = OPENING_SECOND_GAP
         after_start = IN_SECOND_GAP
-    _ = solve(first[column:], second[row:], penalties, after_start, finish, limit, moves, backward.work // 2 <= limit)
-    _ = solve(first[:column], second[:row], penalties, start, before_finish, limit, moves, forward.work // 2 <= limit)
+    _ = solve(
+        first[column:],
+        second[row:],
+        penalties,
+        after_start,
+        finish,
+        limit,
+        moves,
+        backward.work // 2 <= limit,
+        Int.MAX,
+        ends_free.trailing(),
+    )
+    _ = solve(
+        first[:column],
+        second[:row],
+        penalties,
+        start,
+        before_finish,
+        limit,
+        moves,
+        forward.work // 2 <= limit,
+        Int.MAX,
+        ends_free.leading(),
+    )
     return best.cost
 
 
@@ -1150,20 +1241,34 @@ def affine_penalties(mismatch: Int, opening: Int, extension: Int) raises Alignme
 
 
 def affine_distance(
-    first: String, second: String, mismatch: Int, opening: Int, extension: Int
+    first: String,
+    second: String,
+    mismatch: Int,
+    opening: Int,
+    extension: Int,
+    *,
+    ends_free: EndsFree = EndsFree(),
 ) raises AlignmentError -> Int:
     """The least cost of a global alignment of two sequences under gap-affine costs as WFA counts them,
-    a substitution `mismatch` and a gap of `k` letters `opening + k extension`, without the alignment.
+    a substitution `mismatch` and a gap of `k` letters `opening + k extension`, without the alignment;
+    the letters `ends_free` allows at either end left unaligned for nothing.
 
     `affine_cigar`'s cost, by the same two searches keeping only their last few costs' fronts: about
     the same search, none of the traceback, and a few rows of memory however long the pair.
     """
     var penalties = affine_penalties(mismatch, opening, extension)
-    return wavefront_distance(first.as_bytes(), second.as_bytes(), penalties, Int.MAX) * penalties.scale
+    return wavefront_distance(first.as_bytes(), second.as_bytes(), penalties, Int.MAX, ends_free) * penalties.scale
 
 
 def affine_distance(
-    first: String, second: String, mismatch: Int, opening: Int, extension: Int, *, max_cost: Int
+    first: String,
+    second: String,
+    mismatch: Int,
+    opening: Int,
+    extension: Int,
+    *,
+    max_cost: Int,
+    ends_free: EndsFree = EndsFree(),
 ) raises AlignmentError -> Optional[Int]:
     """`affine_distance`, or None when it would pass `max_cost`: the searches stop once each has grown
     to about half of `max_cost` without the two meeting within it, so a pair far over costs a fraction
@@ -1171,24 +1276,36 @@ def affine_distance(
     var penalties = affine_penalties(mismatch, opening, extension)
     if max_cost < 0:
         return None
-    var cost = wavefront_distance(first.as_bytes(), second.as_bytes(), penalties, max_cost // penalties.scale)
+    var cost = wavefront_distance(
+        first.as_bytes(), second.as_bytes(), penalties, max_cost // penalties.scale, ends_free
+    )
     if cost < 0:
         return None
     return cost * penalties.scale
 
 
 def affine_cigar(
-    first: String, second: String, mismatch: Int, opening: Int, extension: Int, extended: Bool = True
+    first: String,
+    second: String,
+    mismatch: Int,
+    opening: Int,
+    extension: Int,
+    extended: Bool = True,
+    *,
+    ends_free: EndsFree = EndsFree(),
 ) raises AlignmentError -> AffineCigar:
     """The least cost of a global alignment of two sequences under gap-affine costs as WFA counts them,
     a substitution `mismatch` and a gap of `k` letters `opening + k extension`, and an optimal
     alignment as a CIGAR string, `=` and `X`, or with `extended` false `M` for both (see `EditCigar`).
+    The letters `ends_free` allows at either end may go unaligned for nothing, as `D` or `I` runs.
 
     Every byte is a symbol matching only itself, so DNA in either case, or any other text, needs no
     alphabet. The two-ended wavefront finds it (see the module): its work grows with the square of
     the cost rather than with the matrix, and its memory stays bounded.
     """
-    var found = cigar_within(first, second, affine_penalties(mismatch, opening, extension), extended, Int.MAX)
+    var found = cigar_within(
+        first, second, affine_penalties(mismatch, opening, extension), extended, Int.MAX, ends_free
+    )
     return found.take()
 
 
@@ -1201,17 +1318,23 @@ def affine_cigar(
     extended: Bool = True,
     *,
     max_cost: Int,
+    ends_free: EndsFree = EndsFree(),
 ) raises AlignmentError -> Optional[AffineCigar]:
     """`affine_cigar`, or None when the cost would pass `max_cost`, found as `affine_distance` finds
     that, with no fronts traced."""
     var penalties = affine_penalties(mismatch, opening, extension)
     if max_cost < 0:
         return None
-    return cigar_within(first, second, penalties, extended, max_cost // penalties.scale)
+    return cigar_within(first, second, penalties, extended, max_cost // penalties.scale, ends_free)
 
 
 def cigar_within(
-    first: String, second: String, penalties: Penalties, extended: Bool, ceiling: Int
+    first: String,
+    second: String,
+    penalties: Penalties,
+    extended: Bool,
+    ceiling: Int,
+    ends_free: EndsFree = EndsFree(),
 ) -> Optional[AffineCigar]:
     """An optimal alignment's cost and CIGAR, or None when its cost, in `penalties`' units, would pass
     `ceiling`."""
@@ -1220,7 +1343,16 @@ def cigar_within(
     # UTF-8 never holds the sentinels' bytes, so the text's own bytes serve as codes.
     var moves = List[UInt8](capacity=columns + rows)
     var cost = solve(
-        first.as_bytes(), second.as_bytes(), penalties, FREE_START, FREE_START, HISTORY_LIMIT, moves, True, ceiling
+        first.as_bytes(),
+        second.as_bytes(),
+        penalties,
+        FREE_START,
+        FREE_START,
+        HISTORY_LIMIT,
+        moves,
+        True,
+        ceiling,
+        ends_free,
     )
     if cost < 0:
         return None

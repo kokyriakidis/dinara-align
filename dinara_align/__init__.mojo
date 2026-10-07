@@ -33,7 +33,7 @@ Gap-affine costs as WFA counts them, a mismatch and a gap's opening and extensio
 from both ends whose work grows with the square of the cost; every byte is a symbol of its own:
 
 ```mojo
-from dinara_align import affine_cigar, affine_cigars, affine_distance
+from dinara_align import EndsFree, affine_cigar, affine_cigars, affine_distance
 
 var aligned = affine_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2)  # cost 12, CIGAR "4=3X6="
 var firsts: List[String] = ["ACGTACGT", "TTGCA"]
@@ -41,6 +41,8 @@ var seconds: List[String] = ["ACGACGT", "TTGGCA"]
 var batch = affine_cigars(firsts, seconds, 4, 6, 2)  # every pair, over every thread
 var cost = affine_distance("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2)  # 12, with no alignment
 var capped = affine_cigar("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2, max_cost=10)  # None: it costs 12
+# A read placed anywhere in a reference: the reference's ends free, as WFA2-lib's ends-free mode.
+var placed = affine_cigar("TTTTACGTACGTTTTT", "ACGTACGT", 4, 6, 2, ends_free=EndsFree(16, 16, 0, 0))  # 4D8=4D
 ```
 
 A pattern can also be found inside a text, Edlib's infix mode, or at its start, its prefix mode:
@@ -80,6 +82,6 @@ from .api import (
 )
 from .edit_distance import EditCigar, edit_alignment, edit_cigar, edit_distance
 from .edit_search import EditHit, edit_search, edit_search_alignment
-from .gap_affine import AffineCigar, affine_cigar, affine_distance
+from .gap_affine import AffineCigar, EndsFree, affine_cigar, affine_distance
 from .common import Device, DeviceScope, GpuSpecs, Placement, hardware_threads
 from .errors import AlignmentError, ErrorKind

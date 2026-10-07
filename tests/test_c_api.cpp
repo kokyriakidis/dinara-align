@@ -92,6 +92,12 @@ int main() {
     CHECK(!dinara::affine_distance_within("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2, 11));
     CHECK(!dinara::affine_cigar_within("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2, 11));
     CHECK(dinara::affine_cigar_within("ACGTACGTTTGCA", "ACGTCGTTTTGCA", 4, 6, 2, 12)->cigar == "4=3X6=");
+    // A read placed inside a reference, the reference's ends free.
+    dinara::EndsFree inside{16, 16, 0, 0};
+    dinara::AffineAlignment placed = dinara::affine_cigar("TTTTACGTACGTTTTT", "ACGTACGT", 4, 6, 2, true, inside);
+    CHECK(placed.cost == 0 && placed.cigar == "4D8=4D");
+    CHECK(dinara::affine_distance("TTTTACGTACGTTTTT", "ACGTACGT", 4, 6, 2) > 0);
+    CHECK(dinara::affine_distance("TTTTACGTACGTTTTT", "ACGTACGT", 4, 6, 2, inside) == 0);
 
     std::mt19937 random(7);
     std::uniform_int_distribution<int> base(0, 3);
