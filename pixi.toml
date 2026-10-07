@@ -28,7 +28,7 @@ build-fuzz = {cmd = "mojo build -I . -I tests tests/fuzz.mojo -o build/fuzz", de
 fuzz = {cmd = "./build/fuzz", depends-on = ["build-fuzz"]}
 # Holds every mode WFA2-lib also has to its regression set: its pairs, scores and CIGARs; see `scripts/test_wfa.py`.
 test-wfa = "python3 scripts/test_wfa.py"
-format = "mojo format -l 120 dinara_align tests c"
+format = "mojo format -l 120 dinara_align tests c python cli"
 # Pulls the latest Mojo skills from github.com/modular/skills into .claude/skills for coding agents.
 sync-skills = "bash .claude/sync-skills.sh"
 # Times dinara-align against other exact global aligners; see `benchmarks/run.py` for the flags.
@@ -46,6 +46,10 @@ bundle = "bash scripts/bundle.sh"
 build-c = "bash scripts/build_c.sh"
 # Builds the C API and runs its C++ test against it.
 test-c = { cmd = "c++ -std=c++17 -O2 -pthread -I build/c tests/test_c_api.cpp -L build/c -ldinara -Wl,-rpath,$PIXI_PROJECT_ROOT/build/c -o build/test_c_api && ./build/test_c_api", depends-on = ["build-c"] }
+# The command-line aligner in build/cli: `pixi run build-cli [target-cpu]`, then `build/cli/dinara-align --help`.
+build-cli = "bash scripts/build_cli.sh"
+# Builds the command-line aligner and runs its tests against it.
+test-cli = { cmd = "bash tests/test_cli.sh", depends-on = ["build-cli"] }
 # The Python package (python/dinara_align) in build/python beside its runtime libraries: `pixi run build-python [target-cpu]`.
 build-python = "bash scripts/build_python.sh"
 # The Python package as a wheel in build/dist, for `pip install`.
