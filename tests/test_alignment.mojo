@@ -37,6 +37,7 @@ from dinara_align import (
 )
 from dinara_align.alignment import AlignmentMode
 from dinara_align.edit_distance import edit_distance as bit_parallel_distance
+from dinara_align.local import best_end
 from dinara_align.seeds import SEED_COLUMNS
 from dinara_align.bit_parallel import Profile
 from dinara_align.diagonal import DiagonalFronts, diagonal_transition, trace_diagonals
@@ -2155,6 +2156,28 @@ def test_every_mode_matches_the_full_matrix() raises:
     assert_equal(placed.cigar, "4=1D3=")
     assert_equal(placed.reference_start, 4)
     assert_equal(placed.reference_end, 12)
+
+
+def test_local_sweeps_agree_in_either_width() raises:
+    """The local end found in 16-bit lanes is the one found in 32-bit lanes, for one gap piece or two,
+    pairs close and far, short and long."""
+    seed(73)
+    for costs in [Costs.affine(4, 6, 2), Costs.two_piece(4, 6, 2, 24, 1), Costs.edit()]:
+        for trial in range(30):
+            var core = random_sequence(1, 600, DNA_ALPHABET)
+            var reference = random_sequence(0, 300, DNA_ALPHABET) + core + random_sequence(0, 300, DNA_ALPHABET)
+            var query = mutated(core, [0.0, 0.05, 0.2, 0.5][trial % 4], [1, 4, 20][(trial // 4) % 3])
+            var a = reference.as_bytes()
+            var b = query.as_bytes()
+            var narrow = best_end[1, DType.int16, 32](a, b, costs, 2) if costs.pieces() == 1 else best_end[
+                2, DType.int16, 32
+            ](a, b, costs, 2)
+            var wide = best_end[1, DType.int32, 16](a, b, costs, 2) if costs.pieces() == 1 else best_end[
+                2, DType.int32, 16
+            ](a, b, costs, 2)
+            assert_equal(narrow[0], wide[0])
+            assert_equal(narrow[1], wide[1])
+            assert_equal(narrow[2], wide[2])
 
 
 # endregion Refusals
