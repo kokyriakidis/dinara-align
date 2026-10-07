@@ -1189,6 +1189,7 @@ def test_affine_ends_free_matches_the_full_matrix() raises:
             assert_equal(found.cost, expected)
             var rows = rows_from_cigar(first, second, found.cigar)
             assert_equal(rows[0].replace("-", ""), first)
+            assert_equal(rows[1].replace("-", ""), second)
             assert_equal(ends_free_price(found.cigar, x, o, e, ends), expected)
             var capped = affine_cigar(first, second, x, o, e, max_cost=expected, ends_free=ends)
             assert_equal(capped.value().cost, expected)
