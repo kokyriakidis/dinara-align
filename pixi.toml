@@ -24,7 +24,7 @@ build = {cmd = "mojo precompile dinara_align -o build/dinara_align.mojoc", depen
 build-tests = {cmd = "mojo build -I . tests/test_alignment.mojo -o build/test_alignment $MOJO_ACCELERATOR", depends-on = ["prepare"]}
 test = {cmd = "./build/test_alignment", depends-on = ["build-tests"]}
 # Random pairs, costs, modes, bands and caps, each answer held to the full matrix: `pixi run fuzz [cases] [seed]`.
-build-fuzz = {cmd = "mojo build -I . -I tests tests/fuzz.mojo -o build/fuzz", depends-on = ["prepare"]}
+build-fuzz = {cmd = "mojo build -I . -I tests tests/fuzz.mojo -o build/fuzz $MOJO_ACCELERATOR", depends-on = ["prepare"]}
 fuzz = {cmd = "./build/fuzz", depends-on = ["build-fuzz"]}
 # Holds every mode WFA2-lib also has to its regression set: its pairs, scores and CIGARs; see `scripts/test_wfa.py`.
 test-wfa = "python3 scripts/test_wfa.py"

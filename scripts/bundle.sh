@@ -38,10 +38,12 @@ cpu=${3:-$cpu}
 mkdir -p "$out"
 if $library; then
     [ "$(uname -s)" = Darwin ] && file=lib$name.dylib || file=lib$name.so
-    mojo build --emit shared-lib --target-cpu "$cpu" -I "$root" "$program" -o "$out/$file"
+    # shellcheck disable=SC2086 # `$MOJO_ACCELERATOR` is a list of flags, empty for the host's own GPU.
+    mojo build --emit shared-lib --target-cpu "$cpu" ${MOJO_ACCELERATOR:-} -I "$root" "$program" -o "$out/$file"
 else
     file=$name
-    mojo build --target-cpu "$cpu" -I "$root" "$program" -o "$out/$file"
+    # shellcheck disable=SC2086
+    mojo build --target-cpu "$cpu" ${MOJO_ACCELERATOR:-} -I "$root" "$program" -o "$out/$file"
 fi
 
 if [ "$(uname -s)" = Linux ]; then

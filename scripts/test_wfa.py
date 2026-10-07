@@ -8,6 +8,7 @@ only, builds `tests/wfa_utest.mojo` and runs it on the clone's `tests` directory
 is built: only its data files are read.
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -22,8 +23,11 @@ def main() -> None:
     wfa = fetch("WFA2-lib")
     binary = ROOT / "build" / "wfa_utest"
     binary.parent.mkdir(parents=True, exist_ok=True)
+    # `$MOJO_ACCELERATOR`, as every build here takes it, names a GPU to compile for when the host's is unknown.
+    accelerator = os.environ.get("MOJO_ACCELERATOR", "").split()
     subprocess.run(
-        ["mojo", "build", "-I", str(ROOT), str(ROOT / "tests" / "wfa_utest.mojo"), "-o", str(binary)], check=True
+        ["mojo", "build", "-I", str(ROOT), str(ROOT / "tests" / "wfa_utest.mojo"), "-o", str(binary), *accelerator],
+        check=True,
     )
     sys.exit(subprocess.run([str(binary), str(wfa / "tests")]).returncode)
 
