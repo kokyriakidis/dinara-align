@@ -356,46 +356,47 @@ def scoring_mode(mode: Mode) raises AlignmentError -> AlignmentMode:
 
 
 def score(
-    first: String, second: String, scoring: Scoring, mode: Mode = Mode.GLOBAL, placement: Optional[Placement] = None
+    reference: String, query: String, scoring: Scoring, mode: Mode = Mode.GLOBAL, placement: Optional[Placement] = None
 ) raises -> Int32:
     """The optimal score under `scoring`, `Mode.GLOBAL` or `Mode.LOCAL`, alone, in two rows of memory on
     either device (see `scoring.score_with`)."""
     if scoring_mode(mode) == AlignmentMode.LOCAL:
-        return score_with[AlignmentMode.LOCAL](first, second, scoring, placement)
-    return score_with[AlignmentMode.GLOBAL](first, second, scoring, placement)
+        return score_with[AlignmentMode.LOCAL](reference, query, scoring, placement)
+    return score_with[AlignmentMode.GLOBAL](reference, query, scoring, placement)
 
 
 def align(
-    first: String,
-    second: String,
+    reference: String,
+    query: String,
     scoring: Scoring,
     mode: Mode = Mode.GLOBAL,
     placement: Optional[Placement] = None,
     stored_budget: Int = STORED_MATRIX_BUDGET,
 ) raises -> GappedAlignment:
-    """The optimal score under `scoring` and the two gapped rows that earn it: both sequences whole for
-    `Mode.GLOBAL`, Needleman-Wunsch, or the best-scoring window of each for `Mode.LOCAL`, Smith-Waterman."""
+    """The optimal score under `scoring` and the two gapped rows that earn it, the reference's first,
+    also read as a CIGAR (see `GappedAlignment.cigar`): both sequences whole for `Mode.GLOBAL`,
+    Needleman-Wunsch, or the best-scoring window of each for `Mode.LOCAL`, Smith-Waterman."""
     if scoring_mode(mode) == AlignmentMode.LOCAL:
-        return align_with[AlignmentMode.LOCAL](first, second, scoring, placement, stored_budget)
-    return align_with[AlignmentMode.GLOBAL](first, second, scoring, placement, stored_budget)
+        return align_with[AlignmentMode.LOCAL](reference, query, scoring, placement, stored_budget)
+    return align_with[AlignmentMode.GLOBAL](reference, query, scoring, placement, stored_budget)
 
 
 def scores(
-    firsts: List[String],
-    seconds: List[String],
+    references: List[String],
+    queries: List[String],
     scoring: Scoring,
     mode: Mode = Mode.GLOBAL,
     placement: Optional[Placement] = None,
 ) raises -> List[Int32]:
     """`score` for every pair; on the device, every pair one block can carry goes out in one launch."""
     if scoring_mode(mode) == AlignmentMode.LOCAL:
-        return scores_with[AlignmentMode.LOCAL](firsts, seconds, scoring, placement)
-    return scores_with[AlignmentMode.GLOBAL](firsts, seconds, scoring, placement)
+        return scores_with[AlignmentMode.LOCAL](references, queries, scoring, placement)
+    return scores_with[AlignmentMode.GLOBAL](references, queries, scoring, placement)
 
 
 def alignments(
-    firsts: List[String],
-    seconds: List[String],
+    references: List[String],
+    queries: List[String],
     scoring: Scoring,
     mode: Mode = Mode.GLOBAL,
     placement: Optional[Placement] = None,
@@ -403,8 +404,8 @@ def alignments(
 ) raises -> List[GappedAlignment]:
     """`align` for every pair; on the device, every pair both bounds admit goes out in one launch."""
     if scoring_mode(mode) == AlignmentMode.LOCAL:
-        return alignments_with[AlignmentMode.LOCAL](firsts, seconds, scoring, placement, stored_budget)
-    return alignments_with[AlignmentMode.GLOBAL](firsts, seconds, scoring, placement, stored_budget)
+        return alignments_with[AlignmentMode.LOCAL](references, queries, scoring, placement, stored_budget)
+    return alignments_with[AlignmentMode.GLOBAL](references, queries, scoring, placement, stored_budget)
 
 
 # endregion Scoring
@@ -412,12 +413,12 @@ def alignments(
 # region Batches
 
 
-def longest_first(firsts: List[String], seconds: List[String]) -> List[Int]:
+def longest_first(references: List[String], queries: List[String]) -> List[Int]:
     """The pairs' indices, the longest pair first: taken in that order by whichever thread is free, the
     long pairs start first and the short ones fill in around them, so none is left alone at the end
     holding up the rest."""
     comptime INDEX_BITS = 25
-    var pairs = len(firsts)
+    var pairs = len(references)
     var order = List[Int](capacity=pairs)
     if pairs >= 1 << INDEX_BITS:
         for index in range(pairs):
@@ -425,7 +426,7 @@ def longest_first(firsts: List[String], seconds: List[String]) -> List[Int]:
         return order^
     var keys = List[Int](capacity=pairs)
     for index in range(pairs):
-        var length = firsts[index].byte_length() + seconds[index].byte_length()
+        var length = references[index].byte_length() + queries[index].byte_length()
         keys.append((length << INDEX_BITS) | index)
     sort(keys)
     for slot in range(pairs - 1, -1, -1):

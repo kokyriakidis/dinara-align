@@ -65,6 +65,7 @@ from dinara_align import Mode, Scoring, align, score
 
 var scoring = Scoring.dna()  # minimap2's: match 2, mismatch -4, a gap of k letters -(4 + 2k)
 var rows = align("ACGTACGTTTGCA", "ACGTCGTTTTGCA", scoring)  # rows.first_gapped, rows.second_gapped
+var spelled = rows.cigar()  # the same alignment as a CIGAR
 var best = score("TTTTACGTACGTTTTT", "ACGTACGT", scoring, Mode.LOCAL)  # 16
 ```
 

@@ -43,6 +43,40 @@ def migrate(text: str) -> str:
     return text.replace("AffineGapsError", "AlignmentError")
 
 
+GAPPED_ROWS_END = '''    """The second sequence, gapped to the same columns."""\n'''
+GAPPED_ROWS_CIGAR = '''
+    def cigar(self, extended: Bool = True) -> String:
+        """The rows as a CIGAR, the first sequence the reference, as `Alignment`'s reads: `=` a match and
+        `X` a substitution, or with `extended` false `M` for both, `D` a letter of the first alone and
+        `I` one of the second, each run its length then its letter."""
+        comptime GAP = UInt8(ord("-"))
+        var top = self.first_gapped.as_bytes()
+        var bottom = self.second_gapped.as_bytes()
+        var out = String()
+        var last = UInt8(0)
+        var run = 0
+        for column in range(len(top)):
+            var letter: UInt8
+            if top[column] == GAP:
+                letter = UInt8(ord("I"))
+            elif bottom[column] == GAP:
+                letter = UInt8(ord("D"))
+            elif not extended:
+                letter = UInt8(ord("M"))
+            else:
+                letter = UInt8(ord("=")) if top[column] == bottom[column] else UInt8(ord("X"))
+            if letter != last and run > 0:
+                out += String(run, chr(Int(last)))
+                run = 0
+            last = letter
+            run += 1
+        if run > 0:
+            out += String(run, chr(Int(last)))
+        return out
+'''
+"""The gapped rows' `cigar`, which upstream has not."""
+
+
 def port_alignment(text: str) -> str:
     """The kernels, with the 1.1 import moves and the references to a Python oracle that is not here."""
     text = replace(
@@ -87,6 +121,8 @@ def port_alignment(text: str) -> str:
     # `Alignment` is this package's CIGAR result (see `modes.mojo`); the gapped rows are named as such.
     assert "AlignmentResult" in text, "upstream no longer names AlignmentResult"
     text = re.sub(r"\bAlignmentResult\b", "GappedAlignment", text)
+    # The gapped rows read as a CIGAR too, as every `Alignment` of this package is.
+    text = replace(text, GAPPED_ROWS_END, GAPPED_ROWS_END + GAPPED_ROWS_CIGAR)
     text = cut(text, "comptime DEFAULT_PROTEINS_SCALE", "comptime CORNER_BYTES")
     return cut(text, "# BLOSUM62 scaled by five", "@fieldwise_init\nstruct AffineGapCosts")
 

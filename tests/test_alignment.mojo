@@ -211,6 +211,10 @@ def assert_well_formed(mode: Mode, first: String, second: String, produced: Gapp
         assert_true(core_first in first, "a local row is not a substring of its input")
         assert_true(core_second in second, "a local row is not a substring of its input")
     assert_equal(rescore(produced.first_gapped, produced.second_gapped, scoring), Int(produced.score))
+    # The rows read back as a CIGAR spell the same rows, over the letters they align.
+    var spelled = rows_from_cigar(core_first, core_second, produced.cigar())
+    assert_equal(spelled[0], produced.first_gapped)
+    assert_equal(spelled[1], produced.second_gapped)
 
 
 def gpu_available() raises -> Bool:
@@ -278,6 +282,9 @@ def test_hand_computed_global() raises:
     var deleted = align("ACGTTGCAGGGCATGACGT", "ACGTTGCACATGACGT", dna)
     assert_equal(deleted.first_gapped, "ACGTTGCAGGGCATGACGT")
     assert_equal(deleted.second_gapped, "ACGTTGCA---CATGACGT")
+    assert_equal(deleted.cigar(), "8=3D8=")
+    assert_equal(substituted.cigar(), "4=1X3=")
+    assert_equal(substituted.cigar(extended=False), "8M")
     assert_equal(deleted.score, 16 * 2 - 6 - 2 * 2)
     assert_equal(score("ACGTTGCAGGGCATGACGT", "ACGTTGCACATGACGT", dna), 22)
 
