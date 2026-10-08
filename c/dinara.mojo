@@ -37,7 +37,7 @@ from dinara_align import (
 from dinara_align.api import aligned_within, bits_serve, cost_within
 from dinara_align.common import next_share, spread
 from dinara_align.gap_affine import KEPT_BYTES, Penalties, SearchSpace, cigar_of, penalties_of
-from dinara_align.lanes import LaneCosts, Texts, lane_alignments, lane_distances
+from dinara_align.lanes import LaneCosts, Texts, lane_alignments, lane_distances, lane_free_alignments
 
 comptime UNSUPPORTED_SYMBOLS = -1
 """A 0xFE or 0xFF byte, which the wavefront's sentinels are and UTF-8 never holds."""
@@ -623,9 +623,10 @@ def dinara_alignments(
     var taken = Atomic[Int64](0)
     var workers = workers_for(pairs, threads)
 
-    # Global alignments go many pairs at once into the lanes of a register, as `alignments` sends them
-    # (see `lanes.lane_alignments`): every pair whose bytes the library takes. A pair the library refuses,
-    # and every pair of costs it refuses or of other modes, goes one at a time for its own code.
+    # Alignments go many pairs at once into the lanes of a register, as `alignments` sends them (see
+    # `lanes.lane_alignments`, and with free ends `lanes.lane_free_alignments`): every pair whose bytes the
+    # library takes. A pair the library refuses, and every pair of costs it refuses or of a mode that
+    # scores, goes one at a time for its own code.
     var capped = asked.max_cost >= 0
     var settled = List[Bool](length=pairs, fill=False)
     var found = List[Optional[Int]](length=pairs, fill=None)
@@ -637,8 +638,13 @@ def dinara_alignments(
     var found_ptr = found.unsafe_ptr()
     var laned_ptr = laned.unsafe_ptr()
     var path_ptr = paths.unsafe_ptr()
-    # As `alignments` sends them: unit costs the bit-parallel sweep serves take it pair by pair.
-    var lane_costs = LaneCosts.of(wanted_costs, wanted_mode) if not bits_serve(
+    # Each laned pair's span: the reference's first letter and the one past its last, then the query's.
+    var spans = List[Int](length=4 * pairs, fill=0)
+    var span_ptr = spans.unsafe_ptr()
+    # As `alignments` sends them: unit costs the bit-parallel sweep serves take it pair by pair, and free ends
+    # take the lanes only with no band.
+    var unbanded = asked.band.covers(1 << 40, 1 << 40)
+    var lane_costs = LaneCosts.of(wanted_costs, wanted_mode, unbanded) if not bits_serve(
         wanted_costs, wanted_mode, asked.band, asked.max_cost if capped else Int.MAX
     ) else None
     var penalties: Optional[Penalties] = None
@@ -660,20 +666,40 @@ def dinara_alignments(
 
         spread(refuse, workers, workers)
         var before = settled.copy()
-        _ = lane_alignments(
-            pairs,
-            ByteTexts.of(references, reference_lengths),
-            ByteTexts.of(queries, query_lengths),
-            lane_costs.value(),
-            asked.band,
-            asked.max_cost if capped else Int.MAX,
-            asked.ties == Ties.LEFT,
-            workers,
-            asked.max_memory,
-            found_ptr,
-            path_ptr,
-            settled_ptr,
-        )
+        if wanted_mode.is_global():
+            for index in range(pairs):
+                span_ptr[unsafe_offset=4 * index + 1] = reference_lengths[unsafe_offset=index]
+                span_ptr[unsafe_offset=4 * index + 3] = query_lengths[unsafe_offset=index]
+            _ = lane_alignments(
+                pairs,
+                ByteTexts.of(references, reference_lengths),
+                ByteTexts.of(queries, query_lengths),
+                lane_costs.value(),
+                asked.band,
+                asked.max_cost if capped else Int.MAX,
+                asked.ties == Ties.LEFT,
+                workers,
+                asked.max_memory,
+                found_ptr,
+                path_ptr,
+                settled_ptr,
+            )
+        else:
+            lane_free_alignments(
+                pairs,
+                ByteTexts.of(references, reference_lengths),
+                ByteTexts.of(queries, query_lengths),
+                lane_costs.value(),
+                wanted_mode,
+                asked.max_cost if capped else Int.MAX,
+                asked.ties == Ties.RIGHT,
+                workers,
+                asked.max_memory,
+                found_ptr,
+                path_ptr,
+                span_ptr,
+                settled_ptr,
+            )
         for index in range(pairs):
             laned[index] = settled[index] and not before[index]
 
@@ -692,18 +718,25 @@ def dinara_alignments(
                         statuses[unsafe_offset=index] = ABOVE_MAX if capped else OUTSIDE_BAND
                         continue
                     var cost = found_ptr[unsafe_offset=index].value()
-                    var columns = reference_lengths[unsafe_offset=index]
-                    var rows = query_lengths[unsafe_offset=index]
+                    var first_start = span_ptr[unsafe_offset=4 * index]
+                    var first_end = span_ptr[unsafe_offset=4 * index + 1]
+                    var second_start = span_ptr[unsafe_offset=4 * index + 2]
+                    var second_end = span_ptr[unsafe_offset=4 * index + 3]
                     ref scaled = penalties.value()
                     # As `alignments` keeps them: only a pair the searches would never split for memory.
-                    if 2 * (cost // scaled.scale + 1) * (columns + rows + 1) <= limit:
-                        var first = sequence(references[unsafe_offset=index], columns)
-                        var second = sequence(queries[unsafe_offset=index], rows)
+                    var letters = first_end - first_start + second_end - second_start
+                    if 2 * (cost // scaled.scale + 1) * (letters + 1) <= limit:
+                        var first = sequence(
+                            references[unsafe_offset=index].unsafe_offset(first_start), first_end - first_start
+                        )
+                        var second = sequence(
+                            queries[unsafe_offset=index].unsafe_offset(second_start), second_end - second_start
+                        )
                         var moves = List[UInt8]()
                         swap(moves, path_ptr[unsafe_offset=index])
                         var cigar = cigar_of(first, second, moves^, cost // scaled.scale, scaled, asked.eqx)
                         statuses[unsafe_offset=index] = written(
-                            Alignment(cost, -cost, cigar^, 0, columns, 0, rows),
+                            Alignment(cost, -cost, cigar^, first_start, first_end, second_start, second_end),
                             alignments.unsafe_offset(index * ALIGNMENT_FIELDS),
                         )
                         continue

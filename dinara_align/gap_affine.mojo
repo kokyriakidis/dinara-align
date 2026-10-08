@@ -138,8 +138,9 @@ def along_first(layer: Int) -> Bool:
 
 
 comptime CELLS_PER_STEP = 4
-"""Cells of the vectorized full sweep (see `vector_score`) one diagonal step of the three fronts
-costs about as much as: about 1.5 against 0.4 ns."""
+"""Cells of the full sweep one diagonal step of the three fronts costs about as much as: about 1.5
+against 0.4 ns, measured against the 32-bit sweep `scoring.swept_score` replaced; its 16-bit lanes cost
+less a cell, so the wavefront now hands a pair over a little later than it would have to."""
 
 comptime MET = 0
 """`bidirectional`'s answer when the searches proved where an optimal path splits."""
@@ -1473,20 +1474,15 @@ def bidirectional[
                 return HALTED
 
 
-def wavefront_score(
-    first: List[UInt8], second: List[UInt8], penalties: Penalties, give_up: Bool = True
-) -> Optional[Int]:
-    """The optimal global score of two encoded sequences, or None once a full sweep would be cheaper.
-
-    With `give_up` off, the search runs to the end whatever it costs.
-    """
+def wavefront_score(first: List[UInt8], second: List[UInt8], penalties: Penalties) -> Optional[Int]:
+    """The optimal global score of two encoded sequences, or None once a full sweep would be cheaper."""
     var letters = len(first) + len(second)
     if len(first) == 0 or len(second) == 0:
         return penalties.score(gapped_cost[1](penalties, letters, len(second) == 0), letters)
     var forward = Wavefront[1](Span(first), Span(second), penalties, FREE_START, False, False)
     var backward = Wavefront[1](Span(first), Span(second), penalties, FREE_START, False, True)
     var best = Meeting.none()
-    if bidirectional[1, False, cost_only=True](forward, backward, best, give_up, Int.MAX) != MET:
+    if bidirectional[1, False, cost_only=True](forward, backward, best, True, Int.MAX) != MET:
         return None
     return penalties.score(best.cost, letters)
 

@@ -8,8 +8,9 @@ alignment as a CIGAR, for any `Mode`; `distances` and `alignments` take a batch,
 Every call runs on the caller's own thread unless asked for more (see `distances`), and keeps no state
 between calls, so an application may call it from as many threads as it likes; an `Aligner` keeps one
 thread's memory from call to call.
-Unit costs, global or with the query found inside or at the start of the reference, take the
-bit-parallel band doubling of A*PA2 (see `edit_distance` and `edit_search`); every other case, and a
+Unit costs, global or with the query found inside, at the start or at the end of the reference, take the
+bit-parallel band doubling of A*PA2 (see `edit_distance` and `edit_search`), the end as the start of both
+sequences reversed; every other case, and a
 pair holding more symbols than it takes, the gap-affine wavefront from both ends (see `gap_affine`),
 which gives the same alignment at the same costs. The modes with a match score maximize a score: an
 extension, and a global alignment with a reward, by the wavefront; a local alignment and other free
@@ -27,10 +28,10 @@ from .alignment import AlignmentMode, GappedAlignment
 from .common import Device, DeviceScope, Placement, next_share, spread
 from .device_edit import MAX_PATTERN_WORDS, device_edit_distances
 from .edit_distance import edit_cigar, edit_distance
-from .edit_search import edit_search
+from .edit_search import EditHit, edit_search
 from .errors import AlignmentError, ErrorKind
-from .cigar import cigar_matches, cigar_runs, joined_cigar
-from .search import Hit, local_scores_by_block
+from .cigar import cigar_matches, cigar_runs, reversed_text
+from .search import Hit, local_scores_by_lane
 from .scored import (
     FROM_EDGE,
     LocalScores,
@@ -374,6 +375,12 @@ def cost_within(
             var scale = costs.unit_scale()
             if ends.first_begin == 0 and ends.first_end == 0:
                 return edit_distance(reference, query, space.edit) * scale
+            if ends.first_end == 0:
+                # A suffix: a prefix of both reversed.
+                return (
+                    edit_search(reversed_text(query.as_bytes()), reversed_text(reference.as_bytes()), True).distance
+                    * scale
+                )
             return edit_search(query, reference, ends.first_begin == 0).distance * scale
         except error:
             # More symbols than the sweep takes: the wavefront takes any.
@@ -435,20 +442,20 @@ def aligned_within(
 
 def swept_by_bits(costs: Costs, ends: EndsFree, band: Band, max_cost: Int, columns: Int, rows: Int) -> Bool:
     """Whether the bit-parallel sweep serves a pair: unit costs, no cap and no band, both sequences
-    holding a letter, and free ends of none, the query inside the reference, or at its start."""
+    holding a letter, and free ends of none, the query inside the reference, or at its start or end."""
     if costs.unit_scale() == 0 or max_cost != Int.MAX or not band.covers(columns, rows) or columns == 0 or rows == 0:
         return False
     if ends.second_begin != 0 or ends.second_end != 0:
         return False
     if ends.first_begin == 0:
         return ends.first_end == 0 or ends.first_end == columns
-    return ends.first_begin == columns and ends.first_end == columns
+    return ends.first_begin == columns and (ends.first_end == columns or ends.first_end == 0)
 
 
 def bits_serve(costs: Costs, mode: Mode, band: Band, max_cost: Int) -> Bool:
     """Whether the bit-parallel sweep serves a batch's pairs (see `swept_by_bits`), as it does every pair
-    of a batch of unit costs with no cap and no band, globally or with the query found inside or at the
-    start of the reference. Such a batch's alignments take the sweep pair by pair, which beat the lanes on
+    of a batch of unit costs with no cap and no band, globally or with the query found inside, at the
+    start or at the end of the reference. Such a batch's alignments take the sweep pair by pair, which beat the lanes on
     short reads and long: 1.26 against 1.44 us a 150 bp read, 21.9 against 23.5 a 1 kbp read at 10%, on
     the Skylake-X. Its distances take the lanes, which beat it on short reads, 0.23 against 0.40 us."""
     if costs.unit_scale() == 0 or max_cost != Int.MAX or not band.covers(1 << 40, 1 << 40):
@@ -458,7 +465,7 @@ def bits_serve(costs: Costs, mode: Mode, band: Band, max_cost: Int) -> Bool:
     var whole = 1 << 40
     if mode.reference_start == 0:
         return mode.reference_end == 0 or mode.reference_end >= whole
-    return mode.reference_start >= whole and mode.reference_end >= whole
+    return mode.reference_start >= whole and (mode.reference_end >= whole or mode.reference_end == 0)
 
 
 def least_costly(
@@ -486,7 +493,19 @@ def least_costly(
                 var whole = edit_cigar(reference, query, eqx, ties)
                 var cost = whole.distance * scale
                 return Alignment(cost, -cost, whole.cigar, 0, columns, 0, rows)
-            var hit = edit_search(query, reference, ends.first_begin == 0, ties)
+            var hit: EditHit
+            if ends.first_end == 0:
+                # A suffix: a prefix of both reversed, the rule's span mirrored, as `Ties.RIGHT` is `Ties.LEFT`
+                # over both reversed.
+                var mirrored = edit_search(
+                    reversed_text(query.as_bytes()),
+                    reversed_text(reference.as_bytes()),
+                    True,
+                    Ties.RIGHT if ties == Ties.LEFT else Ties.LEFT,
+                )
+                hit = EditHit(mirrored.distance, columns - mirrored.end, columns - mirrored.start)
+            else:
+                hit = edit_search(query, reference, ends.first_begin == 0, ties)
             var part = String(StringSlice(unsafe_from_utf8=reference.as_bytes()[hit.start : hit.end]))
             var found = edit_cigar(part, query, eqx, ties)
             var cost = found.distance * scale
@@ -647,16 +666,37 @@ def scores(
 ) raises -> List[Int]:
     """`score` for every pair; on the device, every pair one block can carry goes out in one launch."""
     var found: List[Int32]
-    var kind = mode.kind
-    if kind == Mode.SMITH_WATERMAN:
+    if mode.kind == Mode.SMITH_WATERMAN and mode.match_score == 0:
         found = scores_with[AlignmentMode.LOCAL](references, queries, scoring, placement)
     elif mode.is_global() and mode.match_score == 0:
         found = scores_with[AlignmentMode.GLOBAL](references, queries, scoring, placement)
     else:
+        # Free ends and extensions, and modes `score` refuses: each pair as `score` takes it, over the threads
+        # asked for, a pair that raises raising here as a serial loop would have raised it first.
         var pairs = paired_length(references, queries)
-        var results = List[Int](capacity=pairs)
+        var results = List[Int](length=pairs, fill=0)
+        var failed = List[Bool](length=pairs, fill=False)
+        var out = results.unsafe_ptr()
+        var flags = failed.unsafe_ptr()
+        var resolved = placement.or_else(Placement.default())
+        var workers = max(resolved.threads, 1)
+        var single = Placement(resolved.device, resolved.gpu_id, 1)
+        var chunks = max(min(pairs, workers * 8), 1)
+
+        def score_chunk(
+            chunk: Int,
+        ) {imm references, imm queries, imm scoring, imm mode, imm single, imm out, imm flags, imm pairs, imm chunks}:
+            """Scores chunk `chunk` of the pairs, flagging any pair that raised for the serial retry below."""
+            for index in range(pairs * chunk // chunks, pairs * (chunk + 1) // chunks):
+                try:
+                    out[unsafe_offset=index] = score(references[index], queries[index], scoring, mode, placement=single)
+                except:
+                    flags[unsafe_offset=index] = True
+
+        spread(score_chunk, chunks, workers)
         for index in range(pairs):
-            results.append(score(references[index], queries[index], scoring, mode, placement=placement))
+            if failed[index]:
+                results[index] = score(references[index], queries[index], scoring, mode, placement=single)
         return results^
     var results = List[Int](capacity=len(found))
     for value in found:
@@ -855,6 +895,10 @@ def distances(
     every other cost or mode, on the host.
     """
     if placement and placement.value().device == Device.GPU:
+        if mode.is_scored():
+            raise AlignmentError(
+                ErrorKind.INVALID_ARGUMENT, "a mode with a match score maximizes a score, which `align` finds"
+            )
         if costs.unit_scale() == 0 or not mode.is_global() or not band.covers(1 << 40, 1 << 40):
             raise AlignmentError(
                 ErrorKind.INVALID_ARGUMENT, "on the GPU, distances at unit costs, globally, with no band"
@@ -1104,8 +1148,9 @@ def capped_alignments(
     if lane_costs and not mode.is_global():
         penalties = penalties_of(costs)
         lane_free_alignments(
-            references,
-            queries,
+            pairs,
+            StringTexts.of(references),
+            StringTexts.of(queries),
             lane_costs.value(),
             mode,
             max_cost,
@@ -1252,8 +1297,8 @@ def search(
     best first, ties by the references' order; with `best` that many alone, with `max_cost` (a mode
     with no reward) those within it alone, and with `aligned` each kept hit's alignment too.
 
-    A local alignment scores a block of references at once, one to a SIMD lane, as SWIPE does (see
-    `local_scores_by_block`); a mode with no reward takes `distances`, under the cap when there is one;
+    A local alignment scores a group of references at once, one to a SIMD lane, as SWIPE does (see
+    `local_scores_by_lane`); a mode with no reward takes `distances`, under the cap when there is one;
     any other mode each pair's `score`. Every kept hit is then aligned on its own, when asked for, by
     `align`."""
     var count = len(references)
@@ -1261,7 +1306,10 @@ def search(
     var scores = List[Int](length=count, fill=Int.MIN)
     if mode.kind == Mode.SMITH_WATERMAN and mode.match_score > 0:
         _ = penalties_of(costs)
-        scores = local_scores_by_block(query, references, costs, mode.match_score, workers)
+        var laned = local_scores_by_lane(query, references, costs, mode.match_score, workers)
+        for index in range(count):
+            # A reference the lanes leave, costs under which padding could earn, scored alone.
+            scores[index] = laned[index].value() if laned[index] else score(references[index], query, costs, mode)
     elif not mode.is_scored():
         var queries = List[String](length=count, fill=query)
         var found = capped_distances(

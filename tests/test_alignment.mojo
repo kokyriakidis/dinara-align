@@ -38,7 +38,7 @@ from dinara_align import (
     scores,
     search,
 )
-from dinara_align.alignment import AlignmentMode, GappedAlignment, colorize
+from dinara_align.alignment import AlignmentMode, GappedAlignment, colorize, serial_align
 from dinara_align.scoring import DNA_ALPHABET
 from dinara_align.cigar import cigar_runs
 from dinara_align.edit_distance import edit_distance as bit_parallel_distance
@@ -67,7 +67,6 @@ from dinara_align.gap_affine import (
     wavefront_penalties,
 )
 from dinara_align.substitutions import SubstitutionLookup
-from dinara_align.vector_score import vector_score
 
 comptime GLOBAL = Mode.GLOBAL
 comptime LOCAL = Mode.LOCAL
@@ -1096,9 +1095,9 @@ def test_wavefront_matches_the_full_sweep() raises:
                 second = random_sequence(1, 3, DNA_ALPHABET)
             if second.byte_length() == 0:
                 second = "A"
-            var expected = vector_score[AlignmentMode.GLOBAL](
-                dna_codes(first), dna_codes(second), SubstitutionLookup(scoring.substitutions, 4), gaps
-            )
+            var expected = serial_align[AlignmentMode.GLOBAL](
+                dna_codes(first), dna_codes(second), scoring.substitutions, 4, gaps, DNA_ALPHABET
+            ).score
             var produced = align(first, second, scoring, GLOBAL, placement=host)
             assert_equal(produced.score, Int(expected))
             assert_well_formed(GLOBAL, first, second, produced, scoring)
@@ -1123,12 +1122,9 @@ def test_wavefront_splits_a_pair_too_large_to_keep() raises:
             var second = mutated(first, rate, [1, 5, 60][trial % 3])
             if second.byte_length() == 0:
                 second = "C"
-            var expected = vector_score[AlignmentMode.GLOBAL](
-                dna_codes(first),
-                dna_codes(second),
-                SubstitutionLookup(scoring.substitutions, 4),
-                scoring.gaps,
-            )
+            var expected = serial_align[AlignmentMode.GLOBAL](
+                dna_codes(first), dna_codes(second), scoring.substitutions, 4, scoring.gaps, DNA_ALPHABET
+            ).score
             for limit in [0, 64, 4096]:
                 var traced = wavefront_align(dna_codes(first), dna_codes(second), penalties, DNA_ALPHABET, limit)
                 var produced = GappedAlignment(Int32(traced[0]), traced[1], traced[2])
@@ -1152,9 +1148,9 @@ def test_affine_cigar_spells_an_optimal_alignment() raises:
                 second = String()
             var found = align(first, second, Costs.affine(x, o, e))
             var expected = -Int(
-                vector_score[AlignmentMode.GLOBAL](
-                    dna_codes(first), dna_codes(second), SubstitutionLookup(scoring.substitutions, 4), scoring.gaps
-                )
+                serial_align[AlignmentMode.GLOBAL](
+                    dna_codes(first), dna_codes(second), scoring.substitutions, 4, scoring.gaps, DNA_ALPHABET
+                ).score
             )
             assert_equal(found.cost, expected)
             var rows = rows_from_cigar(first, second, found.cigar)
@@ -2749,6 +2745,76 @@ def test_lane_free_alignments_match_single_pairs() raises:
                         assert_equal(capped[index].value().query_start, expected.value().query_start)
 
 
+def test_scoring_batches_match_single_pairs_in_every_mode() raises:
+    """A batch of scores under a `Scoring`, with free ends or as an extension, spread over the threads asked
+    for, gives each pair the score a call of its own gives; and a mode a single pair refuses, a local
+    alignment with its own match score, the batch refuses too."""
+    seed(59)
+    var references = List[String]()
+    var queries = List[String]()
+    for trial in range(60):
+        var reference = random_sequence(0, 220, DNA_ALPHABET)
+        references.append(reference)
+        queries.append(
+            mutated(reference, [0.0, 0.05, 0.2][trial % 3], 6) if trial % 5
+            != 0 else random_sequence(0, 150, DNA_ALPHABET)
+        )
+    var scoring = Scoring.dna()
+    var modes: List[Mode] = [
+        Mode.INFIX,
+        Mode.PREFIX,
+        Mode.ends_free(reference_end=40, query_start=40),
+        Mode.extension(0),
+        Mode.extension(0, Anchor.END, zdrop=20),
+    ]
+    for mode in modes:
+        var found = scores(references, queries, scoring, mode, placement=Placement.on_cpu(3))
+        for index in range(len(references)):
+            assert_equal(found[index], score(references[index], queries[index], scoring, mode))
+    var local = Mode.local(2)
+    with assert_raises():
+        _ = score(references[1], queries[1], scoring, local)
+    with assert_raises():
+        _ = scores(references, queries, scoring, local)
+
+
+def test_unit_suffixes_take_the_bits_as_the_wavefront_aligns_them() raises:
+    """A suffix at unit costs, which the bit-parallel search serves as a prefix of both sequences reversed,
+    gives the cost, the span and the CIGAR the wavefront gives, which a cap sends it to, under either tie
+    rule, one pair at a time and in a batch."""
+    seed(67)
+    var references = List[String]()
+    var queries = List[String]()
+    for trial in range(80):
+        var reference = random_sequence(1, 400, DNA_ALPHABET)
+        references.append(reference)
+        var bytes = reference.as_bytes()
+        var start = Int(random_ui64(0, UInt64(len(bytes))))
+        var tail = String(StringSlice(unsafe_from_utf8=bytes[start:]))
+        var query = mutated(tail, [0.0, 0.03, 0.15][trial % 3], 4) if trial % 7 != 0 else random_sequence(
+            1, 80, DNA_ALPHABET
+        )
+        if query.byte_length() == 0:
+            query = "ACGT"
+        queries.append(query)
+    var unit = Costs.edit()
+    for ties in [Ties.LEFT, Ties.RIGHT]:
+        var batch = alignments(references, queries, unit, Mode.SUFFIX, ties=ties, threads=3)
+        var costs = distances(references, queries, unit, Mode.SUFFIX, threads=3)
+        for index in range(len(references)):
+            var swept = align(references[index], queries[index], unit, Mode.SUFFIX, ties=ties)
+            var capped = align(references[index], queries[index], unit, Mode.SUFFIX, max_cost=1 << 40, ties=ties)
+            var searched = capped.take()
+            assert_equal(swept.cost, searched.cost)
+            assert_equal(swept.cigar, searched.cigar)
+            assert_equal(swept.reference_start, searched.reference_start)
+            assert_equal(swept.reference_end, references[index].byte_length())
+            assert_equal(distance(references[index], queries[index], unit, Mode.SUFFIX), searched.cost)
+            assert_equal(batch[index].cigar, searched.cigar)
+            assert_equal(batch[index].reference_start, searched.reference_start)
+            assert_equal(costs[index], searched.cost)
+
+
 def test_long_prefixes_find_their_distance() raises:
     """A read of a few kbp at up to a fifth divergence placed at a reference's start costs at unit costs
     what the wavefront finds, its CIGAR spending it: the bit-parallel prefix search gives a try up at a
@@ -3175,8 +3241,8 @@ def test_deletions_cost_their_own() raises:
 def test_search_ranks_every_reference() raises:
     """A search's every hit scores what `score` gives its pair, the best first, ties by the
     references' order; `best` keeps that many, a cap drops what passes it, and `aligned` aligns the
-    kept hits. Local scores come from blocks of references one to a lane, of every length, a block
-    shorter than a lane's width among them."""
+    kept hits. Local scores come from groups of references one to a lane, of every length, a group
+    shorter than a lane's width among them, in 16 bits and, where a reward passes them, in 32."""
     seed(107)
     var query = random_sequence(80, 160, DNA_ALPHABET)
     var references = List[String]()
@@ -3219,6 +3285,10 @@ def test_search_ranks_every_reference() raises:
             within += 1
     assert_equal(len(capped), within)
     assert_equal(len(search(List[String](), query, Costs.affine(4, 6, 2), Mode.local(2))), 0)
+    # A reward 16 bits cannot hold over the query, which the lanes score in 32.
+    var wide = Mode.local(300)
+    for hit in search(references, query, Costs.affine(400, 600, 200), wide, threads=2):
+        assert_equal(hit.score, score(references[hit.index], query, Costs.affine(400, 600, 200), wide))
 
 
 def rebuilt_reference(query: String, cigar: String, md: String) raises -> String:

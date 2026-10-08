@@ -421,66 +421,6 @@ struct GappedAlignment(Copyable, Movable):
         return String(unsafe_from_utf8=out^)
 
 
-def serial_score[
-    mode: AlignmentMode
-](
-    first: ImmSpan[Scalar[SymbolDType], _],
-    second: ImmSpan[Scalar[SymbolDType], _],
-    substitutions: ImmSpan[Scalar[SubstitutionDType], _],
-    alphabet_size: Int,
-    scoring: AffineGapCosts,
-) -> Int32:
-    """Two-row reference, transcribed from the `*_score_kernel` functions of AffineGaps' NumPy reference."""
-    var rows = len(first)
-    var columns = len(second)
-    var scores_above = List[Int32](length=columns + 1, fill=Int32(0))
-    var scores_row = List[Int32](length=columns + 1, fill=Int32(0))
-    var deletes_above = List[Int32](length=columns + 1, fill=Int32(0))
-    var deletes_row = List[Int32](length=columns + 1, fill=Int32(0))
-    var inserts_row = List[Int32](length=columns + 1, fill=Int32(0))
-
-    scores_above[0] = 0
-    for column in range(1, columns + 1):
-        if mode == AlignmentMode.GLOBAL:
-            scores_above[column] = scoring.open + Int32(column - 1) * scoring.extend
-            deletes_above[column] = scores_above[column] + scoring.open + scoring.extend
-        else:
-            scores_above[column] = 0
-            deletes_above[column] = scoring.open + scoring.extend
-
-    var best = Int32(0)
-    for row in range(1, rows + 1):
-        if mode == AlignmentMode.GLOBAL:
-            scores_row[0] = scoring.open + Int32(row - 1) * scoring.extend
-        else:
-            scores_row[0] = 0
-        inserts_row[0] = scores_row[0] + scoring.open + scoring.extend
-
-        for column in range(1, columns + 1):
-            var substitution = Int32(substitutions[Int(first[row - 1]) * alphabet_size + Int(second[column - 1])])
-            var cell = gotoh_cell[mode](
-                scores_above[column - 1],
-                scores_above[column],
-                deletes_above[column],
-                scores_row[column - 1],
-                inserts_row[column - 1],
-                substitution,
-                scoring,
-            )
-            comptime if mode == AlignmentMode.LOCAL:
-                best = max(best, cell.score)
-            scores_row[column] = cell.score
-            deletes_row[column] = cell.deletion
-            inserts_row[column] = cell.insertion
-
-        swap(scores_above, scores_row)
-        swap(deletes_above, deletes_row)
-
-    if mode == AlignmentMode.LOCAL:
-        return best
-    return scores_above[columns]
-
-
 def serial_align[
     mode: AlignmentMode
 ](
@@ -848,7 +788,7 @@ def vector_sweep_bands[
     """`sweep_bands` sixteen cells at a time, under any table (see `substitutions`).
 
     The same recurrence and borders, swept by anti-diagonal with each diagonal's cells by row, as
-    `vector_score` sweeps; the last row's cell of each diagonal is taken as the diagonal passes it.
+    `vector_score.reach_back` and `vector_align` run; the last row's cell of each diagonal is taken as the diagonal passes it.
     """
     comptime Lanes = SIMD[DType.int32, SWEEP_LANES]
     comptime reversed_order = half == SweepHalf.REVERSE
@@ -1120,12 +1060,11 @@ def serial_hirschberg(
     leaf_cells: Int,
     path_columns: MutSpan[Int32, _],
     path_layers: MutSpan[Layer, _],
-    vectorized: Bool = False,
 ) raises:
     """Linear-space traceback: split on rows, join the two halves, recurse without recursion.
 
-    With `vectorized`, the sweeps of halves tall enough run sixteen cells at a time (see
-    `vector_sweep_bands`), computing the same rows; off, every sweep runs cell by cell, as a reference.
+    The sweeps of halves tall enough run sixteen cells at a time (see `vector_sweep_bands`); shorter ones
+    cell by cell, the same rows either way.
 
     A substitution step advances `i + j` by two and can skip an anti-diagonal entirely, while the
     row index advances by exactly zero or one per step, so the cut has to be a row. The two halves
@@ -1166,7 +1105,7 @@ def serial_hirschberg(
             continue
 
         var split = (first_from + first_to) // 2
-        if vectorized and first_to - split >= VECTOR_SWEEP_ROWS:
+        if first_to - split >= VECTOR_SWEEP_ROWS:
             vector_sweep_bands[SweepHalf.FORWARD](
                 first,
                 second,

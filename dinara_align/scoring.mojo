@@ -73,6 +73,7 @@ from .lanes import (
     StringTexts,
     lane_alignments,
     lane_distances,
+    LocalCosts,
     lane_local_scores,
 )
 from .modes import Alignment, Anchor, Band, Costs, Mode
@@ -80,7 +81,7 @@ from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, swept_cells
 from .band_groups import banded_scores
 from .score_groups import grouped_scores
 from .substitutions import SubstitutionLookup
-from .vector_score import optimal_band, reach_back, vector_align, vector_score
+from .vector_score import optimal_band, reach_back, vector_align
 
 
 from std.memory import bitcast
@@ -299,13 +300,8 @@ def global_linear(
     first: ImmSpan[Scalar[SymbolDType], _],
     second: ImmSpan[Scalar[SymbolDType], _],
     scoring: Scoring,
-    vectorized: Bool = True,
 ) raises -> GappedAlignment:
-    """Global alignment in linear space, splitting rows and joining halves Myers-Miller style.
-
-    `vectorized` lets the sweeps run sixteen cells at a time, which computes the same rows; off, every
-    sweep runs cell by cell, as a reference to check it against.
-    """
+    """Global alignment in linear space, splitting rows and joining halves Myers-Miller style."""
     var path_columns = List[Int32](length=len(first) + 1, fill=Int32(0))
     var path_layers = List[Layer](length=len(first) + 1, fill=Layer.ALIGNING)
     serial_hirschberg(
@@ -321,7 +317,6 @@ def global_linear(
         DEFAULT_LEAF_CELLS,
         path_columns,
         path_layers,
-        vectorized,
     )
     var score = score_path(
         first,
@@ -348,8 +343,8 @@ def host_score[
     mode: AlignmentMode
 ](first: ImmSpan[Scalar[SymbolDType], _], second: ImmSpan[Scalar[SymbolDType], _], scoring: Scoring) -> Int32:
     """The optimal score on the host: by wavefront for a global one under a table of one match and
-    one mismatch score while it is cheaper (see `gap_affine`), else by full sweep, sixteen cells at a
-    time under any table (see `vector_score`)."""
+    one mismatch score while it is cheaper (see `gap_affine`), else by full sweep under any table (see
+    `swept_score`)."""
     var codes_first = List[UInt8](first)
     var codes_second = List[UInt8](second)
     comptime if mode == AlignmentMode.GLOBAL:
@@ -362,8 +357,21 @@ def host_score[
             var found = wavefront_score(codes_first, codes_second, penalties.value())
             if found:
                 return Int32(found.value())
-    var lookup = SubstitutionLookup(scoring.substitutions, scoring.alphabet_size())
-    return vector_score[mode](codes_first, codes_second, lookup, scoring.gaps)
+    return Int32(swept_score[mode](Span(codes_first), Span(codes_second), scoring))
+
+
+def swept_score[mode: AlignmentMode](first: Span[UInt8, _], second: Span[UInt8, _], scoring: Scoring) -> Int:
+    """The optimal score by full sweep under any table, by anti-diagonal in lanes of 16 bits while the
+    scores fit (see `tabulated_end`): a global alignment as free ends with none free, a local one
+    anywhere. A side with no letters is a gap over the other, or for a local alignment nothing."""
+    comptime if mode == AlignmentMode.LOCAL:
+        if len(first) == 0 or len(second) == 0:
+            return 0
+        return tabulated_end[ANYWHERE](first, second, scoring, EndsFree(), True)[0]
+    var letters = len(first) + len(second)
+    if len(first) == 0 or len(second) == 0:
+        return 0 if letters == 0 else Int(scoring.gaps.open) + (letters - 1) * Int(scoring.gaps.extend)
+    return tabulated_end[FROM_EDGE](first, second, scoring, EndsFree(), True)[0]
 
 
 def align_on_host[
@@ -416,7 +424,7 @@ def global_on_host(
     if known:
         best = known.value()
     else:
-        best = Int(vector_score[AlignmentMode.GLOBAL](codes_first, codes_second, lookup, scoring.gaps))
+        best = swept_score[AlignmentMode.GLOBAL](Span(codes_first), Span(codes_second), scoring)
     var band = optimal_band(len(first), len(second), lookup.best, scoring.gaps, best)
     var width = min(band[1], len(second)) - max(band[0], -len(first)) + 1
     if (len(first) + 1) * width <= stored_cells:
@@ -607,20 +615,25 @@ def extension_span(
 
 
 def mode_span(
-    first: List[Scalar[SymbolDType]], second: List[Scalar[SymbolDType]], scoring: Scoring, mode: Mode
+    first: List[Scalar[SymbolDType]],
+    second: List[Scalar[SymbolDType]],
+    scoring: Scoring,
+    mode: Mode,
+    started: Bool = True,
 ) -> Tuple[Int, Int, Int, Int, Int]:
     """The best score under `scoring` with free ends or as an extension, and the span it covers, as
     `Costs` place it under `Ties.LEFT` (see `gap_affine.free_ends_alignment`): free ends by a sweep
-    from the edges for the end on the highest diagonal, then one back from it for the start on the
-    highest too; an extension by a sweep from its anchor for the end as late as an equally good one
-    allows. The score, then the start's and the end's letters of each sequence."""
+    from the edges for the end on the highest diagonal, then, with `started`, one back from it for the
+    start on the highest too, without it the start left at the origin; an extension by a sweep from its
+    anchor for the end as late as an equally good one allows. The score, then the start's and the end's
+    letters of each sequence."""
     var columns = len(first)
     var rows = len(second)
     if mode.kind == Mode.EXTENSION:
         var stop = extension_span(first, second, scoring, mode)
         # The end bonus prefers the best extension reaching the query's far end, unless the Z-drop gave up.
         if mode.end_bonus > 0 and not stop[5]:
-            var reaching = mode_span(first, second, scoring, mode.reaching_end())
+            var reaching = mode_span(first, second, scoring, mode.reaching_end(), started)
             if reaching[0] + mode.end_bonus > stop[0]:
                 return reaching
         return (stop[0], stop[1], stop[2], stop[3], stop[4])
@@ -628,6 +641,8 @@ def mode_span(
     var forward = tabulated_end[FROM_EDGE](first, second, scoring, ends, True)
     var end_column = forward[1]
     var end_row = forward[2]
+    if not started:
+        return (forward[0], 0, 0, end_column, end_row)
     var head = List[Scalar[SymbolDType]](capacity=end_column)
     for index in range(end_column - 1, -1, -1):
         head.append(first[index])
@@ -751,7 +766,8 @@ def scoring_score(
         return Int(score_with[AlignmentMode.GLOBAL](first, second, scoring, placement))
     if placement and placement.value().device == Device.GPU:
         raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "on the GPU a Scoring aligns globally or locally")
-    return mode_span(translate(first, scoring.alphabet), translate(second, scoring.alphabet), scoring, mode)[0]
+    # The score alone: no search back for the start.
+    return mode_span(translate(first, scoring.alphabet), translate(second, scoring.alphabet), scoring, mode, False)[0]
 
 
 # endregion Every Mode
@@ -765,8 +781,8 @@ def score_with[
     """The optimal score alone, in two rows of memory on either device.
 
     On the host, a global score under a table of one match and one mismatch score runs the
-    wavefront first (see `gap_affine`), and the full sweep only when the wavefront gives up; under
-    such a table the sweep runs sixteen cells at a time (see `vector_score`).
+    wavefront first (see `gap_affine`), and the full sweep only when the wavefront gives up; under any
+    other table the sweep alone (see `swept_score`).
     """
     var resolved = placement.or_else(Placement.default())
     var encoded_first = translate(first, scoring.alphabet)
@@ -998,10 +1014,7 @@ def laned_local_scores(
         pairs,
         StringTexts(firsts.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
         StringTexts(seconds.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
-        uniform.value()[0],
-        uniform.value()[1],
-        Int(scoring.gaps.open),
-        Int(scoring.gaps.extend),
+        LocalCosts.symmetric(uniform.value()[0], uniform.value()[1], Int(scoring.gaps.open), Int(scoring.gaps.extend)),
         (pads[0], pads[1]),
         workers,
         scores_out,
@@ -1161,10 +1174,7 @@ def tabled_scores[
             pairs,
             batch.firsts(),
             batch.seconds(),
-            best,
-            least,
-            open,
-            extend,
+            LocalCosts.symmetric(best, least, open, extend),
             (UInt8(size), UInt8(size + 1)),
             workers,
             scores_out,
@@ -1315,7 +1325,8 @@ def alignments_with[
     placement: Optional[Placement] = None,
     stored_cells: Int = cells_within(DEFAULT_MAX_MEMORY),
 ) raises -> List[GappedAlignment]:
-    """Aligns every pair; on the device, every pair both bounds admit goes out in one launch."""
+    """Aligns every pair on the device, every pair both bounds admit in one launch; the host's pairs are
+    `api.alignments`' own."""
     var resolved = placement.or_else(Placement.default())
     var pairs = paired_length(firsts, seconds)
     var results = List[GappedAlignment](capacity=pairs)
@@ -1323,33 +1334,6 @@ def alignments_with[
         results.append(GappedAlignment(0, String(), String()))
     if pairs == 0:
         return results^
-    if resolved.device != Device.GPU:
-        var out = results.unsafe_ptr()
-        var failed = List[Bool](length=pairs, fill=False)
-        var flags = failed.unsafe_ptr()
-        var single = Placement.on_cpu(1)
-
-        # The pairs are independent, so each is aligned on one thread start to finish, in
-        # contiguous chunks, several a thread so one that draws long pairs does not hold up the rest.
-        var chunks = chunk_count(pairs, resolved.threads)
-
-        def align_range(slot: Int) {imm}:
-            """Aligns chunk `slot` of the pairs, flagging any pair that raised for the serial retry below."""
-            for index in range(pairs * slot // chunks, pairs * (slot + 1) // chunks):
-                try:
-                    out[unsafe_offset=index] = align_with[mode](
-                        firsts[index], seconds[index], scoring, single, stored_cells
-                    )
-                except:
-                    flags[unsafe_offset=index] = True
-
-        spread(align_range, chunks, max(resolved.threads, 1))
-        # A pair that failed raises here, the same error a serial loop would have raised first.
-        for index in range(pairs):
-            if failed[index]:
-                results[index] = align_with[mode](firsts[index], seconds[index], scoring, single, stored_cells)
-        return results^
-
     # A batch of one is a single pair however it arrived, and gets the single pair's crossover.
     var limit = stored_cells if pairs > 1 else min(stored_cells, DEVICE_STORED_CELLS)
     var scope = DeviceScope(resolved.gpu_id)

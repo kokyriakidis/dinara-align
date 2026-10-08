@@ -221,8 +221,8 @@ def search(references: List[String], query: String, costs: Costs = Costs.edit(),
 
 The query against every reference, a database search: each reference's `Hit`, its score, the best first, ties by the references' order; with `best` that many alone, with `max_cost` (a mode with no reward) those within it alone, and with `aligned` each kept hit's alignment too.
 
-A local alignment scores a block of references at once, one to a SIMD lane, as SWIPE does (see
-`local_scores_by_block`); a mode with no reward takes `distances`, under the cap when there is one;
+A local alignment scores a group of references at once, one to a SIMD lane, as SWIPE does (see
+`local_scores_by_lane`); a mode with no reward takes `distances`, under the cap when there is one;
 any other mode each pair's `score`. Every kept hit is then aligned on its own, when asked for, by
 `align`.
 

@@ -11,6 +11,7 @@ distance from the pattern to any substring of the text, and an alignment there.
 from std.math import ceildiv
 
 from .band import CHECK_MARGIN, CHECKPOINTS
+from .cigar import reversed_text
 from .bit_parallel import ALL_ONES, BAND_COLUMNS, Frontier, Profile, WORD_BITS, word_value
 from .diagonal import PROBE_MARGIN
 from .errors import AlignmentError
@@ -24,15 +25,6 @@ struct EditHit(ImplicitlyCopyable, Writable):
     var distance: Int
     var start: Int
     var end: Int
-
-
-def reversed_text(text: String, end: Int) -> String:
-    """The first `end` bytes of `text`, back to front."""
-    var bytes = text.as_bytes()[0:end]
-    var out = List[UInt8](capacity=len(bytes))
-    for index in range(len(bytes) - 1, -1, -1):
-        out.append(bytes[index])
-    return String(unsafe_from_utf8=out)
 
 
 comptime SEARCH_START = 64
@@ -231,7 +223,7 @@ def edit_search(
     var length = text.byte_length()
     if ties == Ties.RIGHT and not prefix:
         # The first start: the last end of both reversed, then the first end from that start.
-        var backward = Profile(reversed_text(text, length), reversed_text(pattern, pattern.byte_length()))
+        var backward = Profile(reversed_text(text.as_bytes()[0:length]), reversed_text(pattern.as_bytes()))
         var found = last_row_scores[True](backward, True)
         var start = length - found[1]
         var tail = String(StringSlice(unsafe_from_utf8=text.as_bytes()[start:]))
@@ -245,6 +237,6 @@ def edit_search(
         return EditHit(found[0], 0, found[1])
     var found = last_row_scores[True](forward, True)
     var end = found[1]
-    var backward = Profile(reversed_text(text, end), reversed_text(pattern, pattern.byte_length()))
+    var backward = Profile(reversed_text(text.as_bytes()[0:end]), reversed_text(pattern.as_bytes()))
     var start_found = last_row_scores[False](backward)
     return EditHit(found[0], end - start_found[1], end)

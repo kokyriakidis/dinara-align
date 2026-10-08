@@ -90,7 +90,7 @@ def swept_cells[
     an extension a diagonal between them, below the best so far, the best so far stands.
 
     Gotoh's recurrence over scores, a local alignment's every cell floored at zero, swept by
-    anti-diagonal as `vector_score` sweeps it: every cell of `d = i + j` reads only diagonals `d - 1`
+    anti-diagonal as `vector_score.reach_back` sweeps it: every cell of `d = i + j` reads only diagonals `d - 1`
     and `d - 2`, so a diagonal's cells fill `width` lanes of `dtype`, as narrow as the scores allow
     (see `local_alignment`). For a local alignment each lane keeps its best of the diagonal and the
     step it came at, and the diagonal's best is placed only when it meets the best so far; one from
@@ -514,8 +514,8 @@ def latest_local(
         # Too many fronts to keep: the extension's own search and split, by the left rule too, over
         # both sequences reversed from the end.
         var mirrored = extension_of[2](
-            reversed_text(head),
-            reversed_text(lead),
+            reversed_text(head.as_bytes()),
+            reversed_text(lead.as_bytes()),
             penalties,
             eqx,
             Anchor.START,
@@ -524,8 +524,8 @@ def latest_local(
             found[0],
             limit,
         ) if two else extension_of[1](
-            reversed_text(head),
-            reversed_text(lead),
+            reversed_text(head.as_bytes()),
+            reversed_text(lead.as_bytes()),
             penalties,
             eqx,
             Anchor.START,
@@ -560,7 +560,9 @@ def local_alignment(
         return latest_local(reference, query, costs, match_score, eqx, limit)
     var columns = reference.byte_length()
     var rows = query.byte_length()
-    var mirrored = latest_local(reversed_text(reference), reversed_text(query), costs, match_score, eqx, limit)
+    var mirrored = latest_local(
+        reversed_text(reference.as_bytes()), reversed_text(query.as_bytes()), costs, match_score, eqx, limit
+    )
     if mirrored.score == 0:
         return mirrored^
     return Alignment(
@@ -585,8 +587,8 @@ def rewarded_span(
     var forward = swept[FROM_EDGE](reference.as_bytes(), query.as_bytes(), costs, match_score, ends)
     var end_column = forward[1]
     var end_row = forward[2]
-    var head = reversed_text(String(StringSlice(unsafe_from_utf8=reference.as_bytes()[:end_column])))
-    var lead = reversed_text(String(StringSlice(unsafe_from_utf8=query.as_bytes()[:end_row])))
+    var head = reversed_text(reference.as_bytes()[:end_column])
+    var lead = reversed_text(query.as_bytes()[:end_row])
     # From the end, the highest diagonal is the lowest of the reversed sequences'.
     var back = swept[FROM_EDGE](
         head.as_bytes(), lead.as_bytes(), costs, match_score, EndsFree(0, ends.first_begin, 0, ends.second_begin), False
@@ -619,8 +621,8 @@ def rewarded_alignment(
     var span: Tuple[Int, Int, Int, Int, Int]
     if ties == Ties.RIGHT:
         var mirrored = rewarded_span(
-            reversed_text(reference),
-            reversed_text(query),
+            reversed_text(reference.as_bytes()),
+            reversed_text(query.as_bytes()),
             costs,
             match_score,
             EndsFree(ends.first_end, ends.first_begin, ends.second_end, ends.second_begin),

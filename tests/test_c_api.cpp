@@ -280,6 +280,29 @@ int main() {
             CHECK(affine_batch[index].cigar == single.cigar);
         }
     }
+    // Free ends too: reads placed in windows and overlapping them, many pairs at once in the lanes, each
+    // span and CIGAR the one a single call gives under either rule.
+    std::vector<std::string> windows, reads;
+    for (int index = 0; index < 80; ++index) {
+        std::string window;
+        for (int letter = 0; letter < 200; ++letter) window += "ACGT"[base(random)];
+        size_t start = static_cast<size_t>(base(random)) * 12;
+        reads.push_back(mutated(window.substr(start, 150), 0.03, random));
+        windows.push_back(window);
+    }
+    std::vector<std::string_view> window_views(windows.begin(), windows.end()), read_views(reads.begin(), reads.end());
+    for (Mode mode : {Mode::infix(), Mode::ends_free(0, 60, 60, 0)})
+        for (Costs costs : {Costs::affine(4, 6, 2), Costs::edit()})
+            for (dinara::Ties ties : {dinara::Ties::left, dinara::Ties::right}) {
+                std::vector<dinara::Alignment> placed_batch = dinara::alignments(window_views, read_views, costs, mode, {}, ties);
+                for (size_t index = 0; index < windows.size(); ++index) {
+                    dinara::Alignment single = dinara::align(windows[index], reads[index], costs, mode, {}, ties);
+                    CHECK(placed_batch[index].cost == single.cost);
+                    CHECK(placed_batch[index].cigar == single.cigar);
+                    CHECK(placed_batch[index].reference_start == single.reference_start);
+                    CHECK(placed_batch[index].query_start == single.query_start);
+                }
+            }
     // One thread's aligner, reused pair after pair, gives what the functions give; moved, it goes on.
     dinara::Aligner aligner;
     for (dinara::Ties ties : {dinara::Ties::left, dinara::Ties::right})

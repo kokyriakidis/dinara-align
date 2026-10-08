@@ -42,13 +42,31 @@ def reversed_cigar(cigar: String) -> String:
     return joined_cigar(letters, lengths)
 
 
-def reversed_text(text: String) -> String:
-    """A sequence back to front."""
-    var bytes = text.as_bytes()
-    var out = List[UInt8](capacity=len(bytes))
-    for index in range(len(bytes) - 1, -1, -1):
-        out.append(bytes[index])
+def reversed_text(bytes: ImmSpan[UInt8, _]) -> String:
+    """`bytes` back to front."""
+    var out = List[UInt8](bytes)
+    reverse_bytes(out.unsafe_ptr(), len(out))
     return String(unsafe_from_utf8=out^)
+
+
+def reverse_bytes(bytes: MutPointer[UInt8, _], count: Int):
+    """Turns `count` bytes back to front in place, sixteen from either end at a time."""
+    comptime CHUNK = 16
+    var front = 0
+    var back = count
+    while back - front >= 2 * CHUNK:
+        var head = bytes.unsafe_offset(front).unsafe_load[width=CHUNK]()
+        var tail = bytes.unsafe_offset(back - CHUNK).unsafe_load[width=CHUNK]()
+        bytes.unsafe_offset(front).unsafe_store(tail.reversed())
+        bytes.unsafe_offset(back - CHUNK).unsafe_store(head.reversed())
+        front += CHUNK
+        back -= CHUNK
+    while back - front >= 2:
+        back -= 1
+        var kept = bytes[unsafe_offset=front]
+        bytes[unsafe_offset=front] = bytes[unsafe_offset=back]
+        bytes[unsafe_offset=back] = kept
+        front += 1
 
 
 def cigar_matches(first: String, second: String, cigar: String) -> Int:
