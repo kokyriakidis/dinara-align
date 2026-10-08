@@ -1,9 +1,9 @@
 # This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
 # MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """
-A batch of global distances many pairs at once, a pair a 16-bit lane of one SIMD register, each over a
-band of diagonals its own cost proves wide enough: the inter-sequence vectorization SeqAn's and
-parasail's batch modes sweep whole matrices with, here over the band alone.
+A batch of global distances many pairs at once, a pair a lane of one SIMD register, each over a band
+of diagonals its own cost proves wide enough: the inter-sequence vectorization SeqAn's and parasail's
+batch modes sweep whole matrices with, here over the band alone.
 
 The pairs of a group share a register, one lane each, the group's references down the rows and its
 queries across, their letters laid side by side, position by position, so one load holds a position of
@@ -20,14 +20,18 @@ path through the diagonals just outside the band is the least; a pair whose cost
 every path off the band past it too, is past it. A pair the first band does not prove is scored again
 over every diagonal a cheaper path could visit, which proves itself, its cost the less of the two.
 
-A pair goes into a lane only if no cell of its matrix can reach past what 16 bits hold (see `fits`);
-the rest are left to the caller.
+The lanes come in two sizes, as SSW's and parasail's do. First every pair goes into a byte, 64 to an
+AVX-512 register, whose additions saturate: a cost under 255 is exact, 255 is 255 or more, and stands
+for a cell no path inside the band reaches, so a pair whose cost passes it is left. Then every pair left
+goes into 16 bits, whose dearest path must stay under what they hold (see `fits`); the rest are left to
+the caller.
 """
 
 from std.bit import count_leading_zeros
 from std.math import ceildiv
+from std.memory import bitcast
 from std.utils import IndexList
-from std.sys import simd_width_of
+from std.sys import llvm_intrinsic, simd_width_of
 from std.atomic import Atomic
 from max.algorithm import parallelize
 
@@ -62,11 +66,29 @@ struct StringTexts(Texts, TrivialRegisterPassable):
         return self.items[unsafe_offset=index].unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()
 
 
-comptime WIDTH = simd_width_of[DType.int16]()
-"""Pairs a group: the lanes of one native register of 16-bit integers, 32 under AVX-512."""
-comptime Lanes = SIMD[DType.int16, WIDTH]
-comptime FAR = Int16(16384)
-"""A cell no path inside the band reaches; any cost a lane may hold stays under it (see `fits`)."""
+@always_inline
+def lanes_of[value: DType]() -> Int:
+    """Pairs a group: the lanes of one native register of `value`s, 64 bytes or 32 16-bit integers
+    under AVX-512."""
+    return simd_width_of[value]()
+
+
+@always_inline
+def far_of[value: DType]() -> Int:
+    """A cell no path inside the band reaches: a byte's 255, which its additions saturate at; 16 bits'
+    16384, which any cost a lane may hold stays under (see `fits`)."""
+    return 255 if value == DType.uint8 else 16384
+
+
+@always_inline
+def added[value: DType, width: Int](left: SIMD[value, width], right: SIMD[value, width]) -> SIMD[value, width]:
+    """A sum of costs: a byte's saturating at 255, 16 bits' plain."""
+    comptime if value == DType.uint8:
+        return llvm_intrinsic["llvm.uadd.sat", SIMD[value, width]](left, right)
+    else:
+        return left + right
+
+
 comptime HELD = 16000
 """The dearest path a pair may have for a lane: FAR plus the most any chain of the recurrence adds to
 it stays inside 16 bits."""
@@ -101,6 +123,13 @@ struct LaneCosts(ImplicitlyCopyable, TrivialRegisterPassable):
         """An insertion of `letters` query letters, nothing for none."""
         return 0 if letters <= 0 else self.insertion_opening + letters * self.insertion_extension
 
+    def fits_bytes(self) -> Bool:
+        """Whether every step costs under a byte's 255, which a pair's lanes need to count anything."""
+        var dearest = max(
+            self.deletion_opening + self.deletion_extension, self.insertion_opening + self.insertion_extension
+        )
+        return max(dearest, self.mismatch) < 255
+
     def fits(self, rows: Int, columns: Int) -> Bool:
         """Whether a pair of `rows` reference letters and `columns` query letters stays inside 16 bits:
         its dearest path, all gaps, plus an opening and a mismatch more, under `HELD`."""
@@ -117,7 +146,7 @@ struct LaneCosts(ImplicitlyCopyable, TrivialRegisterPassable):
         return 0
 
 
-struct LaneSpace(Movable):
+struct LaneSpace[value: DType](Movable):
     """A worker's memory for its groups, kept from group to group: the letters side by side, a row of
     each layer, the group's pairs, and the pairs its first bands did not prove."""
 
@@ -125,8 +154,8 @@ struct LaneSpace(Movable):
     var column_letters: List[UInt8]
     var staging: List[UInt8]
     """Each lane's text whole, a lane after another, on its way to lying side by side."""
-    var scores: List[Lanes]
-    var deletions: List[Lanes]
+    var scores: List[SIMD[Self.value, lanes_of[Self.value]()]]
+    var deletions: List[SIMD[Self.value, lanes_of[Self.value]()]]
     var members: List[Int]
     var retries: List[List[Int]]
     """The pairs its first bands did not prove, filed by the width of the band that will (see
@@ -136,8 +165,8 @@ struct LaneSpace(Movable):
         self.row_letters = List[UInt8]()
         self.column_letters = List[UInt8]()
         self.staging = List[UInt8]()
-        self.scores = List[Lanes]()
-        self.deletions = List[Lanes]()
+        self.scores = List[SIMD[Self.value, lanes_of[Self.value]()]]()
+        self.deletions = List[SIMD[Self.value, lanes_of[Self.value]()]]()
         self.members = List[Int]()
         self.retries = List[List[Int]]()
         for _ in range(BUCKETS):
@@ -148,24 +177,37 @@ comptime BLOCK = 8
 """Positions laid side by side at once: a lane's eight letters are one 64-bit load."""
 
 
-def transposed_order() -> IndexList[WIDTH * BLOCK]:
-    """Where each byte of a block laid position by position comes from in one laid lane by lane."""
-    var mask = IndexList[WIDTH * BLOCK]()
+def byte_order() -> IndexList[64]:
+    """An 8 by 8 transpose of bytes inside 64: eight lanes' eight letters in, eight positions' out."""
+    var mask = IndexList[64]()
     for position in range(BLOCK):
-        for lane in range(WIDTH):
-            mask[position * WIDTH + lane] = lane * BLOCK + position
+        for lane in range(8):
+            mask[position * 8 + lane] = lane * BLOCK + position
+    return mask
+
+
+def word_order[groups: Int]() -> IndexList[groups * BLOCK]:
+    """Words of `groups` groups of eight lanes, a group's eight positions in turn, to each position's
+    words, a group's after another."""
+    var mask = IndexList[groups * BLOCK]()
+    for position in range(BLOCK):
+        for group in range(groups):
+            mask[position * groups + group] = group * BLOCK + position
     return mask
 
 
 def side_by_side[
-    T: Texts
+    T: Texts, width: Int
 ](texts: T, members: List[Int], length: Int, mut staging: List[UInt8], target: MutPointer[UInt8, _]):
-    """The members' texts, position `p` of every lane at `target[p WIDTH:(p + 1) WIDTH]`: each text copied
+    """The members' texts, position `p` of every lane at `target[p width:(p + 1) width]`: each text copied
     whole into `staging`, a lane's stretch padded to whole blocks, then a block of `BLOCK` positions at
-    a time, every lane's letters of the block one load, the block turned in registers."""
-    comptime order = transposed_order()
+    a time, every lane's letters of the block one load, the block turned in registers in two steps: eight
+    lanes' bytes inside 64 at a time, then the 64-bit words of all of them."""
+    comptime groups = width // 8
+    comptime bytes = byte_order()
+    comptime words = word_order[groups]()
     var stride = ceildiv(max(length, 1), BLOCK) * BLOCK
-    staging.resize(unsafe_uninit_length=WIDTH * stride)
+    staging.resize(unsafe_uninit_length=width * stride)
     var lanes = staging.unsafe_ptr()
     for lane in range(len(members)):
         var index = members[lane]
@@ -173,21 +215,40 @@ def side_by_side[
         Span(unsafe_ptr=lanes.unsafe_offset(lane * stride), length=count).copy_from(
             Span(unsafe_ptr=texts.letters(index), length=count)
         )
-    var block = Array[UInt8, WIDTH * BLOCK](fill=0)
+    var block = Array[UInt8, width * BLOCK](fill=0)
     var block_ptr = block.unsafe_ptr()
     for start in range(0, stride, BLOCK):
-        comptime for lane in range(WIDTH):
+        comptime for lane in range(width):
             block_ptr.unsafe_offset(lane * BLOCK).unsafe_bitcast[UInt64]().unsafe_store(
                 lanes.unsafe_offset(lane * stride + start).unsafe_bitcast[UInt64]().unsafe_load()
             )
-        target.unsafe_offset(start * WIDTH).unsafe_store(block_ptr.unsafe_load[width=WIDTH * BLOCK]().shuffle[order]())
+        var turned = SIMD[DType.uint64, groups * BLOCK]()
+        comptime for group in range(groups):
+            var inner = bitcast[DType.uint64, BLOCK](
+                block_ptr.unsafe_offset(group * 64).unsafe_load[width=64]().shuffle[bytes]()
+            )
+            comptime for position in range(BLOCK):
+                turned[group * BLOCK + position] = inner[position]
+        target.unsafe_offset(start * width).unsafe_bitcast[UInt64]().unsafe_store(turned.shuffle[words]())
 
 
 def band_costs[
-    T: Texts
-](references: T, queries: T, mut space: LaneSpace, low: Int, high: Int, costs: LaneCosts,) -> Lanes:
+    T: Texts, value: DType
+](references: T, queries: T, mut space: LaneSpace[value], low: Int, high: Int, costs: LaneCosts) -> SIMD[
+    value, lanes_of[value]()
+]:
     """The least cost of each of `space.members`'s pairs over the paths on diagonals `low ..= high`,
-    `FAR` or more for a pair none of whose paths stays on them; a lane past the members holds nothing."""
+    `far_of[value]()` or more for a pair none of whose paths stays on them, or, in a byte, whose cost
+    reaches 255; a lane past the members holds nothing."""
+    comptime WIDTH = lanes_of[value]()
+    comptime Lanes = SIMD[value, WIDTH]
+    comptime FAR = far_of[value]()
+
+    @always_inline
+    def held(cost: Int) -> Scalar[value]:
+        """A cost as a lane holds it, 255 or more a byte's 255."""
+        return Scalar[value](min(cost, FAR))
+
     var count = len(space.members)
     var rows = 0
     var columns = 0
@@ -205,8 +266,8 @@ def band_costs[
     # was there before: no cell past a pair's sequences feeds its corner.
     space.row_letters.resize(unsafe_uninit_length=ceildiv(max(rows, 1), BLOCK) * BLOCK * WIDTH)
     space.column_letters.resize(unsafe_uninit_length=ceildiv(max(columns, 1), BLOCK) * BLOCK * WIDTH)
-    side_by_side(references, space.members, rows, space.staging, space.row_letters.unsafe_ptr())
-    side_by_side(queries, space.members, columns, space.staging, space.column_letters.unsafe_ptr())
+    side_by_side[T, WIDTH](references, space.members, rows, space.staging, space.row_letters.unsafe_ptr())
+    side_by_side[T, WIDTH](queries, space.members, columns, space.staging, space.column_letters.unsafe_ptr())
 
     space.scores.resize(columns + 2, Lanes(FAR))
     space.deletions.resize(columns + 2, Lanes(FAR))
@@ -217,18 +278,18 @@ def band_costs[
         deletions[unsafe_offset=column] = Lanes(FAR)
     # Row zero inside the band: an insertion of every column before.
     for column in range(max(low, 0), min(high, columns) + 1):
-        scores[unsafe_offset=column] = Lanes(Int16(costs.inserted(column)))
+        scores[unsafe_offset=column] = Lanes(held(costs.inserted(column)))
     var found = Lanes(FAR)
     for lane in range(count):
         var column = Int(column_ends[lane])
         if row_ends[lane] == 0 and column >= low and column <= high:
             found[lane] = scores[unsafe_offset=column][lane]
 
-    var mismatch = Lanes(Int16(costs.mismatch))
-    var delete_open = Lanes(Int16(costs.deletion_opening + costs.deletion_extension))
-    var delete_extend = Lanes(Int16(costs.deletion_extension))
-    var insert_open = Lanes(Int16(costs.insertion_opening + costs.insertion_extension))
-    var insert_extend = Lanes(Int16(costs.insertion_extension))
+    var mismatch = Lanes(held(costs.mismatch))
+    var delete_open = Lanes(held(costs.deletion_opening + costs.deletion_extension))
+    var delete_extend = Lanes(held(costs.deletion_extension))
+    var insert_open = Lanes(held(costs.insertion_opening + costs.insertion_extension))
+    var insert_extend = Lanes(held(costs.insertion_extension))
     var row_source = space.row_letters.unsafe_ptr()
     var column_source = space.column_letters.unsafe_ptr()
     for row in range(1, rows + 1):
@@ -242,7 +303,7 @@ def band_costs[
         if first == 0:
             # The left edge: a deletion of every row so far.
             diagonal = scores[unsafe_offset=0]
-            left = Lanes(Int16(costs.deleted(row)))
+            left = Lanes(held(costs.deleted(row)))
             scores[unsafe_offset=0] = left
             first = 1
         else:
@@ -255,9 +316,9 @@ def band_costs[
         for column in range(first, last + 1):
             var other = column_source.unsafe_offset((column - 1) * WIDTH).unsafe_load[width=WIDTH]()
             var above = scores[unsafe_offset=column]
-            var deletion = min(above + delete_open, deletions[unsafe_offset=column] + delete_extend)
-            insertion = min(left + insert_open, insertion + insert_extend)
-            var score = min(min(diagonal + letter.eq(other).select(Lanes(0), mismatch), deletion), insertion)
+            var deletion = min(added(above, delete_open), added(deletions[unsafe_offset=column], delete_extend))
+            insertion = min(added(left, insert_open), added(insertion, insert_extend))
+            var score = min(min(added(diagonal, letter.eq(other).select(Lanes(0), mismatch)), deletion), insertion)
             deletions[unsafe_offset=column] = deletion
             scores[unsafe_offset=column] = score
             diagonal = above
@@ -285,16 +346,48 @@ def lane_distances[
     costs_out: MutPointer[Optional[Int], _],
     settled: MutPointer[Bool, _],
 ) -> Int:
-    """Every pair 16 bits hold and `settled` does not already mark, its global distance within
+    """Every pair `settled` does not already mark that the lanes hold, its global distance within
     `reference_band` into `costs_out`, None past `max_cost` or with no path inside the band, and `settled`
-    set; the others left for the caller. The pairs settled here.
+    set; the others left for the caller. The pairs settled here: first in bytes, where every step's
+    cost fits one, then in 16 bits."""
+    var before = 0
+    for index in range(pairs):
+        before += Int(settled[unsafe_offset=index])
+    if costs.fits_bytes():
+        lane_stage[T, DType.uint8](
+            pairs, references, queries, costs, reference_band, max_cost, workers, costs_out, settled
+        )
+    lane_stage[T, DType.int16](pairs, references, queries, costs, reference_band, max_cost, workers, costs_out, settled)
+    # A stage leaves what its lanes cannot hold, so the pairs settled are counted, not assumed.
+    var after = 0
+    for index in range(pairs):
+        after += Int(settled[unsafe_offset=index])
+    return after - before
+
+
+def lane_stage[
+    T: Texts, value: DType
+](
+    pairs: Int,
+    references: T,
+    queries: T,
+    costs: LaneCosts,
+    reference_band: Band,
+    max_cost: Int,
+    workers: Int,
+    costs_out: MutPointer[Optional[Int], _],
+    settled: MutPointer[Bool, _],
+):
+    """`lane_distances` in lanes of `value`: every pair `settled` does not mark and the lanes hold settled,
+    a pair whose byte saturates left.
 
     The band is the library's, its diagonals the reference's position less the query's; the lanes run
     the reference down the rows, their diagonals the query's position less the reference's, so they
     take it mirrored."""
+    comptime WIDTH = lanes_of[value]()
     var band = Band(-reference_band.high, -reference_band.low)
     if pairs == 0:
-        return 0
+        return
     var stretches = max(min(workers, pairs // WIDTH), 1)
     # Each pair's end diagonal, columns less rows; `HELD` and more for a pair the lanes cannot hold.
     var ends = List[Int](capacity=pairs)
@@ -312,7 +405,9 @@ def lane_distances[
         for index in range(pairs * stretch // stretches, pairs * (stretch + 1) // stretches):
             var rows = references.length(index)
             var columns = queries.length(index)
-            if not settled[unsafe_offset=index] and costs.fits(rows, columns):
+            # A byte holds any pair, its saturation telling; 16 bits only a pair whose costs fit.
+            var held = value == DType.uint8 or costs.fits(rows, columns)
+            if not settled[unsafe_offset=index] and held:
                 var end = columns - rows
                 end_ptr[unsafe_offset=index] = end
                 lowest = min(lowest, end)
@@ -366,9 +461,9 @@ def lane_distances[
 
     # First pass: each group over the band between its end diagonals and the main one and one diagonal
     # more either side, within `band`.
-    var spaces = List[LaneSpace](capacity=workers)
+    var spaces = List[LaneSpace[value]](capacity=workers)
     for _ in range(workers):
-        spaces.append(LaneSpace())
+        spaces.append(LaneSpace[value]())
     var space_ptr = spaces.unsafe_ptr()
     var groups = ceildiv(placed, WIDTH)
     var taken = Atomic[Int64](0)
@@ -414,7 +509,7 @@ def lane_distances[
                 var found = band_costs(references, queries, space, low, high, costs)
                 for lane in range(len(space.members)):
                     var index = space.members[lane]
-                    settle(
+                    settle[value](
                         index,
                         Int(found[lane]),
                         references.length(index),
@@ -440,7 +535,7 @@ def lane_distances[
             retries.extend(Span(spaces[worker].retries[bucket]))
     var unproven = len(retries) // 4
     if unproven == 0:
-        return placed
+        return
     var retry_ptr = retries.unsafe_ptr()
     var retry_groups = ceildiv(unproven, WIDTH)
     var retaken = Atomic[Int64](0)
@@ -480,13 +575,13 @@ def lane_distances[
                 var found = band_costs(references, queries, space, low, high, costs)
                 for lane in range(len(space.members)):
                     var slot = group * WIDTH + lane
-                    # A path as cheap as the first band's cost the first band found already.
+                    # A path as cheap as the first band's cost the first band found already; one cheaper is
+                    # under 255, so no byte saturates on it.
                     var cost = min(Int(found[lane]), retry_ptr[unsafe_offset=4 * slot + 1])
                     costs_out[unsafe_offset=space.members[lane]] = Optional[Int](cost) if cost <= max_cost else None
                     settled[unsafe_offset=space.members[lane]] = True
 
     parallelize(second_pass, second_workers, second_workers)
-    return placed
 
 
 comptime BUCKETS = 24
@@ -494,7 +589,9 @@ comptime BUCKETS = 24
 
 
 @always_inline
-def settle(
+def settle[
+    value: DType
+](
     index: Int,
     found: Int,
     rows: Int,
@@ -511,7 +608,11 @@ def settle(
     """Settles pair `index`, of `rows` reference letters and `columns` query letters, with the cost
     `found` on diagonals `low ..= high` if no path off them could beat it, or one past the cap could not
     come under it; else files it, its cost and the band a cheaper path needs, by that band's width. A
-    path cannot leave the matrix, nor the band."""
+    path cannot leave the matrix, nor the band. A byte's 255 may be any cost from there up, or none
+    inside the band: such a pair is left for 16 bits."""
+    comptime if value == DType.uint8:
+        if found >= far_of[value]():
+            return
     var end = columns - rows
     if end < band.low or end > band.high or 0 < band.low or 0 > band.high:
         # Its start or its end lies outside the band: no alignment inside it.
