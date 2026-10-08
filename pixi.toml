@@ -41,6 +41,8 @@ bench-astarpa2 = "python3 benchmarks/pa_bench.py"
 results-astarpa2 = "python3 benchmarks/pa_results.py"
 # Times local and overlap alignment against SSW, parasail, abPOA and hyalite; see `benchmarks/local_bench.py`.
 bench-local = "python3 benchmarks/local_bench.py"
+# Times dinara-align's free ends, extension, two-piece gaps and tables against Edlib, WFA2-lib, KSW2, parasail and SSW; see `benchmarks/mode_bench.py`.
+bench-modes = "python3 benchmarks/mode_bench.py"
 # Builds a program on dinara-align into a folder that runs without pixi or Mojo, for a baseline CPU:
 # `pixi run bundle <program.mojo> [out-dir] [target-cpu]`; see `scripts/bundle.sh`.
 bundle = "bash scripts/bundle.sh"

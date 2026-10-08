@@ -56,6 +56,9 @@ RIVALS = {
     ),
     "parasail": ("https://github.com/jeffdaily/parasail", "fb985ee4f2302c72c87d7d56443712b2d920b106"),
     "abPOA": ("https://github.com/yangao07/abPOA", "2e095ba7f8de6bc62aaaa9a684cda781b8098ee0"),
+    # The free-end, extension and two-piece rivals of `mode_bench.py`: Edlib v1.2.7, and KSW2.
+    "edlib": ("https://github.com/Martinsos/edlib", "ec2310eda1841ab48c14cd3d866778a4f5eb1491"),
+    "ksw2": ("https://github.com/lh3/ksw2", "289609bd9e5381a13b16239d0a7703f1ff03f9ca"),
 }
 """Each rival's repository and the commit its numbers were taken at."""
 
