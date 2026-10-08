@@ -2206,7 +2206,25 @@ def first_reached[
     var columns = len(first)
     var rows = len(second)
     begun(searched, first, second, penalties, FREE_START, False, reverse, starts.first_begin, starts.second_begin, band)
-    ref search = searched.value()
+    # The search taken out while it runs, a value of its own rather than one reached through `searched`.
+    var search = searched.take()
+    var found = reached_from[pieces](search, columns, rows, penalties, starts, ceiling, highest)
+    searched = search^
+    return found
+
+
+def reached_from[
+    pieces: Int
+](
+    mut search: Wavefront[pieces],
+    columns: Int,
+    rows: Int,
+    penalties: Penalties,
+    starts: EndsFree,
+    ceiling: Int,
+    highest: Bool,
+) -> Optional[Tuple[Int, Int, Int]]:
+    """`first_reached`'s search, begun: grown a cost at a time until a stop is reached."""
     var window = penalties.window[pieces]()
     while True:
         var slot = search.fronts.current
