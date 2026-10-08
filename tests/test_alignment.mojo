@@ -2649,9 +2649,58 @@ def test_lane_batches_match_single_pairs() raises:
                     assert_equal(found[index].or_else(-1), expected.or_else(-1))
 
 
+def test_lane_alignments_match_single_pairs() raises:
+    """A batch of global alignments, which goes many pairs at once into the lanes and traces each from the
+    flags its band kept (see `lanes.traced`), gives each pair the alignment a call of its own gives, its
+    CIGAR the one either tie rule picks: under a band, under a cap, both and neither, and with too little
+    memory for a group's flags, which leaves its pairs to the searches; unit, affine, linear and
+    two-piece costs and deletions priced apart, pairs of every length up to a few hundred, close,
+    divergent and unrelated, empty sides, and one long pair among them."""
+    seed(43)
+    var references = List[String]()
+    var queries = List[String]()
+    for trial in range(150):
+        var reference = random_sequence(0, 300, DNA_ALPHABET)
+        references.append(reference)
+        if trial % 5 == 0:
+            queries.append(random_sequence(0, 300, DNA_ALPHABET))
+        else:
+            queries.append(mutated(reference, [0.0, 0.01, 0.05, 0.2][trial % 4], 12))
+    references.append(random_sequence(3000, 3000, DNA_ALPHABET))
+    queries.append(mutated(references[len(references) - 1], 0.02, 6))
+    var all_costs: List[Costs] = [
+        Costs.edit(),
+        Costs.affine(4, 6, 2),
+        Costs.affine(1, 2, 1).with_deletions(3, 2),
+        Costs.linear(2, 3),
+        Costs.two_piece(4, 6, 2, 24, 1),
+    ]
+    var bands: List[Band] = [Band(), Band.around(6), Band(-3, 40)]
+    for costs in all_costs:
+        for ties in [Ties.LEFT, Ties.RIGHT]:
+            for memory in [DEFAULT_MAX_MEMORY, 200000, 20000]:
+                var whole = alignments(references, queries, costs, ties=ties, threads=3, max_memory=memory)
+                for index in range(len(references)):
+                    var single = align(references[index], queries[index], costs, ties=ties, max_memory=memory)
+                    assert_equal(whole[index].cost, single.cost)
+                    assert_equal(whole[index].cigar, single.cigar)
+            for band in bands:
+                for cap in [1 << 40, 8, 60]:
+                    var found = alignments(references, queries, costs, max_cost=cap, band=band, ties=ties, threads=3)
+                    for index in range(len(references)):
+                        var expected = align(
+                            references[index], queries[index], costs, max_cost=cap, band=band, ties=ties
+                        )
+                        assert_equal(Bool(found[index]), Bool(expected))
+                        if expected:
+                            assert_equal(found[index].value().cost, expected.value().cost)
+                            assert_equal(found[index].value().cigar, expected.value().cigar)
+
+
 def test_lane_scores_match_single_pairs() raises:
-    """A batch of global scores under a table of one match and one mismatch score, which goes many pairs
-    at once into the lanes (see `lanes`), gives each pair the score a call of its own gives: minimap2's
+    """A batch of global scores or alignments under a table of one match and one mismatch score, which
+    goes many pairs at once into the lanes (see `lanes`), gives each pair the score and the CIGAR a call
+    of its own gives: minimap2's
     scores, a dear gap and a cheap one, unit costs, pairs of every length up to a few hundred, close and
     unrelated, empty sides among them; and a letter outside the alphabet raises as it does alone."""
     seed(37)
@@ -2671,6 +2720,12 @@ def test_lane_scores_match_single_pairs() raises:
         var found = scores(firsts, seconds, scoring, GLOBAL, placement=Placement.on_cpu(3))
         for index in range(len(firsts)):
             assert_equal(found[index], score(firsts[index], seconds[index], scoring, GLOBAL))
+        # Their alignments too, each traced from its lanes' flags as the wavefront's tie rule picks it.
+        var aligned = alignments(firsts, seconds, scoring, GLOBAL, placement=Placement.on_cpu(3))
+        for index in range(len(firsts)):
+            var single = align(firsts[index], seconds[index], scoring, GLOBAL, placement=Placement.on_cpu(1))
+            assert_equal(aligned[index].score, single.score)
+            assert_equal(aligned[index].cigar, single.cigar)
     var odd_firsts: List[String] = ["ACGT", "ACXT"]
     var odd_seconds: List[String] = ["ACGT", "ACGT"]
     var dna = Scoring.dna()

@@ -39,14 +39,16 @@ from .scored import (
     rewarded_alignment,
     swept,
 )
-from .lanes import LaneCosts, StringTexts, lane_distances
+from .lanes import LaneCosts, StringTexts, lane_alignments, lane_distances
 from .gap_affine import (
     AffineCigar,
     DEFAULT_MAX_MEMORY,
     SearchSpace,
     EndsFree,
     KEPT_BYTES,
+    Penalties,
     Spanned,
+    cigar_of,
     cigar_within,
     extend,
     extension_of,
@@ -64,6 +66,7 @@ from .scoring import (
     as_alignment,
     paired_length,
     scores_with,
+    laned_alignments,
     scoring_alignment,
     scoring_score,
 )
@@ -589,6 +592,12 @@ def alignments(
         var single = Placement.on_cpu(1)
         var workers = max(resolved.threads, 1)
         var chunks = max(min(pairs, workers * 8), 1)
+        # Global alignments under a table of one match and one mismatch score: many pairs at once in the
+        # lanes (see `scoring.laned_alignments`); the rest one at a time.
+        var settled = List[Bool](length=pairs, fill=False)
+        if mode.is_global() and mode.match_score == 0:
+            settled = laned_alignments(references, queries, scoring, eqx, workers, max_memory, out)
+        var settled_ptr = settled.unsafe_ptr()
 
         def align_chunk(
             chunk: Int,
@@ -604,10 +613,13 @@ def alignments(
             imm flags,
             imm pairs,
             imm chunks,
+            imm settled_ptr,
         }:
             """Aligns chunk `chunk` of the pairs, flagging any pair that raised for the serial retry below."""
             var space = SearchSpace()
             for index in range(pairs * chunk // chunks, pairs * (chunk + 1) // chunks):
+                if settled_ptr[unsafe_offset=index]:
+                    continue
                 try:
                     out[unsafe_offset=index] = scoring_alignment(
                         references[index], queries[index], scoring, mode, single, stored_cells, eqx, space
@@ -961,6 +973,35 @@ def capped_alignments(
     var out = results.unsafe_ptr()
     var failed = List[Bool](length=pairs, fill=False)
     var flags = failed.unsafe_ptr()
+    # Global costs: as many pairs at once as a register holds lanes, each traced from the flags its band
+    # kept (see `lanes`); every other pair, and every pair of other costs and modes, one at a time.
+    var settled = List[Bool](length=pairs, fill=False)
+    var settled_ptr = settled.unsafe_ptr()
+    var laned = List[Optional[Int]](length=pairs, fill=None)
+    var laned_ptr = laned.unsafe_ptr()
+    var paths = List[List[UInt8]](capacity=pairs)
+    for _ in range(pairs):
+        paths.append(List[UInt8]())
+    var path_ptr = paths.unsafe_ptr()
+    var lane_costs = LaneCosts.of(costs, mode)
+    var penalties: Optional[Penalties] = None
+    if lane_costs:
+        # Costs the searches would refuse raise here, as a pair's search would raise them.
+        penalties = penalties_of(costs)
+        _ = lane_alignments(
+            pairs,
+            StringTexts(references.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
+            StringTexts(queries.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
+            lane_costs.value(),
+            band,
+            max_cost,
+            ties == Ties.LEFT,
+            workers,
+            limit * KEPT_BYTES,
+            laned_ptr,
+            path_ptr,
+            settled_ptr,
+        )
     var order = longest_first(references, queries, workers)
     var taken = Atomic[Int64](0)
 
@@ -982,9 +1023,13 @@ def capped_alignments(
         imm eqx,
         imm limit,
         imm workers,
+        imm settled_ptr,
+        imm laned_ptr,
+        imm path_ptr,
+        imm penalties,
     }:
         """Takes the next pairs in `order` until none is left, storing each one's capped alignment or flagging
-        that it raised."""
+        that it raised; a pair the lanes settled has its CIGAR spelled from their path."""
         var last = 0
         var space = SearchSpace()
         while True:
@@ -993,6 +1038,24 @@ def capped_alignments(
                 return
             for dealt in range(share[0], share[1]):
                 var index = order[dealt]
+                if settled_ptr[unsafe_offset=index] and not laned_ptr[unsafe_offset=index]:
+                    continue
+                if settled_ptr[unsafe_offset=index]:
+                    var cost = laned_ptr[unsafe_offset=index].value()
+                    var columns = references[index].byte_length()
+                    var rows = queries[index].byte_length()
+                    ref scaled = penalties.value()
+                    # The lanes follow the tie rule across the whole pair; the searches would too unless they
+                    # split it, which they never do while both sides' fronts, each at most a diagonal of the
+                    # matrix at every cost, stay within `limit`. A pair they might split takes them.
+                    if 2 * (cost // scaled.scale + 1) * (columns + rows + 1) <= limit:
+                        var moves = List[UInt8]()
+                        swap(moves, path_ptr[unsafe_offset=index])
+                        var cigar = cigar_of(
+                            references[index], queries[index], moves^, cost // scaled.scale, scaled, eqx
+                        )
+                        out[unsafe_offset=index] = Alignment(cost, -cost, cigar^, 0, columns, 0, rows)
+                        continue
                 try:
                     out[unsafe_offset=index] = aligned_within(
                         references[index], queries[index], costs, mode, band, max_cost, ties, eqx, limit, space

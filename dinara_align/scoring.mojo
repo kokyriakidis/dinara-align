@@ -65,7 +65,7 @@ from .gap_affine import (
     wavefront_penalties,
     wavefront_score,
 )
-from .lanes import LaneCosts, StringTexts, lane_distances
+from .lanes import LaneCosts, StringTexts, lane_alignments, lane_distances
 from .modes import Alignment, Anchor, Band, Costs, Mode
 from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, swept_cells
 from .score_groups import grouped_scores
@@ -799,23 +799,13 @@ def chunk_count(pairs: Int, threads: Int) -> Int:
     return min(pairs, max(threads, 1) * CHUNKS_PER_THREAD)
 
 
-def laned_scores(
-    firsts: List[String],
-    seconds: List[String],
-    alphabet: String,
-    costs: LaneCosts,
-    penalties: Penalties,
-    threads: Int,
-    scores_out: MutPointer[Int32, _],
-) -> List[Bool]:
-    """The global scores of every pair the lanes take into `scores_out`, and which they were: those whose letters
-    `alphabet` holds, a pair holding another left for its own call to raise as it does."""
+def unknown_letters(firsts: List[String], seconds: List[String], alphabet: String, workers: Int) -> List[Bool]:
+    """Which pairs hold a letter outside `alphabet`, checked over `workers` threads: the lanes leave those
+    for their own calls to raise as they do."""
     var pairs = len(firsts)
-    var workers = max(threads, 1)
     var held = Array[Bool, 256](fill=False)
     for letter in alphabet.as_bytes():
         held[Int(letter)] = True
-    # A pair holding a letter outside the alphabet is marked settled beforehand, so the lanes leave it.
     var refused = List[Bool](length=pairs, fill=False)
     var refused_ptr = refused.unsafe_ptr()
 
@@ -831,6 +821,24 @@ def laned_scores(
                 refused_ptr[unsafe_offset=index] = True
 
     parallelize(refuse, workers, workers)
+    return refused^
+
+
+def laned_scores(
+    firsts: List[String],
+    seconds: List[String],
+    alphabet: String,
+    costs: LaneCosts,
+    penalties: Penalties,
+    threads: Int,
+    scores_out: MutPointer[Int32, _],
+) -> List[Bool]:
+    """The global scores of every pair the lanes take into `scores_out`, and which they were: those whose letters
+    `alphabet` holds, a pair holding another left for its own call to raise as it does."""
+    var pairs = len(firsts)
+    var workers = max(threads, 1)
+    # A pair holding a letter outside the alphabet is marked settled beforehand, so the lanes leave it.
+    var refused = unknown_letters(firsts, seconds, alphabet, workers)
     var settled = refused.copy()
     var found = List[Optional[Int]](length=pairs, fill=None)
     _ = lane_distances(
@@ -850,6 +858,92 @@ def laned_scores(
         elif settled[index]:
             var letters = firsts[index].byte_length() + seconds[index].byte_length()
             scores_out[unsafe_offset=index] = Int32(penalties.score(found[index].value(), letters))
+    return settled^
+
+
+def laned_alignments(
+    firsts: List[String],
+    seconds: List[String],
+    scoring: Scoring,
+    eqx: Bool,
+    threads: Int,
+    budget: Int,
+    alignments_out: MutPointer[Alignment, _],
+) -> List[Bool]:
+    """The global alignments of every pair the lanes take into `alignments_out`, and which they were, under
+    a table of one match and one mismatch score: the alignment `scoring_alignment` gives, the wavefront's
+    path by `Ties.LEFT`, traced from the flags a group's band kept within `budget` bytes (see
+    `lanes.lane_alignments`). A pair holding a letter outside the alphabet, with an empty side, or one the
+    searches might split for memory, which would follow the tie rule within each piece, is left for its own
+    call."""
+    var pairs = len(firsts)
+    var workers = max(threads, 1)
+    var penalties = wavefront_penalties(
+        scoring.substitutions, scoring.alphabet_size(), Int(scoring.gaps.open), Int(scoring.gaps.extend)
+    )
+    if not penalties:
+        return List[Bool](length=pairs, fill=False)
+    var found = penalties.value()
+    var costs = LaneCosts.one_piece(found.mismatch, found.opening, found.extension, found.opening, found.extension)
+    var refused = unknown_letters(firsts, seconds, scoring.alphabet, workers)
+    var settled = refused.copy()
+    var laned = List[Optional[Int]](length=pairs, fill=None)
+    var paths = List[List[UInt8]](capacity=pairs)
+    for _ in range(pairs):
+        paths.append(List[UInt8]())
+    _ = lane_alignments(
+        pairs,
+        StringTexts(firsts.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
+        StringTexts(seconds.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
+        costs,
+        Band(),
+        Int.MAX,
+        True,
+        workers,
+        budget,
+        laned.unsafe_ptr(),
+        paths.unsafe_ptr(),
+        settled.unsafe_ptr(),
+    )
+    var settled_ptr = settled.unsafe_ptr()
+    var laned_ptr = laned.unsafe_ptr()
+    var path_ptr = paths.unsafe_ptr()
+    var refused_ptr = refused.unsafe_ptr()
+
+    def spell(
+        stretch: Int,
+    ) {
+        imm firsts,
+        imm seconds,
+        imm found,
+        imm eqx,
+        imm pairs,
+        imm workers,
+        imm settled_ptr,
+        imm laned_ptr,
+        imm path_ptr,
+        imm refused_ptr,
+        imm alignments_out,
+    }:
+        """Spells the CIGARs of stretch `stretch`'s pairs the lanes traced, and unsettles the rest."""
+        for index in range(pairs * stretch // workers, pairs * (stretch + 1) // workers):
+            if refused_ptr[unsafe_offset=index] or not settled_ptr[unsafe_offset=index]:
+                settled_ptr[unsafe_offset=index] = False
+                continue
+            var cost = laned_ptr[unsafe_offset=index].value()
+            var columns = firsts[index].byte_length()
+            var rows = seconds[index].byte_length()
+            # The searches split a pair whose fronts pass `HISTORY_LIMIT`, which they cannot below this.
+            if 2 * (cost + 1) * (columns + rows + 1) > HISTORY_LIMIT:
+                settled_ptr[unsafe_offset=index] = False
+                continue
+            var moves = List[UInt8]()
+            swap(moves, path_ptr[unsafe_offset=index])
+            var score = found.score(cost, columns + rows)
+            var cigar = cigar_of(firsts[index], seconds[index], moves^, cost, found, eqx)
+            alignments_out[unsafe_offset=index] = Alignment(-score, score, cigar^, 0, columns, 0, rows)
+
+    parallelize(spell, workers, workers)
     return settled^
 
 
