@@ -22,7 +22,9 @@ Apache-2.0 as well (see NOTICE).
   ends by an anti-diagonal sweep in 16-bit lanes; all exact, every alignment's memory bounded
   (`max_memory`).
 - A `Scoring`, any alphabet's substitution table with affine gap scores, in every mode on the CPU,
-  and globally or locally on the GPU.
+  and globally or locally on the GPU: a batch's global scores there first over a band of sixteen
+  diagonals, a thread a pair, each kept where the pair's own cost proves no path off the band could
+  score as well, the rest over whole matrices, several pairs a warp.
 - One rule for ties (`Ties`): of equally good alignments, indels placed left by default, as minimap2
   places them, or right, WFA2-lib's CIGAR byte for byte; with free ends the span first, by the same
   rule, whichever search found the cost, under any band or cap.

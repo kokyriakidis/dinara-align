@@ -77,6 +77,7 @@ from .lanes import (
 )
 from .modes import Alignment, Anchor, Band, Costs, Mode
 from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, swept_cells
+from .band_groups import banded_scores
 from .score_groups import grouped_scores
 from .substitutions import SubstitutionLookup
 from .vector_score import optimal_band, reach_back, vector_align, vector_score
@@ -1237,16 +1238,39 @@ def scores_with[
         return results^
 
     var scope = DeviceScope(resolved.gpu_id)
-    # Several pairs a warp, whatever their rows, wherever every second sequence fits a shape; otherwise a
-    # warp a pair where one block's carry can index the pair, and a tiled sweep where it cannot.
-    var everything = List[Int](capacity=pairs)
+    # A global score over the band its cost proves, a thread a pair, or over its whole matrix where that
+    # band does not prove it (see `band_groups`).
+    var remaining = List[Int](capacity=pairs)
     for index in range(pairs):
-        everything.append(index)
+        remaining.append(index)
+    comptime if mode == AlignmentMode.GLOBAL:
+        var swept = banded_scores(
+            scope,
+            firsts,
+            seconds,
+            scoring.alphabet,
+            scoring.substitutions,
+            scoring.gaps,
+            resolved.threads,
+            resolved.gpu_id,
+        )
+        if swept:
+            ref answer = swept.value()
+            results = answer[0].copy()
+            remaining.clear()
+            for index in range(pairs):
+                if not answer[1][index]:
+                    remaining.append(index)
+            if len(remaining) == 0:
+                return results^
+    # The rest whole, several pairs a warp, whatever their rows, wherever every second sequence fits a
+    # shape; otherwise a warp a pair where one block's carry can index the pair, and a tiled sweep where
+    # it cannot.
     var grouped = grouped_scores[mode](
         scope,
         firsts,
         seconds,
-        everything,
+        remaining,
         scoring.alphabet,
         scoring.substitutions,
         scoring.gaps,
@@ -1254,10 +1278,13 @@ def scores_with[
         resolved.gpu_id,
     )
     if grouped:
-        return grouped.take()
+        var scored = grouped.take()
+        for slot in range(len(remaining)):
+            results[remaining[slot]] = scored[slot]
+        return results^
     var band = band_length(scope.specs)
     var banded = List[Int]()
-    for index in range(pairs):
+    for index in remaining:
         if serving_space(firsts[index].byte_length(), band) == Space.BANDED:
             banded.append(index)
         else:

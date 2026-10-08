@@ -66,8 +66,11 @@ def unpack_kernel[bits: Int](codes: Pointer[UInt32, MutAnyOrigin], letters: Poin
     if index >= Int(words):
         return
     var word = codes[unsafe_offset=index]
+    var unpacked = SIMD[DType.uint8, per_word]()
     comptime for slot in range(per_word):
-        letters[unsafe_offset=index * per_word + slot] = UInt8((word >> UInt32(slot * bits)) & UInt32((1 << bits) - 1))
+        unpacked[slot] = UInt8((word >> UInt32(slot * bits)) & UInt32((1 << bits) - 1))
+    # A word's letters in one store: a byte a store left a warp's writes sixteen bytes apart.
+    letters.unsafe_offset(index * per_word).unsafe_store[alignment=per_word](unpacked)
 
 
 def group_score_kernel[
@@ -78,6 +81,25 @@ def group_score_kernel[
     substitutions: Pointer[Scalar[SubstitutionDType], MutAnyOrigin],
     results: Pointer[Scalar[ScoreDType], MutAnyOrigin],
     pairs: Int32,
+    alphabet_size: Int32,
+    open: Int32,
+    extend: Int32,
+):
+    """`group_scores` over `pairs` pairs."""
+    group_scores[mode, lanes, columns_per_lane, per_word](
+        letters, shapes, substitutions, results, Int(pairs), alphabet_size, open, extend
+    )
+
+
+@always_inline
+def group_scores[
+    mode: AlignmentMode, lanes: Int, columns_per_lane: Int, per_word: Int
+](
+    letters: Pointer[UInt8, MutAnyOrigin],
+    shapes: Pointer[UInt32, MutAnyOrigin],
+    substitutions: Pointer[Scalar[SubstitutionDType], MutAnyOrigin],
+    results: Pointer[Scalar[ScoreDType], MutAnyOrigin],
+    pairs: Int,
     alphabet_size: Int32,
     open: Int32,
     extend: Int32,
@@ -108,7 +130,10 @@ def group_score_kernel[
     var thread = Int(thread_idx.x)
     var member = thread % lanes
     var pair = Int(block_idx.x) * pairs_per_block + thread // lanes
-    var live = pair < Int(pairs)
+    if Int(block_idx.x) * pairs_per_block >= pairs:
+        # A block past the last pair, launched for as many as there might have been.
+        return
+    var live = pair < pairs
     var first_start = 0
     var second_start = 0
     var rows = 0
@@ -223,6 +248,53 @@ def shape_for(longest_rows: Int, longest_columns: Int) -> Int:
     return chosen
 
 
+struct Chunks(Movable):
+    """A batch's pairs in the chunks it crosses to the device in, each packed while the device scores the
+    one before: the first as many pairs as the device holds at once in the narrowest pairs a block, each
+    after twice the last, so only the first chunk's packing waits and the device, slower a pair than the
+    packing, never does. Each chunk is split into a stretch a thread."""
+
+    var starts: List[Int]
+    """Each chunk's first stretch, then the number of stretches."""
+    var bounds: List[Int]
+    """Each stretch's first pair, then the number of pairs."""
+
+    def __init__(out self, scope: DeviceScope, pairs: Int, workers: Int):
+        """The chunks of `pairs` pairs packed over `workers` threads for the device of `scope`."""
+        var holds = (
+            scope.specs.streaming_multiprocessors
+            * scope.specs.max_blocks_per_multiprocessor
+            * (THREADS_PER_BLOCK // WARP_SIZE)
+        )
+        self.starts = List[Int]()
+        self.bounds = List[Int]()
+        var chunk_size = max(holds, 1)
+        var first = 0
+        while first < pairs:
+            var last = min(first + chunk_size, pairs)
+            self.starts.append(len(self.bounds))
+            var parts = min(workers, last - first)
+            for part in range(parts):
+                self.bounds.append(first + (last - first) * part // parts)
+            first = last
+            chunk_size *= 2
+        self.starts.append(len(self.bounds))
+        self.bounds.append(pairs)
+
+
+def copy_stream(gpu_id: Int) raises -> Optional[DeviceContext]:
+    """A second context on device `gpu_id`, a second stream for the copies: each chunk crosses the bus
+    there while the kernels score the chunk before. None on a device whose driver has no streams to
+    offer (Metal's), whose copies go on the kernels' own stream, in order."""
+    var copier = DeviceContext(device_id=gpu_id)
+    try:
+        var probe = copier.create_event()
+        copier.stream().record_event(probe)
+    except:
+        return None
+    return copier^
+
+
 def grouped_scores[
     mode: AlignmentMode
 ](
@@ -248,29 +320,9 @@ def grouped_scores[
     var bases = alphabet == "ACGT"
     var workers = max(threads, 1)
 
-    # The batch goes over in chunks, each packed while the device scores the one before: the first as
-    # many pairs as the device holds at once in the narrowest pairs a block, each after twice the last,
-    # so only the first chunk's packing waits and the device, slower a pair than the packing, never does.
-    # Each chunk is split into a stretch a thread.
-    var holds = (
-        scope.specs.streaming_multiprocessors
-        * scope.specs.max_blocks_per_multiprocessor
-        * (THREADS_PER_BLOCK // WARP_SIZE)
-    )
-    var chunk_starts = List[Int]()
-    var bounds = List[Int]()
-    var chunk_size = max(holds, 1)
-    var first = 0
-    while first < pairs:
-        var last = min(first + chunk_size, pairs)
-        chunk_starts.append(len(bounds))
-        var parts = min(workers, last - first)
-        for part in range(parts):
-            bounds.append(first + (last - first) * part // parts)
-        first = last
-        chunk_size *= 2
-    chunk_starts.append(len(bounds))
-    bounds.append(pairs)
+    var chunks = Chunks(scope, pairs, workers)
+    ref chunk_starts = chunks.starts
+    ref bounds = chunks.bounds
     var stretches = len(bounds) - 1
 
     # Every stretch measured over the threads asked for: its words on the tape, its longest first and second
@@ -319,16 +371,10 @@ def grouped_scores[
     var substitutions_buffer = upload(scope, substitutions)
     var results_buffer = zeroed[ScoreDType](scope, pairs)
     scope.context.synchronize()
-    # A second context on the same device is a second stream, the copies': each chunk crosses the bus
-    # there while the kernels score the chunk before, and the kernels wait only for their own chunk. A
-    # device whose driver has no streams to offer (Metal's) copies on the kernels' own, in order.
-    var copier = DeviceContext(device_id=gpu_id)
-    var streams = True
-    try:
-        var probe = copier.create_event()
-        copier.stream().record_event(probe)
-    except:
-        streams = False
+    # The kernels wait only for their own chunk's copies.
+    var copies = copy_stream(gpu_id)
+    var streams = Bool(copies)
+    var copier = copies.take() if streams else DeviceContext(device_id=gpu_id)
     var codes_by_byte = Array[UInt8, 256](fill=UNKNOWN_SYMBOL)
     var alphabet_bytes = alphabet.as_bytes()
     for index in range(size):
