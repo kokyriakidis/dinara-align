@@ -2690,6 +2690,27 @@ def test_lane_free_ends_match_single_pairs() raises:
                     assert_equal(capped[index].or_else(-1), expected.or_else(-1))
 
 
+def test_long_prefixes_find_their_distance() raises:
+    """A read of a few kbp at up to a fifth divergence placed at a reference's start costs at unit costs
+    what the wavefront finds, its CIGAR spending it: the bit-parallel prefix search gives a try up at a
+    checkpoint once its climb projects past the bound (see `edit_search.banded_last_row`), and a later
+    try must still find the least cost."""
+    seed(61)
+    for trial in range(24):
+        var length = [1000, 2000, 3000][trial % 3]
+        var source = random_sequence(length + 500, length + 500, DNA_ALPHABET)
+        var read = mutated(
+            String(StringSlice(unsafe_from_utf8=source.as_bytes()[0:length])), [0.05, 0.1, 0.2][trial % 3], 6
+        )
+        var swept = distance(source, read, Costs.edit(), Mode.PREFIX)
+        # A cap the batch never reaches sends the pair to the wavefront instead (see `api.swept_by_bits`).
+        var searched = distance(source, read, Costs.edit(), Mode.PREFIX, max_cost=1 << 40)
+        assert_equal(swept, searched.value())
+        var aligned = align(source, read, Costs.edit(), Mode.PREFIX)
+        assert_equal(aligned.cost, swept)
+        assert_equal(aligned.reference_start, 0)
+
+
 def test_aligner_matches_the_functions() raises:
     """One `Aligner` reused across every call, its memory kept from pair to pair, gives each pair what
     the functions give: distances and alignments under unit, affine and two-piece costs, globally and

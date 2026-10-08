@@ -10,7 +10,9 @@ distance from the pattern to any substring of the text, and an alignment there.
 
 from std.math import ceildiv
 
+from .band import CHECK_MARGIN, CHECKPOINTS
 from .bit_parallel import ALL_ONES, BAND_COLUMNS, Frontier, Profile, WORD_BITS, word_value
+from .diagonal import PROBE_MARGIN
 from .errors import AlignmentError
 from .modes import Ties
 
@@ -54,14 +56,27 @@ def last_row_scores[free_start: Bool](mut profile: Profile, latest: Bool = False
     while True:
         var found = banded_last_row[free_start](profile, bound, latest)
         if found[0] <= bound or bound >= profile.rows:
-            return found
-        bound *= 2
+            return (found[0], found[1])
+        # A try a checkpoint gave up on aims past the distance its climb projected, as the global
+        # band's retry does (see `band.band_doubling`); any other doubles.
+        var estimate = found[2]
+        var next_bound = 2 * bound
+        if estimate >= 0:
+            next_bound = max(bound + bound // 4, estimate + estimate // 8 + PROBE_MARGIN)
+        bound = next_bound
 
 
-def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int, latest: Bool = False) -> Tuple[Int, Int]:
+def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int, latest: Bool = False) -> Tuple[Int, Int, Int]:
     """`last_row_scores` swept only where a score within `bound` can still lie, Ukkonen's cutoff: its
     least score and first column, or with `latest` its last, when that score is within the bound, else
-    some score above it.
+    some score above it; and -1, or the distance a checkpoint projected when it gave the try up.
+
+    Without `free_start`, at an eighth, a quarter and half of the pattern's length across the text, the
+    least score down the band has climbed about in proportion to the columns crossed, so scaled to the
+    pattern's whole length it projects the distance, as the global band's checkpoints do (see
+    `band.Band.check`); a try whose projection less its margin passes the bound gives up there, where
+    without it the try would sweep on until its band emptied, two thirds of the way across a 1 kbp
+    read at 10% under a bound of 64. Giving up only ever loses a try that would have failed.
 
     A tile at a time, the band runs down to the last row scoring within the bound at the tile's left
     edge, plus the tile's width, since that row moves at most one down a column. Every word but the
@@ -96,6 +111,7 @@ def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int, latest: 
     # word's top on the current left edge, which the words left above it carry.
     var top = 0
     var anchor = 0
+    var checkpoint = 0
     var first_column = 0
     while first_column < columns:
         comptime if not free_start:
@@ -171,10 +187,12 @@ def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int, latest: 
             anchor = first_column
         anchor += end_column - first_column
         var running = anchor if not free_start else 0
+        var least = running
         reach = 0
         for word in range(top, end_word):
             var top = running
             running += word_value(frontier.vertical_plus[word], frontier.vertical_minus[word])
+            least = min(least, max((top + running - WORD_BITS) // 2, 0))
             if (top + running - WORD_BITS) // 2 <= bound:
                 reach = min((word + 1) * WORD_BITS, rows)
         comptime if not free_start:
@@ -182,8 +200,17 @@ def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int, latest: 
             # is within the bound either, and the try has failed. A free start begins anew anywhere.
             if reach == 0:
                 break
+            var passed = checkpoint
+            while passed < CHECKPOINTS and end_column >= rows >> (CHECKPOINTS - passed):
+                passed += 1
+            if passed != checkpoint and end_column < rows:
+                checkpoint = passed
+                var estimate = least * rows // end_column
+                var margin = estimate * (CHECKPOINTS + 1 - passed) * CHECK_MARGIN // 10
+                if estimate - margin // 2 > bound:
+                    return (bound + 1, 0, estimate)
         first_column = end_column
-    return (best, best_column)
+    return (best, best_column, -1)
 
 
 def edit_search(
