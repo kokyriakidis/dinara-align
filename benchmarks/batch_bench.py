@@ -16,7 +16,7 @@ fewer or 30 more at either end.
 | workload | dinara-align | rivals |
 | :-- | :-- | :-- |
 | illumina-affine | `distances(..., Costs.affine(1, 2, 1))` | WFA2-lib, exact, score only; KSW2's `extz2`, score only, no band; parasail's striped `nw` |
-| illumina-edit | `distances(...)` at unit costs | Edlib's NW, distance only, its own band |
+| illumina-edit | `distances(...)` at unit costs | WFA2-lib, exact, score only; Edlib's NW, distance only, its own band |
 
 Every tool runs on every thread, the rivals through OpenMP, one aligner a thread, and its time is the
 faster of two passes over the whole batch. The costs, summed and position-weighted, must agree between

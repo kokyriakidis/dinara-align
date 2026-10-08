@@ -7,8 +7,9 @@
 //     batch-rivals <pairs file> <workload>
 //
 // `illumina-affine`: WFA2-lib exact, KSW2's `extz2` with no band or Z-drop, and parasail's striped `nw`, at a
-// match 0, a mismatch 1 and a gap of `k` letters `2 + k`. `illumina-edit`: Edlib's NW edit distance. Each
-// tool's time is the faster of two passes, and its answer the sum and position-weighted sum of the costs.
+// match 0, a mismatch 1 and a gap of `k` letters `2 + k`. `illumina-edit`: WFA2-lib exact and Edlib's NW,
+// the edit distance alone. Each tool's time is the faster of two passes, and its answer the sum and
+// position-weighted sum of the costs.
 // Prints `tool<TAB>workload<TAB>seconds<TAB>answer` rows.
 #include <omp.h>
 
@@ -156,6 +157,22 @@ int main(int argc, char **argv) {
             [](int) {});
         parasail_matrix_free(matrix);
     } else if (workload == "illumina-edit") {
+        // WFA2-lib exact at unit costs, its score alone, its WF-adaptive heuristic off as above.
+        time_batch<wavefront_aligner_t *>(
+            "WFA2-lib", argv[2], pairs,
+            [] {
+                wavefront_aligner_attr_t attributes = wavefront_aligner_attr_default;
+                attributes.distance_metric = edit;
+                attributes.alignment_scope = compute_score;
+                attributes.heuristic.strategy = wf_heuristic_none;
+                return wavefront_aligner_new(&attributes);
+            },
+            [](const Pair &pair, wavefront_aligner_t *aligner) {
+                wavefront_align(aligner, pair.query.data(), static_cast<int>(pair.query.size()), pair.reference.data(),
+                                static_cast<int>(pair.reference.size()));
+                return labs(aligner->cigar->score);
+            },
+            [](wavefront_aligner_t *aligner) { wavefront_aligner_delete(aligner); });
         // Edlib's global edit distance alone, with its own band, as Accelign's study ran it.
         time_batch<int>(
             "Edlib", argv[2], pairs, [] { return 0; },
