@@ -2649,6 +2649,46 @@ def test_lane_batches_match_single_pairs() raises:
                     assert_equal(found[index].or_else(-1), expected.or_else(-1))
 
 
+def test_lane_free_ends_match_single_pairs() raises:
+    """A batch of distances with free ends, which goes many pairs at once into the lanes with each lane's
+    own free letters (see `lanes.LaneEnds`), gives each pair the cost a call of its own gives: reads in
+    windows, prefixes and suffixes, a read holding the reference, a few letters free at each end and an
+    overlap's, under unit, affine and two-piece costs, a band and a cap, empty sides among the pairs."""
+    seed(47)
+    var references = List[String]()
+    var queries = List[String]()
+    for trial in range(120):
+        var reference = random_sequence(0, 260, DNA_ALPHABET)
+        references.append(reference)
+        if trial % 6 == 0:
+            queries.append(random_sequence(0, 200, DNA_ALPHABET))
+        else:
+            var bytes = reference.as_bytes()
+            var start = Int(random_ui64(0, UInt64(len(bytes) // 4)))
+            var stop = len(bytes) - Int(random_ui64(0, UInt64(len(bytes) // 4)))
+            var piece = String(StringSlice(unsafe_from_utf8=bytes[start : max(start, stop)]))
+            queries.append(mutated(piece, [0.0, 0.02, 0.1][trial % 3], 6))
+    var modes: List[Mode] = [
+        Mode.INFIX,
+        Mode.PREFIX,
+        Mode.SUFFIX,
+        Mode.REFERENCE_IN_QUERY,
+        Mode.ends_free(reference_start=8, reference_end=8, query_start=3, query_end=3),
+        Mode.ends_free(reference_end=40, query_start=40),
+    ]
+    var all_costs: List[Costs] = [Costs.edit(), Costs.affine(4, 6, 2), Costs.two_piece(4, 6, 2, 24, 1)]
+    for costs in all_costs:
+        for mode in modes:
+            var found = distances(references, queries, costs, mode, threads=3)
+            for index in range(len(references)):
+                assert_equal(found[index], distance(references[index], queries[index], costs, mode))
+            for band in [Band(), Band.around(20)]:
+                var capped = distances(references, queries, costs, mode, max_cost=30, band=band, threads=3)
+                for index in range(len(references)):
+                    var expected = distance(references[index], queries[index], costs, mode, max_cost=30, band=band)
+                    assert_equal(capped[index].or_else(-1), expected.or_else(-1))
+
+
 def test_lane_alignments_match_single_pairs() raises:
     """A batch of global alignments, which goes many pairs at once into the lanes and traces each from the
     flags its band kept (see `lanes.traced`), gives each pair the alignment a call of its own gives, its

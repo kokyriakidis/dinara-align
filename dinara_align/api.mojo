@@ -837,11 +837,12 @@ def capped_distances(
     var out = results.unsafe_ptr()
     var failed = List[Bool](length=pairs, fill=False)
     var flags = failed.unsafe_ptr()
-    # Global costs of one gap piece: as many pairs at once as a register holds lanes (see `lanes`); the
-    # pairs too long for its 16 bits, and every pair of other costs and modes, one at a time.
+    # Costs with no reward, globally or with free ends: as many pairs at once as a register holds lanes
+    # (see `lanes`); the pairs too long for its 16 bits, a pair with an empty side and free ends, and
+    # every pair of a mode with a reward, one at a time.
     var settled = List[Bool](length=pairs, fill=False)
     var settled_ptr = settled.unsafe_ptr()
-    var lane_costs = LaneCosts.of(costs, mode)
+    var lane_costs = LaneCosts.of(costs, mode, free_ends=True)
     var reference_texts = StringTexts(references.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]())
     var query_texts = StringTexts(queries.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]())
     if lane_costs:
@@ -850,7 +851,7 @@ def capped_distances(
     if (
         lane_costs
         and lane_distances(
-            pairs, reference_texts, query_texts, lane_costs.value(), band, max_cost, workers, out, settled_ptr
+            pairs, reference_texts, query_texts, lane_costs.value(), band, max_cost, workers, out, settled_ptr, mode
         )
         == pairs
     ):

@@ -434,8 +434,8 @@ def dinara_distances(
     var taken = Atomic[Int64](0)
     var workers = workers_for(pairs, threads)
 
-    # Global costs of one gap piece go many pairs at once into the lanes of a register, as `distances`
-    # sends them (see `lanes`): every pair whose bytes the library takes and 16 bits hold. A pair the
+    # Costs with no reward, globally or with free ends, go many pairs at once into the lanes of a register,
+    # as `distances` sends them (see `lanes`): every pair whose bytes the library takes and 16 bits hold. A pair the
     # library refuses, and every pair of costs it refuses, goes one at a time for its own code.
     var settled = List[Bool](length=pairs, fill=False)
     var found = List[Optional[Int]](length=pairs, fill=None)
@@ -443,7 +443,7 @@ def dinara_distances(
     var settled_ptr = settled.unsafe_ptr()
     var found_ptr = found.unsafe_ptr()
     var laned_ptr = laned.unsafe_ptr()
-    var lane_costs = LaneCosts.of(wanted_costs, wanted_mode)
+    var lane_costs = LaneCosts.of(wanted_costs, wanted_mode, free_ends=True)
     if lane_costs:
         try:
             _ = penalties_of(wanted_costs)
@@ -472,6 +472,7 @@ def dinara_distances(
             workers,
             found_ptr,
             settled_ptr,
+            wanted_mode,
         )
         for index in range(pairs):
             laned[index] = settled[index] and not before[index]

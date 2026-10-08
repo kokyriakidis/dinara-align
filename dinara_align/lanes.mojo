@@ -26,6 +26,13 @@ for a cell no path inside the band reaches, so a pair whose cost passes it is le
 goes into 16 bits, whose dearest path must stay under what they hold (see `fits`); the rest are left to
 the caller.
 
+Free ends take the lanes too, for a distance (see `LaneEnds`): each lane's first row and column cost
+nothing over its free letters and a gap past them, and its cost is the least over every cell it may
+end on, its last column on the rows its free reference letters reach and its last row over its free
+query letters. A path off the band then runs out from the nearest start's diagonal and back to the
+nearest end's. A read placed in a window may start and end on any row, and its band is the whole
+matrix, swept 64 pairs at a time.
+
 An alignment takes the bytes alone (see `lane_alignments`). Its band must hold every optimal path, so a
 path off it must cost more, not merely as much; each cell then keeps a flag naming the source the
 wavefront's backtrace would take there, and a lane's path is traced from its corner through them, the
@@ -103,6 +110,47 @@ it stays inside 16 bits."""
 
 
 @fieldwise_init
+struct LaneEnds(ImplicitlyCopyable, TrivialRegisterPassable):
+    """A pair's letters an alignment may leave unaligned for nothing, in the lanes' terms: reference
+    rows and query columns at the start and at the end. All none is a global alignment."""
+
+    var start_rows: Int
+    var end_rows: Int
+    var start_columns: Int
+    var end_columns: Int
+
+    @staticmethod
+    def of(mode: Mode, rows: Int, columns: Int) -> Self:
+        """`mode`'s free letters for a pair of `rows` reference letters and `columns` query letters."""
+        return Self(
+            min(mode.reference_start, rows),
+            min(mode.reference_end, rows),
+            min(mode.query_start, columns),
+            min(mode.query_end, columns),
+        )
+
+    @always_inline
+    def start_low(self) -> Int:
+        """The lowest diagonal a path may start on: past the free reference letters, down the first column."""
+        return -self.start_rows
+
+    @always_inline
+    def start_high(self) -> Int:
+        """The highest: past the free query letters, along the first row."""
+        return self.start_columns
+
+    @always_inline
+    def end_low(self, end: Int) -> Int:
+        """The lowest diagonal a path may end on, the corner on diagonal `end`: short of the free query letters."""
+        return end - self.end_columns
+
+    @always_inline
+    def end_high(self, end: Int) -> Int:
+        """The highest: short of the free reference letters."""
+        return end + self.end_rows
+
+
+@fieldwise_init
 struct LaneCosts(ImplicitlyCopyable, TrivialRegisterPassable):
     """One or two gap pieces' costs either way, and a mismatch's: a deletion is a run of reference letters
     alone, down the rows; an insertion a run of query letters alone, across. A gap costs the cheaper of
@@ -129,9 +177,10 @@ struct LaneCosts(ImplicitlyCopyable, TrivialRegisterPassable):
         )
 
     @staticmethod
-    def of(costs: Costs, mode: Mode) -> Optional[Self]:
-        """The lanes' costs for `costs`, or None where they do not serve: free ends or a match's reward."""
-        if not mode.is_global() or mode.is_scored():
+    def of(costs: Costs, mode: Mode, free_ends: Bool = False) -> Optional[Self]:
+        """The lanes' costs for `costs`, or None where they do not serve: a match's reward, or free ends
+        unless `free_ends`."""
+        if mode.is_scored() or (not free_ends and not mode.is_global()):
             return None
         return Self(
             costs.mismatch,
@@ -166,6 +215,22 @@ struct LaneCosts(ImplicitlyCopyable, TrivialRegisterPassable):
             cost = min(cost, self.insertion_opening2 + letters * self.insertion_extension2)
         return cost
 
+    @always_inline
+    def gap_lanes[
+        value: DType, width: Int
+    ](self, letters: SIMD[DType.int16, width], deletion: Bool) -> SIMD[value, width]:
+        """`deleted` or `inserted` of each lane's `letters` at once, as lanes of `value` hold them (see `held`)."""
+        var count = letters.cast[DType.int32]()
+        var opening = self.deletion_opening if deletion else self.insertion_opening
+        var extension = self.deletion_extension if deletion else self.insertion_extension
+        var cost = SIMD[DType.int32, width](Int32(opening)) + count * Int32(extension)
+        if self.pieces == 2:
+            var opening2 = self.deletion_opening2 if deletion else self.insertion_opening2
+            var extension2 = self.deletion_extension2 if deletion else self.insertion_extension2
+            cost = min(cost, SIMD[DType.int32, width](Int32(opening2)) + count * Int32(extension2))
+        cost = count.gt(0).select(cost, SIMD[DType.int32, width](0))
+        return min(cost, SIMD[DType.int32, width](Int32(far_of[value]()))).cast[value]()
+
     def dearest_step(self) -> Int:
         """The most any one step of the recurrence adds: a mismatch, or a gap's opening letter or a further one."""
         var dearest = max(self.mismatch, self.deletion_opening + self.deletion_extension)
@@ -195,13 +260,18 @@ struct LaneCosts(ImplicitlyCopyable, TrivialRegisterPassable):
             )
         return dearest + self.dearest_step() < HELD
 
-    def off_band(self, diagonal: Int, end: Int) -> Int:
-        """The least any path visiting `diagonal` costs, its end on diagonal `end`: a gap out to the
-        diagonal from the main one's side and one back to the end's; nothing between the two."""
-        if diagonal > max(0, end):
-            return self.inserted(diagonal) + self.deleted(diagonal - end)
-        if diagonal < min(0, end):
-            return self.deleted(-diagonal) + self.inserted(end - diagonal)
+    def off_band(self, diagonal: Int, end: Int, ends: LaneEnds = LaneEnds(0, 0, 0, 0)) -> Int:
+        """The least any path visiting `diagonal` costs, its end on diagonal `end` and its free letters
+        `ends`: a gap out to the diagonal from the nearest start's side and one back to the nearest end's;
+        nothing between the two."""
+        var start_low = ends.start_low()
+        var start_high = ends.start_high()
+        var end_low = ends.end_low(end)
+        var end_high = ends.end_high(end)
+        if diagonal > max(start_high, end_high):
+            return self.inserted(diagonal - start_high) + self.deleted(diagonal - end_high)
+        if diagonal < min(start_low, end_low):
+            return self.deleted(start_low - diagonal) + self.inserted(end_low - diagonal)
         return 0
 
 
@@ -228,6 +298,15 @@ struct LaneSpace[value: DType](Movable):
     var columns: Int
     var row_ends: SIMD[DType.int16, lanes_of[Self.value]()]
     var column_ends: SIMD[DType.int16, lanes_of[Self.value]()]
+    var free: Bool
+    """Whether any lane has free letters at an end, which its own allowances below give."""
+    var last_columns: List[Int]
+    """The lanes' last columns, each once, and the lanes ending on each, for `ends_reached`."""
+    var last_lanes: List[SIMD[DType.bool, lanes_of[Self.value]()]]
+    var start_rows: SIMD[DType.int16, lanes_of[Self.value]()]
+    var end_rows: SIMD[DType.int16, lanes_of[Self.value]()]
+    var start_columns: SIMD[DType.int16, lanes_of[Self.value]()]
+    var end_columns: SIMD[DType.int16, lanes_of[Self.value]()]
     var members: List[Int]
     var retries: List[List[Int]]
     """The pairs its first bands did not prove, filed by the width of the band that will (see
@@ -247,6 +326,13 @@ struct LaneSpace[value: DType](Movable):
         self.columns = 0
         self.row_ends = SIMD[DType.int16, lanes_of[Self.value]()](-1)
         self.column_ends = SIMD[DType.int16, lanes_of[Self.value]()](0)
+        self.free = False
+        self.last_columns = List[Int]()
+        self.last_lanes = List[SIMD[DType.bool, lanes_of[Self.value]()]]()
+        self.start_rows = SIMD[DType.int16, lanes_of[Self.value]()](0)
+        self.end_rows = SIMD[DType.int16, lanes_of[Self.value]()](0)
+        self.start_columns = SIMD[DType.int16, lanes_of[Self.value]()](0)
+        self.end_columns = SIMD[DType.int16, lanes_of[Self.value]()](0)
         self.members = List[Int]()
         self.retries = List[List[Int]]()
         for _ in range(BUCKETS):
@@ -359,17 +445,20 @@ def band_costs[
     costs: LaneCosts,
     reverse: Bool = False,
     every: Int = 0,
+    mode: Mode = Mode.GLOBAL,
 ) -> SIMD[value, lanes_of[value]()]:
-    """The least cost of each of `space.members`'s pairs over the paths on diagonals `low ..= high`,
-    `far_of[value]()` or more for a pair none of whose paths stays on them, or, in a byte, whose cost
-    reaches 255; a lane past the members holds nothing. References run down the rows and queries across,
-    both back to front with `reverse`. With `every` rows, the rows on a multiple of it are kept in
-    `space.saved`, for `band_flags` to sweep a stretch again from."""
+    """The least cost of each of `space.members`'s pairs over the paths on diagonals `low ..= high`, the
+    letters `mode` leaves free at either end unaligned for nothing, `far_of[value]()` or more for a pair
+    none of whose paths stays on them, or, in a byte, whose cost reaches 255; a lane past the members
+    holds nothing. References run down the rows and queries across, both back to front with `reverse`.
+    With `every` rows, the rows on a multiple of it are kept in `space.saved`, for `band_flags` to sweep
+    a stretch again from."""
     var count = len(space.members)
     var rows = 0
     var columns = 0
     space.row_ends = SIMD[DType.int16, lanes_of[value]()](-1)
     space.column_ends = SIMD[DType.int16, lanes_of[value]()](0)
+    space.free = False
     for lane in range(count):
         var index = space.members[lane]
         var reference = references.length(index)
@@ -378,6 +467,20 @@ def band_costs[
         columns = max(columns, query)
         space.row_ends[lane] = Int16(reference)
         space.column_ends[lane] = Int16(query)
+        var ends = LaneEnds.of(mode, reference, query)
+        space.start_rows[lane] = Int16(ends.start_rows)
+        space.end_rows[lane] = Int16(ends.end_rows)
+        space.start_columns[lane] = Int16(ends.start_columns)
+        space.end_columns[lane] = Int16(ends.end_columns)
+        space.free = space.free or ends.start_rows + ends.end_rows + ends.start_columns + ends.end_columns > 0
+    if space.free:
+        space.last_columns.clear()
+        space.last_lanes.clear()
+        for lane in range(count):
+            var column = Int(space.column_ends[lane])
+            if column not in space.last_columns:
+                space.last_columns.append(column)
+                space.last_lanes.append(space.column_ends.eq(Int16(column)))
     space.rows = rows
     space.columns = columns
     space.every = every
@@ -407,6 +510,10 @@ def pieced_band_costs[
         space.deletions2.resize(columns + 2, Lanes(FAR))
     first_row[value, pieces](space, low, high, costs)
     var found = Lanes(FAR)
+    if space.free:
+        ends_reached[value](space, low, high, 0, found)
+        swept[value, pieces, False, True](space, low, high, costs, 0, space.rows, found)
+        return found
     for lane in range(len(space.members)):
         var column = Int(space.column_ends[lane])
         if space.row_ends[lane] == 0 and column >= low and column <= high:
@@ -445,6 +552,11 @@ def first_row[value: DType, pieces: Int](mut space: LaneSpace[value], low: Int, 
         deletions[unsafe_offset=column] = Lanes(FAR)
         comptime if pieces == 2:
             deletions2[unsafe_offset=column] = Lanes(FAR)
+    if space.free:
+        # Each lane's free query letters cost nothing; past them, a gap from the last.
+        for column in range(max(low, 0), min(high, space.columns) + 1):
+            scores[unsafe_offset=column] = costs.gap_lanes[value](Int16(column) - space.start_columns, False)
+        return
     for column in range(max(low, 0), min(high, space.columns) + 1):
         scores[unsafe_offset=column] = Lanes(held[value](costs.inserted(column)))
 
@@ -512,8 +624,39 @@ def band_flags[value: DType](mut space: LaneSpace[value], low: Int, high: Int, c
         swept[value, 1, True](space, low, high, costs, start, end, found)
 
 
+def ends_reached[
+    value: DType
+](space: LaneSpace[value], low: Int, high: Int, row: Int, mut found: SIMD[value, lanes_of[value]()]):
+    """Lowers each lane's `found` to its cells on row `row` an alignment may end on: its last column, on
+    a row its free reference letters reach, and on its last row, every column its free query letters do;
+    inside the band. The last columns a column at a time, every lane ending on it at once."""
+    comptime WIDTH = lanes_of[value]()
+    comptime Lanes = SIMD[value, WIDTH]
+    var last_rows = space.row_ends
+    var reached = (last_rows - space.end_rows).le(Int16(row)) & last_rows.ge(Int16(row))
+    if not reached.reduce_or():
+        return
+    var first = max(row + low, 0)
+    var last = min(row + high, space.columns)
+    for slot in range(len(space.last_columns)):
+        var column = space.last_columns[slot]
+        if column >= first and column <= last:
+            var ending = space.last_lanes[slot] & reached
+            found = min(found, ending.select(space.scores[column], Lanes(far_of[value]())))
+    # A lane's free query letters on its last row, once.
+    var finishing = last_rows.eq(Int16(row)) & space.end_columns.gt(0)
+    if finishing.reduce_or():
+        for lane in range(len(space.members)):
+            if finishing[lane]:
+                var column = Int(space.column_ends[lane])
+                var best = found[lane]
+                for end in range(max(column - Int(space.end_columns[lane]), first), min(column, last) + 1):
+                    best = min(best, space.scores[end][lane])
+                found[lane] = best
+
+
 def swept[
-    value: DType, pieces: Int, record: Bool
+    value: DType, pieces: Int, record: Bool, free: Bool = False
 ](
     mut space: LaneSpace[value],
     low: Int,
@@ -525,7 +668,7 @@ def swept[
 ):
     """Gotoh's recurrence over rows `start + 1 ..= end` of the band, every lane at once, from the rows
     `space` holds for row `start`; a lane whose reference ends on one of them reads its corner into
-    `found`.
+    `found`, or with `free`, every cell it may end on (see `ends_reached`).
 
     With `record`, each cell keeps a flag in `space.flags`, for `traced`: the source its alignment layer
     takes, `ALIGNED` for the diagonal, and a bit a gap layer, `extended_bit`, where the layer extends. The
@@ -566,9 +709,12 @@ def swept[
         var left = Lanes(FAR)
         var diagonal: Lanes
         if first == 0:
-            # The left edge: a deletion of every row so far.
+            # The left edge: a deletion of every row so far, past the lane's free reference letters.
             diagonal = scores[unsafe_offset=0]
-            left = Lanes(held[value](costs.deleted(row)))
+            comptime if free:
+                left = costs.gap_lanes[value](Int16(row) - space.start_rows, True)
+            else:
+                left = Lanes(held[value](costs.deleted(row)))
             scores[unsafe_offset=0] = left
             first = 1
         else:
@@ -632,8 +778,11 @@ def swept[
             scores[unsafe_offset=column] = score
             diagonal = above
             left = score
-        # A lane whose reference ends on this row reads its corner, if the band holds it.
-        comptime if not record:
+        # A lane whose reference ends on this row reads its corner, if the band holds it; with free ends,
+        # every cell of the row it may end on.
+        comptime if free:
+            ends_reached[value](space, low, high, row, found)
+        elif not record:
             if row_ends.eq(Int16(row)).reduce_or():
                 for lane in range(len(space.members)):
                     if Int(row_ends[lane]) == row:
@@ -654,19 +803,23 @@ def lane_distances[
     workers: Int,
     costs_out: MutPointer[Optional[Int], _],
     settled: MutPointer[Bool, _],
+    mode: Mode = Mode.GLOBAL,
 ) -> Int:
-    """Every pair `settled` does not already mark that the lanes hold, its global distance within
-    `reference_band` into `costs_out`, None past `max_cost` or with no path inside the band, and `settled`
-    set; the others left for the caller. The pairs settled here: first in bytes, where every step's
-    cost fits one, then in 16 bits."""
+    """Every pair `settled` does not already mark that the lanes hold, its distance within `reference_band`
+    with the letters `mode` leaves free at either end into `costs_out`, None past `max_cost` or with no
+    path inside the band, and `settled` set; the others left for the caller, a pair with an empty side
+    among them when an end is free. The pairs settled here: first in bytes, where every step's cost fits
+    one, then in 16 bits."""
     var before = 0
     for index in range(pairs):
         before += Int(settled[unsafe_offset=index])
     if costs.fits_bytes():
         lane_stage[T, DType.uint8](
-            pairs, references, queries, costs, reference_band, max_cost, workers, costs_out, settled
+            pairs, references, queries, costs, reference_band, max_cost, workers, costs_out, settled, mode
         )
-    lane_stage[T, DType.int16](pairs, references, queries, costs, reference_band, max_cost, workers, costs_out, settled)
+    lane_stage[T, DType.int16](
+        pairs, references, queries, costs, reference_band, max_cost, workers, costs_out, settled, mode
+    )
     # A stage leaves what its lanes cannot hold, so the pairs settled are counted, not assumed.
     var after = 0
     for index in range(pairs):
@@ -787,6 +940,7 @@ def lane_stage[
     workers: Int,
     costs_out: MutPointer[Optional[Int], _],
     settled: MutPointer[Bool, _],
+    mode: Mode,
 ):
     """`lane_distances` in lanes of `value`: every pair `settled` does not mark and the lanes hold settled,
     a pair whose byte saturates left.
@@ -798,11 +952,12 @@ def lane_stage[
     var band = Band(-reference_band.high, -reference_band.low)
     if pairs == 0:
         return
-    var order = dealt[T, value](pairs, references, queries, costs, workers, settled, Band(), False)
+    var free = not mode.is_global()
+    var order = dealt[T, value](pairs, references, queries, costs, workers, settled, Band(), free)
     var placed = len(order)
     var order_ptr = order.unsafe_ptr()
 
-    # First pass: each group over the band between its end diagonals and the main one and one diagonal
+    # First pass: each group over the band between its starts' and its ends' diagonals and one diagonal
     # more either side, within `band`.
     var spaces = List[LaneSpace[value]](capacity=workers)
     for _ in range(workers):
@@ -821,6 +976,7 @@ def lane_stage[
         imm costs,
         imm band,
         imm max_cost,
+        imm mode,
         imm groups,
         imm first_workers,
         imm placed,
@@ -843,26 +999,32 @@ def lane_stage[
                 for slot in range(group * WIDTH, min(placed, (group + 1) * WIDTH)):
                     var index = order_ptr[unsafe_offset=slot]
                     space.members.append(index)
-                    var end = queries.length(index) - references.length(index)
-                    low = min(low, min(0, end) - 1)
-                    high = max(high, max(0, end) + 1)
+                    var rows = references.length(index)
+                    var columns = queries.length(index)
+                    var end = columns - rows
+                    var ends = LaneEnds.of(mode, rows, columns)
+                    low = min(low, min(ends.start_low(), ends.end_low(end)) - 1)
+                    high = max(high, max(ends.start_high(), ends.end_high(end)) + 1)
                 low = max(low, band.low)
                 high = min(high, band.high)
-                var found = band_costs(references, queries, space, low, high, costs)
+                var found = band_costs(references, queries, space, low, high, costs, False, 0, mode)
                 for lane in range(len(space.members)):
                     var index = space.members[lane]
                     var cost = Int(found[lane])
+                    var rows = references.length(index)
+                    var columns = queries.length(index)
                     var verdict = proof[value, False](
                         index,
                         cost,
-                        references.length(index),
-                        queries.length(index),
+                        rows,
+                        columns,
                         low,
                         high,
                         band,
                         costs,
                         max_cost,
                         space.retries,
+                        LaneEnds.of(mode, rows, columns),
                     )
                     if verdict == PROVEN or verdict == REFUSED:
                         var kept = verdict == PROVEN and cost <= max_cost
@@ -894,6 +1056,7 @@ def lane_stage[
         imm queries,
         imm costs,
         imm max_cost,
+        imm mode,
         imm retry_groups,
         imm second_workers,
         imm unproven,
@@ -917,7 +1080,7 @@ def lane_stage[
                     space.members.append(retry_ptr[unsafe_offset=4 * slot])
                     low = min(low, retry_ptr[unsafe_offset=4 * slot + 2])
                     high = max(high, retry_ptr[unsafe_offset=4 * slot + 3])
-                var found = band_costs(references, queries, space, low, high, costs)
+                var found = band_costs(references, queries, space, low, high, costs, False, 0, mode)
                 for lane in range(len(space.members)):
                     var slot = group * WIDTH + lane
                     # A path as cheap as the first band's cost the first band found already; one cheaper is
@@ -957,24 +1120,28 @@ def proof[
     costs: LaneCosts,
     max_cost: Int,
     mut retries: List[List[Int]],
+    ends: LaneEnds = LaneEnds(0, 0, 0, 0),
 ) -> Int:
     """Whether the cost `found` on diagonals `low ..= high` settles pair `index`, of `rows` reference letters
-    and `columns` query letters: proven when no path off them could beat it, or one past the cap could
-    not come under it; else the pair is filed, its cost and the band a cheaper path needs, by that band's
-    width. With `strict`, as an alignment needs, no path off them may even match it: the tie rule's
-    path, an optimal one, then lies inside. A path cannot leave the matrix, nor the band. A byte's 255
-    may be any cost from there up, or none inside the band: such a pair is left for 16 bits."""
+    and `columns` query letters and the free letters `ends`: proven when no path off them could beat it,
+    or one past the cap could not come under it; else the pair is filed, its cost and the band a cheaper
+    path needs, by that band's width. With `strict`, as an alignment needs, no path off them may even
+    match it: the tie rule's path, an optimal one, then lies inside. A path cannot leave the matrix, nor
+    the band. A byte's 255 may be any cost from there up, or none inside the band: such a pair is left
+    for 16 bits."""
     comptime if value == DType.uint8:
         if found >= far_of[value]():
             return UNHELD
     var end = columns - rows
-    if end < band.low or end > band.high or 0 < band.low or 0 > band.high:
-        # Its start or its end lies outside the band: no alignment inside it.
+    if max(ends.start_low(), band.low) > min(ends.start_high(), band.high) or max(ends.end_low(end), band.low) > min(
+        ends.end_high(end), band.high
+    ):
+        # Every start or every end lies outside the band: no alignment inside it.
         return REFUSED
     var top = min(band.high, columns)
     var bottom = max(band.low, -rows)
-    var beyond_high = costs.off_band(high + 1, end) if high < top else Int.MAX
-    var beyond_low = costs.off_band(low - 1, end) if low > bottom else Int.MAX
+    var beyond_high = costs.off_band(high + 1, end, ends) if high < top else Int.MAX
+    var beyond_low = costs.off_band(low - 1, end, ends) if low > bottom else Int.MAX
     var off = min(beyond_high, beyond_low)
     var beaten = found < off if strict else found <= off
     if beaten or off > max_cost:
@@ -984,10 +1151,10 @@ def proof[
     # dearer than the cap need not be found, only shown past it.
     var target = min(found, max_cost) + 1 if strict else (found if found <= max_cost else max_cost + 1)
     var wide_high = high
-    while wide_high < top and costs.off_band(wide_high + 1, end) < target:
+    while wide_high < top and costs.off_band(wide_high + 1, end, ends) < target:
         wide_high += 1
     var wide_low = low
-    while wide_low > bottom and costs.off_band(wide_low - 1, end) < target:
+    while wide_low > bottom and costs.off_band(wide_low - 1, end, ends) < target:
         wide_low -= 1
     var width_bits = 64 - Int(count_leading_zeros(UInt64(wide_high - wide_low)))
     ref bucket = retries[min(width_bits, BUCKETS - 1)]
