@@ -33,6 +33,9 @@ query letters. A path off the band then runs out from the nearest start's diagon
 nearest end's. A read placed in a window may start and end on any row, and its band is the whole
 matrix, swept 64 pairs at a time.
 
+A local score takes the lanes in 16 bits, the whole matrix swept (see `lane_local_scores`): each lane
+padded past its letters with bytes that match nothing, so no cell there beats its best.
+
 An alignment takes the bytes alone (see `lane_alignments`). Its band must hold every optimal path, so a
 path off it must cost more, not merely as much; each cell then keeps a flag naming the source the
 wavefront's backtrace would take there, and a lane's path is traced from its corner through them, the
@@ -371,12 +374,14 @@ def side_by_side[
     mut staging: List[UInt8],
     target: MutPointer[UInt8, _],
     reverse: Bool = False,
+    pad: Int = -1,
 ):
     """The members' texts, each back to front with `reverse`, position `p` of every lane at
     `target[p width:(p + 1) width]`: each text copied whole into `staging`, a lane's stretch padded to
     whole blocks, then a block of `BLOCK` positions at a time, every lane's letters of the block one load,
     the block turned in registers in two steps: eight lanes' bytes inside 64 at a time, then the 64-bit
-    words of all of them."""
+    words of all of them. Past a lane's own letters each position holds `pad`, if one is given, else
+    whatever was there."""
     comptime groups = width // 8
     comptime bytes = byte_order()
     comptime words = word_order[groups]()
@@ -386,6 +391,9 @@ def side_by_side[
     for lane in range(len(members)):
         var index = members[lane]
         var count = texts.length(index)
+        if pad >= 0:
+            for position in range(count, stride):
+                lanes[unsafe_offset=lane * stride + position] = UInt8(pad)
         if reverse:
             var source = texts.letters(index)
             var destination = lanes.unsafe_offset(lane * stride)
@@ -1559,3 +1567,157 @@ def lane_alignment_stage[
                     )
 
     parallelize(second_pass, second_workers, second_workers)
+
+
+def lane_local_scores[
+    T: Texts
+](
+    pairs: Int,
+    references: T,
+    queries: T,
+    hit: Int,
+    mismatch: Int,
+    open: Int,
+    extend: Int,
+    pads: Tuple[UInt8, UInt8],
+    workers: Int,
+    scores_out: MutPointer[Int32, _],
+    settled: MutPointer[Bool, _],
+) -> Int:
+    """Every pair `settled` does not mark whose best score 16 bits hold, its best local alignment's score
+    into `scores_out` and `settled` set, many pairs at once, a pair a lane: a match scoring `hit`, a
+    mismatch `mismatch` and a gap of `k` letters `open + (k - 1) extend`, both sequences swept whole, as
+    Smith and Waterman's recurrence with Gotoh's gaps runs. The pairs settled are counted.
+
+    A lane past its own letters reads `pads`, a byte for the references and one for the queries that
+    match no letter and not each other, so a cell past them scores less than the cell it came from and
+    never the lane's best; which needs a mismatch and a gap that cost. Otherwise every pair is left."""
+    comptime WIDTH = lanes_of[DType.int16]()
+    if mismatch >= 0 or open >= 0 or extend >= 0 or pairs == 0:
+        return 0
+    # The pairs a lane holds, by their references' lengths, so a group's lanes pad few rows.
+    var keys = List[Int](capacity=pairs)
+    for index in range(pairs):
+        var rows = references.length(index)
+        var columns = queries.length(index)
+        if not settled[unsafe_offset=index] and max(hit, 0) * min(rows, columns) < HELD:
+            keys.append((min(rows, (1 << 30) - 1) << 32) | index)
+    sort(keys)
+    var held_pairs = len(keys)
+    var order = List[Int](capacity=max(held_pairs, 1))
+    for key in keys:
+        order.append(key & ((1 << 32) - 1))
+    var order_ptr = order.unsafe_ptr()
+    var spaces = List[LaneSpace[DType.int16]](capacity=workers)
+    for _ in range(workers):
+        spaces.append(LaneSpace[DType.int16]())
+    var space_ptr = spaces.unsafe_ptr()
+    var groups = ceildiv(held_pairs, WIDTH)
+    var taken = Atomic[Int64](0)
+    var group_workers = min(workers, groups)
+
+    def sweep(
+        worker: Int,
+    ) {
+        mut taken,
+        imm references,
+        imm queries,
+        imm hit,
+        imm mismatch,
+        imm open,
+        imm extend,
+        imm pads,
+        imm groups,
+        imm group_workers,
+        imm held_pairs,
+        imm order_ptr,
+        imm space_ptr,
+        imm scores_out,
+        imm settled,
+    }:
+        """Takes groups until none is left, scoring each pair."""
+        ref space = space_ptr[unsafe_offset=worker]
+        var last_share = 0
+        while True:
+            var share = next_share(taken, groups, group_workers, last_share)
+            if share[0] >= groups:
+                return
+            for group in range(share[0], share[1]):
+                space.members.clear()
+                for slot in range(group * WIDTH, min(held_pairs, (group + 1) * WIDTH)):
+                    space.members.append(order_ptr[unsafe_offset=slot])
+                var best = local_band_scores[T](references, queries, space, hit, mismatch, open, extend, pads)
+                for lane in range(len(space.members)):
+                    scores_out[unsafe_offset=space.members[lane]] = Int32(best[lane])
+                    settled[unsafe_offset=space.members[lane]] = True
+
+    if groups > 0:
+        parallelize(sweep, group_workers, group_workers)
+    return held_pairs
+
+
+def local_band_scores[
+    T: Texts
+](
+    references: T,
+    queries: T,
+    mut space: LaneSpace[DType.int16],
+    hit: Int,
+    mismatch: Int,
+    open: Int,
+    extend: Int,
+    pads: Tuple[UInt8, UInt8],
+) -> SIMD[DType.int16, lanes_of[DType.int16]()]:
+    """The best local score of each of `space.members`'s pairs, the whole matrix swept a row at a time
+    for every lane at once (see `lane_local_scores`)."""
+    comptime WIDTH = lanes_of[DType.int16]()
+    comptime Lanes = SIMD[DType.int16, WIDTH]
+    var rows = 0
+    var columns = 0
+    for lane in range(len(space.members)):
+        rows = max(rows, references.length(space.members[lane]))
+        columns = max(columns, queries.length(space.members[lane]))
+    space.row_letters.resize(unsafe_uninit_length=ceildiv(max(rows, 1), BLOCK) * BLOCK * WIDTH)
+    space.column_letters.resize(unsafe_uninit_length=ceildiv(max(columns, 1), BLOCK) * BLOCK * WIDTH)
+    side_by_side[T, WIDTH](
+        references, space.members, rows, space.staging, space.row_letters.unsafe_ptr(), False, Int(pads[0])
+    )
+    side_by_side[T, WIDTH](
+        queries, space.members, columns, space.staging, space.column_letters.unsafe_ptr(), False, Int(pads[1])
+    )
+    # A gap layer no path has entered: below any score a gap opened from a cell, which is at least `open`.
+    var none = Lanes(Int16(-HELD))
+    space.scores.resize(columns + 1, Lanes(0))
+    space.deletions.resize(columns + 1, none)
+    var scores = space.scores.unsafe_ptr()
+    var deletions = space.deletions.unsafe_ptr()
+    for column in range(columns + 1):
+        scores[unsafe_offset=column] = Lanes(0)
+        deletions[unsafe_offset=column] = none
+    var matched = Lanes(Int16(hit))
+    var mismatched = Lanes(Int16(mismatch))
+    var opened = Lanes(Int16(open))
+    var extended = Lanes(Int16(extend))
+    var zero = Lanes(0)
+    var best = Lanes(0)
+    var row_source = space.row_letters.unsafe_ptr()
+    var column_source = space.column_letters.unsafe_ptr()
+    for row in range(1, rows + 1):
+        var letter = row_source.unsafe_offset((row - 1) * WIDTH).unsafe_load[width=WIDTH]()
+        var diagonal = Lanes(0)
+        var left = Lanes(0)
+        var insertion = none
+        for column in range(1, columns + 1):
+            var other = column_source.unsafe_offset((column - 1) * WIDTH).unsafe_load[width=WIDTH]()
+            var above = scores[unsafe_offset=column]
+            var deletion = max(above + opened, deletions[unsafe_offset=column] + extended)
+            insertion = max(left + opened, insertion + extended)
+            var score = max(
+                max(diagonal + letter.eq(other).select(matched, mismatched), deletion), max(insertion, zero)
+            )
+            deletions[unsafe_offset=column] = deletion
+            scores[unsafe_offset=column] = score
+            best = max(best, score)
+            diagonal = above
+            left = score
+    return best

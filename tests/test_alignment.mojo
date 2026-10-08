@@ -2760,6 +2760,10 @@ def test_lane_scores_match_single_pairs() raises:
         var found = scores(firsts, seconds, scoring, GLOBAL, placement=Placement.on_cpu(3))
         for index in range(len(firsts)):
             assert_equal(found[index], score(firsts[index], seconds[index], scoring, GLOBAL))
+        # Local scores too, the whole matrix swept many pairs at once.
+        var local = scores(firsts, seconds, scoring, LOCAL, placement=Placement.on_cpu(3))
+        for index in range(len(firsts)):
+            assert_equal(local[index], score(firsts[index], seconds[index], scoring, LOCAL))
         # Their alignments too, each traced from its lanes' flags as the wavefront's tie rule picks it.
         var aligned = alignments(firsts, seconds, scoring, GLOBAL, placement=Placement.on_cpu(3))
         for index in range(len(firsts)):

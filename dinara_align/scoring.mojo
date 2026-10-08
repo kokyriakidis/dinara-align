@@ -65,7 +65,7 @@ from .gap_affine import (
     wavefront_penalties,
     wavefront_score,
 )
-from .lanes import LaneCosts, StringTexts, lane_alignments, lane_distances
+from .lanes import LaneCosts, StringTexts, lane_alignments, lane_distances, lane_local_scores
 from .modes import Alignment, Anchor, Band, Costs, Mode
 from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, swept_cells
 from .score_groups import grouped_scores
@@ -947,6 +947,61 @@ def laned_alignments(
     return settled^
 
 
+def uniform_scores(scoring: Scoring) -> Optional[Tuple[Int, Int]]:
+    """The match and the mismatch score of a table of one each, if it is one."""
+    var size = scoring.alphabet_size()
+    if size < 2:
+        return None
+    var hit = Int(scoring.substitutions[0])
+    var mismatch = Int(scoring.substitutions[1])
+    for row in range(size):
+        for column in range(size):
+            if Int(scoring.substitutions[row * size + column]) != (hit if row == column else mismatch):
+                return None
+    return (hit, mismatch)
+
+
+def laned_local_scores(
+    firsts: List[String], seconds: List[String], scoring: Scoring, threads: Int, scores_out: MutPointer[Int32, _]
+) -> List[Bool]:
+    """The local scores of every pair the lanes take into `scores_out`, and which they were, under a table
+    of one match and one mismatch score (see `lanes.lane_local_scores`): those whose letters the alphabet
+    holds, padded past their ends with two bytes it does not."""
+    var pairs = len(firsts)
+    var workers = max(threads, 1)
+    var uniform = uniform_scores(scoring)
+    if not uniform:
+        return List[Bool](length=pairs, fill=False)
+    var held = Array[Bool, 256](fill=False)
+    for letter in scoring.alphabet.as_bytes():
+        held[Int(letter)] = True
+    var pads = List[UInt8]()
+    for byte in range(256):
+        if not held[byte] and len(pads) < 2:
+            pads.append(UInt8(byte))
+    if len(pads) < 2:
+        return List[Bool](length=pairs, fill=False)
+    var refused = unknown_letters(firsts, seconds, scoring.alphabet, workers)
+    var settled = refused.copy()
+    _ = lane_local_scores(
+        pairs,
+        StringTexts(firsts.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
+        StringTexts(seconds.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
+        uniform.value()[0],
+        uniform.value()[1],
+        Int(scoring.gaps.open),
+        Int(scoring.gaps.extend),
+        (pads[0], pads[1]),
+        workers,
+        scores_out,
+        settled.unsafe_ptr(),
+    )
+    for index in range(pairs):
+        if refused[index]:
+            settled[index] = False
+    return settled^
+
+
 def scores_with[
     mode: AlignmentMode
 ](firsts: List[String], seconds: List[String], scoring: Scoring, placement: Optional[Placement] = None) raises -> List[
@@ -978,6 +1033,8 @@ def scores_with[
                     found.mismatch, found.opening, found.extension, found.opening, found.extension
                 )
                 settled = laned_scores(firsts, seconds, scoring.alphabet, lane_costs, found, resolved.threads, out)
+        comptime if mode == AlignmentMode.LOCAL:
+            settled = laned_local_scores(firsts, seconds, scoring, resolved.threads, out)
         var settled_ptr = settled.unsafe_ptr()
 
         # The pairs are independent, so each is aligned on one thread start to finish, in
