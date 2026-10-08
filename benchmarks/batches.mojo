@@ -8,12 +8,19 @@ The side of `batch_bench.py` dinara-align runs: a whole batch of global costs on
 `illumina-affine` takes `Costs.affine(1, 2, 1)`, Accelign's case study's scores; `illumina-edit` unit
 costs. The time is the faster of two passes over the batch, and the answer the sum and position-weighted
 sum of the costs, as `batches/rivals.cpp` prints them.
+
+Where a GPU answers, the affine workload is scored there too, by `scores` at the same scores as a
+match 0, a mismatch -1 and a gap of `k` letters `-(2 + k)`, each pair's cost its score negated: a row
+of its own, `dinara-align GPU`, the faster of five passes after three that bring the device's clocks
+up from idle. Its time is the call's: packing the batch, copying it over, scoring, copying back.
 """
 
 from std.sys import argv
 from std.time import perf_counter_ns
 
-from dinara_align import Costs, distances
+from std.sys import has_accelerator
+
+from dinara_align import Costs, Mode, Placement, Scoring, distances, scores
 
 
 def main() raises:
@@ -42,3 +49,20 @@ def main() raises:
             total += found[index]
             weighted += (index + 1) * found[index]
     print("dinara-align", workload, best, String(total, ":", weighted), sep="\t")
+    comptime if has_accelerator():
+        if workload == "illumina-affine":
+            var scoring = Scoring.uniform(0, -1, -2, -1)
+            var device = Placement.on_gpu(0, Placement.default().threads)
+            var fastest = Float64.MAX
+            for attempt in range(8):
+                var started = perf_counter_ns()
+                var found = scores(references, queries, scoring, Mode.GLOBAL, placement=device)
+                var seconds = Float64(perf_counter_ns() - started) / 1e9
+                if attempt >= 3:
+                    fastest = min(fastest, seconds)
+                total = 0
+                weighted = 0
+                for index in range(len(found)):
+                    total -= found[index]
+                    weighted -= (index + 1) * found[index]
+            print("dinara-align GPU", workload, fastest, String(total, ":", weighted), sep="\t")

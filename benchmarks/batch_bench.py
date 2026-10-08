@@ -114,7 +114,7 @@ def main() -> None:
     disagreeing = {workload: found for workload, found in answers.items() if len(set(found.values())) > 1}
     if disagreeing:
         sys.exit(f"the tools' answers disagree: {disagreeing}")
-    tools = ["dinara-align", "WFA2-lib", "KSW2", "parasail", "Edlib"]
+    tools = ["dinara-align", "dinara-align GPU", "WFA2-lib", "KSW2", "parasail", "Edlib"]
     lines = ["| workload | " + " | ".join(tools) + " |", "| :-- | " + " | ".join("--:" for _ in tools) + " |"]
     for workload, measured in times.items():
         fastest = min(measured.values())
