@@ -52,9 +52,8 @@ from std.memory import bitcast
 from std.utils import IndexList
 from std.sys import llvm_intrinsic, simd_width_of, size_of
 from std.atomic import Atomic
-from max.algorithm import parallelize
 
-from .common import next_share
+from .common import next_share, spread
 from .gap_affine import ALIGNED, FIRST_GAP, SECOND_GAP
 from .modes import Band, Costs, Mode
 
@@ -980,7 +979,7 @@ def dealt[
         extreme_ptr[unsafe_offset=2 * stretch] = lowest
         extreme_ptr[unsafe_offset=2 * stretch + 1] = highest
 
-    parallelize(measure, stretches, stretches)
+    spread(measure, stretches, stretches)
     var lowest = 0
     var highest = 0
     for stretch in range(stretches):
@@ -999,7 +998,7 @@ def dealt[
             if end != HELD:
                 counts[unsafe_offset=end - lowest] += 1
 
-    parallelize(count, stretches, stretches)
+    spread(count, stretches, stretches)
     var placed = 0
     for diagonal in range(span):
         for stretch in range(stretches):
@@ -1019,7 +1018,7 @@ def dealt[
                 order_ptr[unsafe_offset=next[unsafe_offset=end - lowest]] = index
                 next[unsafe_offset=end - lowest] += 1
 
-    parallelize(place, stretches, stretches)
+    spread(place, stretches, stretches)
     return order^
 
 
@@ -1126,7 +1125,7 @@ def lane_stage[
                         costs_out[unsafe_offset=index] = Optional[Int](cost) if kept else None
                         settled[unsafe_offset=index] = True
 
-    parallelize(first_pass, first_workers, first_workers)
+    spread(first_pass, first_workers, first_workers)
 
     # Second pass: every pair the first band did not prove, over every diagonal a cheaper path than its
     # first cost could visit, which proves itself; gathered from the workers' buckets by the width of
@@ -1184,7 +1183,7 @@ def lane_stage[
                     costs_out[unsafe_offset=space.members[lane]] = Optional[Int](cost) if cost <= max_cost else None
                     settled[unsafe_offset=space.members[lane]] = True
 
-    parallelize(second_pass, second_workers, second_workers)
+    spread(second_pass, second_workers, second_workers)
 
 
 comptime BUCKETS = 24
@@ -1580,7 +1579,7 @@ def lane_alignment_stage[
                         space, walks, low, high, costs, references, queries, left, costs_out, moves_out, settled
                     )
 
-    parallelize(first_pass, first_workers, first_workers)
+    spread(first_pass, first_workers, first_workers)
 
     # Second pass: every pair the first band did not prove, over every diagonal a path as cheap as its
     # first cost could visit, which proves itself and holds every optimal path.
@@ -1653,7 +1652,7 @@ def lane_alignment_stage[
                         space, walks, low, high, costs, references, queries, left, costs_out, moves_out, settled
                     )
 
-    parallelize(second_pass, second_workers, second_workers)
+    spread(second_pass, second_workers, second_workers)
 
 
 def lane_local_scores[
@@ -1752,7 +1751,7 @@ def lane_local_scores[
                     settled[unsafe_offset=space.members[lane]] = True
 
     if groups > 0:
-        parallelize(sweep, group_workers, group_workers)
+        spread(sweep, group_workers, group_workers)
     return held_pairs
 
 

@@ -280,6 +280,19 @@ int main() {
             CHECK(affine_batch[index].cigar == single.cigar);
         }
     }
+    // One thread's aligner, reused pair after pair, gives what the functions give; moved, it goes on.
+    dinara::Aligner aligner;
+    for (dinara::Ties ties : {dinara::Ties::left, dinara::Ties::right})
+        for (size_t index = 0; index < pairs.size(); ++index) {
+            auto &pair = pairs[index];
+            CHECK(aligner.distance(pair.first, pair.second, Costs::affine(4, 6, 2)) == affine_costs[index]);
+            CHECK(aligner.align(pair.first, pair.second, Costs::affine(4, 6, 2), Mode::global(), {}, ties).cigar ==
+                  dinara::align(pair.first, pair.second, Costs::affine(4, 6, 2), Mode::global(), {}, ties).cigar);
+            CHECK(aligner.distance_within(pair.first, pair.second, distances[index]) == distances[index]);
+        }
+    dinara::Aligner moved = std::move(aligner);
+    CHECK(moved.distance(pairs[0].first, pairs[0].second) == distances[0]);
+    dinara_aligner_free(nullptr);
     // Under a cap, the pairs past it come back empty, the rest as they were.
     int64_t cap = distances[1];
     std::vector<std::optional<int64_t>> within = dinara::distances_within(firsts, seconds, cap);

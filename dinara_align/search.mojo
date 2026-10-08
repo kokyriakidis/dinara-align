@@ -9,14 +9,13 @@ hyalite's database mode do: the query runs down the rows of every lane's matrix 
 reference across its own lane's columns, so a block of references of about one length costs about
 what one of them costs alone, every lane busy on every cell. Each pair's own sweep keeps its lanes
 along one pair's anti-diagonals, which a short pair fills only in part; across references there is
-no such waste. Other modes take each pair's own search, the pairs spread over every thread.
+no such waste. Other modes take each pair's own search, the pairs spread over the threads asked for.
 """
 
 from std.atomic import Atomic
 
-from max.algorithm import parallelize
 
-from .common import hardware_threads
+from .common import spread
 from .errors import AlignmentError, ErrorKind
 from .modes import Alignment, Costs, Mode, Ties
 
@@ -176,5 +175,5 @@ def local_scores_by_block(
                 out[unsafe_offset=members[lane]] = found[lane]
 
     var workers = max(min(threads, blocks), 1)
-    parallelize(work, workers, workers)
+    spread(work, workers, workers)
     return scores^

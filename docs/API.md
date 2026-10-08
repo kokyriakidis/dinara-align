@@ -45,11 +45,15 @@ var joined = align("TTTTTACGTACGT", "ACGTACGTGGGGG", costs, Mode.overlap(2))  # 
 var sam_cigar = core.clipped_cigar(16)  # "4S8=4S"
 var edits = core.edit_distance("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC")  # NM: 0
 var md = core.mismatch_string("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC")  # MD: "8"
-# A batch, over every thread, and one under a cap, None for a pair past it.
+# A batch, many pairs at once on the caller's thread, and one under a cap, None for a pair past it.
 var references: List[String] = ["ACGTACGT", "TTGCA"]
 var queries: List[String] = ["ACGACGT", "TTGGCA"]
 var batch = distances(references, queries)  # [1, 1]
 var near = distances(references, queries, costs, max_cost=7)  # [None, None]: a gap of one costs 8
+# One thread's aligner, its memory kept from call to call: a loop of single pairs, one a thread.
+var aligner = Aligner()
+for index in range(len(references)):
+    var each = aligner.align(references[index], queries[index], costs)  # as `align` gives it
 ```
 
 | mode | the reference | the query |
@@ -163,7 +167,7 @@ def distance(reference: String, query: String, costs: Costs = Costs.edit(), mode
 def distances(references: List[String], queries: List[String], costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, band: Band = Band(), threads: Optional[Int] = None, placement: Optional[Placement] = None) -> List[Int]
 ```
 
-Every pair's `distance`, the pairs spread over `threads` threads, every thread this process may use by default.
+Every pair's `distance`, on the caller's own thread by default, or spread over `threads` threads when asked: an application that calls the library from threads of its own spreads its work itself, and it alone knows how many its machine can spare.
 
 The pairs are independent, so each runs on one thread start to finish, each thread taking the
 next pair of the batch, longest first, as soon as it is free (see `longest_first`). A pair that
@@ -223,6 +227,54 @@ any other mode each pair's `score`. Every kept hit is then aligned on its own, w
 `align`.
 
 ## Types
+
+### `Aligner`
+
+```mojo
+struct Aligner
+```
+
+One thread's aligner: `distance` and `align` as the functions of those names give them, the memory their searches take kept from call to call, so a loop of calls takes none once it is warm. An application calling from many threads keeps one a thread; one never crosses threads, and the library keeps no state of its own, so any number of them work at once.
+
+| field | type | |
+| :-- | :-- | :-- |
+| `space` | `SearchSpace` |  |
+
+#### `__init__`
+
+```mojo
+def Aligner.__init__(out self)
+```
+
+An aligner holding no memory yet: its first call takes what it needs.
+
+#### `distance`
+
+```mojo
+def distance(mut self, reference: String, query: String, costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, band: Band = Band()) -> Int
+```
+
+`distance`, through this aligner's memory.
+
+```mojo
+def distance(mut self, reference: String, query: String, costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, max_cost: Int, band: Band = Band()) -> Optional[Int]
+```
+
+`distance` under a cap, through this aligner's memory.
+
+#### `align`
+
+```mojo
+def align(mut self, reference: String, query: String, costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, band: Band = Band(), ties: Ties = Ties.LEFT, eqx: Bool = True, max_memory: Int = Int(83886080)) -> Alignment
+```
+
+`align`, through this aligner's memory: the same alignment, the CIGAR its `ties` picks.
+
+```mojo
+def align(mut self, reference: String, query: String, costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, max_cost: Int, band: Band = Band(), ties: Ties = Ties.LEFT, eqx: Bool = True, max_memory: Int = Int(83886080)) -> Optional[Alignment]
+```
+
+`align` under a cap, through this aligner's memory.
 
 ### `Device`
 
@@ -286,7 +338,7 @@ One accelerator, plus the width of the host region the device path forks back to
 def Placement.default() -> Self
 ```
 
-The host sweep across every thread this process may use.
+The host, on the caller's own thread: an application spreads its calls over its threads itself, and asks for more here only when it wants this call spread too.
 
 ### `AlignmentError`
 

@@ -32,7 +32,6 @@ from std.memory import stack_allocation
 from std.memory.pointer import AddressSpace
 from std.sys.info import size_of
 
-from max.algorithm import parallelize
 from max.gpu import WARP_SIZE, barrier, block_dim, block_idx, grid_dim, lane_id, thread_idx
 from max.gpu.primitives.warp import shuffle_down, shuffle_up, shuffle_xor
 from max.gpu.host import DeviceBuffer, FuncAttribute
@@ -40,6 +39,7 @@ from max.gpu.memory import external_memory
 
 from .errors import AlignmentError, ErrorKind
 from .common import (
+    spread,
     DeviceScope,
     GAP_BYTE,
     GpuSpecs,
@@ -1838,7 +1838,7 @@ def device_hirschberg(
                     first, second, leaves[slot], substitutions, alphabet_size, scoring, path_columns, path_layers
                 )
 
-            parallelize(solve_leaf, len(leaves), placement.threads)
+            spread(solve_leaf, len(leaves), placement.threads)
         else:
             for slot in range(len(leaves)):
                 solve_frame(

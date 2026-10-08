@@ -18,8 +18,9 @@ Every call takes a reference and a query as `str` (or ASCII `bytes`), `Costs` th
 a `Mode` that says which ends of the two the alignment must reach, and returns the least cost
 (`distance`), the best score (`score`) or an optimal alignment (`align`). Every answer is exact. A
 `Scoring`, an alphabet's substitution table with affine gap scores, takes the place of `Costs` for
-tables beyond one match and one mismatch score. Batches (`distances`, `alignments`) spread their pairs
-over every thread.
+tables beyond one match and one mismatch score. Batches (`distances`, `alignments`) take many pairs at
+once on the caller's thread, or spread over `threads` threads when asked. No call keeps state between
+calls, so any number of threads may call at once.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from typing import Optional, Sequence, Union
 from . import _dinara
 
 __all__ = [
+    "Aligner",
     "Alignment",
     "Anchor",
     "Band",
@@ -433,6 +435,47 @@ def align(
     return None if found is None else Alignment(*found)
 
 
+class Aligner:
+    """One thread's aligner: `distance` and `align` as the functions give them, under `Costs`, the memory
+    their searches take kept from call to call, so a loop of calls takes none once it is warm. Keep one
+    a thread; the functions keep no state of their own, so any number of aligners work at once."""
+
+    def __init__(self) -> None:
+        self._aligner = _dinara.Aligner()
+
+    def distance(
+        self,
+        reference: Text,
+        query: Text,
+        costs: Costs = Costs(),
+        mode: Mode = Mode.GLOBAL,
+        *,
+        band: Optional[Band] = None,
+        max_cost: Optional[int] = None,
+    ) -> Optional[int]:
+        """`distance`, through this aligner's memory."""
+        options = _options(band, max_cost, True, "left", None)
+        return _call(self._aligner.distance, _text(reference), _text(query), costs._fields(), mode._fields(), options)
+
+    def align(
+        self,
+        reference: Text,
+        query: Text,
+        costs: Costs = Costs(),
+        mode: Mode = Mode.GLOBAL,
+        *,
+        band: Optional[Band] = None,
+        max_cost: Optional[int] = None,
+        ties: str = "left",
+        eqx: bool = True,
+        max_memory: Optional[int] = None,
+    ) -> Optional[Alignment]:
+        """`align`, through this aligner's memory: the same alignment, the CIGAR its `ties` picks."""
+        options = _options(band, max_cost, eqx, ties, max_memory)
+        found = _call(self._aligner.align, _text(reference), _text(query), costs._fields(), mode._fields(), options)
+        return None if found is None else Alignment(*found)
+
+
 def score(
     reference: Text,
     query: Text,
@@ -470,7 +513,7 @@ def distances(
     max_cost: Optional[int] = None,
     threads: int = 0,
 ) -> list:
-    """Every pair's `distance`, the pairs spread over `threads` threads, every thread for zero."""
+    """Every pair's `distance`, the pairs spread over `threads` threads, the caller's own alone for zero."""
     options = _options(band, max_cost, True, "left", None)
     return _call(
         _dinara.distances,
@@ -496,7 +539,7 @@ def alignments(
     max_memory: Optional[int] = None,
     threads: int = 0,
 ) -> list:
-    """Every pair's `align`, the pairs spread over `threads` threads, every thread for zero."""
+    """Every pair's `align`, the pairs spread over `threads` threads, the caller's own alone for zero."""
     options = _options(band, max_cost, eqx, ties, max_memory)
     found = _call(
         _dinara.alignments,

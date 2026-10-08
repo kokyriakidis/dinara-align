@@ -4,7 +4,10 @@
 The entry points a caller uses, each deciding which search serves a pair so the caller never has to.
 
 Under `Costs`, which an alignment minimizes, `distance` finds the least cost and `align` an optimal
-alignment as a CIGAR, for any `Mode`; `distances` and `alignments` take a batch over every thread.
+alignment as a CIGAR, for any `Mode`; `distances` and `alignments` take a batch, many pairs at once.
+Every call runs on the caller's own thread unless asked for more (see `distances`), and keeps no state
+between calls, so an application may call it from as many threads as it likes; an `Aligner` keeps one
+thread's memory from call to call.
 Unit costs, global or with the query found inside or at the start of the reference, take the
 bit-parallel band doubling of A*PA2 (see `edit_distance` and `edit_search`); every other case, and a
 pair holding more symbols than it takes, the gap-affine wavefront from both ends (see `gap_affine`),
@@ -19,10 +22,9 @@ Under a `Scoring`, an alphabet's substitution table and gap scores, which an ali
 from std.atomic import Atomic
 from std.bit import count_leading_zeros
 
-from max.algorithm import parallelize
 
 from .alignment import AlignmentMode, GappedAlignment
-from .common import Device, DeviceScope, Placement, hardware_threads, next_share
+from .common import Device, DeviceScope, Placement, next_share, spread
 from .device_edit import MAX_PATTERN_WORDS, device_edit_distances
 from .edit_distance import edit_cigar, edit_distance
 from .edit_search import edit_search
@@ -154,6 +156,85 @@ def align(
     `distance` finds that, with no fronts traced. A mode with a match score, which maximizes a score,
     takes no cap."""
     return aligned_within(reference, query, costs, mode, band, max_cost, ties, eqx, max_memory // KEPT_BYTES)
+
+
+struct Aligner(Movable):
+    """One thread's aligner: `distance` and `align` as the functions of those names give them, the memory
+    their searches take kept from call to call, so a loop of calls takes none once it is warm. An
+    application calling from many threads keeps one a thread; one never crosses threads, and the library
+    keeps no state of its own, so any number of them work at once."""
+
+    var space: SearchSpace
+
+    def __init__(out self):
+        """An aligner holding no memory yet: its first call takes what it needs."""
+        self.space = SearchSpace()
+
+    def distance(
+        mut self,
+        reference: String,
+        query: String,
+        costs: Costs = Costs.edit(),
+        mode: Mode = Mode.GLOBAL,
+        *,
+        band: Band = Band(),
+    ) raises AlignmentError -> Int:
+        """`distance`, through this aligner's memory."""
+        var found = cost_within(reference, query, costs, mode, band, Int.MAX, self.space)
+        if not found:
+            raise outside(band)
+        return found.value()
+
+    def distance(
+        mut self,
+        reference: String,
+        query: String,
+        costs: Costs = Costs.edit(),
+        mode: Mode = Mode.GLOBAL,
+        *,
+        max_cost: Int,
+        band: Band = Band(),
+    ) raises AlignmentError -> Optional[Int]:
+        """`distance` under a cap, through this aligner's memory."""
+        return cost_within(reference, query, costs, mode, band, max_cost, self.space)
+
+    def align(
+        mut self,
+        reference: String,
+        query: String,
+        costs: Costs = Costs.edit(),
+        mode: Mode = Mode.GLOBAL,
+        *,
+        band: Band = Band(),
+        ties: Ties = Ties.LEFT,
+        eqx: Bool = True,
+        max_memory: Int = DEFAULT_MAX_MEMORY,
+    ) raises AlignmentError -> Alignment:
+        """`align`, through this aligner's memory: the same alignment, the CIGAR its `ties` picks."""
+        var found = aligned_within(
+            reference, query, costs, mode, band, Int.MAX, ties, eqx, max_memory // KEPT_BYTES, self.space
+        )
+        if not found:
+            raise outside(band)
+        return found.take()
+
+    def align(
+        mut self,
+        reference: String,
+        query: String,
+        costs: Costs = Costs.edit(),
+        mode: Mode = Mode.GLOBAL,
+        *,
+        max_cost: Int,
+        band: Band = Band(),
+        ties: Ties = Ties.LEFT,
+        eqx: Bool = True,
+        max_memory: Int = DEFAULT_MAX_MEMORY,
+    ) raises AlignmentError -> Optional[Alignment]:
+        """`align` under a cap, through this aligner's memory."""
+        return aligned_within(
+            reference, query, costs, mode, band, max_cost, ties, eqx, max_memory // KEPT_BYTES, self.space
+        )
 
 
 def score(
@@ -627,7 +708,7 @@ def alignments(
                 except:
                     flags[unsafe_offset=index] = True
 
-        parallelize(align_chunk, chunks, workers)
+        spread(align_chunk, chunks, workers)
         # A pair that failed raises here, the same error a serial loop would have raised first.
         for index in range(pairs):
             if failed[index]:
@@ -655,13 +736,13 @@ def alignments(
                 )
             )
         return results^
-    # Each pair's rows read as its CIGAR, on every thread, as the pairs were aligned.
+    # Each pair's rows read as its CIGAR, on the host threads the placement asks for.
     var results = List[Alignment](capacity=pairs)
     for _ in range(pairs):
         results.append(Alignment(0, 0, String(), 0, 0, 0, 0))
     var out = results.unsafe_ptr()
     var whole = mode.is_global()
-    var workers = hardware_threads()
+    var workers = max(resolved.threads, 1)
     var chunks = max(min(pairs, workers * 8), 1)
 
     def convert(
@@ -671,7 +752,7 @@ def alignments(
         for index in range(pairs * chunk // chunks, pairs * (chunk + 1) // chunks):
             out[unsafe_offset=index] = as_alignment(gapped[index], references[index], queries[index], whole, eqx)
 
-    parallelize(convert, chunks, workers)
+    spread(convert, chunks, workers)
     return results^
 
 
@@ -723,7 +804,7 @@ def longest_first(references: List[String], queries: List[String], workers: Int)
             order_ptr[unsafe_offset=next[unsafe_offset=found]] = index
             next[unsafe_offset=found] += 1
 
-    parallelize(count, stretches, stretches)
+    spread(count, stretches, stretches)
     # Each stretch's first place in each class: the classes in turn, each stretch's pairs in turn.
     var placed = 0
     for found in range(CLASSES):
@@ -731,7 +812,7 @@ def longest_first(references: List[String], queries: List[String], workers: Int)
             var counted = starts[stretch * CLASSES + found]
             starts[stretch * CLASSES + found] = placed
             placed += counted
-    parallelize(place, stretches, stretches)
+    spread(place, stretches, stretches)
     return order^
 
 
@@ -745,8 +826,9 @@ def distances(
     threads: Optional[Int] = None,
     placement: Optional[Placement] = None,
 ) raises -> List[Int]:
-    """Every pair's `distance`, the pairs spread over `threads` threads, every thread this process may
-    use by default.
+    """Every pair's `distance`, on the caller's own thread by default, or spread over `threads` threads
+    when asked: an application that calls the library from threads of its own spreads its work itself,
+    and it alone knows how many its machine can spare.
 
     The pairs are independent, so each runs on one thread start to finish, each thread taking the
     next pair of the batch, longest first, as soon as it is free (see `longest_first`). A pair that
@@ -810,7 +892,7 @@ def gpu_distances(
         else:
             on_host.append(index)
     if len(on_device) > 0:
-        var found = device_edit_distances(DeviceScope(placement.gpu_id), patterns, texts)
+        var found = device_edit_distances(DeviceScope(placement.gpu_id), patterns, texts, placement.threads)
         for slot in range(len(on_device)):
             results[on_device[slot]] = found[slot] * scale
     for index in on_host:
@@ -833,7 +915,7 @@ def capped_distances(
     var results = List[Optional[Int]](length=pairs, fill=None)
     if pairs == 0:
         return results^
-    var workers = max(threads.or_else(hardware_threads()), 1)
+    var workers = max(threads.or_else(1), 1)
     var out = results.unsafe_ptr()
     var failed = List[Bool](length=pairs, fill=False)
     var flags = failed.unsafe_ptr()
@@ -898,7 +980,7 @@ def capped_distances(
                 except:
                     flags[unsafe_offset=index] = True
 
-    parallelize(distance_worker, min(workers, pairs), min(workers, pairs))
+    spread(distance_worker, min(workers, pairs), min(workers, pairs))
     for index in range(pairs):
         if failed[index]:
             results[index] = cost_within(references[index], queries[index], costs, mode, band, max_cost)
@@ -970,7 +1052,7 @@ def capped_alignments(
         results.append(None)
     if pairs == 0:
         return results^
-    var workers = max(threads.or_else(hardware_threads()), 1)
+    var workers = max(threads.or_else(1), 1)
     var out = results.unsafe_ptr()
     var failed = List[Bool](length=pairs, fill=False)
     var flags = failed.unsafe_ptr()
@@ -1064,7 +1146,7 @@ def capped_alignments(
                 except:
                     flags[unsafe_offset=index] = True
 
-    parallelize(alignment_worker, min(workers, pairs), min(workers, pairs))
+    spread(alignment_worker, min(workers, pairs), min(workers, pairs))
     for index in range(pairs):
         if failed[index]:
             results[index] = aligned_within(
@@ -1096,7 +1178,7 @@ def search(
     any other mode each pair's `score`. Every kept hit is then aligned on its own, when asked for, by
     `align`."""
     var count = len(references)
-    var workers = max(threads.or_else(hardware_threads()), 1)
+    var workers = max(threads.or_else(1), 1)
     var scores = List[Int](length=count, fill=Int.MIN)
     if mode.kind == Mode.SMITH_WATERMAN and mode.match_score > 0:
         _ = penalties_of(costs)
@@ -1131,7 +1213,7 @@ def search(
                     except:
                         flags[unsafe_offset=index] = True
 
-        parallelize(work, min(workers, max(count, 1)), min(workers, max(count, 1)))
+        spread(work, min(workers, max(count, 1)), min(workers, max(count, 1)))
         for index in range(count):
             if failed[index]:
                 scores[index] = score(references[index], query, costs, mode)

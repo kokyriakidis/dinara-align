@@ -26,8 +26,14 @@ Apache-2.0 as well (see NOTICE).
 - One rule for ties (`Ties`): of equally good alignments, indels placed left by default, as minimap2
   places them, or right, WFA2-lib's CIGAR byte for byte; with free ends the span first, by the same
   rule, whichever search found the cost, under any band or cap.
-- Bands of diagonals, cost caps (`max_cost`), and batches over every thread (`distances`,
-  `alignments`), capped too.
+- Bands of diagonals, cost caps (`max_cost`), and batches (`distances`, `alignments`, `scores`),
+  capped too, many pairs at once in the lanes of a SIMD register: global costs and alignments, free
+  ends, local scores and tables of up to sixteen entries.
+- Every call runs on its caller's own thread and starts none unless asked (`threads`), and keeps no
+  state between calls, so an application calls it from as many threads as it likes and spreads its
+  work itself. An `Aligner`, one a thread, keeps its searches' memory from call to call; in C,
+  `dinara_aligner_new`, and in C++ and Python, `Aligner`. The command line spreads its pairs over
+  every thread itself.
 - What a SAM record holds: soft- or hard-clipped CIGARs, `NM`, `MD`, identity
   (`Alignment.clipped_cigar`, `edit_distance`, `mismatch_string`, `identity`), and SSW's second-best
   local score for a mapping quality (`local_scores`).

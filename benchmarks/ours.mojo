@@ -246,8 +246,8 @@ def seq_mode() raises:
     flushed as it finishes, gives its file, its time and its cost, so a run stopped mid-pair still
     reports the pairs before it.
 
-    A batch tool instead aligns each file's pairs in one call across every thread, and gives each
-    pair the batch's wall-clock time shared evenly: a throughput, not one pair's latency.
+    A batch tool instead aligns each file's pairs in one call on this one thread, as the library runs,
+    and gives each pair the batch's time shared evenly: a throughput, not one pair's latency.
 
     A tool named `name:x,o,e` aligns at affine costs instead, as WFA counts them: a mismatch `x` and a
     gap of `k` letters `o + k e`, on one thread, with a CIGAR as the rivals' traceback hands back.
@@ -283,10 +283,10 @@ def seq_mode() raises:
             var costs = List[Int]()
             if affine:
                 var model = Costs.affine(mismatch, opening, extension)
-                for found in alignments(firsts, seconds, model, threads=hardware_threads()):
+                for found in alignments(firsts, seconds, model):
                     costs.append(found.cost)
             else:
-                for found in alignments(firsts, seconds, threads=hardware_threads()):
+                for found in alignments(firsts, seconds):
                     costs.append(found.cost)
             var share = Float64(perf_counter_ns() - started) / 1e9 / Float64(max(len(firsts), 1))
             for cost in costs:
@@ -339,8 +339,9 @@ def main() raises:
     var affine = Pairs(directory + "/dna_affine.tsv")
     var edit = Pairs(directory + "/dna_edit.tsv")
     for device in devices:
-        var threads = hardware_threads()
-        var placement = Placement.on_gpu(0, threads) if device == "gpu" else Placement.on_cpu(threads)
+        # The host on one core, the library as a library runs, every rival a single thread too; the
+        # device with the host's every thread for its packing, which the caller asks for here.
+        var placement = Placement.on_gpu(0, hardware_threads()) if device == "gpu" else Placement.on_cpu(1)
         run_batch(reads, dna, device, placement)
         run_batch(kilobase, dna, device, placement)
         run_pairs(affine, dna, device, placement)

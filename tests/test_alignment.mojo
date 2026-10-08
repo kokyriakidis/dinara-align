@@ -18,6 +18,7 @@ from std.random import random_float64, random_ui64, seed
 from std.testing import TestSuite, assert_equal, assert_false, assert_raises, assert_true
 
 from dinara_align import (
+    Aligner,
     Alignment,
     AlignmentError,
     Anchor,
@@ -2687,6 +2688,39 @@ def test_lane_free_ends_match_single_pairs() raises:
                 for index in range(len(references)):
                     var expected = distance(references[index], queries[index], costs, mode, max_cost=30, band=band)
                     assert_equal(capped[index].or_else(-1), expected.or_else(-1))
+
+
+def test_aligner_matches_the_functions() raises:
+    """One `Aligner` reused across every call, its memory kept from pair to pair, gives each pair what
+    the functions give: distances and alignments under unit, affine and two-piece costs, globally and
+    with free ends, under either tie rule, a cap and a band, short pairs after long and empty sides."""
+    seed(59)
+    var aligner = Aligner()
+    var all_costs: List[Costs] = [Costs.edit(), Costs.affine(4, 6, 2), Costs.two_piece(4, 6, 2, 24, 1)]
+    var modes: List[Mode] = [Mode.GLOBAL, Mode.INFIX, Mode.PREFIX]
+    for trial in range(120):
+        var reference = random_sequence(0, [40, 600, 12, 250][trial % 4], DNA_ALPHABET)
+        var query = mutated(reference, [0.0, 0.02, 0.1][trial % 3], 8) if trial % 7 else random_sequence(
+            0, 300, DNA_ALPHABET
+        )
+        var costs = all_costs[trial % 3]
+        var mode = modes[(trial // 3) % 3]
+        var ties = Ties.LEFT if trial % 2 else Ties.RIGHT
+        assert_equal(aligner.distance(reference, query, costs, mode), distance(reference, query, costs, mode))
+        var mine = aligner.align(reference, query, costs, mode, ties=ties)
+        var theirs = align(reference, query, costs, mode, ties=ties)
+        assert_equal(mine.cost, theirs.cost)
+        assert_equal(mine.cigar, theirs.cigar)
+        assert_equal(mine.reference_start, theirs.reference_start)
+        var capped = aligner.align(reference, query, costs, mode, max_cost=40, band=Band.around(30), ties=ties)
+        var expected = align(reference, query, costs, mode, max_cost=40, band=Band.around(30), ties=ties)
+        assert_equal(Bool(capped), Bool(expected))
+        if expected:
+            assert_equal(capped.value().cigar, expected.value().cigar)
+        assert_equal(
+            aligner.distance(reference, query, costs, mode, max_cost=40).or_else(-1),
+            distance(reference, query, costs, mode, max_cost=40).or_else(-1),
+        )
 
 
 def test_lane_tables_match_single_pairs() raises:

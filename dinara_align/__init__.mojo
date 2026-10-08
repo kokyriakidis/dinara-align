@@ -44,11 +44,15 @@ var joined = align("TTTTTACGTACGT", "ACGTACGTGGGGG", costs, Mode.overlap(2))  # 
 var sam_cigar = core.clipped_cigar(16)  # "4S8=4S"
 var edits = core.edit_distance("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC")  # NM: 0
 var md = core.mismatch_string("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC")  # MD: "8"
-# A batch, over every thread, and one under a cap, None for a pair past it.
+# A batch, many pairs at once on the caller's thread, and one under a cap, None for a pair past it.
 var references: List[String] = ["ACGTACGT", "TTGCA"]
 var queries: List[String] = ["ACGACGT", "TTGGCA"]
 var batch = distances(references, queries)  # [1, 1]
 var near = distances(references, queries, costs, max_cost=7)  # [None, None]: a gap of one costs 8
+# One thread's aligner, its memory kept from call to call: a loop of single pairs, one a thread.
+var aligner = Aligner()
+for index in range(len(references)):
+    var each = aligner.align(references[index], queries[index], costs)  # as `align` gives it
 ```
 
 | mode | the reference | the query |
@@ -86,7 +90,7 @@ Ported from AffineGaps by Ash Vardanian, https://github.com/unum-science/AffineG
 the edit distance from A*PA by Ragnar Groot Koerkamp and Pesho Ivanov (see NOTICE).
 """
 
-from .api import align, alignments, distance, distances, local_scores, score, scores, search
+from .api import Aligner, align, alignments, distance, distances, local_scores, score, scores, search
 from .common import Device, Placement
 from .errors import AlignmentError, ErrorKind
 from .gap_affine import DEFAULT_MAX_MEMORY

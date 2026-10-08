@@ -14,6 +14,8 @@ Run with `--help` for every option (see `USAGE`).
 
 from std.sys import argv, exit, stderr
 
+from dinara_align.common import hardware_threads
+
 from dinara_align import (
     Alignment,
     Anchor,
@@ -66,7 +68,7 @@ Options:
   --both-strands                   also align each query's reverse complement, keep the better
   --distance                       the cost alone, no alignment
   --format tsv | sam | paf         the output (tsv by default)
-  --threads N                      threads, every one by default
+  --threads N                      threads, every one this process may use by default
   --max-memory BYTES               the fronts kept for a traceback, about 80 MB by default
   -h, --help                       this text
 """
@@ -349,6 +351,9 @@ def run() raises:
         print(USAGE)
         exit(2)
 
+    # The executable, not the library, spreads the work: every thread this process may use, unless asked.
+    if not threads:
+        threads = hardware_threads()
     if cost_only:
         var found = distances(
             references,

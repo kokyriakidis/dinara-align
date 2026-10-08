@@ -137,6 +137,13 @@ def main() -> None:
         assert [a.cigar for a in da.alignments(references, queries, affine, da.Mode.INFIX, threads=threads)] == [
             da.align(r, q, affine, da.Mode.INFIX).cigar for r, q in zip(references, queries)
         ]
+    # One thread's aligner, reused pair after pair, gives what the functions give.
+    aligner = da.Aligner()
+    for r, q in zip(references, queries):
+        for ties in ("left", "right"):
+            assert aligner.align(r, q, affine, ties=ties).cigar == da.align(r, q, affine, ties=ties).cigar
+        assert aligner.distance(r, q, two, da.Mode.INFIX) == da.distance(r, q, two, da.Mode.INFIX)
+        assert aligner.distance(r, q, affine, max_cost=30) == da.distance(r, q, affine, max_cost=30)
     capped = da.distances(references, queries, affine, max_cost=30)
     assert all((c is None) == (da.distance(r, q, affine) > 30) for c, r, q in zip(capped, references, queries))
     hits = da.search(["TTTT", "ACGTACGTACGT", "ACGTTCGTACGT"], "ACGTACGTACGT", affine, da.Mode.local(2), best=2, aligned=True)

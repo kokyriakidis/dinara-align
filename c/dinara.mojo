@@ -15,8 +15,8 @@ header).
 
 from std.atomic import Atomic
 from std.ffi import external_call
+from std.sys import size_of
 
-from max.algorithm import parallelize
 
 from dinara_align import (
     DEFAULT_MAX_MEMORY,
@@ -34,8 +34,8 @@ from dinara_align import (
     score,
     search,
 )
-from dinara_align.api import aligned_within
-from dinara_align.common import hardware_threads, next_share
+from dinara_align.api import aligned_within, cost_within
+from dinara_align.common import next_share, spread
 from dinara_align.gap_affine import KEPT_BYTES, Penalties, SearchSpace, cigar_of, penalties_of
 from dinara_align.lanes import LaneCosts, Texts, lane_alignments, lane_distances
 
@@ -171,15 +171,16 @@ def distance_code(
     costs: Costs,
     mode: Mode,
     asked: Options,
+    mut space: SearchSpace,
 ) -> Int:
-    """One pair's least cost, or its code (see `dinara_distance`)."""
+    """One pair's least cost, or its code (see `dinara_distance`), through `space`'s searches."""
     if not plain_bytes(reference, reference_length) or not plain_bytes(query, query_length):
         return UNSUPPORTED_SYMBOLS
     try:
         var first = sequence(reference, reference_length)
         var second = sequence(query, query_length)
         var cap = asked.max_cost if asked.max_cost >= 0 else Int.MAX
-        var found = distance(first, second, costs, mode, max_cost=cap, band=asked.band)
+        var found = cost_within(first, second, costs, mode, asked.band, cap, space)
         if not found:
             # Under a cap, a band no alignment fits also leaves nothing within it.
             return OUTSIDE_BAND if cap == Int.MAX else ABOVE_MAX
@@ -263,8 +264,16 @@ def dinara_distance(
     `ABOVE_MAX` when it passes a `max_cost` of zero or more, `OUTSIDE_BAND` when no alignment fits the
     band, or under a cap `ABOVE_MAX` again. The options' `eqx` and `right_ties` change nothing."""
     try:
+        var space = SearchSpace()
         return distance_code(
-            reference, reference_length, query, query_length, costs_of(costs), mode_of(mode), options_of(options)
+            reference,
+            reference_length,
+            query,
+            query_length,
+            costs_of(costs),
+            mode_of(mode),
+            options_of(options),
+            space,
         )
     except error:
         return failure(error)
@@ -297,6 +306,81 @@ def dinara_align(
             options_of(options),
             alignment,
             space,
+        )
+    except error:
+        return failure(error)
+
+
+@export("dinara_aligner_new")
+def dinara_aligner_new() abi("C") -> OptionalPointer[SearchSpace, MutAnyOrigin]:
+    """One thread's aligner, its searches' memory kept from call to call, in memory from C's `malloc`, for
+    `dinara_aligner_free`; null when there is none to be had. It keeps nothing a call depends on, so it
+    gives the same answers as the functions without one, and it is never shared between threads."""
+    var aligner = external_call["malloc", OptionalPointer[SearchSpace, MutAnyOrigin]](size_of[SearchSpace]())
+    if aligner:
+        aligner.value().unsafe_write(SearchSpace())
+    return aligner
+
+
+@export("dinara_aligner_free")
+def dinara_aligner_free(aligner: OptionalPointer[SearchSpace, MutAnyOrigin]) abi("C"):
+    """Frees an aligner `dinara_aligner_new` made, and the memory it kept; null is nothing to free."""
+    if aligner:
+        _ = aligner.value().unsafe_take_pointee()
+        external_call["free", NoneType](aligner)
+
+
+@export("dinara_aligner_distance")
+def dinara_aligner_distance(
+    aligner: MutPointer[SearchSpace, MutAnyOrigin],
+    reference: ImmPointer[UInt8, MutAnyOrigin],
+    reference_length: Int,
+    query: ImmPointer[UInt8, MutAnyOrigin],
+    query_length: Int,
+    costs: OptionalPointer[Int, MutAnyOrigin],
+    mode: OptionalPointer[Int, MutAnyOrigin],
+    options: OptionalPointer[Int, MutAnyOrigin],
+) abi("C") -> Int:
+    """`dinara_distance` through `aligner`'s memory."""
+    try:
+        return distance_code(
+            reference,
+            reference_length,
+            query,
+            query_length,
+            costs_of(costs),
+            mode_of(mode),
+            options_of(options),
+            aligner[],
+        )
+    except error:
+        return failure(error)
+
+
+@export("dinara_aligner_align")
+def dinara_aligner_align(
+    aligner: MutPointer[SearchSpace, MutAnyOrigin],
+    reference: ImmPointer[UInt8, MutAnyOrigin],
+    reference_length: Int,
+    query: ImmPointer[UInt8, MutAnyOrigin],
+    query_length: Int,
+    costs: OptionalPointer[Int, MutAnyOrigin],
+    mode: OptionalPointer[Int, MutAnyOrigin],
+    options: OptionalPointer[Int, MutAnyOrigin],
+    alignment: MutPointer[Int, MutAnyOrigin],
+) abi("C") -> Int:
+    """`dinara_align` through `aligner`'s memory."""
+    try:
+        return align_into(
+            reference,
+            reference_length,
+            query,
+            query_length,
+            costs_of(costs),
+            mode_of(mode),
+            options_of(options),
+            alignment,
+            aligner[],
         )
     except error:
         return failure(error)
@@ -399,10 +483,10 @@ struct ByteTexts(Texts, TrivialRegisterPassable):
 
 
 def workers_for(pairs: Int, threads: Int) -> Int:
-    """Threads for a batch of `pairs`: `threads`, or every thread this process may use for zero or
-    fewer, and no more than there are pairs."""
-    var workers = threads if threads > 0 else hardware_threads()
-    return max(min(workers, pairs), 1)
+    """Threads for a batch of `pairs`: `threads`, or the caller's own alone for zero or fewer, and no more
+    than there are pairs. The caller spreads its own calls over its threads; the library starts more only
+    when asked."""
+    return max(min(threads, pairs), 1)
 
 
 @export("dinara_distances")
@@ -460,7 +544,7 @@ def dinara_distances(
                 ):
                     settled_ptr[unsafe_offset=index] = True
 
-        parallelize(refuse, workers, workers)
+        spread(refuse, workers, workers)
         var before = settled.copy()
         _ = lane_distances(
             pairs,
@@ -480,6 +564,7 @@ def dinara_distances(
     def work(slot: Int) {mut taken, imm}:
         """Takes the next pairs not yet taken and writes each one's least cost or code, until none is left."""
         var last = 0
+        var space = SearchSpace()
         while True:
             var share = next_share(taken, pairs, workers, last)
             if share[0] >= pairs:
@@ -500,9 +585,10 @@ def dinara_distances(
                     wanted_costs,
                     wanted_mode,
                     asked,
+                    space,
                 )
 
-    parallelize(work, workers, workers)
+    spread(work, workers, workers)
     return 0
 
 
@@ -569,7 +655,7 @@ def dinara_alignments(
                 ):
                     settled_ptr[unsafe_offset=index] = True
 
-        parallelize(refuse, workers, workers)
+        spread(refuse, workers, workers)
         var before = settled.copy()
         _ = lane_alignments(
             pairs,
@@ -630,7 +716,7 @@ def dinara_alignments(
                     space,
                 )
 
-    parallelize(work, workers, workers)
+    spread(work, workers, workers)
     return 0
 
 

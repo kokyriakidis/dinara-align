@@ -15,10 +15,9 @@ pattern is longer stays on the host (see `api.distances`).
 
 from std.math import ceildiv
 
-from max.algorithm import parallelize
 from max.gpu import global_idx
 
-from .common import DeviceScope, allocate, hardware_threads, upload, zeroed
+from .common import DeviceScope, allocate, spread, upload, zeroed
 
 comptime MAX_PATTERN_WORDS = 64
 """Words of the longest pattern a thread holds, 4,096 letters: its two vectors stay in its own memory."""
@@ -78,16 +77,18 @@ def myers_kernel(
     results[unsafe_offset=pair] = Int32(score)
 
 
-def device_edit_distances(scope: DeviceScope, patterns: List[String], texts: List[String]) raises -> List[Int]:
+def device_edit_distances(
+    scope: DeviceScope, patterns: List[String], texts: List[String], threads: Int = 1
+) raises -> List[Int]:
     """Every pair's edit distance on the device, `patterns[i]` against `texts[i]`, each pattern of one
-    to `64 * MAX_PATTERN_WORDS` letters."""
+    to `64 * MAX_PATTERN_WORDS` letters, its rows laid out on the host over `threads` threads."""
     var pairs = len(patterns)
     # First each pair's symbols, which size its rows, then where its rows and its text go, then both
-    # written, every pair on its own, over every thread.
+    # written, every pair on its own, over the threads asked for.
     var symbols = List[Int](length=pairs, fill=0)
     var counts = symbols.unsafe_ptr()
 
-    var workers = hardware_threads()
+    var workers = max(threads, 1)
     # Chunks of pairs, several a thread, so a thread is never a task a pair.
     var chunks = max(min(pairs, workers * 8), 1)
 
@@ -104,7 +105,7 @@ def device_edit_distances(scope: DeviceScope, patterns: List[String], texts: Lis
                     count += 1
             counts[unsafe_offset=pair] = count
 
-    parallelize(count_symbols, chunks, workers)
+    spread(count_symbols, chunks, workers)
     var row_offsets = List[Int64](capacity=pairs + 1)
     var words_of = List[Int32](capacity=pairs)
     var lengths = List[Int32](capacity=pairs)
@@ -143,7 +144,7 @@ def device_edit_distances(scope: DeviceScope, patterns: List[String], texts: Lis
         for pair in range(pairs * chunk // chunks, pairs * (chunk + 1) // chunks):
             fill_pair(pair, patterns, texts, rows_at, text_at, row_offsets, text_offsets, words_of)
 
-    parallelize(fill, chunks, workers)
+    spread(fill, chunks, workers)
 
     var rows_buffer = upload(scope, rows)
     var offsets_buffer = upload(scope, row_offsets)

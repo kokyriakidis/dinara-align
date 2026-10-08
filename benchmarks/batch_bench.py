@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
 # MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
-"""Times batches of short-read global scores on every thread, as Accelign's short-read case study does
-(Kallenborn et al., BMC Bioinformatics 2026), against the CPU aligners it compares.
+"""Times batches of short-read global scores, on one core and on every core, as Accelign's short-read case
+study does on every core (Kallenborn et al., BMC Bioinformatics 2026), against the CPU aligners it compares.
 
     pixi run bench-batch     # builds the rivals the first time; then a minute or two
 
@@ -18,12 +18,15 @@ fewer or 30 more at either end.
 | illumina-affine | `distances(..., Costs.affine(1, 2, 1))` | WFA2-lib, exact, score only; KSW2's `extz2`, score only, no band; parasail's striped `nw` |
 | illumina-edit | `distances(...)` at unit costs | WFA2-lib, exact, score only; Edlib's NW, distance only, its own band |
 
-Every tool runs on every thread, the rivals through OpenMP, one aligner a thread, and its time is the
-faster of two passes over the whole batch. The costs, summed and position-weighted, must agree between
+Every tool runs twice: on one core, each library as a library runs, and on every core, each tool's
+calls spread by its own driver, the rivals' through OpenMP, one aligner a thread, dinara-align's by
+`batches.mojo`, a piece of the batch a call; the library itself starts no threads. A time is the faster
+of two passes over the whole batch. The costs, summed and position-weighted, must agree between
 every tool on a workload, or the run fails. Each rival is pinned (see `run.RIVALS`), built for the same
 CPU as everything else, and timed once (see `run.kept_rows`).
 """
 
+import os
 import random
 import subprocess
 import sys
@@ -95,28 +98,44 @@ def main() -> None:
             built["rivals"] = mode_bench.build_rivals(HERE / "batches" / "rivals.cpp", "batch-rivals", ["-fopenmp"])
         return built["rivals"]
 
+    # One core, each library as a library runs, then every core, each tool's calls spread by its driver.
+    cores = len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1
     rows = []
-    for workload in WORKLOADS:
-        rows.extend(rows_of([ours, path, workload]))
-        rows.extend(
-            kept_rows(
-                f"WFA2-lib, KSW2, parasail and Edlib on {workload}",
+    for threads in (1, cores):
+        spread = "one core" if threads == 1 else f"{threads} cores"
+
+        def rivals_rows(workload: str = "", threads: int = threads) -> list:
+            """The rivals' rows on `threads` OpenMP threads."""
+            environment = dict(os.environ, OMP_NUM_THREADS=str(threads))
+            print(f"{workload}: rivals on {threads} threads ...", file=sys.stderr, flush=True)
+            output = subprocess.run(
+                [str(rivals()), str(path), workload], check=True, capture_output=True, text=True, env=environment
+            ).stdout
+            return [line.split("\t") for line in output.strip().splitlines()]
+
+        for workload in WORKLOADS:
+            rows.extend([spread, *row] for row in rows_of([ours, path, workload, threads]))
+            kept = kept_rows(
+                f"WFA2-lib, KSW2, parasail and Edlib on {workload}, {spread}",
                 ["WFA2-lib", "ksw2", "parasail", "edlib"],
                 [HERE / "batches" / "rivals.cpp", path],
-                lambda: rows_of([rivals(), path, workload]),
+                lambda workload=workload: rivals_rows(workload),
             )
-        )
+            rows.extend([spread, *row] for row in kept)
     answers = defaultdict(dict)
     times = defaultdict(dict)
-    for tool, workload, seconds, answer in rows:
-        answers[workload][tool] = answer
-        times[workload][tool] = float(seconds)
+    for spread, tool, workload, seconds, answer in rows:
+        answers[workload][(spread, tool)] = answer
+        times[(workload, spread)][tool] = float(seconds)
     disagreeing = {workload: found for workload, found in answers.items() if len(set(found.values())) > 1}
     if disagreeing:
         sys.exit(f"the tools' answers disagree: {disagreeing}")
     tools = ["dinara-align", "dinara-align GPU", "WFA2-lib", "KSW2", "parasail", "Edlib"]
-    lines = ["| workload | " + " | ".join(tools) + " |", "| :-- | " + " | ".join("--:" for _ in tools) + " |"]
-    for workload, measured in times.items():
+    lines = [
+        "| workload | threads | " + " | ".join(tools) + " |",
+        "| :-- | :-- | " + " | ".join("--:" for _ in tools) + " |",
+    ]
+    for (workload, spread), measured in times.items():
         fastest = min(measured.values())
         cells = []
         for tool in tools:
@@ -126,7 +145,7 @@ def main() -> None:
                 continue
             text = f"{seconds * 1e3:.0f} ms" if seconds < 10 else f"{seconds:.1f} s"
             cells.append(f"**{text}**" if seconds == fastest else text)
-        lines.append(f"| {workload} | " + " | ".join(cells) + " |")
+        lines.append(f"| {workload} | {spread} | " + " | ".join(cells) + " |")
     table = build_note() + "\n".join(lines)
     RESULTS.mkdir(parents=True, exist_ok=True)
     (RESULTS / "batch-results.md").write_text(table + "\n")

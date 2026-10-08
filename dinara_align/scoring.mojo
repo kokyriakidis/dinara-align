@@ -40,6 +40,7 @@ from .alignment import (
     serving_space,
 )
 from .common import (
+    spread,
     Device,
     DeviceScope,
     MAX_ALPHABET_SIZE,
@@ -81,7 +82,6 @@ from .substitutions import SubstitutionLookup
 from .vector_score import optimal_band, reach_back, vector_align, vector_score
 
 
-from max.algorithm import parallelize
 from std.memory import bitcast
 from std.math import gcd
 
@@ -261,7 +261,7 @@ def pack_batch(
             if not known:
                 flags[unsafe_offset=slot] = True
 
-    parallelize(encode, stretches, stretches)
+    spread(encode, stretches, stretches)
     for slot in range(pairs):
         if failed[slot]:
             # The pair's own translation raises the error the serial packing raised.
@@ -830,7 +830,7 @@ def unknown_letters(firsts: List[String], seconds: List[String], alphabet: Strin
             if not known:
                 refused_ptr[unsafe_offset=index] = True
 
-    parallelize(refuse, workers, workers)
+    spread(refuse, workers, workers)
     return refused^
 
 
@@ -953,7 +953,7 @@ def laned_alignments(
             var cigar = cigar_of(firsts[index], seconds[index], moves^, cost, found, eqx)
             alignments_out[unsafe_offset=index] = Alignment(-score, score, cigar^, 0, columns, 0, rows)
 
-    parallelize(spell, workers, workers)
+    spread(spell, workers, workers)
     return settled^
 
 
@@ -1080,7 +1080,7 @@ def coded_batch(firsts: List[String], seconds: List[String], alphabet: String, w
                 target[unsafe_offset=position] = 0 if code == 255 else code
             refused_ptr[unsafe_offset=index] = unknown
 
-    parallelize(translate_stretch, workers, workers)
+    spread(translate_stretch, workers, workers)
     return CodedBatch(codes^, starts^, refused^)
 
 
@@ -1229,7 +1229,7 @@ def scores_with[
                 except:
                     flags[unsafe_offset=index] = True
 
-        parallelize(score_range, chunks, max(resolved.threads, 1))
+        spread(score_range, chunks, max(resolved.threads, 1))
         # A pair that failed raises here, the same error a serial loop would have raised first.
         for index in range(pairs):
             if failed[index]:
@@ -1316,7 +1316,7 @@ def alignments_with[
                 except:
                     flags[unsafe_offset=index] = True
 
-        parallelize(align_range, chunks, max(resolved.threads, 1))
+        spread(align_range, chunks, max(resolved.threads, 1))
         # A pair that failed raises here, the same error a serial loop would have raised first.
         for index in range(pairs):
             if failed[index]:

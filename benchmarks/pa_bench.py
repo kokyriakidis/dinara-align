@@ -28,7 +28,7 @@ disagreement fails the run.
 The aligners are the evaluation's exact ones: Edlib, BiWFA, A*PA, A*PA2-simple and A*PA2-full, with
 its parameters, and WFA2-lib's WFA keeping every front, under a memory cap (see `MEMORY_CAP`). Like
 the evaluation, the times here are wall-clock on one thread; dinara-align also runs as a batch, every
-pair of the sample in one call spread over the threads a pair at a time, whose column is the batch's
+pair of the sample in one call on the same one thread, as the library runs, whose column is the batch's
 time over its pairs: a throughput, where the others are latencies.
 
 The rivals are pinned, so each one runs on a sample once and its results are kept for good, while its
@@ -98,9 +98,6 @@ KEPT = CACHE / "pa-bench-rivals.json"
 """The rivals' results from earlier runs, by tool, sample, budget and binary."""
 
 
-THREADS = os.cpu_count() or 1
-"""The threads dinara-align's batch column takes: every one this machine offers."""
-
 TIMER = Path("/usr/bin/time")
 """GNU time, which on Linux reports a runner's own peak memory (see `run_tool`)."""
 
@@ -114,7 +111,7 @@ def tools(dataset: str, ours: Path, astarpa: Path, wrapper: Path) -> list[tuple[
     """Each column's runner and the tool name it is given, as the evaluation ran them on a dataset."""
     return [
         (dinara("1 thread"), ours, dinara("1 thread")),
-        (dinara(f"batch, {THREADS} threads"), ours, dinara(f"batch, {THREADS} threads")),
+        (dinara("batch, 1 thread"), ours, dinara("batch, 1 thread")),
         ("a*pa2-full", astarpa, "a*pa2-full"),
         ("a*pa2-simple", astarpa, "a*pa2-simple"),
         ("a*pa", astarpa, astarpa_settings(dataset)),
@@ -126,8 +123,9 @@ def tools(dataset: str, ours: Path, astarpa: Path, wrapper: Path) -> list[tuple[
 
 def affine_tools(costs: str, ours: Path, wrapper: Path) -> list[tuple[str, Path, str]]:
     """The columns at affine costs `x,o,e`, as WFA counts them: the exact aligners that take them, KSW2's
-    SSE kernels on x86-64 alone, and dinara-align's batch over every thread beside its one-thread column."""
-    batch = f"dinara-align (batch, {THREADS} threads)"
+    SSE kernels on x86-64 alone, and dinara-align's batch, one call on one thread, beside its pairs one at
+    a time."""
+    batch = "dinara-align (batch, 1 thread)"
     chosen = [("dinara-align (1 thread)", ours, f"dinara-align:{costs}"), (batch, ours, f"{batch}:{costs}")]
     chosen.append(("wfa", wrapper, f"wfa:{costs}"))
     chosen.append(("biwfa", wrapper, f"biwfa:{costs}"))

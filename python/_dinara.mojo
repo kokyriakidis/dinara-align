@@ -15,6 +15,7 @@ from std.python.bindings import PythonModuleBuilder
 
 from dinara_align import (
     DEFAULT_MAX_MEMORY,
+    Aligner,
     Alignment,
     AlignmentError,
     Anchor,
@@ -58,6 +59,12 @@ def PyInit__dinara() abi("C") -> PythonObject:
         module.def_function[py_scoring_align]("scoring_align")
         module.def_function[py_scoring_score]("scoring_score")
         module.def_function[py_search]("search")
+        _ = (
+            module.add_type[PyAligner]("Aligner")
+            .def_init_defaultable[PyAligner]()
+            .def_method[PyAligner.distance]("distance")
+            .def_method[PyAligner.align]("align")
+        )
         return module.finalize()
     except error:
         abort(String("dinara_align: the extension failed to load: ", error))
@@ -145,12 +152,27 @@ def py_distance(
     reference: PythonObject, query: PythonObject, costs: PythonObject, mode: PythonObject, options: PythonObject
 ) raises -> PythonObject:
     """The least cost, or None past a cap of zero or more."""
+    var aligner = Aligner()
+    return distance_through(aligner, reference, query, costs, mode, options)
+
+
+def distance_through(
+    mut aligner: Aligner,
+    reference: PythonObject,
+    query: PythonObject,
+    costs: PythonObject,
+    mode: PythonObject,
+    options: PythonObject,
+) raises -> PythonObject:
+    """`py_distance` through `aligner`'s memory."""
     var asked = options_of(options)
     var first = String(py=reference)
     var second = String(py=query)
     if asked.max_cost < 0:
-        return PythonObject(distance(first, second, costs_of(costs), mode_of(mode), band=asked.band))
-    var found = distance(first, second, costs_of(costs), mode_of(mode), max_cost=asked.max_cost, band=asked.band)
+        return PythonObject(aligner.distance(first, second, costs_of(costs), mode_of(mode), band=asked.band))
+    var found = aligner.distance(
+        first, second, costs_of(costs), mode_of(mode), max_cost=asked.max_cost, band=asked.band
+    )
     if not found:
         return Python.none()
     return PythonObject(found.value())
@@ -160,12 +182,25 @@ def py_align(
     reference: PythonObject, query: PythonObject, costs: PythonObject, mode: PythonObject, options: PythonObject
 ) raises -> PythonObject:
     """An optimal alignment as a tuple (see `alignment_tuple`), or None past a cap of zero or more."""
+    var aligner = Aligner()
+    return align_through(aligner, reference, query, costs, mode, options)
+
+
+def align_through(
+    mut aligner: Aligner,
+    reference: PythonObject,
+    query: PythonObject,
+    costs: PythonObject,
+    mode: PythonObject,
+    options: PythonObject,
+) raises -> PythonObject:
+    """`py_align` through `aligner`'s memory."""
     var asked = options_of(options)
     var first = String(py=reference)
     var second = String(py=query)
     if asked.max_cost < 0:
         return alignment_tuple(
-            align(
+            aligner.align(
                 first,
                 second,
                 costs_of(costs),
@@ -176,7 +211,7 @@ def py_align(
                 max_memory=asked.max_memory,
             )
         )
-    var found = align(
+    var found = aligner.align(
         first,
         second,
         costs_of(costs),
@@ -190,6 +225,45 @@ def py_align(
     if not found:
         return Python.none()
     return alignment_tuple(found.value())
+
+
+struct PyAligner(Defaultable, Movable, Writable):
+    """`Aligner` for Python: one thread's memory kept from call to call (see `dinara_align.Aligner`)."""
+
+    var aligner: Aligner
+
+    def __init__(out self):
+        self.aligner = Aligner()
+
+    def write_to(self, mut writer: Some[Writer]):
+        writer.write("Aligner()")
+
+    def write_repr_to(self, mut writer: Some[Writer]):
+        writer.write("Aligner()")
+
+    @staticmethod
+    def distance(
+        self_ptr: MutPointer[Self, MutAnyOrigin],
+        reference: PythonObject,
+        query: PythonObject,
+        costs: PythonObject,
+        mode: PythonObject,
+        options: PythonObject,
+    ) raises -> PythonObject:
+        """`py_distance` through this aligner."""
+        return distance_through(self_ptr[].aligner, reference, query, costs, mode, options)
+
+    @staticmethod
+    def align(
+        self_ptr: MutPointer[Self, MutAnyOrigin],
+        reference: PythonObject,
+        query: PythonObject,
+        costs: PythonObject,
+        mode: PythonObject,
+        options: PythonObject,
+    ) raises -> PythonObject:
+        """`py_align` through this aligner."""
+        return align_through(self_ptr[].aligner, reference, query, costs, mode, options)
 
 
 def py_score(
@@ -229,7 +303,7 @@ def strings(items: PythonObject) raises -> List[String]:
 
 
 def threads_of(count: PythonObject) raises -> Optional[Int]:
-    """A thread count for the library: `count` when above zero, else none, every thread."""
+    """A thread count for the library: `count` when above zero, else none, the caller's own thread alone."""
     var threads = Int(py=count)
     return Optional[Int](threads) if threads > 0 else None
 
@@ -242,7 +316,7 @@ def py_distances(
     options: PythonObject,
     threads: PythonObject,
 ) raises -> PythonObject:
-    """Every pair's least cost, None past a cap, over `threads` threads, every one for zero."""
+    """Every pair's least cost, None past a cap, over `threads` threads, the caller's own alone for zero."""
     var asked = options_of(options)
     var out = Python.list()
     if asked.max_cost < 0:

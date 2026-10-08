@@ -29,7 +29,6 @@ pageable memory, 20 ms, a fifth of the batch's time.
 from std.math import ceildiv, clamp
 from std.memory import stack_allocation
 from std.memory.pointer import AddressSpace
-from max.algorithm import parallelize
 from max.gpu import WARP_SIZE, barrier, block_idx, thread_idx
 from max.gpu.host import DeviceContext
 from max.gpu.primitives.warp import shuffle_up, shuffle_xor
@@ -37,6 +36,7 @@ from max.gpu.primitives.warp import shuffle_up, shuffle_xor
 from .alignment import AffineGapCosts, AlignmentMode
 from .bit_parallel import base_codes, not_bases
 from .common import (
+    spread,
     DeviceScope,
     MAX_ALPHABET_SIZE,
     ScoreDType,
@@ -273,7 +273,7 @@ def grouped_scores[
     bounds.append(pairs)
     var stretches = len(bounds) - 1
 
-    # Every stretch measured on every thread: its words on the tape, its longest first and second
+    # Every stretch measured over the threads asked for: its words on the tape, its longest first and second
     # sequences.
     var measures = List[Int](length=3 * stretches, fill=0)
     var measure_ptr = measures.unsafe_ptr()
@@ -296,7 +296,7 @@ def grouped_scores[
         measure_ptr[unsafe_offset=3 * stretch + 1] = rows
         measure_ptr[unsafe_offset=3 * stretch + 2] = columns
 
-    parallelize(measure, stretches, min(workers, stretches))
+    spread(measure, stretches, min(workers, stretches))
     var longest_rows = 0
     var longest_columns = 0
     var words = 0
@@ -381,7 +381,7 @@ def grouped_scores[
                 if not known:
                     flags[unsafe_offset=slot] = True
 
-        parallelize(pack, stop_stretch - first_stretch, stop_stretch - first_stretch)
+        spread(pack, stop_stretch - first_stretch, stop_stretch - first_stretch)
 
         # The chunk's tape and places over, unpacked, scored: all enqueued, the host on to the next.
         var first_pair = bounds[first_stretch]

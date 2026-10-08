@@ -10,6 +10,7 @@ Symbol codes, the device staging helpers, and the scoring records every entry po
 that presumes a rotating band or an affine gap belongs to `alignment.mojo`.
 """
 
+from max.algorithm import parallelize
 from std.atomic import Atomic
 from std.ffi import c_int, c_size_t, external_call
 from std.memory import stack_allocation
@@ -87,6 +88,17 @@ def next_share(mut taken: Atomic[Int64], count: Int, workers: Int, mut last: Int
     return (first, min(first + share, count))
 
 
+def spread[F: def(Int) -> None](work: F, items: Int, workers: Int):
+    """Runs `work` on each of `items` items over `workers` threads; on the caller's own thread, starting
+    none, for one worker or one item. The library starts threads only when a caller asks for more than
+    one: an application that calls it from threads of its own knows best how to spread its work."""
+    if workers <= 1 or items <= 1:
+        for item in range(items):
+            work(item)
+        return
+    parallelize(work, items, workers)
+
+
 def hardware_threads() -> Int:
     """Threads this process may actually run on, which an affinity mask or a cgroup quota narrows.
 
@@ -140,8 +152,9 @@ struct Placement(ImplicitlyCopyable, TrivialRegisterPassable):
 
     @staticmethod
     def default() -> Self:
-        """The host sweep across every thread this process may use."""
-        return Self.on_cpu(hardware_threads())
+        """The host, on the caller's own thread: an application spreads its calls over its threads itself,
+        and asks for more here only when it wants this call spread too."""
+        return Self.on_cpu(1)
 
 
 @fieldwise_init

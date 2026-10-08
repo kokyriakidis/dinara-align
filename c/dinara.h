@@ -144,6 +144,30 @@ int64_t dinara_align(const char *reference, int64_t reference_length, const char
                      const dinara_costs *costs, const dinara_mode *mode, const dinara_options *options,
                      dinara_alignment *alignment);
 
+/*
+ * One thread's aligner: `dinara_distance` and `dinara_align` through memory kept from call to call, so a
+ * loop of calls on one thread takes none once it is warm. Every function here runs on the caller's own
+ * thread and keeps no state of its own, so an application calls them from as many threads as it likes,
+ * an aligner a thread; an aligner is never used by two threads at once.
+ */
+typedef struct dinara_aligner dinara_aligner;
+
+/* A new aligner, or null when memory runs out; free it with `dinara_aligner_free`. */
+dinara_aligner *dinara_aligner_new(void);
+
+/* Frees an aligner and the memory it kept; null is nothing to free. */
+void dinara_aligner_free(dinara_aligner *aligner);
+
+/* `dinara_distance` through `aligner`. */
+int64_t dinara_aligner_distance(dinara_aligner *aligner, const char *reference, int64_t reference_length,
+                                const char *query, int64_t query_length, const dinara_costs *costs,
+                                const dinara_mode *mode, const dinara_options *options);
+
+/* `dinara_align` through `aligner`. */
+int64_t dinara_aligner_align(dinara_aligner *aligner, const char *reference, int64_t reference_length,
+                             const char *query, int64_t query_length, const dinara_costs *costs,
+                             const dinara_mode *mode, const dinara_options *options, dinara_alignment *alignment);
+
 /* The best score `dinara_align` would return, with no alignment traced, into `*score`: for a mode with
  * a match score its matches' reward less its costs, else minus the least cost. Zero, or a DINARA_ code.
  * The options' cap, `eqx`, `right_ties` and memory change nothing. */
@@ -182,8 +206,9 @@ void dinara_free(char *cigar);
 
 /*
  * A batch: pair `i` is `references[i]` of `reference_lengths[i]` bytes against `queries[i]` of
- * `query_lengths[i]`, all under the same costs, mode and options, spread over `threads` threads, every
- * thread the process may use for zero. Each thread takes the next pair as soon as it is free. Both
+ * `query_lengths[i]`, all under the same costs, mode and options, spread over `threads` threads, or on
+ * the caller's own thread alone for zero: the library starts threads only when asked, its caller being
+ * the one that knows how to spread its work. Each thread takes the next pair as soon as it is free. Both
  * return zero, or a DINARA_ code that fails the whole batch (costs or a mode no pair can take), and
  * then write nothing.
  */
@@ -203,10 +228,12 @@ int64_t dinara_alignments(int64_t pairs, const char *const *references, const in
 #ifdef __cplusplus
 }
 
+#include <new>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace dinara {
@@ -334,11 +361,14 @@ inline dinara_costs c_costs(const Costs &costs) {
 
 /* The least cost, or DINARA_ABOVE_MAX past a `max_cost` of zero or more; raises on any other code. */
 inline int64_t distance(std::string_view reference, std::string_view query, const Costs &costs, const Mode &mode,
-                        Band band, int64_t max_cost) {
+                        Band band, int64_t max_cost, dinara_aligner *aligner = nullptr) {
     dinara_costs c = c_costs(costs);
     dinara_options options{band.low, band.high, max_cost, 1, 0, 0};
-    int64_t cost = dinara_distance(reference.data(), static_cast<int64_t>(reference.size()), query.data(),
-                                   static_cast<int64_t>(query.size()), &c, &mode.fields, &options);
+    int64_t cost =
+        aligner ? dinara_aligner_distance(aligner, reference.data(), static_cast<int64_t>(reference.size()),
+                                          query.data(), static_cast<int64_t>(query.size()), &c, &mode.fields, &options)
+                : dinara_distance(reference.data(), static_cast<int64_t>(reference.size()), query.data(),
+                                  static_cast<int64_t>(query.size()), &c, &mode.fields, &options);
     check(cost);
     return cost;
 }
@@ -347,12 +377,16 @@ inline int64_t distance(std::string_view reference, std::string_view query, cons
  * or more; raises on any other code. */
 inline std::optional<Alignment> align(std::string_view reference, std::string_view query, const Costs &costs,
                                       const Mode &mode, Band band, int64_t max_cost, Ties ties, bool eqx,
-                                      int64_t max_memory) {
+                                      int64_t max_memory, dinara_aligner *aligner = nullptr) {
     dinara_costs c = c_costs(costs);
     dinara_options options{band.low, band.high, max_cost, eqx ? 1 : 0, ties == Ties::right ? 1 : 0, max_memory};
     dinara_alignment found{};
-    int64_t status = dinara_align(reference.data(), static_cast<int64_t>(reference.size()), query.data(),
-                                  static_cast<int64_t>(query.size()), &c, &mode.fields, &options, &found);
+    int64_t status =
+        aligner ? dinara_aligner_align(aligner, reference.data(), static_cast<int64_t>(reference.size()),
+                                       query.data(), static_cast<int64_t>(query.size()), &c, &mode.fields, &options,
+                                       &found)
+                : dinara_align(reference.data(), static_cast<int64_t>(reference.size()), query.data(),
+                               static_cast<int64_t>(query.size()), &c, &mode.fields, &options, &found);
     check(status);
     if (status == DINARA_ABOVE_MAX) return std::nullopt;
     Alignment result{found.cost,          found.score,         std::string(found.cigar, static_cast<size_t>(found.cigar_length)),
@@ -503,8 +537,8 @@ inline std::optional<Alignment> align_within(std::string_view reference, std::st
     return detail::align(reference, query, costs, mode, band, max_cost, ties, eqx, max_memory);
 }
 
-/* Every pair's least cost, `references[i]` against `queries[i]`, over `threads` threads (zero: every
- * thread); raises as the first failing pair's `distance` would. */
+/* Every pair's least cost, `references[i]` against `queries[i]`, over `threads` threads (zero: the
+ * caller's own alone); raises as the first failing pair's `distance` would. */
 inline std::vector<int64_t> distances(const std::vector<std::string_view> &references,
                                       const std::vector<std::string_view> &queries,
                                       const Costs &costs = Costs::edit(), const Mode &mode = Mode::global(),
@@ -554,6 +588,58 @@ inline std::vector<std::optional<Alignment>> alignments_within(const std::vector
     return detail::alignments(detail::Batch(references, queries), costs, mode, band, max_cost, ties, eqx,
                               threads, max_memory);
 }
+
+/* One thread's aligner: `distance` and `align` through memory kept from call to call, freed with it.
+ * Movable, not copyable; one a thread, as the functions themselves keep no state between calls. */
+class Aligner {
+  public:
+    Aligner() : handle_(dinara_aligner_new()) {
+        if (!handle_) throw std::bad_alloc();
+    }
+    ~Aligner() { dinara_aligner_free(handle_); }
+    Aligner(const Aligner &) = delete;
+    Aligner &operator=(const Aligner &) = delete;
+    Aligner(Aligner &&other) noexcept : handle_(other.handle_) { other.handle_ = nullptr; }
+    Aligner &operator=(Aligner &&other) noexcept {
+        std::swap(handle_, other.handle_);
+        return *this;
+    }
+
+    /* `dinara::distance` through this aligner. */
+    int64_t distance(std::string_view reference, std::string_view query, const Costs &costs = Costs::edit(),
+                     const Mode &mode = Mode::global(), Band band = {}) {
+        return detail::distance(reference, query, costs, mode, band, -1, handle_);
+    }
+
+    /* `dinara::distance_within` through this aligner. */
+    std::optional<int64_t> distance_within(std::string_view reference, std::string_view query, int64_t max_cost,
+                                           const Costs &costs = Costs::edit(), const Mode &mode = Mode::global(),
+                                           Band band = {}) {
+        if (max_cost < 0) return std::nullopt;
+        int64_t cost = detail::distance(reference, query, costs, mode, band, max_cost, handle_);
+        if (cost == DINARA_ABOVE_MAX) return std::nullopt;
+        return cost;
+    }
+
+    /* `dinara::align` through this aligner. */
+    Alignment align(std::string_view reference, std::string_view query, const Costs &costs = Costs::edit(),
+                    const Mode &mode = Mode::global(), Band band = {}, Ties ties = Ties::left, bool eqx = true,
+                    int64_t max_memory = 0) {
+        return *detail::align(reference, query, costs, mode, band, -1, ties, eqx, max_memory, handle_);
+    }
+
+    /* `dinara::align_within` through this aligner. */
+    std::optional<Alignment> align_within(std::string_view reference, std::string_view query, int64_t max_cost,
+                                          const Costs &costs = Costs::edit(), const Mode &mode = Mode::global(),
+                                          Band band = {}, Ties ties = Ties::left, bool eqx = true,
+                                          int64_t max_memory = 0) {
+        if (max_cost < 0) return std::nullopt;
+        return detail::align(reference, query, costs, mode, band, max_cost, ties, eqx, max_memory, handle_);
+    }
+
+  private:
+    dinara_aligner *handle_;
+};
 
 }  // namespace dinara
 #endif
