@@ -288,7 +288,7 @@ def cost_within(
         try:
             var scale = costs.unit_scale()
             if ends.first_begin == 0 and ends.first_end == 0:
-                return edit_distance(reference, query) * scale
+                return edit_distance(reference, query, space.edit) * scale
             return edit_search(query, reference, ends.first_begin == 0).distance * scale
         except error:
             # More symbols than the sweep takes: the wavefront takes any.

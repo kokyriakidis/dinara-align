@@ -713,28 +713,39 @@ def word_value(plus: UInt64, minus: UInt64) -> Int:
     return Int(pop_count(plus)) - Int(pop_count(minus))
 
 
-def all_bases(text: String) -> Bool:
-    """Whether every byte is `A`, `C`, `G` or `T`, sixteen at a time."""
+@always_inline
+def base_codes[width: Int](bytes: SIMD[DType.uint8, width]) -> SIMD[DType.uint8, width]:
+    """Each byte's code, right for `A`, `C`, `G` and `T` alone (see `encoded_bases`)."""
+    return (((bytes >> 1) ^ (bytes >> 2)) & 1) | ((bytes >> 1) & 2)
+
+
+@always_inline
+def not_bases[width: Int](bytes: SIMD[DType.uint8, width]) -> SIMD[DType.bool, width]:
+    """Which bytes are not `A`, `C`, `G` or `T`."""
+    return ~(
+        bytes.eq(UInt8(ord("A"))) | bytes.eq(UInt8(ord("C"))) | bytes.eq(UInt8(ord("G"))) | bytes.eq(UInt8(ord("T")))
+    )
+
+
+def encoded_bases(source: ImmPointer[UInt8, _], count: Int, target: MutPointer[UInt8, _]) -> Bool:
+    """Writes each of `count` bytes' base code to `target`, sixteen at a time, and whether every byte
+    was `A`, `C`, `G` or `T`: a byte of these gives its code from its ASCII bits, bit 2 set for `G` and
+    `T`, the code's high bit, and bit 1 differing from bit 2 for `C` and `T`, its low bit. Any other
+    byte's code is wrong until recoded (see `symbol_codes`). One pass for both, where a short read's
+    profile once read each sequence twice."""
     comptime CHUNK = 16
-    var bytes = text.unsafe_ptr()
-    var length = text.byte_length()
-    var other = SIMD[DType.bool, CHUNK](fill=False)
+    var others = SIMD[DType.bool, CHUNK](fill=False)
     var index = 0
-    while index + CHUNK <= length:
-        var chunk = bytes.unsafe_offset(index).unsafe_load[width=CHUNK]()
-        other |= ~(
-            chunk.eq(UInt8(ord("A")))
-            | chunk.eq(UInt8(ord("C")))
-            | chunk.eq(UInt8(ord("G")))
-            | chunk.eq(UInt8(ord("T")))
-        )
+    while index + CHUNK <= count:
+        var bytes = source.unsafe_offset(index).unsafe_load[width=CHUNK]()
+        target.unsafe_offset(index).unsafe_store(base_codes[CHUNK](bytes))
+        others |= not_bases[CHUNK](bytes)
         index += CHUNK
-    var found = other.reduce_or()
-    while index < length:
-        var byte = bytes[unsafe_offset=index]
-        found |= not (
-            byte == UInt8(ord("A")) or byte == UInt8(ord("C")) or byte == UInt8(ord("G")) or byte == UInt8(ord("T"))
-        )
+    var found = others.reduce_or()
+    while index < count:
+        var byte = source[unsafe_offset=index]
+        target[unsafe_offset=index] = base_codes[1](byte)
+        found |= not_bases[1](byte)[0]
         index += 1
     return not found
 
@@ -874,9 +885,9 @@ struct Profile(Movable):
         """Both sequences as codes: `A`, `C`, `G` and `T` zero to three, and up to four other bytes the
         codes four to seven, in the order they first appear, each matching only itself; with
         `reverse`, both back to front, the profile of the reversed pair."""
-        self.columns = first.byte_length()
-        self.rows = second.byte_length()
-        self.words = ceildiv(self.rows, WORD_BITS)
+        self.columns = 0
+        self.rows = 0
+        self.words = 0
         self.column_low = List[UInt64]()
         self.column_high = List[UInt64]()
         self.column_extra = List[UInt64]()
@@ -885,43 +896,32 @@ struct Profile(Movable):
         self.row_extra = List[UInt64]()
         self.row_symbols = False
         self.column_symbols = List[Int32]()
-        self.extended = not all_bases(first) or not all_bases(second)
+        self.extended = False
+        self.column_codes = List[UInt8]()
+        self.row_codes = List[UInt8]()
+        self.reset(first, second, reverse)
 
-        # A byte of `A`, `C`, `G` or `T` gives its code from its ASCII bits: bit 2 is set for `G` and
-        # `T`, the code's high bit, and bit 1 differs from bit 2 for `C` and `T`, its low bit. Any
-        # other byte is recoded after (see `symbol_codes`). Only the codes are built here; the planes
-        # wait for a band (see `build_planes`).
-        self.column_codes = List[UInt8](capacity=self.columns + CODE_PADDING)
+    def reset(mut self, first: String, second: String, reverse: Bool = False) raises AlignmentError:
+        """As new for this pair, the memory the last pair's codes took kept: a batch's worker profiles
+        each of its pairs in the same lists (see `edit_distance.EditSpace`)."""
+        self.columns = first.byte_length()
+        self.rows = second.byte_length()
+        self.words = ceildiv(self.rows, WORD_BITS)
+        # The planes wait for a band, which builds them anew (see `build_planes`).
+        self.column_low.clear()
+        self.column_high.clear()
+        self.column_extra.clear()
+        self.row_low.clear()
+        self.row_high.clear()
+        self.row_extra.clear()
+        self.row_symbols = False
+        self.column_symbols.clear()
+        # Only the codes are built here; the planes wait for a band (see `build_planes`).
         self.column_codes.resize(unsafe_uninit_length=self.columns)
-        var first_bytes = first.unsafe_ptr()
-        var column_codes = self.column_codes.unsafe_ptr()
-        comptime CHUNK = 16
-        var column = 0
-        while column + CHUNK <= self.columns:
-            var bytes = first_bytes.unsafe_offset(column).unsafe_load[width=CHUNK]()
-            column_codes.unsafe_offset(column).unsafe_store((((bytes >> 1) ^ (bytes >> 2)) & 1) | ((bytes >> 1) & 2))
-            column += CHUNK
-        while column < self.columns:
-            var byte = first_bytes[unsafe_offset=column]
-            column_codes[unsafe_offset=column] = (((byte >> 1) ^ (byte >> 2)) & 1) | ((byte >> 1) & 2)
-            column += 1
-
-        comptime ONES = UInt64(0x0101010101010101)
-        var second_bytes = second.unsafe_ptr()
-        self.row_codes = List[UInt8](capacity=self.rows + CODE_PADDING)
         self.row_codes.resize(unsafe_uninit_length=self.rows)
-        var row_codes = self.row_codes.unsafe_ptr()
-        var row = 0
-        while row + 8 <= self.rows:
-            var eight = second_bytes.unsafe_offset(row).unsafe_bitcast[UInt64]().unsafe_load()
-            var low_bits = ((eight >> 1) ^ (eight >> 2)) & ONES
-            var high_bits = (eight >> 2) & ONES
-            row_codes.unsafe_offset(row).unsafe_bitcast[UInt64]().unsafe_store(low_bits | (high_bits << 1))
-            row += 8
-        while row < self.rows:
-            var byte = second_bytes[unsafe_offset=row]
-            row_codes[unsafe_offset=row] = (((byte >> 1) ^ (byte >> 2)) & 1) | ((byte >> 1) & 2)
-            row += 1
+        var bases = encoded_bases(first.unsafe_ptr(), self.columns, self.column_codes.unsafe_ptr())
+        bases = encoded_bases(second.unsafe_ptr(), self.rows, self.row_codes.unsafe_ptr()) and bases
+        self.extended = not bases
         if self.extended:
             symbol_codes(first, second, self.column_codes, self.row_codes)
         if reverse:
@@ -929,9 +929,14 @@ struct Profile(Movable):
             reverse_in_place(self.row_codes.unsafe_ptr(), self.rows)
         # Past the last base of each, sentinels that match nothing, the two of them distinct, so a
         # match extension stops at the matrix's edge without checking it (see `slide_forward`).
-        for _ in range(CODE_PADDING):
-            self.column_codes.append(FIRST_SENTINEL)
-            self.row_codes.append(SECOND_SENTINEL)
+        self.column_codes.resize(unsafe_uninit_length=self.columns + CODE_PADDING)
+        self.row_codes.resize(unsafe_uninit_length=self.rows + CODE_PADDING)
+        self.column_codes.unsafe_ptr().unsafe_offset(self.columns).unsafe_store(
+            SIMD[DType.uint8, CODE_PADDING](FIRST_SENTINEL)
+        )
+        self.row_codes.unsafe_ptr().unsafe_offset(self.rows).unsafe_store(
+            SIMD[DType.uint8, CODE_PADDING](SECOND_SENTINEL)
+        )
 
     def build_planes(mut self):
         """The bit planes a band sweeps, from the codes, once; a pair the diagonal transition settles

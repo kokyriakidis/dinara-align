@@ -63,6 +63,7 @@ searches find keeping only their last few costs, and each piece is aligned the s
 from std.math import gcd
 from std.sys import size_of
 
+from .edit_distance import EditSpace
 from .errors import AlignmentError, ErrorKind
 from .modes import Anchor, Band, Costs, Ties
 from .slides import GATHERED_SLIDES, gathered_slides, slide
@@ -1587,6 +1588,8 @@ struct DistanceSpace(Movable):
     var costs: Optional[Costs]
     """The costs the last pair took, whose `penalties` a batch's next pairs take again."""
     var penalties: Optional[Penalties]
+    var edit: EditSpace
+    """The memory a unit-cost pair's edit distance takes, kept the same way."""
 
     def __init__(out self):
         """No searches yet: the first pair builds them."""
@@ -1596,6 +1599,7 @@ struct DistanceSpace(Movable):
         self.backward2 = None
         self.costs = None
         self.penalties = None
+        self.edit = EditSpace()
 
     def penalties_for(mut self, costs: Costs) raises AlignmentError -> Penalties:
         """`penalties_of(costs)`, worked out once for a batch's costs and not again for each pair: their

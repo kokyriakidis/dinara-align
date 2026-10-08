@@ -479,8 +479,14 @@ def diagonal_transition(
 
 def reversed_codes(codes: List[UInt8], count: Int, sentinel: UInt8) -> List[UInt8]:
     """The first `count` codes back to front, with `CODE_PADDING` sentinels after them."""
-    var flipped = List[UInt8](capacity=count + CODE_PADDING)
-    flipped.resize(unsafe_uninit_length=count)
+    var flipped = List[UInt8]()
+    reversed_codes_into(flipped, codes, count, sentinel)
+    return flipped^
+
+
+def reversed_codes_into(mut flipped: List[UInt8], codes: List[UInt8], count: Int, sentinel: UInt8):
+    """`reversed_codes` written over `flipped`, whose memory is kept."""
+    flipped.resize(unsafe_uninit_length=count + CODE_PADDING)
     var source = codes.unsafe_ptr()
     var target = flipped.unsafe_ptr()
     comptime CHUNK = 16
@@ -493,9 +499,7 @@ def reversed_codes(codes: List[UInt8], count: Int, sentinel: UInt8) -> List[UInt
     while index < count:
         target[unsafe_offset=index] = source[unsafe_offset=count - 1 - index]
         index += 1
-    for _ in range(CODE_PADDING):
-        flipped.append(sentinel)
-    return flipped^
+    target.unsafe_offset(count).unsafe_store(SIMD[DType.uint8, CODE_PADDING](sentinel))
 
 
 comptime FRONT_RING = 2
@@ -541,14 +545,34 @@ struct FrontPair(Movable):
         for diagonal in range(-FRONT_PADDING, FRONT_PADDING + 1):
             first[unsafe_offset=diagonal] = UNREACHED_OFFSET
 
+    def reset(mut self):
+        """As new, recording nothing, the ring's memory kept for a batch's next pair."""
+        self.low = 0
+        self.high = 0
+        self.previous_low = 0
+        self.previous_high = -1
+        self.score = 0
+        self.slot = 0
+        self.furthest = 0
+        self.history = DiagonalFronts(reserve=False)
+        self.record = False
+        var first = self.front_mut(0)
+        for diagonal in range(-FRONT_PADDING, FRONT_PADDING + 1):
+            first[unsafe_offset=diagonal] = UNREACHED_OFFSET
+
     def take_history(deinit self) -> DiagonalFronts:
         """The fronts kept, the rest given up."""
         return self.history^
 
+    @always_inline
     def keep(mut self):
-        """Copies the latest front, with its padding, onto the history, when recording."""
-        if not self.record:
-            return
+        """Copies the latest front, with its padding, onto the history, when recording: a check in place
+        for a distance, which records nothing and once paid a call a step for it."""
+        if self.record:
+            self.kept()
+
+    def kept(mut self):
+        """`keep`'s copy."""
         var source = self.front(self.slot)
         var start = len(self.history.offsets)
         self.history.starts.append(start)
@@ -663,10 +687,28 @@ struct Meeting(ImplicitlyCopyable, TrivialRegisterPassable):
 
 def two_ended_distance(profile: Profile, step_tenths: Int, ceiling: Int = Int.MAX) -> Probe:
     """The edit distance by `two_ended`, keeping no history, giving up past `ceiling` steps too."""
-    var first_back = reversed_codes(profile.column_codes, profile.columns, FIRST_SENTINEL)
-    var second_back = reversed_codes(profile.row_codes, profile.rows, SECOND_SENTINEL)
+    var first_back = List[UInt8]()
+    var second_back = List[UInt8]()
     var ahead = FrontPair()
     var behind = FrontPair()
+    return two_ended_distance(profile, step_tenths, ceiling, first_back, second_back, ahead, behind)
+
+
+def two_ended_distance(
+    profile: Profile,
+    step_tenths: Int,
+    ceiling: Int,
+    mut first_back: List[UInt8],
+    mut second_back: List[UInt8],
+    mut ahead: FrontPair,
+    mut behind: FrontPair,
+) -> Probe:
+    """`two_ended_distance` over memory a batch's worker keeps from pair to pair: the reversed codes
+    and the two fronts' rings, begun afresh."""
+    reversed_codes_into(first_back, profile.column_codes, profile.columns, FIRST_SENTINEL)
+    reversed_codes_into(second_back, profile.row_codes, profile.rows, SECOND_SENTINEL)
+    ahead.reset()
+    behind.reset()
     return two_ended(profile, first_back, second_back, step_tenths, ahead, behind, ceiling).probe
 
 

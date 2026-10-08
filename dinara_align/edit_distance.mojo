@@ -38,8 +38,34 @@ from .modes import Ties
 from .traceback import cigar_string, diagonal_cigar, EditPath, trace_back
 
 
+struct EditSpace(Movable):
+    """A batch worker's memory for its pairs' edit distances: the profile, the reversed codes and the
+    two-ended search's rings, kept from pair to pair so a warm worker allocates nothing, where each
+    pair's own were a third of a short read's time and, on many threads, contended in the allocator."""
+
+    var profile: Optional[Profile]
+    var first_back: List[UInt8]
+    var second_back: List[UInt8]
+    var ahead: FrontPair
+    var behind: FrontPair
+
+    def __init__(out self):
+        """Nothing profiled yet: the first pair does."""
+        self.profile = None
+        self.first_back = List[UInt8]()
+        self.second_back = List[UInt8]()
+        self.ahead = FrontPair()
+        self.behind = FrontPair()
+
+
 def edit_distance(first: String, second: String) raises AlignmentError -> Int:
-    """The global edit distance between two sequences, by bit-parallel sweep.
+    """The global edit distance between two sequences (see the overload taking an `EditSpace`)."""
+    var space = EditSpace()
+    return edit_distance(first, second, space)
+
+
+def edit_distance(first: String, second: String, mut space: EditSpace) raises AlignmentError -> Int:
+    """The global edit distance between two sequences, by bit-parallel sweep, through `space`'s memory.
 
     Built for DNA over `ACGT`. Up to four other bytes, `N` among them, are symbols of their own,
     each matching only itself; a pair holding them sweeps a third bit plane, so runs a little slower
@@ -51,14 +77,24 @@ def edit_distance(first: String, second: String) raises AlignmentError -> Int:
     matrix, the whole matrix is swept instead; a short pair's band covers it from the start, so the
     diagonal transition gives way straight to the sweep once it would cost more.
     """
-    var profile = Profile(first, second)
+    if space.profile:
+        space.profile.value().reset(first, second)
+    else:
+        space.profile = Profile(first, second)
+    ref profile = space.profile.value()
     if profile.columns == 0 or profile.rows == 0:
         return profile.columns + profile.rows
     # A short pair's band would sweep its whole matrix (see `SHORT_BAND_COLUMNS`), so past what that
     # sweep costs the diagonal transition gives way to the sweep itself.
     var short = profile.columns <= SHORT_BAND_COLUMNS
     var search = two_ended_distance(
-        profile, STEP_TENTHS_DISTANCE, full_matrix_steps(profile.columns, profile.rows) if short else Int.MAX
+        profile,
+        STEP_TENTHS_DISTANCE,
+        full_matrix_steps(profile.columns, profile.rows) if short else Int.MAX,
+        space.first_back,
+        space.second_back,
+        space.ahead,
+        space.behind,
     )
     if search.distance >= 0:
         return search.distance
