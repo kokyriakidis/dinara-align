@@ -1146,9 +1146,8 @@ struct Trail(Movable):
         self.ends.append(end)
         self.anchors.append(anchor)
         self.offsets.append(len(self.edge_plus))
-        for word in range(top, end):
-            self.edge_plus.append(frontier.vertical_plus[word])
-            self.edge_minus.append(frontier.vertical_minus[word])
+        self.edge_plus.extend(Span(frontier.vertical_plus)[top:end])
+        self.edge_minus.extend(Span(frontier.vertical_minus)[top:end])
 
 
 struct Edge(Movable):
