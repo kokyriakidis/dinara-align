@@ -65,7 +65,15 @@ from .gap_affine import (
     wavefront_penalties,
     wavefront_score,
 )
-from .lanes import LaneCosts, StringTexts, lane_alignments, lane_distances, lane_local_scores
+from .lanes import (
+    TABLE_ENTRIES,
+    CodeTexts,
+    LaneCosts,
+    StringTexts,
+    lane_alignments,
+    lane_distances,
+    lane_local_scores,
+)
 from .modes import Alignment, Anchor, Band, Costs, Mode
 from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, swept_cells
 from .score_groups import grouped_scores
@@ -74,6 +82,8 @@ from .vector_score import optimal_band, reach_back, vector_align, vector_score
 
 
 from max.algorithm import parallelize
+from std.memory import bitcast
+from std.math import gcd
 
 comptime STORED_CELL_BYTES = 12
 """Bytes the host traceback keeps a stored cell in: three `int32` layers. The device packs a nibble per cell
@@ -1002,6 +1012,171 @@ def laned_local_scores(
     return settled^
 
 
+@fieldwise_init
+struct CodedBatch(Movable):
+    """A batch's sequences as an alphabet's codes for the lanes (see `lanes.CodeTexts`), the firsts' after
+    the seconds', and the pairs holding a letter outside the alphabet, whose codes are left zero."""
+
+    var codes: List[UInt8]
+    var starts: List[Int]
+    var refused: List[Bool]
+
+    def firsts(self) -> CodeTexts:
+        return CodeTexts(
+            self.codes.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin](),
+            self.starts.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin](),
+        )
+
+    def seconds(self) -> CodeTexts:
+        return CodeTexts(
+            self.codes.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin](),
+            self.starts.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]().unsafe_offset(len(self.refused)),
+        )
+
+
+def coded_batch(firsts: List[String], seconds: List[String], alphabet: String, workers: Int) -> CodedBatch:
+    """Every pair's letters as `alphabet`'s codes, translated over `workers` threads."""
+    var pairs = len(firsts)
+    var codes_by_byte = Array[UInt8, 256](fill=UInt8(255))
+    var alphabet_bytes = alphabet.as_bytes()
+    for index in range(len(alphabet_bytes)):
+        codes_by_byte[Int(alphabet_bytes[index])] = UInt8(index)
+    # Sequence `i` of the firsts, then of the seconds, from `starts[i]`, and one entry past the last.
+    var starts = List[Int](capacity=2 * pairs + 1)
+    var total = 0
+    for index in range(pairs):
+        starts.append(total)
+        total += firsts[index].byte_length()
+    for index in range(pairs):
+        starts.append(total)
+        total += seconds[index].byte_length()
+    starts.append(total)
+    var codes = List[UInt8](capacity=max(total, 1))
+    codes.resize(unsafe_uninit_length=total)
+    var refused = List[Bool](length=pairs, fill=False)
+    var code_ptr = codes.unsafe_ptr()
+    var start_ptr = starts.unsafe_ptr()
+    var refused_ptr = refused.unsafe_ptr()
+
+    def translate_stretch(
+        stretch: Int,
+    ) {
+        imm firsts, imm seconds, imm codes_by_byte, imm pairs, imm workers, imm code_ptr, imm start_ptr, imm refused_ptr
+    }:
+        """Translates stretch `stretch`'s pairs, marking any holding a letter outside the alphabet."""
+        for index in range(pairs * stretch // workers, pairs * (stretch + 1) // workers):
+            var unknown = False
+            var first = firsts[index].as_bytes()
+            var target = code_ptr.unsafe_offset(start_ptr[unsafe_offset=index])
+            for position in range(len(first)):
+                var code = codes_by_byte[Int(first[position])]
+                unknown = unknown or code == 255
+                target[unsafe_offset=position] = 0 if code == 255 else code
+            var second = seconds[index].as_bytes()
+            target = code_ptr.unsafe_offset(start_ptr[unsafe_offset=index + pairs])
+            for position in range(len(second)):
+                var code = codes_by_byte[Int(second[position])]
+                unknown = unknown or code == 255
+                target[unsafe_offset=position] = 0 if code == 255 else code
+            refused_ptr[unsafe_offset=index] = unknown
+
+    parallelize(translate_stretch, workers, workers)
+    return CodedBatch(codes^, starts^, refused^)
+
+
+def lane_table(scoring: Scoring) -> SIMD[DType.uint8, TABLE_ENTRIES]:
+    """The table's signed scores as bytes, row by row, for the lanes' byte shuffle."""
+    var table = SIMD[DType.uint8, TABLE_ENTRIES](0)
+    var size = scoring.alphabet_size()
+    for cell in range(min(size * size, TABLE_ENTRIES)):
+        table[cell] = bitcast[DType.uint8](Int8(scoring.substitutions[cell]))
+    return table
+
+
+def tabled_scores[
+    mode: AlignmentMode
+](
+    firsts: List[String], seconds: List[String], scoring: Scoring, threads: Int, scores_out: MutPointer[Int32, _]
+) -> List[Bool]:
+    """The global or local scores of every pair the lanes take into `scores_out`, and which they were,
+    under a table of up to `TABLE_ENTRIES` entries with more than one mismatch score, its sequences as the
+    alphabet's codes. A global score is a cost, as `wavefront_penalties` folds a uniform table's reward:
+    each pair costing twice the table's best score less its own, a gap letter that best less twice its
+    extension, and a gap's opening twice its extension less its opening, all over their common factor."""
+    var pairs = len(firsts)
+    var workers = max(threads, 1)
+    var size = scoring.alphabet_size()
+    var none = List[Bool](length=pairs, fill=False)
+    if size < 2 or size * size > TABLE_ENTRIES:
+        return none^
+    var best = Int.MIN
+    var least = Int.MAX
+    for cell in range(size * size):
+        best = max(best, Int(scoring.substitutions[cell]))
+        least = min(least, Int(scoring.substitutions[cell]))
+    var open = Int(scoring.gaps.open)
+    var extend = Int(scoring.gaps.extend)
+    var batch = coded_batch(firsts, seconds, scoring.alphabet, workers)
+    var settled = batch.refused.copy()
+    comptime if mode == AlignmentMode.GLOBAL:
+        var opening = 2 * (extend - open)
+        var extension = best - 2 * extend
+        if opening < 0 or extension <= 0:
+            return none^
+        var scale = gcd(opening, extension)
+        for cell in range(size * size):
+            scale = gcd(scale, 2 * (best - Int(scoring.substitutions[cell])))
+        var table = SIMD[DType.uint8, TABLE_ENTRIES](0)
+        for cell in range(size * size):
+            var cost = 2 * (best - Int(scoring.substitutions[cell])) // scale
+            if cost > 255:
+                return none^
+            table[cell] = UInt8(cost)
+        var penalties = Penalties(0, opening // scale, extension // scale, scale, best, 0, 0)
+        var costs = LaneCosts.one_piece(
+            0, opening // scale, extension // scale, opening // scale, extension // scale
+        ).tabled(size, table)
+        var found = List[Optional[Int]](length=pairs, fill=None)
+        _ = lane_distances(
+            pairs,
+            batch.firsts(),
+            batch.seconds(),
+            costs,
+            Band(),
+            Int.MAX,
+            workers,
+            found.unsafe_ptr(),
+            settled.unsafe_ptr(),
+        )
+        for index in range(pairs):
+            if batch.refused[index]:
+                settled[index] = False
+            elif settled[index]:
+                var letters = firsts[index].byte_length() + seconds[index].byte_length()
+                scores_out[unsafe_offset=index] = Int32(penalties.score(found[index].value(), letters))
+    else:
+        # Codes past the alphabet pad the lanes.
+        _ = lane_local_scores(
+            pairs,
+            batch.firsts(),
+            batch.seconds(),
+            best,
+            least,
+            open,
+            extend,
+            (UInt8(size), UInt8(size + 1)),
+            workers,
+            scores_out,
+            settled.unsafe_ptr(),
+            size,
+            lane_table(scoring),
+        )
+        for index in range(pairs):
+            if batch.refused[index]:
+                settled[index] = False
+    return settled^
+
+
 def scores_with[
     mode: AlignmentMode
 ](firsts: List[String], seconds: List[String], scoring: Scoring, placement: Optional[Placement] = None) raises -> List[
@@ -1035,6 +1210,9 @@ def scores_with[
                 settled = laned_scores(firsts, seconds, scoring.alphabet, lane_costs, found, resolved.threads, out)
         comptime if mode == AlignmentMode.LOCAL:
             settled = laned_local_scores(firsts, seconds, scoring, resolved.threads, out)
+        # A table of more than one mismatch score, small enough for a register, over its codes.
+        if not uniform_scores(scoring):
+            settled = tabled_scores[mode](firsts, seconds, scoring, resolved.threads, out)
         var settled_ptr = settled.unsafe_ptr()
 
         # The pairs are independent, so each is aligned on one thread start to finish, in

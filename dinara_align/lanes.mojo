@@ -34,7 +34,9 @@ nearest end's. A read placed in a window may start and end on any row, and its b
 matrix, swept 64 pairs at a time.
 
 A local score takes the lanes in 16 bits, the whole matrix swept (see `lane_local_scores`): each lane
-padded past its letters with bytes that match nothing, so no cell there beats its best.
+padded past its letters with bytes that match nothing, so no cell there beats its best. A table of more
+than one mismatch score that fits a register, DNA's, is read by byte shuffle over the alphabet's codes
+(see `CodeTexts`), each lane's pair at once.
 
 An alignment takes the bytes alone (see `lane_alignments`). Its band must hold every optimal path, so a
 path off it must cost more, not merely as much; each cell then keeps a flag naming the source the
@@ -112,6 +114,51 @@ comptime HELD = 16000
 it stays inside 16 bits."""
 
 
+comptime TABLE_ENTRIES = 16
+"""Entries a table holds at most for the lanes: one 16-byte register a byte shuffle reads, a four-letter
+alphabet's, DNA's."""
+
+
+@always_inline
+def looked_up[
+    value: DType, width: Int
+](table: SIMD[DType.uint8, TABLE_ENTRIES], index: SIMD[DType.uint8, width]) -> SIMD[value, width]:
+    """Each lane's entry of `table`, `pshufb` or `tbl` a sixteen lanes, widened to `value`, signed for a
+    signed `value`."""
+    var out = SIMD[value, width]()
+    comptime if width < TABLE_ENTRIES:
+        # Fewer lanes than a shuffle takes, as NEON's eight 16-bit ones: one shuffle, its first lanes kept.
+        var part = table._dynamic_shuffle(SIMD[DType.uint8, TABLE_ENTRIES](0).insert[offset=0](index)).slice[width]()
+        comptime if value.is_signed():
+            return bitcast[DType.int8, width](part).cast[value]()
+        else:
+            return part.cast[value]()
+    comptime for chunk in range(width // TABLE_ENTRIES):
+        var part = table._dynamic_shuffle(index.slice[TABLE_ENTRIES, offset=chunk * TABLE_ENTRIES]())
+        comptime if value.is_signed():
+            out = out.insert[offset=chunk * TABLE_ENTRIES](bitcast[DType.int8, TABLE_ENTRIES](part).cast[value]())
+        else:
+            out = out.insert[offset=chunk * TABLE_ENTRIES](part.cast[value]())
+    return out
+
+
+@fieldwise_init
+struct CodeTexts(Texts, TrivialRegisterPassable):
+    """Sequences as an alphabet's codes, one after another in one buffer, sequence `i` from `starts[i]` to
+    `starts[i + 1]`."""
+
+    var codes: ImmPointer[UInt8, ImmUntrackedOrigin]
+    var starts: ImmPointer[Int, ImmUntrackedOrigin]
+
+    @always_inline
+    def length(self, index: Int) -> Int:
+        return self.starts[unsafe_offset=index + 1] - self.starts[unsafe_offset=index]
+
+    @always_inline
+    def letters(self, index: Int) -> ImmPointer[UInt8, ImmUntrackedOrigin]:
+        return self.codes.unsafe_offset(self.starts[unsafe_offset=index])
+
+
 @fieldwise_init
 struct LaneEnds(ImplicitlyCopyable, TrivialRegisterPassable):
     """A pair's letters an alignment may leave unaligned for nothing, in the lanes' terms: reference
@@ -169,6 +216,11 @@ struct LaneCosts(ImplicitlyCopyable, TrivialRegisterPassable):
     var deletion_extension2: Int
     var insertion_opening2: Int
     var insertion_extension2: Int
+    var letters: Int
+    """With a table, the alphabet's size, the sequences then its codes; zero to compare letters, a match
+    free and a mismatch `mismatch`."""
+    var table: SIMD[DType.uint8, TABLE_ENTRIES]
+    """Pair `(a, b)`'s cost at `a letters + b`, `mismatch` the dearest."""
 
     @staticmethod
     def one_piece(
@@ -176,8 +228,30 @@ struct LaneCosts(ImplicitlyCopyable, TrivialRegisterPassable):
     ) -> Self:
         """Costs of one gap piece."""
         return Self(
-            mismatch, deletion_opening, deletion_extension, insertion_opening, insertion_extension, 1, 0, 0, 0, 0
+            mismatch,
+            deletion_opening,
+            deletion_extension,
+            insertion_opening,
+            insertion_extension,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            SIMD[DType.uint8, TABLE_ENTRIES](0),
         )
+
+    def tabled(self, letters: Int, table: SIMD[DType.uint8, TABLE_ENTRIES]) -> Self:
+        """These gap costs with each pair's cost read from `table`, over an alphabet of `letters` codes."""
+        var dearest = 0
+        for cell in range(letters * letters):
+            dearest = max(dearest, Int(table[cell]))
+        var costs = self
+        costs.mismatch = dearest
+        costs.letters = letters
+        costs.table = table
+        return costs
 
     @staticmethod
     def of(costs: Costs, mode: Mode, free_ends: Bool = False) -> Optional[Self]:
@@ -196,6 +270,8 @@ struct LaneCosts(ImplicitlyCopyable, TrivialRegisterPassable):
             costs.deletion_extension2,
             costs.opening2,
             costs.extension2,
+            0,
+            SIMD[DType.uint8, TABLE_ENTRIES](0),
         )
 
     @always_inline
@@ -499,15 +575,20 @@ def band_costs[
     space.column_letters.resize(unsafe_uninit_length=ceildiv(max(columns, 1), BLOCK) * BLOCK * WIDTH)
     side_by_side[T, WIDTH](references, space.members, rows, space.staging, space.row_letters.unsafe_ptr(), reverse)
     side_by_side[T, WIDTH](queries, space.members, columns, space.staging, space.column_letters.unsafe_ptr(), reverse)
+    if costs.letters > 0:
+        if costs.pieces == 2:
+            return pieced_band_costs[value, 2, True](space, low, high, costs, every)
+        return pieced_band_costs[value, 1, True](space, low, high, costs, every)
     if costs.pieces == 2:
         return pieced_band_costs[value, 2](space, low, high, costs, every)
     return pieced_band_costs[value, 1](space, low, high, costs, every)
 
 
 def pieced_band_costs[
-    value: DType, pieces: Int
+    value: DType, pieces: Int, tabled: Bool = False
 ](mut space: LaneSpace[value], low: Int, high: Int, costs: LaneCosts, every: Int) -> SIMD[value, lanes_of[value]()]:
-    """`band_costs` at `pieces` gap pieces, the letters already side by side."""
+    """`band_costs` at `pieces` gap pieces, each pair's cost from `costs.table` with `tabled`, the letters
+    already side by side."""
     comptime WIDTH = lanes_of[value]()
     comptime Lanes = SIMD[value, WIDTH]
     comptime FAR = far_of[value]()
@@ -520,21 +601,21 @@ def pieced_band_costs[
     var found = Lanes(FAR)
     if space.free:
         ends_reached[value](space, low, high, 0, found)
-        swept[value, pieces, False, True](space, low, high, costs, 0, space.rows, found)
+        swept[value, pieces, False, True, tabled](space, low, high, costs, 0, space.rows, found)
         return found
     for lane in range(len(space.members)):
         var column = Int(space.column_ends[lane])
         if space.row_ends[lane] == 0 and column >= low and column <= high:
             found[lane] = space.scores[column][lane]
     if every <= 0:
-        swept[value, pieces, False](space, low, high, costs, 0, space.rows, found)
+        swept[value, pieces, False, False, tabled](space, low, high, costs, 0, space.rows, found)
         return found
     space.saved.clear()
     saved_row[value, pieces](space, low, high, 0)
     var row = 0
     while row < space.rows:
         var next = min(row + every, space.rows)
-        swept[value, pieces, False](space, low, high, costs, row, next, found)
+        swept[value, pieces, False, False, tabled](space, low, high, costs, row, next, found)
         if next % every == 0 and next < space.rows:
             saved_row[value, pieces](space, low, high, next)
         row = next
@@ -664,7 +745,7 @@ def ends_reached[
 
 
 def swept[
-    value: DType, pieces: Int, record: Bool, free: Bool = False
+    value: DType, pieces: Int, record: Bool, free: Bool = False, tabled: Bool = False
 ](
     mut space: LaneSpace[value],
     low: Int,
@@ -714,6 +795,8 @@ def swept[
         if first > last:
             continue
         var letter = row_source.unsafe_offset((row - 1) * WIDTH).unsafe_load[width=WIDTH]()
+        # With a table, the row's letters as the first half of each pair's entry.
+        var row_entries = letter * UInt8(costs.letters)
         var left = Lanes(FAR)
         var diagonal: Lanes
         if first == 0:
@@ -741,7 +824,11 @@ def swept[
             var other = column_source.unsafe_offset((column - 1) * WIDTH).unsafe_load[width=WIDTH]()
             var above = scores[unsafe_offset=column]
             var equal = letter.eq(other)
-            var substituted = added(diagonal, equal.select(Lanes(0), mismatch))
+            var substituted: Lanes
+            comptime if tabled:
+                substituted = added(diagonal, looked_up[value, WIDTH](costs.table, row_entries + other))
+            else:
+                substituted = added(diagonal, equal.select(Lanes(0), mismatch))
             var opened_deletion = added(above, delete_open)
             var extended_deletion = added(deletions[unsafe_offset=column], delete_extend)
             var deletion = min(opened_deletion, extended_deletion)
@@ -1583,6 +1670,8 @@ def lane_local_scores[
     workers: Int,
     scores_out: MutPointer[Int32, _],
     settled: MutPointer[Bool, _],
+    letters: Int = 0,
+    table: SIMD[DType.uint8, TABLE_ENTRIES] = SIMD[DType.uint8, TABLE_ENTRIES](0),
 ) -> Int:
     """Every pair `settled` does not mark whose best score 16 bits hold, its best local alignment's score
     into `scores_out` and `settled` set, many pairs at once, a pair a lane: a match scoring `hit`, a
@@ -1591,7 +1680,10 @@ def lane_local_scores[
 
     A lane past its own letters reads `pads`, a byte for the references and one for the queries that
     match no letter and not each other, so a cell past them scores less than the cell it came from and
-    never the lane's best; which needs a mismatch and a gap that cost. Otherwise every pair is left."""
+    never the lane's best; which needs a mismatch and a gap that cost. Otherwise every pair is left.
+
+    With `letters`, the sequences are an alphabet's codes and each pair scores `table`'s signed byte at
+    `a letters + b`, `mismatch` its least; a pad is then any code past the alphabet, and scores that."""
     comptime WIDTH = lanes_of[DType.int16]()
     if mismatch >= 0 or open >= 0 or extend >= 0 or pairs == 0:
         return 0
@@ -1627,6 +1719,8 @@ def lane_local_scores[
         imm open,
         imm extend,
         imm pads,
+        imm letters,
+        imm table,
         imm groups,
         imm group_workers,
         imm held_pairs,
@@ -1646,7 +1740,13 @@ def lane_local_scores[
                 space.members.clear()
                 for slot in range(group * WIDTH, min(held_pairs, (group + 1) * WIDTH)):
                     space.members.append(order_ptr[unsafe_offset=slot])
-                var best = local_band_scores[T](references, queries, space, hit, mismatch, open, extend, pads)
+                var best: SIMD[DType.int16, WIDTH]
+                if letters > 0:
+                    best = local_band_scores[T, True](
+                        references, queries, space, hit, mismatch, open, extend, pads, letters, table
+                    )
+                else:
+                    best = local_band_scores[T](references, queries, space, hit, mismatch, open, extend, pads)
                 for lane in range(len(space.members)):
                     scores_out[unsafe_offset=space.members[lane]] = Int32(best[lane])
                     settled[unsafe_offset=space.members[lane]] = True
@@ -1657,7 +1757,7 @@ def lane_local_scores[
 
 
 def local_band_scores[
-    T: Texts
+    T: Texts, tabled: Bool = False
 ](
     references: T,
     queries: T,
@@ -1667,6 +1767,8 @@ def local_band_scores[
     open: Int,
     extend: Int,
     pads: Tuple[UInt8, UInt8],
+    letters: Int = 0,
+    table: SIMD[DType.uint8, TABLE_ENTRIES] = SIMD[DType.uint8, TABLE_ENTRIES](0),
 ) -> SIMD[DType.int16, lanes_of[DType.int16]()]:
     """The best local score of each of `space.members`'s pairs, the whole matrix swept a row at a time
     for every lane at once (see `lane_local_scores`)."""
@@ -1702,8 +1804,11 @@ def local_band_scores[
     var best = Lanes(0)
     var row_source = space.row_letters.unsafe_ptr()
     var column_source = space.column_letters.unsafe_ptr()
+    var alphabet = SIMD[DType.uint8, WIDTH](UInt8(letters))
     for row in range(1, rows + 1):
         var letter = row_source.unsafe_offset((row - 1) * WIDTH).unsafe_load[width=WIDTH]()
+        var row_entries = letter * UInt8(letters)
+        var row_padded = letter.ge(alphabet)
         var diagonal = Lanes(0)
         var left = Lanes(0)
         var insertion = none
@@ -1712,9 +1817,14 @@ def local_band_scores[
             var above = scores[unsafe_offset=column]
             var deletion = max(above + opened, deletions[unsafe_offset=column] + extended)
             insertion = max(left + opened, insertion + extended)
-            var score = max(
-                max(diagonal + letter.eq(other).select(matched, mismatched), deletion), max(insertion, zero)
-            )
+            var paired: Lanes
+            comptime if tabled:
+                paired = (row_padded | other.ge(alphabet)).select(
+                    mismatched, looked_up[DType.int16, WIDTH](table, row_entries + other)
+                )
+            else:
+                paired = letter.eq(other).select(matched, mismatched)
+            var score = max(max(diagonal + paired, deletion), max(insertion, zero))
             deletions[unsafe_offset=column] = deletion
             scores[unsafe_offset=column] = score
             best = max(best, score)

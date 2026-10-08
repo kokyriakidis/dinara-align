@@ -2689,6 +2689,42 @@ def test_lane_free_ends_match_single_pairs() raises:
                     assert_equal(capped[index].or_else(-1), expected.or_else(-1))
 
 
+def test_lane_tables_match_single_pairs() raises:
+    """A batch of global or local scores under a table of more than one mismatch score, small enough for
+    a register, which goes many pairs at once into the lanes over the alphabet's codes (see
+    `scoring.tabled_scores`), gives each pair the score a call of its own gives: a transition and a
+    transversion table, close and unrelated pairs, empty sides, and a letter outside the alphabet raising
+    as it does alone."""
+    seed(53)
+    var cells = List[Int8]()
+    for row in range(4):
+        for column in range(4):
+            cells.append(Int8(2 if row == column else (-2 if (row + column) % 2 == 0 else -4)))
+    var tables: List[Scoring] = [
+        Scoring.tabulated("ACGT", cells.copy(), -4, -2),
+        Scoring.tabulated("ACGT", cells.copy(), -10, -1),
+    ]
+    var firsts = List[String]()
+    var seconds = List[String]()
+    for trial in range(120):
+        var first = random_sequence(0, 300, DNA_ALPHABET)
+        firsts.append(first)
+        seconds.append(random_sequence(0, 300, DNA_ALPHABET) if trial % 6 == 0 else mutated(first, 0.05, 8))
+    for scoring in tables:
+        for mode in [GLOBAL, LOCAL]:
+            var found = scores(firsts, seconds, scoring, mode, placement=Placement.on_cpu(3))
+            for index in range(len(firsts)):
+                assert_equal(found[index], score(firsts[index], seconds[index], scoring, mode))
+    var odd_firsts: List[String] = ["ACGT", "ACNT"]
+    var odd_seconds: List[String] = ["ACGT", "ACGT"]
+    var raised = False
+    try:
+        _ = scores(odd_firsts, odd_seconds, tables[0], GLOBAL, placement=Placement.on_cpu(2))
+    except:
+        raised = True
+    assert_true(raised)
+
+
 def test_lane_alignments_match_single_pairs() raises:
     """A batch of global alignments, which goes many pairs at once into the lanes and traces each from the
     flags its band kept (see `lanes.traced`), gives each pair the alignment a call of its own gives, its
