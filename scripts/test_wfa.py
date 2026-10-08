@@ -20,6 +20,7 @@ from run import fetch  # noqa: E402
 
 
 def main() -> None:
+    """Fetches WFA2-lib, builds the regression test and exits with its status."""
     wfa = fetch("WFA2-lib")
     binary = ROOT / "build" / "wfa_utest"
     binary.parent.mkdir(parents=True, exist_ok=True)

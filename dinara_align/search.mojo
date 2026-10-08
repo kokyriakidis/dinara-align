@@ -147,10 +147,13 @@ def local_scores_by_block(
     var two = costs.pieces() == 2
 
     def work(slot: Int) {mut taken, imm}:
+        """Scores blocks of references one after another, each claimed from the shared counter, until none
+        is left."""
         while True:
             var block = Int(taken.fetch_add(1))
             if block >= blocks:
                 return
+            # Each key's low bits are the reference's index, its length sorted above them.
             var members = List[Int]()
             for position in range(block * width, min((block + 1) * width, count)):
                 members.append(keys[position] & ((1 << INDEX_BITS) - 1))

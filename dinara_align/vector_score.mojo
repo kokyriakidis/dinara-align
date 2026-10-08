@@ -167,6 +167,7 @@ def vector_align[
 
     @inline(.always)
     def border(length: Int) {imm open, imm extend} -> Int32:
+        """The score of a gap run of `length` along the global border; the local border is zero."""
         comptime if mode == AlignmentMode.LOCAL:
             return 0
         if length == 0:
@@ -202,6 +203,7 @@ def vector_align[
 
     @inline(.always)
     def unreachable(index: Int) {imm score_cells, imm delete_cells, imm insert_cells}:
+        """Marks stored cell `index` unreachable in all three layers, as band padding reads."""
         score_cells[unsafe_offset=index] = UNREACHABLE
         delete_cells[unsafe_offset=index] = UNREACHABLE
         insert_cells[unsafe_offset=index] = UNREACHABLE

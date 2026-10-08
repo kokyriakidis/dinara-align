@@ -8,6 +8,8 @@
 
 #include "dinara.h"
 
+// Aligns the two sequences given, or two built in, globally under unit costs and then the query inside the
+// reference under gap-affine costs.
 int main(int argc, char **argv) {
     std::string_view reference = argc > 2 ? argv[1] : "ACGTACGTTTGCA";
     std::string_view query = argc > 2 ? argv[2] : "ACGTCGTTTTGCA";

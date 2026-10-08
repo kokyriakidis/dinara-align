@@ -78,7 +78,7 @@ def myers_kernel(
 
 def device_edit_distances(scope: DeviceScope, patterns: List[String], texts: List[String]) raises -> List[Int]:
     """Every pair's edit distance on the device, `patterns[i]` against `texts[i]`, each pattern of one
-    to `64 MAX_PATTERN_WORDS` letters."""
+    to `64 * MAX_PATTERN_WORDS` letters."""
     var pairs = len(patterns)
     # First each pair's symbols, which size its rows, then where its rows and its text go, then both
     # written, every pair on its own, over every thread.
@@ -90,6 +90,7 @@ def device_edit_distances(scope: DeviceScope, patterns: List[String], texts: Lis
     var chunks = max(min(pairs, workers * 8), 1)
 
     def count_symbols(chunk: Int) {imm patterns, imm counts, imm pairs, imm chunks}:
+        """Counts the distinct symbols in each pattern of chunk `chunk` of the pairs, one bit a byte value."""
         for pair in range(pairs * chunk // chunks, pairs * (chunk + 1) // chunks):
             var seen = SIMD[DType.uint64, 4](0)
             var count = 0
@@ -136,6 +137,7 @@ def device_edit_distances(scope: DeviceScope, patterns: List[String], texts: Lis
         imm pairs,
         imm chunks,
     }:
+        """Writes the match rows and text codes of chunk `chunk` of the pairs (see `fill_pair`)."""
         for pair in range(pairs * chunk // chunks, pairs * (chunk + 1) // chunks):
             fill_pair(pair, patterns, texts, rows_at, text_at, row_offsets, text_offsets, words_of)
 

@@ -32,6 +32,7 @@ struct ErrorKind(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writabl
     """No alignment stays inside the band of diagonals asked for."""
 
     def write_to(self, mut writer: Some[Writer]):
+        """Writes the kind as a short phrase naming the failure."""
         # Every kind names itself, and a kind added without a line says so rather than borrowing
         # the last one's sentence.
         if self == Self.UNKNOWN_SYMBOL:
@@ -64,4 +65,5 @@ struct AlignmentError(Copyable, ImplicitlyCopyable, Writable):
     """The sequence, option or capacity the failure names."""
 
     def write_to(self, mut writer: Some[Writer]):
+        """Writes the error as `dinara-align: <kind> [<detail>]`."""
         writer.write("dinara-align: ", self.kind, " [", self.detail, "]")

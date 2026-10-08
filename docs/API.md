@@ -218,8 +218,9 @@ def search(references: List[String], query: String, costs: Costs = Costs.edit(),
 The query against every reference, a database search: each reference's `Hit`, its score, the best first, ties by the references' order; with `best` that many alone, with `max_cost` (a mode with no reward) those within it alone, and with `aligned` each kept hit's alignment too.
 
 A local alignment scores a block of references at once, one to a SIMD lane, as SWIPE does (see
-`search`); a mode with no reward takes `distances`, under the cap when there is one; any other mode
-each pair's `score`. Every kept hit is then aligned on its own, when asked for, by `align`.
+`local_scores_by_block`); a mode with no reward takes `distances`, under the cap when there is one;
+any other mode each pair's `score`. Every kept hit is then aligned on its own, when asked for, by
+`align`.
 
 ## Types
 
@@ -306,6 +307,8 @@ What went wrong, and which sequence, option or capacity it was.
 def write_to(self, mut writer: T)
 ```
 
+Writes the error as `dinara-align: <kind> [<detail>]`.
+
 ### `ErrorKind`
 
 ```mojo
@@ -332,6 +335,8 @@ Why a call into the kernels failed.
 ```mojo
 def write_to(self, mut writer: T)
 ```
+
+Writes the kind as a short phrase naming the failure.
 
 ### `AlignedCounts`
 
@@ -446,8 +451,8 @@ static band counts diagonals the other way, its `min_k ..= max_k` being `Band(-m
 
 | field | type | |
 | :-- | :-- | :-- |
-| `low` | `Int` |  |
-| `high` | `Int` |  |
+| `low` | `Int` | The lowest diagonal the alignment may use. |
+| `high` | `Int` | The highest diagonal the alignment may use. |
 
 #### `__init__`
 
@@ -470,6 +475,8 @@ The diagonals at most `width` from the origin's, either way.
 ```mojo
 def holds(self, diagonal: Int) -> Bool
 ```
+
+Whether `diagonal` lies inside the band.
 
 #### `covers`
 
@@ -692,6 +699,8 @@ The best-scoring alignment with every end gap free, semi-global: it starts on ei
 ```mojo
 def is_global(self) -> Bool
 ```
+
+Whether these are free ends with none free: both sequences end to end, whatever a match earns.
 
 #### `is_scored`
 

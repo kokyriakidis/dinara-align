@@ -129,6 +129,7 @@ def gap_layer(piece: Int, along_first: Bool) -> Int:
 
 @always_inline
 def piece_of(layer: Int) -> Int:
+    """The gap piece gap layer `layer` belongs to, the inverse of `gap_layer`."""
     return (layer - 1) // 2
 
 
@@ -394,8 +395,9 @@ def opened_bit(layer: Int) -> UInt8:
 
 struct History(Movable):
     """What the traceback needs of every cost's fronts: the alignment front's column on each diagonal
-    kept, and a flag of which source won each layer there (see `ENTRY_MASK` and `opened_bit`). Cost `s` holds diagonals `lows[s] ..= highs[s]`, its columns and flags from `starts[s]`;
-    elsewhere it reads as unreached. The step writes both as it goes (see `begin`), so the fronts are
+    kept, and a flag of which source won each layer there (see `ENTRY_MASK` and `opened_bit`). Cost `s`
+    holds diagonals `lows[s] ..= highs[s]`, its columns and flags from `starts[s]`; elsewhere it reads
+    as unreached. The step writes both as it goes (see `begin`), so the fronts are
     never copied out of the rings, and they go into blocks that are never moved either: a list grown
     by doubling would copy everything kept so far each time, a tenth of an alignment's time.
     """
@@ -531,6 +533,7 @@ struct Fronts[layers: Int](Movable):
     var most: Int
 
     def __init__(out self, slots: Int, columns: Int, rows: Int):
+        """Rings of `slots` costs for a `columns` by `rows` matrix, every row unreached and narrow to start."""
         self.slots = slots
         self.current = 0
         self.least = -rows - 2
@@ -642,11 +645,11 @@ def step[
 
     `mismatched` is the alignment front a mismatch back, `opening` the one an opened gap of the first
     sequence's letters back and `opening_second` the one an opened gap of the second's back, the same
-    front when both cost alike, and the gap fronts are their own layers an extension back. A letter of the first sequence against
-    a gap comes from the diagonal below and moves one column; one of the second, from the diagonal
-    above, stays in its column and moves one row. Each only where it stays inside the matrix. With
-    two `pieces` the second piece's sources and layers, the ones ending in `2`, step the same way;
-    with one they are never read.
+    front when both cost alike, and the gap fronts are their own layers an extension back. A letter of
+    the first sequence against a gap comes from the diagonal below and moves one column; one of the
+    second, from the diagonal above, stays in its column and moves one row. Each only where it stays
+    inside the matrix. With two `pieces` the second piece's sources and layers, the ones ending in `2`,
+    step the same way; with one they are never read.
 
     Each lane group's alignment front then slides over its matches straight away, the eight slides
     independent of each other, and the furthest anti-diagonal, `2 column - diagonal`, comes back.
@@ -715,6 +718,7 @@ def step[
             # Worked out in the fronts' own lanes and narrowed once.
             @always_inline
             def bit(won: SIMD[DType.bool, LANES], layer: Int) -> Lanes:
+                """`opened_bit(layer)` in each lane where the opening won, zero elsewhere."""
                 return won.select(Lanes(Int32(opened_bit(layer))), Lanes(0))
 
             # Ties go as WFA2-lib's backtrace breaks them: a substitution, then a letter of the first
@@ -960,6 +964,7 @@ struct Wavefront[pieces: Int](Movable):
 
         @inline(.always)
         def dead(diagonal: Int) {imm base, imm stride} -> Bool:
+            """Whether no layer of this cost's fronts reached `diagonal`."""
             var reached = base[unsafe_offset=diagonal]
             comptime for layer in range(1, layers_of[Self.pieces]()):
                 reached = max(reached, base[unsafe_offset=layer * stride + diagonal])
@@ -1150,6 +1155,7 @@ def meet[
         imm forward_cost,
         imm backward_cost,
     }:
+        """Lowers `best` to a meeting on `diagonal`, by the alignment fronts or a gap both hold, if one costs less."""
         var mirrored = target - diagonal
         var column = Int(aligned[unsafe_offset=diagonal])
         if total < best.cost and column + Int(back_aligned[unsafe_offset=mirrored]) >= columns:
@@ -1501,16 +1507,16 @@ def solve[
     nothing and returns -1. Free ends take `free_ends_alignment`, which comes here for the letters
     between its span's ends.
 
-    With `keep`, both searches keep every cost's fronts while they stay within `limit` entries. The
-    path is then the one `ties` picks, the search from the far end grown on, pruned to an optimal
-    path's diagonals, and traced back (see `canonical`); for a piece of a split inside a gap, traced
-    from where the searches met instead: back to the origin through the forward fronts, and to the
-    corner through the backward ones. A split itself lies where the searches met, so an alignment
-    split once or more follows `ties` within each piece, not across. A pair too large is split instead where an optimal path
-    crosses, which the two searches find keeping only their rings, as BiWFA does; a crossing inside a
-    gap leaves the piece before it to end in that gap and the piece after it to begin there, the
-    opening paid once, its piece's. A piece is about a quarter of the pair, its two searches about half of the
-    diagonals the pair's search grew from its end, so one that cannot fit skips keeping at once.
+    With `keep`, both searches keep every cost's fronts while they stay within `limit` entries. The path
+    is then the one `ties` picks, the search from the far end grown on, pruned to an optimal path's
+    diagonals, and traced back (see `canonical`); for a piece of a split inside a gap, traced from where
+    the searches met instead: back to the origin through the forward fronts, and to the corner through
+    the backward ones. A split itself lies where the searches met, so an alignment split once or more
+    follows `ties` within each piece, not across. A pair too large is split instead where an optimal
+    path crosses, which the two searches find keeping only their rings, as BiWFA does; a crossing inside
+    a gap leaves the piece before it to end in that gap and the piece after it to begin there, the
+    opening paid once, its piece's. A piece is about a quarter of the pair, its two searches about half
+    of the diagonals the pair's search grew from its end, so one that cannot fit skips keeping at once.
     """
     var columns = len(first)
     var rows = len(second)
@@ -1691,6 +1697,7 @@ def affine2p_penalties(
 
 
 def outside(band: Band) -> AlignmentError:
+    """The error of a pair no alignment inside `band` fits, naming its diagonals."""
     return AlignmentError(ErrorKind.OUTSIDE_BAND, String("diagonals ", band.low, "..=", band.high))
 
 
@@ -1860,14 +1867,15 @@ def free_ends_alignment[
     """An optimal alignment with the letters `ends_free` allows left unaligned for nothing at either end,
     inside `band`, or None past `ceiling`, in `penalties`' units, or when none fits the band.
 
-    Of the equally good alignments the span comes first, by the rule `Ties.LEFT` names, decided from
-    the end back: the end on the highest diagonal an optimal alignment reaches, the furthest along the
-    first sequence less the second, and of those ending there the start on the highest diagonal too;
-    `Ties.RIGHT` is that over both sequences reversed, the start on the lowest diagonal, then the end. The letters between are
-    then a global alignment, its CIGAR the one `ties` picks (see `solve`). A search from the starts finds
-    the end (see `first_reached`), none when it is the corner; one back from that end alone, narrow,
-    finds the start, none when it is the origin; and a global search the CIGAR, which proves the cost
-    when neither search ran. The bit-parallel searches pick the same span (see `edit_search`)."""
+    Of the equally good alignments the span comes first, by the rule `Ties.LEFT` names, decided from the
+    end back: the end on the highest diagonal an optimal alignment reaches, the furthest along the first
+    sequence less the second, and of those ending there the start on the highest diagonal too;
+    `Ties.RIGHT` is that over both sequences reversed, the start on the lowest diagonal, then the end.
+    The letters between are then a global alignment, its CIGAR the one `ties` picks (see `solve`). A
+    search from the starts finds the end (see `first_reached`), none when it is the corner; one back
+    from that end alone, narrow, finds the start, none when it is the origin; and a global search the
+    CIGAR, which proves the cost when neither search ran. The bit-parallel searches pick the same span
+    (see `edit_search`)."""
     var a = first.as_bytes()
     var b = second.as_bytes()
     var columns = len(a)

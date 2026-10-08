@@ -46,14 +46,17 @@ __all__ = [
 ]
 
 UNBOUNDED = 1 << 60
-"""As many free letters as any sequence has."""
+"""As many free letters as any sequence has, and a band edge past every diagonal."""
 
 Text = Union[str, bytes]
+"""A sequence as `str`, or as ASCII `bytes`."""
 
+# A mode's kind, as `dinara_mode` numbers it.
 _ENDS, _EXTENSION, _LOCAL, _OVERLAP = 0, 1, 2, 3
 
 
 def _text(sequence: Text) -> str:
+    """`sequence` as the `str` the extension takes, `bytes` decoded as ASCII."""
     if isinstance(sequence, bytes):
         return sequence.decode("ascii")
     return sequence
@@ -116,6 +119,7 @@ class Costs:
         )
 
     def _fields(self) -> tuple:
+        """The costs as the extension takes them, in `dinara_costs`'s order."""
         return (
             self.mismatch,
             self.opening,
@@ -191,6 +195,7 @@ class Mode:
         return Mode(_OVERLAP, match_score=match_score)
 
     def _fields(self) -> tuple:
+        """The mode as the extension takes it, in `dinara_mode`'s order, free letters capped at `UNBOUNDED`."""
         return (
             self.kind,
             min(self.reference_start, UNBOUNDED),
@@ -221,6 +226,7 @@ class Band:
 
     @staticmethod
     def around(width: int) -> "Band":
+        """KSW2's band of width `width`: at most `width` diagonals from the origin's, either way."""
         return Band(-width, width)
 
 
@@ -253,6 +259,7 @@ class Scoring:
         return Scoring(alphabet, tuple(table), opening, extension)
 
     def _fields(self) -> tuple:
+        """`(alphabet, cells, opening, extension)`, as the extension takes a `Scoring`."""
         return (self.alphabet, list(self.table), self.opening, self.extension)
 
 
@@ -360,6 +367,8 @@ class LocalScores:
 
 
 def _options(band: Optional[Band], max_cost: Optional[int], eqx: bool, ties: str, max_memory: Optional[int]) -> tuple:
+    """The options as the extension takes them, in `dinara_options`'s order: -1 for no cap, 0 for the
+    default memory. Raises `ValueError` for a `ties` other than `"left"` or `"right"`."""
     if ties not in ("left", "right"):
         raise ValueError("ties: 'left' or 'right'")
     band = band or Band()

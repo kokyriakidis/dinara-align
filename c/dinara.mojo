@@ -50,9 +50,13 @@ comptime INVALID_MODE = -6
 overlap, which maximize a score, a cap on any of them, or a band on the last two."""
 
 comptime C_ENDS_FREE = 0
+"""`DINARA_ENDS_FREE`: a `dinara_mode`'s kind for free ends, global among them."""
 comptime C_EXTENSION = 1
+"""`DINARA_EXTENSION`: a `dinara_mode`'s kind for an extension from one end."""
 comptime C_LOCAL = 2
+"""`DINARA_LOCAL`: a `dinara_mode`'s kind for a local alignment."""
 comptime C_OVERLAP = 3
+"""`DINARA_OVERLAP`: a `dinara_mode`'s kind for an overlap, each sequence free at one end."""
 
 comptime CInts = ImmPointer[Int, MutAnyOrigin]
 """A C struct of `int64_t` fields, read by index; null for the default."""
@@ -131,6 +135,8 @@ struct Options(ImplicitlyCopyable):
 
 
 def options_of(fields: OptionalPointer[Int, MutAnyOrigin]) -> Options:
+    """The `Options` a `dinara_options` asks for: a negative cap for none, and the default memory for zero or
+    less."""
     if not fields:
         return Options(Band(), -1, True, Ties.LEFT, DEFAULT_MAX_MEMORY)
     var at = fields.value()
@@ -402,6 +408,7 @@ def dinara_distances(
     var taken = Atomic[Int64](0)
 
     def work(slot: Int) {mut taken, imm}:
+        """Takes the next pair not yet taken and writes its least cost or code, until none is left."""
         while True:
             var index = Int(taken.fetch_add(1))
             if index >= pairs:
@@ -452,6 +459,7 @@ def dinara_alignments(
     var taken = Atomic[Int64](0)
 
     def work(slot: Int) {mut taken, imm}:
+        """Takes the next pair not yet taken and writes its alignment and status, until none is left."""
         while True:
             var index = Int(taken.fetch_add(1))
             if index >= pairs:

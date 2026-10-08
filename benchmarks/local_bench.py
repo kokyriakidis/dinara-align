@@ -38,6 +38,7 @@ def generate() -> None:
     rng = random.Random(9)
 
     def sequence(length: int) -> str:
+        """`length` random bases."""
         return "".join(rng.choice("ACGT") for _ in range(length))
 
     with open(LOCAL / "local-short.tsv", "w") as out:
@@ -132,6 +133,7 @@ def build_rivals() -> Path:
 
 
 def build_ours() -> Path:
+    """dinara-align's runner, `local.mojo`, built for the chosen CPU."""
     binary = BUILD / f"dinara-align-local-{run.CPU}"
     BUILD.mkdir(parents=True, exist_ok=True)
     subprocess.run(
@@ -141,6 +143,8 @@ def build_ours() -> Path:
 
 
 def main() -> None:
+    """Generates the workloads, runs every tool on each, fails unless their answers agree, and writes the
+    table of times to `results/local-results.md`."""
     import argparse
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)

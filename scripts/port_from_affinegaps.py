@@ -56,6 +56,7 @@ GAPPED_ROWS_CIGAR = '''
         var out = List[UInt8](capacity=64)
 
         def emit(mut out: List[UInt8], run: Int, letter: UInt8):
+            """Appends one run to `out`: the decimal digits of `run`, most significant first, then `letter`."""
             var digits = Array[UInt8, 20](fill=0)
             var count = 0
             var value = run
@@ -271,6 +272,7 @@ def hoist(path: pathlib.Path, starts: list[int]) -> None:
 
 
 def main(upstream: pathlib.Path) -> None:
+    """Ports the three modules from the affine-gaps checkout at `upstream` into the package, then formats them."""
     for name, port in (("alignment", port_alignment), ("common", port_common), ("errors", port_errors)):
         source = (upstream / f"{name}.mojo").read_text()
         (PACKAGE / f"{name}.mojo").write_text(migrate(port(source)))

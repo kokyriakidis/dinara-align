@@ -34,14 +34,17 @@ from oracle import ENDS, EXTENSION, LOCAL, Model, check_alignment, optimum, reve
 
 
 def draw(low: Int, high: Int) -> Int:
+    """A random integer in `low ..= high`."""
     return Int(random_ui64(UInt64(low), UInt64(high)))
 
 
 def chance(probability: Float64) -> Bool:
+    """True with probability `probability`."""
     return random_float64() < probability
 
 
 def letters(length: Int, alphabet: String) -> String:
+    """`length` random letters drawn from `alphabet`."""
     var symbols = alphabet.as_bytes()
     var out = List[UInt8](capacity=length)
     for _ in range(length):
@@ -50,6 +53,8 @@ def letters(length: Int, alphabet: String) -> String:
 
 
 def mutated(text: String, rate: Float64, longest_gap: Int, alphabet: String) -> String:
+    """`text` with about a `rate` of its letters substituted, or starting a deletion or followed by an
+    insertion of up to `longest_gap` letters, a third each."""
     var bytes = text.as_bytes()
     var symbols = alphabet.as_bytes()
     var out = List[UInt8]()
@@ -89,6 +94,7 @@ def sequences() -> Tuple[String, String]:
 
 
 def random_costs() raises AlignmentError -> Costs:
+    """Random `Costs` of any kind, a quarter of them with deletions priced apart."""
     var costs = symmetric_costs()
     if chance(0.25):
         # Deletions of their own, one piece or two, as bwa's -O del,ins.
@@ -101,6 +107,7 @@ def random_costs() raises AlignmentError -> Costs:
 
 
 def symmetric_costs() raises AlignmentError -> Costs:
+    """Random unit, linear, affine or two-piece costs, insertions and deletions alike."""
     var kind = draw(0, 3)
     if kind == 0:
         return Costs.edit()
@@ -115,6 +122,7 @@ def symmetric_costs() raises AlignmentError -> Costs:
 
 
 def allowance(length: Int) -> Int:
+    """A free-end allowance for a sequence of `length` letters: none, unbounded, or up to one past it."""
     var choice = draw(0, 3)
     if choice == 0:
         return 0
@@ -124,6 +132,7 @@ def allowance(length: Int) -> Int:
 
 
 def random_mode(columns: Int, rows: Int) raises AlignmentError -> Mode:
+    """A random mode for a reference of `columns` letters and a query of `rows`, any kind, rewarded or not."""
     var kind = draw(0, 10)
     var reward = draw(1, 4)
     if kind == 0:
@@ -155,6 +164,7 @@ def random_mode(columns: Int, rows: Int) raises AlignmentError -> Mode:
 
 
 def model_of(costs: Costs, mode: Mode, band: Band) -> Model:
+    """The oracle's `Model` of `costs` under `mode` within `band`."""
     var pieces = List[Tuple[Int, Int]]()
     pieces.append((costs.opening, costs.extension))
     if costs.pieces() == 2:
@@ -193,6 +203,8 @@ def sweeps(mode: Mode) -> Bool:
 
 @fieldwise_init
 struct Case(Copyable, Movable, Writable):
+    """One trial: a pair and everything it is aligned under."""
+
     var reference: String
     var query: String
     var costs: Costs
@@ -366,6 +378,7 @@ def check(trial: Case) raises:
 
 
 def reversed_cigar(cigar: String) -> String:
+    """`cigar` with its runs in reverse order, each run kept whole: the CIGAR of both sequences reversed."""
     var runs = List[String]()
     var start = 0
     var bytes = cigar.as_bytes()
@@ -380,6 +393,7 @@ def reversed_cigar(cigar: String) -> String:
 
 
 def random_case() raises -> Case:
+    """A random trial; a band only for modes that take one, and a small memory budget three times in ten."""
     var pair = sequences()
     var columns = pair[0].byte_length()
     var rows = pair[1].byte_length()
@@ -421,6 +435,8 @@ def random_scoring(alphabet: String) raises -> Scoring:
 
 
 def scoring_mode(columns: Int, rows: Int) raises AlignmentError -> Mode:
+    """A random mode a `Scoring` takes for a reference of `columns` letters and a query of `rows`: no match
+    score, the table's own rewards counting instead."""
     var kind = draw(0, 6)
     if kind == 0:
         return Mode.GLOBAL
@@ -450,6 +466,8 @@ def check_scoring(reference: String, query: String, scoring: Scoring, mode: Mode
     for row in range(size):
         for column in range(size):
             table[Int(letters[row]) * 256 + Int(letters[column])] = Int(scoring.substitutions[row * size + column])
+    # The scores charge `open` for a gap's first letter and `extend` for each after it; as the model's
+    # costs, a gap of `k` letters is `(extend - open) + k * -extend`.
     var opening = Int(scoring.gaps.extend - scoring.gaps.open)
     var extension = Int(-scoring.gaps.extend)
     var pieces: List[Tuple[Int, Int]] = [(opening, extension)]
@@ -500,6 +518,8 @@ def check_scoring(reference: String, query: String, scoring: Scoring, mode: Mode
 
 
 def main() raises:
+    """Runs `iterations` trials from `seed` (the arguments, 1000 and 1 by default), each with a `Scoring`'s
+    turn, and every 16 trials alike a batch; raises when any failed."""
     var arguments = argv()
     var iterations = Int(String(arguments[1])) if len(arguments) > 1 else 1000
     var start = Int(String(arguments[2])) if len(arguments) > 2 else 1
@@ -537,6 +557,7 @@ def main() raises:
             for value in scoring.substitutions:
                 cells += String(Int(value), ",")
             print("  table", scoring.alphabet, cells, scoring.gaps.open, scoring.gaps.extend, "mode", mode)
+        # Trials sharing the first's costs and mode, with no band in the way, gather into a batch.
         if not sweeps(trial.mode) and trial.band.covers(trial.reference.byte_length(), trial.query.byte_length()):
             if len(batch) == 0 or (batch[0].costs == trial.costs and batch[0].mode == trial.mode):
                 batch.append(trial.copy())

@@ -51,20 +51,24 @@ extern "C" {
  * {1, 0, 1, -1, 0}.
  */
 typedef struct {
-    int64_t mismatch;
-    int64_t opening;
-    int64_t extension;
-    int64_t opening2;
-    int64_t extension2;
-    int64_t deletion_opening;
-    int64_t deletion_extension;
-    int64_t deletion_opening2;
-    int64_t deletion_extension2;
+    int64_t mismatch;            /* A substitution's cost. */
+    int64_t opening;             /* A gap's cost before its letters. */
+    int64_t extension;           /* Each gapped letter's cost. */
+    int64_t opening2;            /* The second piece's opening; negative for one piece. */
+    int64_t extension2;          /* Each gapped letter's cost on the second piece. */
+    int64_t deletion_opening;    /* A deletion's `opening`, with `deletion_extension` above zero. */
+    int64_t deletion_extension;  /* A deletion's `extension`; zero for deletions costing as insertions. */
+    int64_t deletion_opening2;   /* A deletion's `opening2`; negative for one piece. */
+    int64_t deletion_extension2; /* A deletion's `extension2`. */
 } dinara_costs;
 
+/* A `dinara_mode`'s kind: free ends, a global alignment when none is free. */
 #define DINARA_ENDS_FREE 0
+/* A `dinara_mode`'s kind: an extension from both sequences' starts, or ends. */
 #define DINARA_EXTENSION 1
+/* A `dinara_mode`'s kind: a local alignment, Smith-Waterman. */
 #define DINARA_LOCAL 2
+/* A `dinara_mode`'s kind: an overlap, every end gap free. */
 #define DINARA_OVERLAP 3
 /* As many free letters as any sequence has. */
 #define DINARA_ALL INT64_MAX
@@ -74,21 +78,21 @@ typedef struct {
  * unaligned for nothing; all zero is a global alignment, the reference's two at DINARA_ALL a query
  * placed anywhere in it (infix), its end alone a prefix. With `match_score` zero the alignment has the
  * least cost; above zero, the best score, a match earning it, as parasail's and hyalite's semi-global
- * modes count it. DINARA_EXTENSION: fixed at both sequences'
- * starts, or with `anchor` nonzero their ends, and free to stop anywhere, a match earning
- * `match_score`: a seed's extension, as KSW2's, with its Z-drop when `zdrop` is above zero. DINARA_LOCAL: any part of each, a match
- * earning `match_score`, Smith-Waterman, as abPOA's local mode. DINARA_OVERLAP: every end gap free, a
+ * modes count it. DINARA_EXTENSION: fixed at both sequences' starts, or with `anchor` nonzero their
+ * ends, and free to stop anywhere, a match earning `match_score`: a seed's extension, as KSW2's, with
+ * its Z-drop when `zdrop` is above zero. DINARA_LOCAL: any part of each, a match earning
+ * `match_score`, Smith-Waterman, as abPOA's local mode. DINARA_OVERLAP: every end gap free, a
  * match earning `match_score`, semi-global, as parasail's `sg`. A null pointer is a global alignment.
  */
 typedef struct {
-    int64_t kind;
-    int64_t reference_start;
-    int64_t reference_end;
-    int64_t query_start;
-    int64_t query_end;
-    int64_t match_score;
-    int64_t anchor;
-    int64_t zdrop;
+    int64_t kind;            /* DINARA_ENDS_FREE, DINARA_EXTENSION, DINARA_LOCAL or DINARA_OVERLAP. */
+    int64_t reference_start; /* Free ends: the reference's letters free before the alignment. */
+    int64_t reference_end;   /* Free ends: the reference's letters free after it. */
+    int64_t query_start;     /* Free ends: the query's letters free before it. */
+    int64_t query_end;       /* Free ends: the query's letters free after it. */
+    int64_t match_score;     /* What a match earns; zero for free ends' least cost. */
+    int64_t anchor;          /* An extension: zero fixes it at the starts, nonzero at the ends. */
+    int64_t zdrop;           /* An extension: its Z-drop when above zero, else none. */
 } dinara_mode;
 
 /*
@@ -103,28 +107,28 @@ typedef struct {
  * each piece. A null pointer is no band, no cap, `=` and `X`, indels left, the default memory.
  */
 typedef struct {
-    int64_t band_low;
-    int64_t band_high;
-    int64_t max_cost;
-    int64_t eqx;
-    int64_t right_ties;
-    int64_t max_memory;
+    int64_t band_low;   /* The lowest diagonal a move may reach; INT64_MIN for no bound. */
+    int64_t band_high;  /* The highest diagonal a move may reach; INT64_MAX for no bound. */
+    int64_t max_cost;   /* The cost cap when zero or more; negative for none. */
+    int64_t eqx;        /* Nonzero writes `=` and `X`, zero `M`. */
+    int64_t right_ties; /* Nonzero places tied indels right, zero left. */
+    int64_t max_memory; /* The bytes of fronts kept for the traceback; zero or less for the default. */
 } dinara_options;
 
 /*
  * An optimal alignment: its cost, its score (an extension's, a local alignment's or an overlap's
- * matches' reward less the cost, else minus the cost), the spans it aligns, and its CIGAR, NUL-terminated and `cigar_length` bytes long, which the
- * caller frees with `dinara_free`.
+ * matches' reward less the cost, else minus the cost), the spans it aligns, and its CIGAR,
+ * NUL-terminated and `cigar_length` bytes long, which the caller frees with `dinara_free`.
  */
 typedef struct {
-    int64_t cost;
-    int64_t score;
-    int64_t reference_start;
-    int64_t reference_end;
-    int64_t query_start;
-    int64_t query_end;
-    char *cigar;
-    int64_t cigar_length;
+    int64_t cost;            /* The alignment's cost. */
+    int64_t score;           /* Its matches' reward less its cost, or minus its cost with no reward. */
+    int64_t reference_start; /* The reference's first aligned letter. */
+    int64_t reference_end;   /* One past the reference's last aligned letter. */
+    int64_t query_start;     /* The query's first aligned letter. */
+    int64_t query_end;       /* One past the query's last aligned letter. */
+    char *cigar;             /* The CIGAR, NUL-terminated, for `dinara_free`. */
+    int64_t cigar_length;    /* The CIGAR's bytes, its NUL not counted. */
 } dinara_alignment;
 
 /* The least cost of aligning the query to the reference, or a DINARA_ code. */
@@ -146,15 +150,15 @@ int64_t dinara_score(const char *reference, int64_t reference_length, const char
  * score of an alignment ending more than a window of reference letters away, as SSW's `score2` and
  * `ref_end2`; zero at zero when there is none. */
 typedef struct {
-    int64_t score;
-    int64_t reference_end;
-    int64_t query_end;
-    int64_t second_score;
-    int64_t second_reference_end;
+    int64_t score;                /* The best local alignment's score. */
+    int64_t reference_end;        /* The reference's letters up to that alignment's end. */
+    int64_t query_end;            /* The query's letters up to that alignment's end. */
+    int64_t second_score;         /* The best score ending more than a window away, as SSW's `score2`. */
+    int64_t second_reference_end; /* The reference's letters up to its end, as SSW's `ref_end2`. */
 } dinara_local_scores_result;
 
-/* `dinara_local_scores_result` for a DINARA_LOCAL mode, the window `window` letters, or for a negative one
- * half the query and at least 15, as SSW suggests; one sweep, no alignment traced. Zero, or a code. */
+/* `dinara_local_scores_result` for a DINARA_LOCAL mode, the window `window` letters, or for a negative
+ * one half the query and at least 15, as SSW suggests; one sweep, no alignment traced. Zero, or a code. */
 int64_t dinara_local_scores(const char *reference, int64_t reference_length, const char *query,
                             int64_t query_length, const dinara_costs *costs, const dinara_mode *mode,
                             int64_t window, dinara_local_scores_result *scores);
@@ -215,6 +219,7 @@ struct OutsideBand : std::invalid_argument {
 
 /* What each edit costs (see `dinara_costs`). */
 struct Costs {
+    /* The fields of `dinara_costs`, unit costs by default. */
     int64_t mismatch = 1, opening = 0, extension = 1, opening2 = -1, extension2 = 0;
     int64_t deletion_opening = 0, deletion_extension = 0, deletion_opening2 = -1, deletion_extension2 = 0;
     /* Unit costs: the edit distance. */
@@ -248,6 +253,7 @@ enum class Anchor { start, end };
 
 /* Which alignments count (see `dinara_mode`). */
 struct Mode {
+    /* The `dinara_mode` the C functions take, a global alignment by default. */
     dinara_mode fields{DINARA_ENDS_FREE, 0, 0, 0, 0, 0, 0, 0};
     /* Both sequences end to end. */
     static Mode global() { return {}; }
@@ -283,8 +289,8 @@ struct Mode {
 
 /* The diagonals every move stays on, `low ..= high`; the default is every diagonal. */
 struct Band {
-    int64_t low = INT64_MIN;
-    int64_t high = INT64_MAX;
+    int64_t low = INT64_MIN;  /* The lowest diagonal. */
+    int64_t high = INT64_MAX; /* The highest diagonal. */
     /* KSW2's band of width `w`: at most `w` diagonals from the origin's, either way. */
     static Band around(int64_t width) { return Band{-width, width}; }
 };
@@ -295,13 +301,16 @@ enum class Ties { left, right };
 
 /* An optimal alignment (see `dinara_alignment`). */
 struct Alignment {
-    int64_t cost;
-    int64_t score;
-    std::string cigar;
+    int64_t cost;       /* The alignment's cost. */
+    int64_t score;      /* Its matches' reward less its cost, or minus its cost with no reward. */
+    std::string cigar;  /* The CIGAR, its memory the string's own. */
+    /* The aligned spans, `reference[reference_start:reference_end]` and `query[query_start:query_end]`. */
     int64_t reference_start, reference_end, query_start, query_end;
 };
 
+/* The wrapper's internals, called by the functions below it. */
 namespace detail {
+/* Raises the exception a DINARA_ code stands for; a result of zero or more, or DINARA_ABOVE_MAX, passes. */
 inline void check(int64_t result) {
     if (result == DINARA_INVALID_COSTS) throw std::invalid_argument("dinara: a mismatch and an extension must cost");
     if (result == DINARA_INVALID_MODE) throw std::invalid_argument("dinara: a mode these costs cannot serve");
@@ -310,12 +319,14 @@ inline void check(int64_t result) {
     if (result < 0 && result != DINARA_ABOVE_MAX) throw UnsupportedSymbols();
 }
 
+/* The `dinara_costs` the C functions take for `costs`. */
 inline dinara_costs c_costs(const Costs &costs) {
     return {costs.mismatch,          costs.opening,          costs.extension,
             costs.opening2,          costs.extension2,       costs.deletion_opening,
             costs.deletion_extension, costs.deletion_opening2, costs.deletion_extension2};
 }
 
+/* The least cost, or DINARA_ABOVE_MAX past a `max_cost` of zero or more; raises on any other code. */
 inline int64_t distance(std::string_view reference, std::string_view query, const Costs &costs, const Mode &mode,
                         Band band, int64_t max_cost) {
     dinara_costs c = c_costs(costs);
@@ -326,6 +337,8 @@ inline int64_t distance(std::string_view reference, std::string_view query, cons
     return cost;
 }
 
+/* An optimal alignment with its CIGAR copied and the C one freed, or nothing past a `max_cost` of zero
+ * or more; raises on any other code. */
 inline std::optional<Alignment> align(std::string_view reference, std::string_view query, const Costs &costs,
                                       const Mode &mode, Band band, int64_t max_cost, Ties ties, bool eqx,
                                       int64_t max_memory) {
@@ -344,9 +357,10 @@ inline std::optional<Alignment> align(std::string_view reference, std::string_vi
 
 /* A batch's sequences as C takes them: each sequence's first byte and its length. */
 struct Batch {
-    std::vector<const char *> references, queries;
-    std::vector<int64_t> reference_lengths, query_lengths;
+    std::vector<const char *> references, queries;          /* Each pair's first bytes. */
+    std::vector<int64_t> reference_lengths, query_lengths; /* Each pair's lengths. */
 
+    /* Pair `i` is `firsts[i]` against `seconds[i]`; the two must be as long. */
     Batch(const std::vector<std::string_view> &firsts, const std::vector<std::string_view> &seconds) {
         if (firsts.size() != seconds.size()) throw std::invalid_argument("dinara: a batch's sides differ in length");
         for (size_t index = 0; index < firsts.size(); ++index) {
@@ -356,9 +370,12 @@ struct Batch {
             query_lengths.push_back(static_cast<int64_t>(seconds[index].size()));
         }
     }
+    /* The number of pairs. */
     int64_t size() const { return static_cast<int64_t>(references.size()); }
 };
 
+/* Every pair's least cost, or its own DINARA_ code, which the caller checks; raises on a code failing the
+ * whole batch. */
 inline std::vector<int64_t> distances(const Batch &batch, const Costs &costs, const Mode &mode, Band band,
                                       int64_t max_cost, int threads) {
     dinara_costs c = c_costs(costs);
@@ -370,6 +387,8 @@ inline std::vector<int64_t> distances(const Batch &batch, const Costs &costs, co
     return results;
 }
 
+/* Every pair's optimal alignment, or nothing for a pair past `max_cost`; with every CIGAR copied and
+ * freed, raises as the first pair failing otherwise would. */
 inline std::vector<std::optional<Alignment>> alignments(const Batch &batch, const Costs &costs, const Mode &mode,
                                                         Band band, int64_t max_cost, Ties ties, bool eqx,
                                                         int threads, int64_t max_memory) {
@@ -424,8 +443,8 @@ inline dinara_local_scores_result local_scores(std::string_view reference, std::
 
 /* One hit of a `search`: the reference's place in the list, and its score. */
 struct Hit {
-    int64_t index;
-    int64_t score;
+    int64_t index; /* The reference's place in the list searched. */
+    int64_t score; /* Its score, minus its cost with no reward. */
 };
 
 /* The query against every reference, the best first; `best` above zero keeps that many. */
@@ -478,7 +497,7 @@ inline std::optional<Alignment> align_within(std::string_view reference, std::st
     return detail::align(reference, query, costs, mode, band, max_cost, ties, eqx, max_memory);
 }
 
-/* Every pair's least cost, `firsts[i]` against `seconds[i]`, over `threads` threads (zero: every
+/* Every pair's least cost, `references[i]` against `queries[i]`, over `threads` threads (zero: every
  * thread); raises as the first failing pair's `distance` would. */
 inline std::vector<int64_t> distances(const std::vector<std::string_view> &references,
                                       const std::vector<std::string_view> &queries,

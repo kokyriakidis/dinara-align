@@ -120,9 +120,11 @@ comptime COLUMN_PADDING = LANES
 
 
 comptime Words = SIMD[DType.uint64, LANES]
+"""One vector of `LANES` words."""
 
 
 comptime ALL_ONES = ~UInt64(0)
+"""A word with every bit set."""
 
 
 @inline(.always)
@@ -248,6 +250,7 @@ struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
         mut vertical_plus: List[UInt64],
         mut vertical_minus: List[UInt64],
     ):
+        """Pointers into the profile's planes and the frontier's edges, which must outlive the sweep."""
         # Past the padding, so column `c` of the matrix is element `c` here.
         self.column_low = column_low.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]().unsafe_offset(COLUMN_PADDING)
         self.column_high = (
@@ -405,9 +408,11 @@ trait Staggered(Movable):
         ...
 
     def first_column(self) -> Int:
+        """The tile's first column."""
         ...
 
     def end_column(self) -> Int:
+        """The column just past the tile's last."""
         ...
 
     def step[masked: Bool](mut self, offset: Int):
@@ -443,6 +448,7 @@ struct VectorGroup[lanes: Int, symbols: Int](Staggered, TrivialRegisterPassable)
 
     @inline(.always)
     def __init__(out self, sweep: Sweep, first_word: Int, first_column: Int, end_column: Int):
+        """Words `first_word` on, loaded bottom lane first, for columns `[first_column, end_column)`."""
         self.sweep = sweep
         self.first_word = first_word
         self.first = first_column
@@ -467,18 +473,23 @@ struct VectorGroup[lanes: Int, symbols: Int](Staggered, TrivialRegisterPassable)
 
     @inline(.always)
     def width(self) -> Int:
+        """The group's `lanes` words."""
         return Self.lanes
 
     @inline(.always)
     def first_column(self) -> Int:
+        """The tile's first column."""
         return self.first
 
     @inline(.always)
     def end_column(self) -> Int:
+        """The column just past the tile's last."""
         return self.end
 
     @inline(.always)
     def step[masked: Bool](mut self, offset: Int):
+        """One step: the lanes pass their differences down a lane, the top lane takes column
+        `offset + lanes` from the edge, and the bottom lane leaves column `offset + 1`'s there."""
         self.horizontal_plus = self.horizontal_plus.rotate_left[1]()
         self.horizontal_minus = self.horizontal_minus.rotate_left[1]()
         var top = offset + Self.lanes
@@ -517,6 +528,7 @@ struct VectorGroup[lanes: Int, symbols: Int](Staggered, TrivialRegisterPassable)
 
     @inline(.always)
     def finish(self):
+        """Writes each lane's vertical differences back to its word in the frontier."""
         comptime for lane in range(Self.lanes):
             var word = self.first_word + Self.lanes - 1 - lane
             self.sweep.vertical_plus[unsafe_offset=word] = self.vertical_plus[lane]
@@ -545,6 +557,7 @@ struct ScalarGroup[lanes: Int, symbols: Int](Staggered):
 
     @inline(.always)
     def __init__(out self, sweep: Sweep, first_word: Int, first_column: Int, end_column: Int):
+        """Words `first_word` on, top word first, for columns `[first_column, end_column)`."""
         self.sweep = sweep
         self.first_word = first_word
         self.first = first_column
@@ -566,18 +579,23 @@ struct ScalarGroup[lanes: Int, symbols: Int](Staggered):
 
     @inline(.always)
     def width(self) -> Int:
+        """The group's `lanes` words."""
         return Self.lanes
 
     @inline(.always)
     def first_column(self) -> Int:
+        """The tile's first column."""
         return self.first
 
     @inline(.always)
     def end_column(self) -> Int:
+        """The column just past the tile's last."""
         return self.end
 
     @inline(.always)
     def step[masked: Bool](mut self, offset: Int):
+        """One step: word `j` from the top works column `offset + lanes - j`, the top word taking its
+        difference from the edge and the bottom word leaving its own there."""
         # Bottom word first, so each word reads what the one above sent before it is replaced.
         comptime for i in range(Self.lanes):
             comptime j = Self.lanes - 1 - i
@@ -620,6 +638,7 @@ struct ScalarGroup[lanes: Int, symbols: Int](Staggered):
 
     @inline(.always)
     def finish(self):
+        """Writes each word's vertical differences back to the frontier."""
         comptime for j in range(Self.lanes):
             self.sweep.vertical_plus[unsafe_offset=self.first_word + j] = self.vertical_plus[j]
             self.sweep.vertical_minus[unsafe_offset=self.first_word + j] = self.vertical_minus[j]
@@ -1034,6 +1053,7 @@ struct Frontier(Movable):
     var vertical_minus: List[UInt64]
 
     def __init__(out self, columns: Int, words: Int):
+        """Both edges at the global borders: `columns` horizontal differences and `words` vertical words."""
         self.horizontal_plus = List[UInt64](length=columns, fill=1)
         self.horizontal_minus = List[UInt64](length=columns, fill=0)
         self.vertical_plus = List[UInt64](length=words, fill=ALL_ONES)
@@ -1129,6 +1149,7 @@ struct Trail(Movable):
         self.edge_minus = List[UInt64](capacity=tiles * LANES)
 
     def clear(mut self):
+        """Empties the trail for a new round, keeping its buffers."""
         self.first_columns.clear()
         self.end_columns.clear()
         self.tops.clear()
@@ -1176,7 +1197,8 @@ struct Edge(Movable):
         self.minus = List[UInt64](capacity=words)
 
     def capture(mut self, top: Int, end: Int, anchor: Int, frontier: Frontier, rows: Int):
-        """The right edge a round finished on: words `top` to `end` of the frontier, scoring `anchor` at the top."""
+        """The right edge of the last tile swept: words `top` to `end` of the frontier, scoring `anchor` at
+        the top."""
         self.top = top
         self.low_row = top * WORD_BITS
         self.high_row = min(end * WORD_BITS, rows)
@@ -1231,6 +1253,8 @@ struct Edge(Movable):
         var bases = self.bases.unsafe_ptr()
         if row == self.low_row:
             return bases[unsafe_offset=0]
+        # A row on a word's boundary is read as the bottom of the word above, all 64 of its rows
+        # counted, so the last row needs no base past the last word.
         var word = (row - 1) // WORD_BITS - self.top
         var bits = row - (self.top + word) * WORD_BITS
         var kept = ALL_ONES if bits == WORD_BITS else (UInt64(1) << UInt64(bits)) - 1

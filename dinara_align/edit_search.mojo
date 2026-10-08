@@ -124,6 +124,7 @@ def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int, latest: 
                 var incoming_plus = frontier.horizontal_plus[column]
                 var incoming_minus = frontier.horizontal_minus[column]
                 var crossing = matches | vertical_minus
+                # Myers' step takes no `-1` entering from above; Hyyrö folds one in as a match at the top.
                 if incoming_minus != 0:
                     matches |= 1
                 var horizontal = (((matches & vertical_plus) + vertical_plus) ^ vertical_plus) | matches
@@ -162,10 +163,11 @@ def edit_search(
 
     Of equally good matches, the span the wavefront's rule picks (see `gap_affine.free_ends_alignment`):
     with `Ties.LEFT` the last end, then the last start for it; with `Ties.RIGHT` the first start, then
-    the first end for it. One sweep over the whole matrix finds the distance and the end, and one over
-    both reversed, the text cut at that end, the start; for `Ties.RIGHT` the other way round. Symbols
-    as `edit_distance` takes them. The whole matrix is swept, `len(text)` columns of `len(pattern) / 64`
-    words, so this suits a read against a window of reference rather than a genome.
+    the first end for it. One sweep across the text finds the distance and the end, and one over both
+    reversed, the text cut at that end, the start; for `Ties.RIGHT` the other way round. Symbols as
+    `edit_distance` takes them. Every column of the text is swept, down as many of the pattern's
+    `len(pattern) / 64` words as the bound reaches, so this suits a read against a window of reference
+    rather than a genome.
     """
     var length = text.byte_length()
     if ties == Ties.RIGHT and not prefix:

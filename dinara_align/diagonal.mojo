@@ -80,6 +80,7 @@ every pair above."""
 
 @always_inline
 def two_ended_setup(columns: Int, rows: Int) -> Int:
+    """What starting the two-ended alignment costs a pair over one front, in one front's steps."""
     return TWO_ENDED_SETUP + (columns + rows) // 10
 
 
@@ -399,8 +400,9 @@ def diagonal_transition(
     post on A*PA2 names as its weak spot, finish here.
 
     From `PROBE_START` on, the furthest anti-diagonal reached projects the distance, and once the
-    search still to do, the projection squared less the score squared, passes `budget`, it stops
-    and hands the projection on as the band's first bound.
+    search still to do, the projection squared less the score squared, passes what a band would cost
+    (see `step_budget`), it stops and hands the projection on as the band's first bound. With
+    `switch_setup`, it also stops once the two-ended search would finish the rest more cheaply.
     """
     var columns = profile.columns
     var rows = profile.rows
@@ -515,11 +517,13 @@ struct FrontPair(Movable):
     var slot: Int
     """Which of the ring holds the latest front."""
     var furthest: Int
+    """The furthest anti-diagonal, column plus row, the last measured front reached."""
     var history: DiagonalFronts
     """Every front so far, when `record`, laid out as `diagonal_transition` keeps them, for a traceback."""
     var record: Bool
 
     def __init__(out self, record: Bool = False):
+        """A ring holding only score zero's front, still to be set, and a history when `record`."""
         # Every front writes its own diagonals and the padding either side before the next reads it,
         # so only the first front's surroundings need setting.
         self.buffers = List[Int32](capacity=FRONT_RING * FRONT_WIDTH)
@@ -724,6 +728,8 @@ def two_ended(
     def met(
         ahead: FrontPair, behind: FrontPair, diagonal: Int, forward_earlier: Bool, backward_earlier: Bool
     ) -> Meeting:
+        """Where the fronts `overlapping` paired met on `diagonal`: the forward front's column there, and
+        each side's score."""
         var column = Int(ahead.front(ahead.previous() if forward_earlier else ahead.slot)[unsafe_offset=diagonal])
         var forward_score = ahead.score - 1 if forward_earlier else ahead.score
         var backward_score = behind.score - 1 if backward_earlier else behind.score

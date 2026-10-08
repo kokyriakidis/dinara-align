@@ -52,6 +52,7 @@ struct TileFronts(Movable):
     """The left-edge rows' diagonals by cost, each cost's from `starts` at its level."""
 
     def __init__(out self):
+        """Empty buffers, with room for a typical tile."""
         self.columns = List[Int32](capacity=4096)
         self.lows = List[Int](capacity=64)
         self.highs = List[Int](capacity=64)
@@ -161,6 +162,7 @@ def forward_segment(
         var level = entry_costs[unsafe_offset=index] - base
         ordered[unsafe_offset=starts[unsafe_offset=level]] = entry_diagonals[unsafe_offset=index]
         starts[unsafe_offset=level] += 1
+    # Placing the rows moved each cost's start on to the next cost's, so each is taken back one.
     for level in range(levels, 0, -1):
         starts[unsafe_offset=level] = starts[unsafe_offset=level - 1]
     starts[unsafe_offset=0] = 0
@@ -201,6 +203,8 @@ def forward_segment(
         # keeps it. The rest of the row reads unreached, the lanes stored past the last included.
         var from_low = max(new_low, low - 1)
         var from_high = min(new_high, high + 1)
+        # When the cost before reaches none of them, an empty range past the row, so all of it reads
+        # unreached below but for the left-edge rows starting at this cost.
         if from_low > from_high:
             from_low = new_high + PAD + 1
             from_high = new_high + PAD
@@ -244,6 +248,8 @@ def forward_segment(
 
     @inline(.always)
     def at(level: Int, diagonal: Int) {imm row_of, imm lows, imm highs} -> Int:
+        """The furthest column on `diagonal` at cost level `level`, far below zero where that cost's row
+        did not grow it."""
         if level < 0 or diagonal < lows[unsafe_offset=level] or diagonal > highs[unsafe_offset=level]:
             return Int(UNREACHED)
         return Int(row_of(level)[unsafe_offset=diagonal])
@@ -305,6 +311,7 @@ struct Recompute(Movable):
     var low_bases: List[Int]
 
     def __init__(out self):
+        """Empty buffers, which the first recompute grows."""
         self.plus = List[UInt64]()
         self.minus = List[UInt64]()
         self.bases = List[Int]()
@@ -438,6 +445,8 @@ def window_segment[
     def score_in(
         plus: ImmPointer[UInt64, _], minus: ImmPointer[UInt64, _], bases: ImmPointer[Int, _], step: Int, row: Int
     ) {imm count, imm top} -> Int:
+        """The score at `row` on the window's column `step`, from one sweep's differences and its scores at
+        each word's top."""
         var word = (row - 1) // WORD_BITS - top if row > top * WORD_BITS else 0
         if row == top * WORD_BITS:
             return bases[unsafe_offset=step * (count + 1)]
@@ -476,6 +485,7 @@ def window_segment[
 
     @inline(.always)
     def give_up(mut moves: List[UInt8]) {imm start}:
+        """Drops the moves this window appended, so a taller one starts where it did."""
         moves.resize(start, 0)
 
     while step > 0:
@@ -549,6 +559,8 @@ def trace_back(profile: Profile, trail: Trail, start_column: Int, start_row: Int
     for tile in range(len(trail.first_columns) - 1, -1, -1):
         var first_column = trail.first_columns[tile]
         edge.load(trail, tile, profile.rows)
+        # The tile's share of the distance, by its share of the columns: its wavefront may climb three
+        # times that, or `WAVEFRONT_FLOOR`, before the tile is recomputed instead.
         var share = ceildiv(score * (column - first_column), max(start_column, 1))
         var limit = max(WAVEFRONT_FLOOR, 3 * share)
         var left = forward_segment(profile, edge, first_column, column, row, current, limit, fronts, moves)
@@ -610,7 +622,9 @@ struct CigarWriter:
     var text: List[UInt8]
     var used: Int
     var letter: UInt8
+    """The letter of the run still being added to, zero before the first."""
     var length: Int
+    """The length of that run so far."""
 
     def __init__(out self, capacity: Int):
         """Room for `capacity` bytes, which the caller bounds: nothing past it is checked."""
@@ -622,12 +636,14 @@ struct CigarWriter:
 
     @inline(.always)
     def add(mut self, letter: UInt8, length: Int):
+        """`length` more of `letter`, joining the run being added to when it has the same letter."""
         if letter != self.letter:
             self.flush()
             self.letter = letter
         self.length += length
 
     def flush(mut self):
+        """Writes the run being added to, if any, as its length's digits then its letter."""
         if self.length == 0:
             return
         var digits = 1
@@ -646,6 +662,7 @@ struct CigarWriter:
         self.length = 0
 
     def finish(var self) -> String:
+        """The CIGAR string, its last run written."""
         self.flush()
         self.text.resize(self.used, 0)
         return String(unsafe_from_utf8=self.text)

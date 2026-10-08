@@ -33,13 +33,18 @@ from dinara_align import (
 )
 
 comptime C_ENDS_FREE = 0
+"""A mode tuple's kind for free ends, global among them (`DINARA_ENDS_FREE`)."""
 comptime C_EXTENSION = 1
+"""A mode tuple's kind for an extension from one end (`DINARA_EXTENSION`)."""
 comptime C_LOCAL = 2
+"""A mode tuple's kind for a local alignment (`DINARA_LOCAL`)."""
 comptime C_OVERLAP = 3
+"""A mode tuple's kind for an overlap (`DINARA_OVERLAP`)."""
 
 
 @export
 def PyInit__dinara() abi("C") -> PythonObject:
+    """The `_dinara` module, its functions registered, which Python calls on import; a failure aborts."""
     try:
         var module = PythonModuleBuilder("_dinara")
         module.def_function[py_distance]("distance")
@@ -111,8 +116,10 @@ struct Options(ImplicitlyCopyable):
 
 
 def options_of(fields: PythonObject) raises -> Options:
+    """The `Options` an options tuple asks for."""
     var at = ints(fields)
     comptime EDGE = 1 << 60
+    # A band past any diagonal is no band; clamping it keeps the library's arithmetic clear of overflow.
     var band = Band(max(at[0], -EDGE), min(at[1], EDGE))
     var memory = at[5] if at[5] > 0 else DEFAULT_MAX_MEMORY
     return Options(band, at[2], at[3] != 0, Ties.RIGHT if at[4] != 0 else Ties.LEFT, memory)
@@ -211,6 +218,7 @@ def py_local_scores(
 
 
 def strings(items: PythonObject) raises -> List[String]:
+    """A sequence of Python `str`s as Mojo strings."""
     var out = List[String]()
     for item in items:
         out.append(String(py=item))
@@ -218,6 +226,7 @@ def strings(items: PythonObject) raises -> List[String]:
 
 
 def threads_of(count: PythonObject) raises -> Optional[Int]:
+    """A thread count for the library: `count` when above zero, else none, every thread."""
     var threads = Int(py=count)
     return Optional[Int](threads) if threads > 0 else None
 

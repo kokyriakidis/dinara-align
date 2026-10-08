@@ -300,6 +300,7 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         return Self(Self.ENDS, UNBOUNDED, UNBOUNDED, UNBOUNDED, UNBOUNDED, match_score, Anchor.START, -1)
 
     def is_global(self) -> Bool:
+        """Whether these are free ends with none free: both sequences end to end, whatever a match earns."""
         return (
             self.kind == Self.ENDS
             and (self.reference_start | self.reference_end | self.query_start | self.query_end) == 0
@@ -348,7 +349,9 @@ struct Band(ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     static band counts diagonals the other way, its `min_k ..= max_k` being `Band(-max_k, -min_k)`."""
 
     var low: Int
+    """The lowest diagonal the alignment may use."""
     var high: Int
+    """The highest diagonal the alignment may use."""
 
     def __init__(out self):
         """No band: every diagonal."""
@@ -361,6 +364,7 @@ struct Band(ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         return Band(-width, width)
 
     def holds(self, diagonal: Int) -> Bool:
+        """Whether `diagonal` lies inside the band."""
         return self.low <= diagonal and diagonal <= self.high
 
     def covers(self, columns: Int, rows: Int) -> Bool:

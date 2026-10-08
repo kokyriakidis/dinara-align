@@ -84,9 +84,11 @@ def generate(full: bool) -> None:
     rng = random.Random(42)
 
     def random_sequence(length: int) -> str:
+        """`length` random bases."""
         return "".join(rng.choice(DNA) for _ in range(length))
 
     def homologous_pairs(path: str, name: str, count: int, length: int, rate: float) -> None:
+        """Writes `count` pairs of `length` bases to `path`, each second its first mutated at `rate`."""
         with open(DATA / path, "w") as out:
             for _ in range(count):
                 first = random_sequence(length)
@@ -167,6 +169,7 @@ def set_cpu(name: str) -> None:
 
 
 def arm() -> bool:
+    """Whether the host is an ARM machine."""
     return platform.machine().lower() in ("arm64", "aarch64")
 
 
@@ -328,6 +331,8 @@ def report(rows: list[list[str]]) -> bool:
 
 
 def main() -> None:
+    """Generates the workloads, runs every tool it can build on them, and writes the report; exits nonzero
+    when the tools' answers disagree."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--full", action="store_true", help="include the 100k DNA pairs")
     parser.add_argument("--install-rust", action="store_true", help="install A*PA's nightly under the cache")

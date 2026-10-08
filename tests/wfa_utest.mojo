@@ -30,6 +30,7 @@ from dinara_align.gap_affine import (
 )
 
 comptime EDIT = 0
+"""Unit costs, the edit distance, a score WFA2-lib reports as the distance itself."""
 comptime GAP_AFFINE = 1
 """A cost: no match reward, so `Costs.affine` serves it."""
 comptime REWARDED = 2
@@ -43,17 +44,24 @@ struct WfaMode(Copyable, Movable):
     """One of WFA2-lib's tested modes: its name and penalties."""
 
     var name: String
+    """WFA2-lib's name for the mode, which names its results file."""
     var kind: Int
+    """`EDIT`, `GAP_AFFINE`, `REWARDED` or `TWO_PIECE`."""
     var reward: Int
+    """What a match earns, for `REWARDED` alone."""
     var mismatch: Int
+    """A substitution's cost."""
     var opening: Int
+    """A gap's cost before its letters."""
     var extension: Int
+    """Each gapped letter's cost."""
     var opening2: Int
     """The second piece's costs, for `TWO_PIECE` alone."""
     var extension2: Int
 
 
 def lines_of(path: String) raises -> List[String]:
+    """A file's lines, empty ones dropped."""
     var out = List[String]()
     for line in open(path, "r").read().split("\n"):
         if line.byte_length() > 0:
@@ -152,8 +160,11 @@ def priced(cigar: String, first: String, second: String, mode: WfaMode) -> Optio
 
 
 def main() raises:
+    """Holds every mode to WFA2-lib's results, its tests directory the first argument; raises on any
+    disagreement."""
     var root = String(argv()[1])
     var seq = lines_of(root + "/wfa.utest.seq")
+    # A pair is two lines, the first sequence after a `>` and the second after a `<`.
     var firsts = List[String]()
     var seconds = List[String]()
     for index in range(0, len(seq), 2):

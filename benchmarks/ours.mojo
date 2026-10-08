@@ -19,16 +19,21 @@ from dinara_align import Costs, Mode, distance, Placement, Scoring, align, align
 from dinara_align.common import hardware_threads
 
 comptime GLOBAL = Mode.GLOBAL
+"""The mode every workload but the `.seq` datasets aligns in."""
 
 
 struct Pairs(Movable):
     """One workload file: a workload name per pair, and both sequences."""
 
     var names: List[String]
+    """Each pair's workload name."""
     var firsts: List[String]
+    """Each pair's first sequence, the reference."""
     var seconds: List[String]
+    """Each pair's second sequence, the query."""
 
     def __init__(out self, path: String) raises:
+        """The pairs of a `name<TAB>first<TAB>second` file."""
         self.names = List[String]()
         self.firsts = List[String]()
         self.seconds = List[String]()
@@ -117,6 +122,7 @@ def measure[
 
 
 def emit(tool: String, workload: String, task: String, device: String, timed: Tuple[Float64, String]):
+    """Prints one measurement's row: tool, workload, task, device, seconds and answer."""
     print(tool, workload, task, device, timed[0], timed[1], sep="\t")
 
 
@@ -176,9 +182,12 @@ struct SeqFile:
     into lines first, the file left several times its size resident at the peak."""
 
     var data: List[UInt8]
+    """The whole file's bytes."""
     var at: Int
+    """Where the next line starts."""
 
     def __init__(out self, path: String) raises:
+        """The file at `path`, read whole, its first line next."""
         var handle = open(path, "r")
         self.data = handle.read_bytes(getsize(path))
         handle.close()
@@ -187,6 +196,7 @@ struct SeqFile:
     def line(mut self) -> String:
         """The next line, without its first byte, the mark; empty past the last."""
         comptime CHUNK = 16
+        # Sixteen bytes at a time while that many are left, then a byte at a time to the newline.
         var length = len(self.data)
         var start = self.at
         var end = start
@@ -304,6 +314,8 @@ def seq_mode() raises:
 
 
 def main() raises:
+    """Times every workload in the data directory, the first argument, on every device that answers; or
+    with `seq` first, A*PA2's datasets (see `seq_mode`)."""
     if String(argv()[1]) == "seq":
         seq_mode()
         return

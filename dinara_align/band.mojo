@@ -78,19 +78,25 @@ struct Band(Movable):
     var frontier: Frontier
     var sweep: Sweep
     var bounds: List[Int]
+    """The tiles' first columns, then the column just past the last."""
     var columns: Int
     var rows: Int
     var words: Int
     var difference: Int
+    """Rows less columns: the diagonal the end lies on."""
     var extra: Int
+    """How far Ukkonen's band reaches past that diagonal, half the bound left over by the gap."""
     var threshold: Int
     var top: Int
+    """The band's first word."""
     var end_word: Int
+    """The word just past the band's last."""
     var anchor: Int
     """The score at the top of word `top`, on the left edge of the coming tile."""
     var deepest: Int
     """The deepest row a kept cell, scoring `floor` at the least, sits on, after the last tile."""
     var floor: Int
+    """The score at row `deepest` on the last tile's right edge."""
     var outcome: Round
     """Set once the round has pruned every row, the reason it stopped."""
     var adapt: Bool
@@ -129,12 +135,15 @@ struct Band(Movable):
         self.checkpoint = 0
 
     def tiles(self) -> Int:
+        """The number of tiles across the matrix."""
         return len(self.bounds) - 1
 
     def first_column(self, tile: Int) -> Int:
+        """The tile's first column."""
         return self.bounds[tile]
 
     def end_column(self, tile: Int) -> Int:
+        """The column just past the tile's last."""
         return self.bounds[tile + 1]
 
     def prepare[
@@ -379,8 +388,8 @@ def band_doubling[
     Each round sweeps the band for one bound. A failed round leaves either a real alignment's cost,
     which caps the next bound, or the column at which it pruned every row, from which the distance is
     estimated as the bound scaled to the whole width; the next bound aims just past the estimate
-    rather than doubling. Once the band would
-    cover the matrix, `give_up_wide` hands back to the caller, else the bound is lifted past any path.
+    rather than doubling. Once the band would cover the matrix, `give_up_wide` hands back to the
+    caller, else the bound is lifted past any path.
 
     The first bound aims just past where the diagonal transition's `probe` projected the distance,
     and above every score it ruled out.

@@ -104,6 +104,7 @@ TIMER = Path("/usr/bin/time")
 
 
 def dinara(threads: str) -> str:
+    """The bit-parallel column's tool name, `threads` saying how it runs."""
     return f"dinara-align (bit-parallel, {threads})"
 
 
@@ -284,6 +285,7 @@ def run_tool(binary: Path, tool: str, path: Path, budget: float) -> tuple[list[t
     capped = tool in CAPPED
 
     def limit() -> None:
+        """Caps the runner's address space at `MEMORY_CAP`, run in the child before it starts."""
         resource.setrlimit(resource.RLIMIT_AS, (MEMORY_CAP, MEMORY_CAP))
 
     process = subprocess.Popen(
@@ -297,6 +299,7 @@ def run_tool(binary: Path, tool: str, path: Path, budget: float) -> tuple[list[t
     stopped = threading.Event()
 
     def stop() -> None:
+        """Kills the runner's whole session, GNU time with it, and marks the run stopped."""
         stopped.set()
         try:
             os.killpg(process.pid, signal.SIGKILL)
@@ -308,6 +311,7 @@ def run_tool(binary: Path, tool: str, path: Path, budget: float) -> tuple[list[t
     if capped and sys.platform == "darwin":
 
         def watch() -> None:
+            """Stops the runner once its resident size passes `MEMORY_CAP`, polling every 50 ms."""
             while process.poll() is None and not stopped.is_set():
                 resident = subprocess.run(["ps", "-o", "rss=", "-p", str(process.pid)], capture_output=True, text=True)
                 if resident.stdout.strip() and int(resident.stdout) * 1024 > MEMORY_CAP:
@@ -418,6 +422,7 @@ def load_kept() -> dict:
 
 
 def megabytes(peak: int, stopped: bool) -> str:
+    """A peak's table cell in megabytes, a lower bound for a run stopped, a dash for none reported."""
     if peak < 0:
         return "—"
     return f"{'≥ ' if stopped else ''}{peak / 2**20:.0f} MB"
@@ -432,6 +437,7 @@ def growth(rows: list) -> str:
         return "—"
 
     def size(value: int) -> str:
+        """`value` bytes in megabytes, one decimal below ten."""
         return f"{value / 2**20:.1f}" if value < 10 * 2**20 else f"{value / 2**20:.0f}"
 
     return f"{size(grown[len(grown) // 2])} / {size(grown[-1])} MB"
@@ -441,6 +447,9 @@ def growth(rows: list) -> str:
 
 
 def main() -> None:
+    """Runs every tool on a sample of every dataset, checks their costs agree with each other's and the
+    published ones, and writes the tables of time, peak memory and memory growth; exits nonzero when
+    any disagree."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--full", action="store_true", help="add the 3 and 10 Mbp synthetic pairs")
     parser.add_argument("--budget", type=float, default=5.0, help="seconds per tool per dataset (default 5)")
@@ -477,9 +486,11 @@ def main() -> None:
     kept = load_kept() if not options.fresh else {}
 
     def run(binary: Path, tool: str, path: Path) -> tuple[list[tuple[float, int]], int, bool]:
+        """`measure` at the chosen budget, dinara-align run afresh and a rival from its kept results."""
         return measure(binary, tool, path, options.budget, None if binary == ours else kept)
 
     def chosen(dataset: str) -> list[tuple[str, Path, str]]:
+        """The columns for `dataset`: the affine ones when `--affine` asks, else the unit-cost ones."""
         if options.affine:
             return affine_tools(options.affine, ours, wrapper)
         return tools(dataset, ours, astarpa, wrapper)

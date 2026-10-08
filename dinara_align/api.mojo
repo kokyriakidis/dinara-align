@@ -526,6 +526,7 @@ def alignments(
             imm pairs,
             imm chunks,
         }:
+            """Aligns chunk `chunk` of the pairs, flagging any pair that raised for the serial retry below."""
             for index in range(pairs * chunk // chunks, pairs * (chunk + 1) // chunks):
                 try:
                     out[unsafe_offset=index] = scoring_alignment(
@@ -574,6 +575,7 @@ def alignments(
     def convert(
         chunk: Int,
     ) {imm gapped, imm references, imm queries, imm out, imm whole, imm eqx, imm pairs, imm chunks}:
+        """Reads chunk `chunk` of the gapped pairs as `Alignment`s, each with its CIGAR and spans."""
         for index in range(pairs * chunk // chunks, pairs * (chunk + 1) // chunks):
             out[unsafe_offset=index] = as_alignment(gapped[index], references[index], queries[index], whole, eqx)
 
@@ -727,6 +729,7 @@ def capped_distances(
         imm band,
         imm max_cost,
     }:
+        """Takes the next pair in `order` until none is left, storing its capped cost or flagging that it raised."""
         while True:
             var dealt = Int(taken.fetch_add(1))
             if dealt >= pairs:
@@ -834,6 +837,8 @@ def capped_alignments(
         imm eqx,
         imm limit,
     }:
+        """Takes the next pair in `order` until none is left, storing its capped alignment or flagging that it
+        raised."""
         while True:
             var dealt = Int(taken.fetch_add(1))
             if dealt >= pairs:
@@ -874,8 +879,9 @@ def search(
     with no reward) those within it alone, and with `aligned` each kept hit's alignment too.
 
     A local alignment scores a block of references at once, one to a SIMD lane, as SWIPE does (see
-    `search`); a mode with no reward takes `distances`, under the cap when there is one; any other mode
-    each pair's `score`. Every kept hit is then aligned on its own, when asked for, by `align`."""
+    `local_scores_by_block`); a mode with no reward takes `distances`, under the cap when there is one;
+    any other mode each pair's `score`. Every kept hit is then aligned on its own, when asked for, by
+    `align`."""
     var count = len(references)
     var workers = max(threads.or_else(hardware_threads()), 1)
     var scores = List[Int](length=count, fill=Int.MIN)
@@ -899,6 +905,7 @@ def search(
         var taken = Atomic[Int64](0)
 
         def work(slot: Int) {mut taken, imm}:
+            """Scores the next unclaimed reference against the query until none is left, flagging any that raised."""
             while True:
                 var index = Int(taken.fetch_add(1))
                 if index >= count:
@@ -919,6 +926,7 @@ def search(
             order.append(index)
 
     def ahead(left: Int, right: Int) {imm scores} -> Bool:
+        """Whether reference `left` ranks before `right`: the higher score, then the earlier reference."""
         if scores[left] != scores[right]:
             return scores[left] > scores[right]
         return left < right

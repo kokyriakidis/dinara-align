@@ -12,6 +12,7 @@ import dinara_align as da
 
 
 def edit_distance(a: str, b: str) -> int:
+    """The edit distance of `a` and `b`, by the full matrix one row at a time."""
     row = list(range(len(b) + 1))
     for i, x in enumerate(a, 1):
         previous, row[0] = row[0], i
@@ -43,6 +44,8 @@ def rows_cost(top: str, bottom: str, costs: da.Costs) -> int:
 
 
 def mutated(text: str, rate: float, rng: random.Random) -> str:
+    """`text` with about a `rate` of its letters substituted, deleted or followed by an inserted letter,
+    a third each."""
     out = []
     for letter in text:
         roll = rng.random()
@@ -58,6 +61,7 @@ def mutated(text: str, rate: float, rng: random.Random) -> str:
 
 
 def main() -> None:
+    """Runs every check, the package's own examples first; a failed one raises."""
     failures, tried = doctest.testmod(da)
     assert failures == 0, f"{failures} of the package's examples failed"
 

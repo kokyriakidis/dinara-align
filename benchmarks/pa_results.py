@@ -15,8 +15,9 @@ figures:
 
 The rivals and dinara-align's older commits never change, so each runs on a sample once and is kept
 for good (see `pa_bench.measure`); a later `collect` times today's dinara-align alone. Every cost is
-checked against every other aligner's on the pairs both aligned, and the run fails on a disagreement. A rival that has not finished a pair when its budget runs out stops there: its numbers
-cover the pairs it finished, which the table counts, and a rival that finished none shows a dash.
+checked against every other aligner's on the pairs both aligned, and the run fails on a disagreement.
+A rival that has not finished a pair when its budget runs out stops there: its numbers cover the pairs
+it finished, which the table counts, and a rival that finished none shows a dash.
 """
 
 import json
@@ -117,6 +118,7 @@ None for the exact distance, at the unit costs WFA-adaptive takes, and for Block
 only affine costs, BiWFA at the same ones. They may return a worse alignment than that optimum, so
 they are never checked for agreement, and the share they get right goes beside their time."""
 
+# Each aligner's name in the tables.
 LABELS = {
     dinara("1 thread"): "dinara-align",
     "a*pa2-full": "A*PA2-full",
@@ -134,6 +136,7 @@ LABELS = {
 
 
 def runners() -> dict:
+    """The runners every aligner runs under, built or fetched as needed: ours, A*PA's and pa-bench's wrapper."""
     ours = mojo_runner()
     fetch("pa-bench")
     wrapper = cargo_runner("pa-wrapper", dict(os.environ))
@@ -146,6 +149,7 @@ def runners() -> dict:
 
 
 def aligners(dataset: str, binaries: dict) -> list[tuple[str, Path, str]]:
+    """Each exact aligner's column, runner and tool name for `dataset`, in `ALIGNERS`'s order."""
     return [
         (dinara("1 thread"), binaries["ours"], dinara("1 thread")),
         ("a*pa2-full", binaries["astarpa"], "a*pa2-full"),
@@ -256,6 +260,7 @@ def historic_runner(commit: str) -> Path:
 
 
 def collect() -> None:
+    """Times every aligner on every figure's datasets, and dinara-align's history, into `MEASURED`."""
     download()
     published = published_costs()
     binaries = runners()
@@ -335,6 +340,7 @@ def cell(values: list[float], pairs: int) -> str:
 
 
 def mean_cell(values: list[float], pairs: int) -> str:
+    """An aligner's mean time per alignment, and how many pairs it finished if not all."""
     if not values:
         return "—"
     text = duration(sum(values) / len(values))
@@ -342,6 +348,7 @@ def mean_cell(values: list[float], pairs: int) -> str:
 
 
 def header(first: str, columns: list[str]) -> list[str]:
+    """A Markdown table's header and alignment rows, `first` left-aligned and `columns` right."""
     return [
         f"| {first} | " + " | ".join(columns) + " |",
         "| :-- | " + " | ".join("--:" for _ in columns) + " |",
@@ -401,6 +408,7 @@ def tables(measured: dict) -> str:
 
 
 def write_tables() -> None:
+    """Writes the tables of the measurements `collect` took to `astarpa2-results.md`, and prints them."""
     measured = json.loads(MEASURED.read_text())
     text = tables(measured)
     (RESULTS / "astarpa2-results.md").write_text(text)

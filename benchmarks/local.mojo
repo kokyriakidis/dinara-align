@@ -18,6 +18,8 @@ from dinara_align import Costs, Mode, align
 
 
 def main() raises:
+    """Aligns the workload file's pairs, the mode taken from its first name, and prints one row: tool,
+    workload, task, the mean seconds a pair and the scores' checksum."""
     var names = List[String]()
     var references = List[String]()
     var queries = List[String]()

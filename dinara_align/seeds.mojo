@@ -257,6 +257,7 @@ struct SeedHeuristic(Movable):
     matches chain; a layer rarely holds more than three, and any past the slots spill over."""
     var slot_y: List[Int32]
     var counts: List[Int32]
+    """Per layer, how many of its slots hold a start; only a layer whose slots are full can have spilled."""
     var spill_head: List[Int32]
     """Per layer, the last of its spilled starts, -1 for none; each spilled start links to the one
     spilled before it in `spill_next`."""
@@ -870,6 +871,7 @@ struct SeedHeuristic(Movable):
         return False
 
     def add_layer(mut self):
+        """One more layer, its slots empty and nothing spilled."""
         for _ in range(LAYER_SLOTS):
             self.slot_x.append(0)
             self.slot_y.append(0)
@@ -877,6 +879,8 @@ struct SeedHeuristic(Movable):
         self.spill_head.append(-1)
 
     def add_point(mut self, layer: Int, x: Int, y: Int):
+        """Adds the transformed start `(x, y)` to `layer`: into a slot while one is free, else onto the
+        layer's spill chain."""
         var count = Int(self.counts[layer])
         if count < LAYER_SLOTS:
             self.slot_x[layer * LAYER_SLOTS + count] = Int32(x)

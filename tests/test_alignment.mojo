@@ -369,10 +369,12 @@ def check_against_enumeration(mode: Mode) raises:
 
 
 def test_global_matches_enumeration() raises:
+    """A global alignment's score is every tiny pair's optimum by enumeration."""
     check_against_enumeration(GLOBAL)
 
 
 def test_local_matches_enumeration() raises:
+    """A local alignment's score is every tiny pair's optimum by enumeration."""
     check_against_enumeration(LOCAL)
 
 
@@ -420,10 +422,12 @@ def check_linear_matches_stored(mode: Mode) raises:
 
 
 def test_global_linear_matches_stored() raises:
+    """A global alignment traced in linear space scores what one traced from a stored matrix does."""
     check_linear_matches_stored(GLOBAL)
 
 
 def test_local_linear_matches_stored() raises:
+    """A local alignment traced in linear space scores what one traced from a stored matrix does."""
     check_linear_matches_stored(LOCAL)
 
 
@@ -1555,6 +1559,7 @@ def rewarded_optimum(
     var width = m + 1
 
     def edge(letters: Int, free: Int) {imm o, imm e, imm o2, imm e2} -> Int:
+        """The score of reaching the first row or column `letters` in: nothing within `free`, a gap past it."""
         if letters <= free:
             return 0
         var paid = o + e * (letters - free)
@@ -1615,6 +1620,7 @@ def extension_price(cigar: String, a: Int, x: Int, o: Int, e: Int, o2: Int, e2: 
 
 
 def reversed_text(text: String) -> String:
+    """`text`'s bytes in reverse order."""
     var bytes = List[UInt8]()
     var source = text.as_bytes()
     for index in range(len(source) - 1, -1, -1):
@@ -2901,4 +2907,5 @@ def test_device_matches_host() raises:
 
 
 def main() raises:
+    """Runs every `test_` function here."""
     TestSuite.discover_tests[__functions_in_module()]().run()

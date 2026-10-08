@@ -15,8 +15,11 @@ from max.gpu.host import DeviceAttribute, DeviceBuffer, DeviceContext
 from .errors import AlignmentError, ErrorKind
 
 comptime ScoreDType = DType.int32
+"""The type of a score in the gap-affine sweeps."""
 comptime SymbolDType = DType.uint8
+"""The type of a symbol's index in its alphabet."""
 comptime SubstitutionDType = DType.int8
+"""The type of one entry of the substitution table."""
 comptime OffsetDType = DType.uint64
 """
 Indexes the concatenated batch tape rather than one sequence, so it is bounded by the sum of every length in the batch
@@ -44,6 +47,7 @@ cases, and costs one kilobyte per block.
 """
 
 comptime NEGATIVE_INFINITY = Int32.MIN // 4
+"""A score below any real one, a quarter of `Int32.MIN` so adding a few penalties to it never wraps."""
 
 
 @fieldwise_init

@@ -71,11 +71,14 @@ Options:
 
 @fieldwise_init
 struct Record(Copyable, Movable):
+    """A FASTA or FASTQ record: its name, up to the first space, and its sequence."""
+
     var name: String
     var sequence: String
 
 
 def fail(message: String):
+    """Prints `message` to standard error and exits with status 2, as for a bad command line."""
     print("dinara-align:", message, file=stderr)
     exit(2)
 
@@ -112,6 +115,7 @@ def read_records(path: String) raises -> List[Record]:
 
 
 def numbers(text: String) raises -> List[Int]:
+    """The integers of a comma-separated list, as `--band` and `--costs` take them."""
     var out = List[Int]()
     for part in text.split(","):
         out.append(Int(String(part)))
@@ -119,6 +123,7 @@ def numbers(text: String) raises -> List[Int]:
 
 
 def costs_of(text: String) raises -> Costs:
+    """The `Costs` a `--costs` value names: `edit`, `linear:X,G`, `affine:X,O,E` or `two-piece:X,O,E,O2,E2`."""
     var kind = String(text.split(":")[0])
     var values = numbers(String(text.split(":")[1])) if ":" in text else List[Int]()
     if kind == "edit":
@@ -133,6 +138,8 @@ def costs_of(text: String) raises -> Costs:
 
 
 def mode_of(text: String, match_score: Int, zdrop: Int) raises -> Mode:
+    """The `Mode` a `--mode` value names; free ends take `--match-score` when above zero, an extension
+    `--zdrop` when zero or more, and the other modes their reward from the value itself."""
     var kind = String(text.split(":")[0])
     var values = numbers(String(text.split(":")[1])) if ":" in text and not text.endswith(",end") else List[Int]()
     var mode: Mode
@@ -166,6 +173,7 @@ def mode_of(text: String, match_score: Int, zdrop: Int) raises -> Mode:
 
 
 def reverse_complement(sequence: String) -> String:
+    """`sequence` read backward with A and T, C and G swapped; any other letter is kept as it is."""
     var bytes = sequence.as_bytes()
     var out = List[UInt8](capacity=len(bytes))
     for index in range(len(bytes) - 1, -1, -1):
@@ -188,6 +196,7 @@ def better(first: Alignment, second: Alignment, scored: Bool) -> Bool:
 
 
 def main():
+    """Runs the command line, a failure printed as one line with exit status 2."""
     try:
         run()
     except error:
@@ -196,6 +205,7 @@ def main():
 
 
 def run() raises:
+    """Reads the options and the pairs, aligns every pair and prints a line for each in the format asked."""
     var arguments = argv()
     var positional = List[String]()
     var literal_reference = Optional[String]()
@@ -403,6 +413,7 @@ def run() raises:
         var length = query.byte_length()
         if not found:
             if format == "sam":
+                # Flag 4: the read is unmapped.
                 print(names[pair], 4, "*", 0, 0, "*", "*", 0, 0, query, "*", sep="\t")
             elif format == "tsv":
                 print(names[pair], reference_names[pair], "*", "*", "*", "*", "*", "*", "*", "*", sep="\t")
@@ -423,6 +434,7 @@ def run() raises:
                 sep="\t",
             )
         elif format == "sam":
+            # Flag 16 marks the reverse strand; a mapping quality of 255 is none given.
             var flag = 16 if strand == "-" else 0
             print(
                 names[pair],
@@ -478,7 +490,7 @@ def _scored(
     threads: Optional[Int],
     memory: Int,
 ) raises -> List[Optional[Alignment]]:
-    """A mode with a match score takes no cap: every pair aligned."""
+    """Every pair's alignment under a mode with a match score, which takes no cap, so every pair is aligned."""
     var out = List[Optional[Alignment]]()
     for found in alignments(
         references, queries, costs, mode, band=band, ties=ties, eqx=eqx, threads=threads, max_memory=memory

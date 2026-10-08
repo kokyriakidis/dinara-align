@@ -449,7 +449,7 @@ def align_on_device[
     var aligned = device_alignments[mode](
         scope, sequences, offsets, scoring.substitutions, scoring.alphabet, scoring.gaps
     )
-    return aligned[0].copy()
+    return aligned.pop(0)
 
 
 def score_on_device[
@@ -750,6 +750,7 @@ def scores_with[
         var chunks = chunk_count(pairs, resolved.threads)
 
         def score_range(slot: Int) {imm}:
+            """Scores chunk `slot` of the pairs, flagging any pair that raised for the serial retry below."""
             for index in range(pairs * slot // chunks, pairs * (slot + 1) // chunks):
                 try:
                     out[unsafe_offset=index] = score_with[mode](firsts[index], seconds[index], scoring, single)
@@ -816,6 +817,7 @@ def alignments_with[
         var chunks = chunk_count(pairs, resolved.threads)
 
         def align_range(slot: Int) {imm}:
+            """Aligns chunk `slot` of the pairs, flagging any pair that raised for the serial retry below."""
             for index in range(pairs * slot // chunks, pairs * (slot + 1) // chunks):
                 try:
                     out[unsafe_offset=index] = align_with[mode](
@@ -854,8 +856,9 @@ def alignments_with[
         var aligned = device_alignments[mode](
             scope, tape.sequences, tape.offsets, scoring.substitutions, scoring.alphabet, scoring.gaps
         )
-        for slot in range(len(batchable)):
-            results[batchable[slot]] = aligned[slot].copy()
+        # Each alignment moved out rather than copied, the last slot first as `pop` hands them back.
+        for slot in range(len(batchable) - 1, -1, -1):
+            results[batchable[slot]] = aligned.pop()
     return results^
 
 

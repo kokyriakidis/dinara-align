@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def main() -> None:
+    """Prints the notes under the version's `##` heading, the first argument with or without its `v`."""
     version = sys.argv[1].removeprefix("v")
     lines = (ROOT / "CHANGELOG.md").read_text().splitlines()
     out, inside = [], False

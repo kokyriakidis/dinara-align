@@ -12,28 +12,41 @@ zero (`LOCAL`); every cell of the path lies on the band's diagonals, `i - j` cou
 """
 
 comptime ENDS = 0
+"""A kind with up to so many free letters at each end of each sequence; a global alignment when none."""
 comptime EXTENSION = 1
+"""A kind fixed at one end of both sequences and free to stop anywhere."""
 comptime LOCAL = 2
+"""A kind free to start and stop anywhere, every cell floored at zero: Smith-Waterman."""
 comptime LOW = -(1 << 40)
 """A cell no path reaches."""
 
 
 @fieldwise_init
 struct Model(Copyable, Movable, Writable):
+    """The score an alignment maximizes and the alignments that count (see the module's docstring)."""
+
     var table: List[Int]
     """What aligning byte `a` against byte `b` scores, at `a * 256 + b`."""
     var deletion: List[Tuple[Int, Int]]
     """A deletion's pieces, each an opening and an extension."""
     var insertion: List[Tuple[Int, Int]]
+    """An insertion's pieces, each an opening and an extension."""
     var kind: Int
+    """`ENDS`, `EXTENSION` or `LOCAL`."""
     var reference_start: Int
+    """For `ENDS`, the reference's letters free before the alignment."""
     var reference_end: Int
+    """For `ENDS`, the reference's letters free after it."""
     var query_start: Int
+    """For `ENDS`, the query's letters free before it."""
     var query_end: Int
+    """For `ENDS`, the query's letters free after it."""
     var at_end: Bool
     """An extension fixed at both sequences' ends rather than their starts."""
     var band_low: Int
+    """The lowest diagonal, `i - j`, a path's cell may lie on."""
     var band_high: Int
+    """The highest diagonal a path's cell may lie on."""
 
     @staticmethod
     def uniform(reward: Int, mismatch: Int) -> List[Int]:
@@ -52,10 +65,12 @@ struct Model(Copyable, Movable, Writable):
         return cheapest
 
     def holds(self, diagonal: Int) -> Bool:
+        """Whether `diagonal` lies on the band."""
         return self.band_low <= diagonal and diagonal <= self.band_high
 
 
 def reversed_bytes(text: String) -> String:
+    """`text`'s bytes in reverse order."""
     var bytes = text.as_bytes()
     var out = List[UInt8](capacity=len(bytes))
     for index in range(len(bytes) - 1, -1, -1):
@@ -227,9 +242,11 @@ struct Priced(ImplicitlyCopyable, Writable):
     """What an alignment's CIGAR earns under a model."""
 
     var score: Int
+    """The model's score: its substitutions' table entries less its gaps' costs."""
     var cost: Int
     """Its edits' costs alone."""
     var matches: Int
+    """Its pairs of equal letters."""
 
 
 def priced(model: Model, reference: String, query: String, cigar: String, start: Tuple[Int, Int]) raises -> Priced:
@@ -248,6 +265,7 @@ def priced(model: Model, reference: String, query: String, cigar: String, start:
     var corner = len(a) - len(b)
 
     def inside(column: Int, row: Int) {imm model, imm mirrored, imm corner} -> Bool:
+        """Whether cell `(column, row)` lies on the band, which a local alignment does not have."""
         if model.kind == LOCAL:
             return True
         return model.holds(corner - (column - row)) if mirrored else model.holds(column - row)

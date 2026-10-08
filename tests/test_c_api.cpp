@@ -12,8 +12,10 @@
 
 #include "dinara.h"
 
+// The checks failed so far; any one fails the run, after every check has been reported.
 static int failures = 0;
 
+// Reports `condition` with its place when it fails, and counts it, without stopping the run.
 #define CHECK(condition)                                                       \
     do {                                                                       \
         if (!(condition)) {                                                    \
@@ -40,6 +42,8 @@ static int64_t edits(const std::string &cigar, size_t first_length, size_t secon
     return total;
 }
 
+// `text` with about a `rate` of its letters substituted, deleted or followed by an inserted letter, a
+// third each.
 static std::string mutated(const std::string &text, double rate, std::mt19937 &random) {
     static const char bases[] = "ACGT";
     std::uniform_real_distribution<double> roll(0.0, 1.0);
@@ -55,6 +59,7 @@ static std::string mutated(const std::string &text, double rate, std::mt19937 &r
     return out;
 }
 
+// Runs every check, and fails when any did.
 int main() {
     using dinara::Costs;
     using dinara::Mode;

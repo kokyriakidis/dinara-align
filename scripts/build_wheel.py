@@ -23,6 +23,7 @@ DIST = ROOT / "build" / "dist"
 
 
 def platform_tag() -> str:
+    """The wheel's platform tag for this machine; exits for a platform with none known."""
     machine = platform.machine().lower()
     if sys.platform == "darwin":
         return "macosx_11_0_arm64"
@@ -34,10 +35,12 @@ def platform_tag() -> str:
 
 
 def digest(data: bytes) -> str:
+    """A `RECORD` entry's hash of `data`: SHA-256, URL-safe base64 without padding."""
     return "sha256=" + base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
 
 
 def main() -> None:
+    """Writes the wheel, its metadata and `RECORD` with it, and prints its path."""
     if not (PACKAGE / "_dinara.so").exists():
         sys.exit("build_wheel: run `pixi run build-python` first")
     project = tomllib.loads((ROOT / "pixi.toml").read_text())["workspace"]

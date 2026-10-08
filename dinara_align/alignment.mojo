@@ -278,24 +278,29 @@ struct CellDecision(ImplicitlyCopyable, TrivialRegisterPassable):
     @staticmethod
     @inline(.always)
     def recording(source: Layer, deletion: GapRun, insertion: GapRun, reach: PathReach) -> Self:
+        """The byte holding all four answers: source in bits 0-1, the two gap runs in bits 2 and 3, reach in bit 7."""
         return Self(
             source.identifier | (deletion.identifier << 2) | (insertion.identifier << 3) | (reach.identifier << 7)
         )
 
     @inline(.always)
     def source(self) -> Layer:
+        """The layer the cell's score came from."""
         return Layer(self.bits & 0x03)
 
     @inline(.always)
     def deletion(self) -> GapRun:
+        """Whether the deletion run arriving here was opened at this cell or extended from above."""
         return GapRun((self.bits >> 2) & 0x01)
 
     @inline(.always)
     def insertion(self) -> GapRun:
+        """Whether the insertion run arriving here was opened at this cell or extended from the left."""
         return GapRun((self.bits >> 3) & 0x01)
 
     @inline(.always)
     def reach(self) -> PathReach:
+        """Whether a local path stops at this cell because its score fell to zero."""
         return PathReach(self.bits >> 7)
 
     @inline(.always)
@@ -376,6 +381,7 @@ struct GappedAlignment(Copyable, Movable):
         var out = List[UInt8](capacity=64)
 
         def emit(mut out: List[UInt8], run: Int, letter: UInt8):
+            """Appends one run to `out`: the decimal digits of `run`, most significant first, then `letter`."""
             var digits = Array[UInt8, 20](fill=0)
             var count = 0
             var value = run
@@ -566,6 +572,7 @@ trait CellLayout(ImplicitlyCopyable):
     """Where cell `(row, column)` of a stored matrix sits in its three flat layers."""
 
     def index(self, row: Int, column: Int) -> Int:
+        """The flat offset of cell `(row, column)`, the same in every layer."""
         ...
 
 
@@ -574,9 +581,11 @@ struct RowMajor(CellLayout, TrivialRegisterPassable):
     """Row by row, `stride` cells to a row."""
 
     var stride: Int
+    """Cells to a row, one more than the second sequence's length."""
 
     @inline(.always)
     def index(self, row: Int, column: Int) -> Int:
+        """The flat offset of cell `(row, column)`, `stride` cells to each row before it."""
         return row * self.stride + column
 
 
@@ -591,10 +600,13 @@ struct AntiDiagonalMajor(CellLayout, TrivialRegisterPassable):
     `starts[d]` is where diagonal `d`'s padding begins."""
 
     var starts: MutPointer[Int, MutUntrackedOrigin]
+    """Per anti-diagonal, the flat offset where its leading padding begins."""
     var lows: MutPointer[Int, MutUntrackedOrigin]
+    """Per anti-diagonal, the first row its band stores."""
 
     @inline(.always)
     def index(self, row: Int, column: Int) -> Int:
+        """The flat offset of cell `(row, column)`: its row's place in the band of anti-diagonal `row + column`."""
         var diagonal = row + column
         return self.starts[unsafe_offset=diagonal] + BAND_PADDING + row - self.lows[unsafe_offset=diagonal]
 
@@ -730,6 +742,7 @@ struct SweepBands(Movable):
     """Insertion layer of that row."""
 
     def __init__(out self, columns: Int):
+        """Bands for frames up to `columns` wide, left unfilled."""
         self.scores_above = List[Int32](unsafe_uninit_length=columns + 1)
         self.deletes_above = List[Int32](unsafe_uninit_length=columns + 1)
         self.scores_row = List[Int32](unsafe_uninit_length=columns + 1)
@@ -850,10 +863,12 @@ def vector_sweep_bands[
 
     @inline(.always)
     def top_score(column: Int) {imm open, imm extend} -> Int32:
+        """The top border's score at `column`: zero at the corner, then one gap run opened and extended."""
         return 0 if column == 0 else open + Int32(column - 1) * extend
 
     @inline(.always)
     def left_score(row: Int) {imm open, imm extend, imm entering_run} -> Int32:
+        """The left border's score at `row`, which pays no opening when a deletion run enters already open."""
         if entering_run == GapRun.EXTENDS:
             return Int32(row) * extend
         return open + Int32(row - 1) * extend
@@ -1880,6 +1895,7 @@ def device_hirschberg(
         if len(leaves) >= PARALLEL_LEAF_FLOOR:
 
             def solve_leaf(slot: Int) {imm}:
+                """Walks leaf `slot` directly, writing its rows' share of the path."""
                 solve_frame(
                     first, second, leaves[slot], substitutions, alphabet_size, scoring, path_columns, path_layers
                 )
@@ -2146,8 +2162,8 @@ def tiled_sweep_kernel[
         table[unsafe_offset=index] = substitutions[unsafe_offset=index]
 
     # The tile's left column, staged once by the whole warp. Lane zero consumes one entry per anti-diagonal, and a
-    # global load there would sit on the dependency chain that feeds every shuffle. Staging also decouples the read of the
-    # neighbour's frontier from this tile's write of its own, which land in the same slots.
+    # global load there would sit on the dependency chain that feeds every shuffle. Staging also decouples the read of
+    # the neighbour's frontier from this tile's write of its own, which land in the same slots.
     var edge_scores = stack_allocation[TILE_SIDE, Scalar[ScoreDType], address_space=AddressSpace.SHARED]()
     var edge_inserts = stack_allocation[TILE_SIDE, Scalar[ScoreDType], address_space=AddressSpace.SHARED]()
     for index in range(Int(thread_idx.x), height, Int(block_dim.x)):
@@ -2475,13 +2491,16 @@ struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
         return clamp(fair, MIN_TILE_HEIGHT, TILE_SIDE)
 
     def tile_rows(self, sweeps_in_level: Int, target_tiles: Int) -> Int:
+        """How many tiles of `tile_height` rows cover the sweep, at least one."""
         var height = self.tile_height(sweeps_in_level, target_tiles)
         return max(ceildiv(self.rows, height), 1)
 
     def tile_columns(self) -> Int:
+        """How many `TILE_SIDE`-wide tiles cover the sweep, at least one."""
         return max(ceildiv(self.columns, TILE_SIDE), 1)
 
     def tile_anti_diagonals(self, sweeps_in_level: Int, target_tiles: Int) -> Int:
+        """How many anti-diagonals of tiles the sweep takes, one launch each."""
         return self.tile_rows(sweeps_in_level, target_tiles) + self.tile_columns() - 1
 
 

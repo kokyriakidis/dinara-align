@@ -95,6 +95,8 @@ def edit_cigar(
     places them, or with `Ties.RIGHT` as far right, WFA2-lib's edit CIGAR byte for byte; whichever of
     the searches below found the distance. A distance diagonal transition found has its CIGAR written
     straight from the fronts, a run at a time (see `diagonal_cigar`)."""
+    # The search's rule places every edit as far right as it goes; over the reversed pair that is as far
+    # left over the pair itself.
     var reverse = ties == Ties.LEFT
     var profile = Profile(first, second, reverse)
     var settled = settle(profile)
@@ -123,12 +125,14 @@ struct Settled(Movable):
     var banded: Bool
 
     def __init__(out self, distance: Int, var fronts: DiagonalFronts, var moves: List[UInt8], banded: Bool):
+        """A settled pair from its parts, taking ownership of `fronts` and `moves`."""
         self.distance = distance
         self.fronts = fronts^
         self.moves = moves^
         self.banded = banded
 
     def take_moves(deinit self) -> List[UInt8]:
+        """The traced moves, the rest given up."""
         return self.moves^
 
 

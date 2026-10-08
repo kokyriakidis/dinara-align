@@ -32,11 +32,14 @@ def exported() -> list:
 
 
 def prose(entry: dict) -> str:
+    """A declaration's docstring, its summary and description as paragraphs."""
     parts = [entry.get("summary", "").strip(), entry.get("description", "").strip()]
     return "\n\n".join(part for part in parts if part)
 
 
 def function_block(entry: dict, level: str, owner: str = "") -> list:
+    """A function's section at heading `level`: each overload's signature and docstring, a static
+    method's name qualified by its type, `owner`."""
     lines = []
     for overload in entry["overloads"]:
         signature = overload["signature"]
@@ -50,6 +53,8 @@ def function_block(entry: dict, level: str, owner: str = "") -> list:
 
 
 def struct_block(entry: dict) -> list:
+    """A type's section: its signature and docstring, a table of its fields, its constants, and its
+    public methods with `__init__`."""
     lines = [f"### `{entry['name']}`\n", f"```mojo\n{entry['signature']}\n```\n"]
     text = prose(entry)
     if text:
@@ -72,6 +77,7 @@ def struct_block(entry: dict) -> list:
 
 
 def main() -> None:
+    """Writes `OUT` from `mojo doc`'s JSON, the exported functions, types and constants in turn."""
     raw = subprocess.run(["mojo", "doc", str(ROOT / "dinara_align")], check=True, capture_output=True, text=True)
     package = json.loads(raw.stdout)["decl"]
     modules = {module["name"]: module for module in package["modules"]}
