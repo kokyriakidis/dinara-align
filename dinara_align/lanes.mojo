@@ -34,6 +34,34 @@ from max.algorithm import parallelize
 from .common import next_share
 from .modes import Band, Costs, Mode
 
+
+trait Texts(ImplicitlyCopyable):
+    """A batch's sequences, each its bytes and their count: `List[String]`'s, or a C caller's."""
+
+    def length(self, index: Int) -> Int:
+        """Sequence `index`'s bytes."""
+        ...
+
+    def letters(self, index: Int) -> ImmPointer[UInt8, ImmUntrackedOrigin]:
+        """Sequence `index`'s first byte."""
+        ...
+
+
+@fieldwise_init
+struct StringTexts(Texts, TrivialRegisterPassable):
+    """A `List[String]`'s sequences, through its storage."""
+
+    var items: ImmPointer[String, ImmUntrackedOrigin]
+
+    @always_inline
+    def length(self, index: Int) -> Int:
+        return self.items[unsafe_offset=index].byte_length()
+
+    @always_inline
+    def letters(self, index: Int) -> ImmPointer[UInt8, ImmUntrackedOrigin]:
+        return self.items[unsafe_offset=index].unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()
+
+
 comptime WIDTH = simd_width_of[DType.int16]()
 """Pairs a group: the lanes of one native register of 16-bit integers, 32 under AVX-512."""
 comptime Lanes = SIMD[DType.int16, WIDTH]
@@ -129,9 +157,9 @@ def transposed_order() -> IndexList[WIDTH * BLOCK]:
     return mask
 
 
-def side_by_side(
-    texts: List[String], members: List[Int], length: Int, mut staging: List[UInt8], target: MutPointer[UInt8, _]
-):
+def side_by_side[
+    T: Texts
+](texts: T, members: List[Int], length: Int, mut staging: List[UInt8], target: MutPointer[UInt8, _]):
     """The members' texts, position `p` of every lane at `target[p WIDTH:(p + 1) WIDTH]`: each text copied
     whole into `staging`, a lane's stretch padded to whole blocks, then a block of `BLOCK` positions at
     a time, every lane's letters of the block one load, the block turned in registers."""
@@ -140,8 +168,11 @@ def side_by_side(
     staging.resize(unsafe_uninit_length=WIDTH * stride)
     var lanes = staging.unsafe_ptr()
     for lane in range(len(members)):
-        var text = texts[members[lane]].as_bytes()
-        Span(unsafe_ptr=lanes.unsafe_offset(lane * stride), length=len(text)).copy_from(text)
+        var index = members[lane]
+        var count = texts.length(index)
+        Span(unsafe_ptr=lanes.unsafe_offset(lane * stride), length=count).copy_from(
+            Span(unsafe_ptr=texts.letters(index), length=count)
+        )
     var block = Array[UInt8, WIDTH * BLOCK](fill=0)
     var block_ptr = block.unsafe_ptr()
     for start in range(0, stride, BLOCK):
@@ -152,14 +183,9 @@ def side_by_side(
         target.unsafe_offset(start * WIDTH).unsafe_store(block_ptr.unsafe_load[width=WIDTH * BLOCK]().shuffle[order]())
 
 
-def band_costs(
-    references: List[String],
-    queries: List[String],
-    mut space: LaneSpace,
-    low: Int,
-    high: Int,
-    costs: LaneCosts,
-) -> Lanes:
+def band_costs[
+    T: Texts
+](references: T, queries: T, mut space: LaneSpace, low: Int, high: Int, costs: LaneCosts,) -> Lanes:
     """The least cost of each of `space.members`'s pairs over the paths on diagonals `low ..= high`,
     `FAR` or more for a pair none of whose paths stays on them; a lane past the members holds nothing."""
     var count = len(space.members)
@@ -169,8 +195,8 @@ def band_costs(
     var column_ends = SIMD[DType.int16, WIDTH](0)
     for lane in range(count):
         var index = space.members[lane]
-        var reference = references[index].byte_length()
-        var query = queries[index].byte_length()
+        var reference = references.length(index)
+        var query = queries.length(index)
         rows = max(rows, reference)
         columns = max(columns, query)
         row_ends[lane] = Int16(reference)
@@ -246,9 +272,12 @@ def band_costs(
     return found
 
 
-def lane_distances(
-    references: List[String],
-    queries: List[String],
+def lane_distances[
+    T: Texts
+](
+    pairs: Int,
+    references: T,
+    queries: T,
     costs: LaneCosts,
     reference_band: Band,
     max_cost: Int,
@@ -256,15 +285,14 @@ def lane_distances(
     costs_out: MutPointer[Optional[Int], _],
     settled: MutPointer[Bool, _],
 ) -> Int:
-    """Every pair 16 bits hold, its global distance within `reference_band` into `costs_out`, None past
-    `max_cost` or with no path inside the band, and `settled` set; the others left for the caller. The
-    pairs settled.
+    """Every pair 16 bits hold and `settled` does not already mark, its global distance within
+    `reference_band` into `costs_out`, None past `max_cost` or with no path inside the band, and `settled`
+    set; the others left for the caller. The pairs settled here.
 
     The band is the library's, its diagonals the reference's position less the query's; the lanes run
     the reference down the rows, their diagonals the query's position less the reference's, so they
     take it mirrored."""
     var band = Band(-reference_band.high, -reference_band.low)
-    var pairs = len(references)
     if pairs == 0:
         return 0
     var stretches = max(min(workers, pairs // WIDTH), 1)
@@ -277,14 +305,14 @@ def lane_distances(
 
     def measure(
         stretch: Int,
-    ) {imm references, imm queries, imm costs, imm pairs, imm stretches, imm end_ptr, imm extreme_ptr}:
+    ) {imm references, imm queries, imm costs, imm pairs, imm stretches, imm end_ptr, imm extreme_ptr, imm settled}:
         """Stretch `stretch`'s end diagonals, and its lowest and highest."""
         var lowest = 0
         var highest = 0
         for index in range(pairs * stretch // stretches, pairs * (stretch + 1) // stretches):
-            var rows = references[index].byte_length()
-            var columns = queries[index].byte_length()
-            if costs.fits(rows, columns):
+            var rows = references.length(index)
+            var columns = queries.length(index)
+            if not settled[unsafe_offset=index] and costs.fits(rows, columns):
                 var end = columns - rows
                 end_ptr[unsafe_offset=index] = end
                 lowest = min(lowest, end)
@@ -389,8 +417,8 @@ def lane_distances(
                     settle(
                         index,
                         Int(found[lane]),
-                        references[index].byte_length(),
-                        queries[index].byte_length(),
+                        references.length(index),
+                        queries.length(index),
                         low,
                         high,
                         band,

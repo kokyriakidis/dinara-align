@@ -39,7 +39,7 @@ from .scored import (
     rewarded_alignment,
     swept,
 )
-from .lanes import LaneCosts, lane_distances
+from .lanes import LaneCosts, StringTexts, lane_distances
 from .gap_affine import (
     AffineCigar,
     DEFAULT_MAX_MEMORY,
@@ -806,12 +806,17 @@ def capped_distances(
     var settled = List[Bool](length=pairs, fill=False)
     var settled_ptr = settled.unsafe_ptr()
     var lane_costs = LaneCosts.of(costs, mode)
+    var reference_texts = StringTexts(references.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]())
+    var query_texts = StringTexts(queries.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]())
     if lane_costs:
         # Costs the searches would refuse raise here, as a pair's search would raise them.
         _ = penalties_of(costs)
     if (
         lane_costs
-        and lane_distances(references, queries, lane_costs.value(), band, max_cost, workers, out, settled_ptr) == pairs
+        and lane_distances(
+            pairs, reference_texts, query_texts, lane_costs.value(), band, max_cost, workers, out, settled_ptr
+        )
+        == pairs
     ):
         for index in range(pairs):
             if not results[index] and max_cost == Int.MAX:

@@ -36,6 +36,8 @@ from dinara_align import (
     search,
 )
 from dinara_align.common import hardware_threads, next_share
+from dinara_align.gap_affine import penalties_of
+from dinara_align.lanes import LaneCosts, Texts, lane_distances
 
 comptime UNSUPPORTED_SYMBOLS = -1
 """A 0xFE or 0xFF byte, which the wavefront's sentinels are and UTF-8 never holds."""
@@ -374,6 +376,30 @@ comptime CSequences = ImmPointer[ImmPointer[UInt8, MutAnyOrigin], MutAnyOrigin]
 """A C array of sequences' first bytes."""
 
 
+@fieldwise_init
+struct ByteTexts(Texts, TrivialRegisterPassable):
+    """A C caller's sequences for the lanes (see `lanes.Texts`): its arrays of first bytes, held as
+    addresses, and of lengths."""
+
+    var starts: ImmPointer[Int, ImmUntrackedOrigin]
+    var lengths: ImmPointer[Int, ImmUntrackedOrigin]
+
+    @staticmethod
+    def of(sequences: CSequences, lengths: CInts) -> Self:
+        return Self(
+            sequences.unsafe_bitcast[Int]().unsafe_origin_cast[ImmUntrackedOrigin](),
+            lengths.unsafe_origin_cast[ImmUntrackedOrigin](),
+        )
+
+    @always_inline
+    def length(self, index: Int) -> Int:
+        return self.lengths[unsafe_offset=index]
+
+    @always_inline
+    def letters(self, index: Int) -> ImmPointer[UInt8, ImmUntrackedOrigin]:
+        return ImmPointer[UInt8, ImmUntrackedOrigin](unsafe_from_address=self.starts[unsafe_offset=index])
+
+
 def workers_for(pairs: Int, threads: Int) -> Int:
     """Threads for a batch of `pairs`: `threads`, or every thread this process may use for zero or
     fewer, and no more than there are pairs."""
@@ -410,6 +436,48 @@ def dinara_distances(
     var taken = Atomic[Int64](0)
     var workers = workers_for(pairs, threads)
 
+    # Global costs of one gap piece go many pairs at once into the lanes of a register, as `distances`
+    # sends them (see `lanes`): every pair whose bytes the library takes and 16 bits hold. A pair the
+    # library refuses, and every pair of costs it refuses, goes one at a time for its own code.
+    var settled = List[Bool](length=pairs, fill=False)
+    var found = List[Optional[Int]](length=pairs, fill=None)
+    var laned = List[Bool](length=pairs, fill=False)
+    var settled_ptr = settled.unsafe_ptr()
+    var found_ptr = found.unsafe_ptr()
+    var laned_ptr = laned.unsafe_ptr()
+    var lane_costs = LaneCosts.of(wanted_costs, wanted_mode)
+    if lane_costs:
+        try:
+            _ = penalties_of(wanted_costs)
+        except:
+            lane_costs = None
+    var cap = asked.max_cost if asked.max_cost >= 0 else Int.MAX
+    if lane_costs:
+
+        def refuse(stretch: Int) {imm}:
+            """Marks stretch `stretch`'s pairs holding bytes the library refuses, which the lanes leave."""
+            for index in range(pairs * stretch // workers, pairs * (stretch + 1) // workers):
+                if not plain_bytes(references[unsafe_offset=index], reference_lengths[unsafe_offset=index]) or not (
+                    plain_bytes(queries[unsafe_offset=index], query_lengths[unsafe_offset=index])
+                ):
+                    settled_ptr[unsafe_offset=index] = True
+
+        parallelize(refuse, workers, workers)
+        var before = settled.copy()
+        _ = lane_distances(
+            pairs,
+            ByteTexts.of(references, reference_lengths),
+            ByteTexts.of(queries, query_lengths),
+            lane_costs.value(),
+            asked.band,
+            cap,
+            workers,
+            found_ptr,
+            settled_ptr,
+        )
+        for index in range(pairs):
+            laned[index] = settled[index] and not before[index]
+
     def work(slot: Int) {mut taken, imm}:
         """Takes the next pairs not yet taken and writes each one's least cost or code, until none is left."""
         var last = 0
@@ -418,6 +486,13 @@ def dinara_distances(
             if share[0] >= pairs:
                 return
             for index in range(share[0], share[1]):
+                if laned_ptr[unsafe_offset=index]:
+                    var cost = found_ptr[unsafe_offset=index]
+                    # Under a cap, a band no alignment fits also leaves nothing within it.
+                    results[unsafe_offset=index] = cost.value() if cost else (
+                        OUTSIDE_BAND if cap == Int.MAX else ABOVE_MAX
+                    )
+                    continue
                 results[unsafe_offset=index] = distance_code(
                     references[unsafe_offset=index],
                     reference_lengths[unsafe_offset=index],

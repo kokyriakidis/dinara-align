@@ -261,6 +261,9 @@ int main() {
     for (auto &pair : pairs) firsts.push_back(pair.first), seconds.push_back(pair.second);
     CHECK(dinara::distances(firsts, seconds) == distances);
     CHECK(dinara::distances(firsts, seconds, Costs::edit(), Mode::global(), {}, 2) == distances);
+    std::vector<int64_t> affine_costs;
+    for (auto &pair : pairs) affine_costs.push_back(dinara::distance(pair.first, pair.second, Costs::affine(4, 6, 2)));
+    CHECK(dinara::distances(firsts, seconds, Costs::affine(4, 6, 2)) == affine_costs);
     std::vector<dinara::Alignment> batch = dinara::alignments(firsts, seconds);
     for (size_t index = 0; index < batch.size(); ++index) {
         CHECK(batch[index].cost == distances[index]);
