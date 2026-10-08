@@ -557,7 +557,6 @@ def dinara_distances(
             found_ptr,
             settled_ptr,
             wanted_mode,
-            not bits_serve(wanted_costs, wanted_mode, asked.band, cap),
         )
         for index in range(pairs):
             laned[index] = settled[index] and not before[index]

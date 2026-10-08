@@ -448,10 +448,9 @@ def swept_by_bits(costs: Costs, ends: EndsFree, band: Band, max_cost: Int, colum
 def bits_serve(costs: Costs, mode: Mode, band: Band, max_cost: Int) -> Bool:
     """Whether the bit-parallel sweep serves a batch's pairs (see `swept_by_bits`), as it does every pair
     of a batch of unit costs with no cap and no band, globally or with the query found inside or at the
-    start of the reference. Such a batch's lanes keep only the pairs their first band proves: the rest
-    would take a band as wide as their cost, which the sweep crosses faster, 11 against 18 us a 1 kbp read
-    at 10% on the Skylake-X, where the lanes' first band settles a short read in a quarter of the sweep's
-    time."""
+    start of the reference. Such a batch's alignments take the sweep pair by pair, which beat the lanes on
+    short reads and long: 1.26 against 1.44 us a 150 bp read, 21.9 against 23.5 a 1 kbp read at 10%, on
+    the Skylake-X. Its distances take the lanes, which beat it on short reads, 0.23 against 0.40 us."""
     if costs.unit_scale() == 0 or max_cost != Int.MAX or not band.covers(1 << 40, 1 << 40):
         return False
     if mode.is_scored() or mode.query_start != 0 or mode.query_end != 0:
@@ -960,7 +959,6 @@ def capped_distances(
             out,
             settled_ptr,
             mode,
-            not bits_serve(costs, mode, band, max_cost),
         )
         == pairs
     ):
