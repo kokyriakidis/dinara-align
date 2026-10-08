@@ -16,6 +16,8 @@ sweep back from its end for its start, the span the one `Ties` names, the letter
 alignment whose reward folds into the costs (see `rewarded_alignment`).
 """
 
+from std.memory import bitcast
+
 from .cigar import cigar_matches, cigar_runs, reversed_cigar, reversed_text
 from .errors import AlignmentError
 from .gap_affine import (
@@ -28,6 +30,7 @@ from .gap_affine import (
     traced_extension,
 )
 from .modes import Alignment, Anchor, Band, Costs, Ties
+from .substitutions import SHUFFLED_ENTRIES, byte_lookup
 
 
 comptime ANYWHERE = 0
@@ -158,6 +161,12 @@ def swept_cells[
     # What a lane past the diagonal's last row counts as: nothing a best could be.
     var nothing = zero if local else Lanes(LOW)
     var codes_a_row = SIMD[DType.int32, width](Int32(alphabet))
+    # A table of up to sixteen entries sits in a register, read by byte shuffle rather than gathered.
+    var small = tabulated and alphabet * alphabet <= SHUFFLED_ENTRIES
+    var shuffled = SIMD[DType.uint8, SHUFFLED_ENTRIES](0)
+    if small:
+        for cell in range(alphabet * alphabet):
+            shuffled[cell] = bitcast[DType.uint8](Int8(table[cell]))
     var lane_index = Lanes()
     comptime for lane in range(width):
         lane_index[lane] = Value(lane)
@@ -261,10 +270,14 @@ def swept_cells[
             comptime if tabulated:
                 # A table's cell for each lane's pair of codes: the reference's code its row, of `alphabet`
                 # codes, and the query's its column, whichever runs down the lanes.
-                var at = (theirs.cast[DType.int32]() * codes_a_row + mine.cast[DType.int32]()) if transposed else (
-                    mine.cast[DType.int32]() * codes_a_row + theirs.cast[DType.int32]()
-                )
-                substituted = table.unsafe_ptr().unsafe_gather(at)
+                if small:
+                    var cell = (theirs * UInt8(alphabet) + mine) if transposed else (mine * UInt8(alphabet) + theirs)
+                    substituted = byte_lookup[dtype, width](shuffled, cell)
+                else:
+                    var at = (theirs.cast[DType.int32]() * codes_a_row + mine.cast[DType.int32]()) if transposed else (
+                        mine.cast[DType.int32]() * codes_a_row + theirs.cast[DType.int32]()
+                    )
+                    substituted = table.unsafe_ptr().unsafe_gather(at)
             else:
                 substituted = mine.eq(theirs).select(matched, mismatched)
             var score = max(above_left + substituted, max(deletion, insertion))

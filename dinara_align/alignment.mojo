@@ -56,6 +56,7 @@ from .common import (
     upload,
     zeroed,
 )
+from .substitutions import SubstitutionLookup
 
 # region Scoring
 
@@ -826,7 +827,7 @@ comptime SWEEP_LANES = 16
 """Cells the vectorized linear-space sweep computes at once."""
 
 comptime VECTOR_SWEEP_ROWS = 2 * SWEEP_LANES
-"""Rows from which a sweep under a uniform table runs by anti-diagonal: fewer leave its lanes idle."""
+"""Rows from which a sweep runs by anti-diagonal: fewer leave its lanes idle."""
 
 
 def vector_sweep_bands[
@@ -839,13 +840,12 @@ def vector_sweep_bands[
     second_from: Int,
     second_to: Int,
     entering_run: GapRun,
-    reward: Int,
-    mismatch: Int,
+    lookup: SubstitutionLookup,
     scoring: AffineGapCosts,
     final_scores: MutSpan[Int32, _],
     final_deletes: MutSpan[Int32, _],
 ):
-    """`sweep_bands` under a table of one match and one mismatch score, sixteen cells at a time.
+    """`sweep_bands` sixteen cells at a time, under any table (see `substitutions`).
 
     The same recurrence and borders, swept by anti-diagonal with each diagonal's cells by row, as
     `vector_score` sweeps; the last row's cell of each diagonal is taken as the diagonal passes it.
@@ -898,10 +898,9 @@ def vector_sweep_bands[
         final_scores[0] = one_back[1]
         final_deletes[0] = deletes_back[1]
 
+    var substitute = lookup.lanes[SWEEP_LANES]()
     var opening = Lanes(open)
     var extension = Lanes(extend)
-    var matched = Lanes(Int32(reward))
-    var mismatched = Lanes(Int32(mismatch))
     for diagonal in range(2, rows + columns + 1):
         var low = max(1, diagonal - columns)
         var high = min(rows, diagonal - 1)
@@ -915,10 +914,9 @@ def vector_sweep_bands[
             var above_left = two_back.unsafe_ptr().unsafe_offset(row - 1).unsafe_load[width=SWEEP_LANES]()
             var mine = letters.unsafe_ptr().unsafe_offset(row).unsafe_load[width=SWEEP_LANES]()
             var theirs = others.unsafe_ptr().unsafe_offset(lag + row).unsafe_load[width=SWEEP_LANES]()
-            var substitution = mine.eq(theirs).select(matched, mismatched)
             var deletion = max(above + opening, above_delete + extension)
             var insertion = max(left + opening, left_insert + extension)
-            var score = max(above_left + substitution, max(deletion, insertion))
+            var score = max(above_left + substitute(mine, theirs), max(deletion, insertion))
             current.unsafe_ptr().unsafe_offset(row).unsafe_store(score)
             deletes.unsafe_ptr().unsafe_offset(row).unsafe_store(deletion)
             inserts.unsafe_ptr().unsafe_offset(row).unsafe_store(insertion)
@@ -1122,12 +1120,12 @@ def serial_hirschberg(
     leaf_cells: Int,
     path_columns: MutSpan[Int32, _],
     path_layers: MutSpan[Layer, _],
-    uniform: Optional[Tuple[Int, Int]] = None,
+    vectorized: Bool = False,
 ) raises:
     """Linear-space traceback: split on rows, join the two halves, recurse without recursion.
 
-    Under a `uniform` table of one match and one mismatch score, the sweeps of halves tall enough
-    run sixteen cells at a time (see `vector_sweep_bands`), computing the same rows.
+    With `vectorized`, the sweeps of halves tall enough run sixteen cells at a time (see
+    `vector_sweep_bands`), computing the same rows; off, every sweep runs cell by cell, as a reference.
 
     A substitution step advances `i + j` by two and can skip an anti-diagonal entirely, while the
     row index advances by exactly zero or one per step, so the cut has to be a row. The two halves
@@ -1148,6 +1146,7 @@ def serial_hirschberg(
     var reverse_deletes = List[Int32](length=columns + 1, fill=Int32(0))
     # No frame is wider than the window, so one set of bands serves the whole recursion.
     var bands = SweepBands(columns)
+    var lookup = SubstitutionLookup(substitutions, alphabet_size)
 
     while len(frames) > 0:
         var frame = frames.pop()
@@ -1167,8 +1166,7 @@ def serial_hirschberg(
             continue
 
         var split = (first_from + first_to) // 2
-        if uniform and first_to - split >= VECTOR_SWEEP_ROWS:
-            var table = uniform.value()
+        if vectorized and first_to - split >= VECTOR_SWEEP_ROWS:
             vector_sweep_bands[SweepHalf.FORWARD](
                 first,
                 second,
@@ -1177,8 +1175,7 @@ def serial_hirschberg(
                 second_from,
                 second_to,
                 top,
-                table[0],
-                table[1],
+                lookup,
                 scoring,
                 forward_scores,
                 forward_deletes,
@@ -1191,8 +1188,7 @@ def serial_hirschberg(
                 second_from,
                 second_to,
                 bottom,
-                table[0],
-                table[1],
+                lookup,
                 scoring,
                 reverse_scores,
                 reverse_deletes,

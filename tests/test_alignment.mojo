@@ -64,6 +64,7 @@ from dinara_align.gap_affine import (
     wavefront_align,
     wavefront_penalties,
 )
+from dinara_align.substitutions import SubstitutionLookup
 from dinara_align.vector_score import vector_score
 
 comptime GLOBAL = Mode.GLOBAL
@@ -1093,7 +1094,7 @@ def test_wavefront_matches_the_full_sweep() raises:
             if second.byte_length() == 0:
                 second = "A"
             var expected = vector_score[AlignmentMode.GLOBAL](
-                dna_codes(first), dna_codes(second), Int(scoring.substitutions[0]), Int(scoring.substitutions[1]), gaps
+                dna_codes(first), dna_codes(second), SubstitutionLookup(scoring.substitutions, 4), gaps
             )
             var produced = align(first, second, scoring, GLOBAL, placement=host)
             assert_equal(produced.score, Int(expected))
@@ -1122,8 +1123,7 @@ def test_wavefront_splits_a_pair_too_large_to_keep() raises:
             var expected = vector_score[AlignmentMode.GLOBAL](
                 dna_codes(first),
                 dna_codes(second),
-                Int(scoring.substitutions[0]),
-                Int(scoring.substitutions[1]),
+                SubstitutionLookup(scoring.substitutions, 4),
                 scoring.gaps,
             )
             for limit in [0, 64, 4096]:
@@ -1149,7 +1149,9 @@ def test_affine_cigar_spells_an_optimal_alignment() raises:
                 second = String()
             var found = align(first, second, Costs.affine(x, o, e))
             var expected = -Int(
-                vector_score[AlignmentMode.GLOBAL](dna_codes(first), dna_codes(second), 0, -x, scoring.gaps)
+                vector_score[AlignmentMode.GLOBAL](
+                    dna_codes(first), dna_codes(second), SubstitutionLookup(scoring.substitutions, 4), scoring.gaps
+                )
             )
             assert_equal(found.cost, expected)
             var rows = rows_from_cigar(first, second, found.cigar)

@@ -37,8 +37,6 @@ from .alignment import (
     score_path,
     serial_align,
     serial_hirschberg,
-    serial_local_extremum,
-    serial_score,
     serving_space,
 )
 from .common import (
@@ -66,7 +64,8 @@ from .gap_affine import (
 )
 from .modes import Alignment, Anchor, Costs, Mode
 from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, swept_cells
-from .vector_score import optimal_band, uniform_table, vector_align, vector_score
+from .substitutions import SubstitutionLookup
+from .vector_score import optimal_band, reach_back, vector_align, vector_score
 
 
 from max.algorithm import parallelize
@@ -225,8 +224,8 @@ def global_linear(
 ) raises -> GappedAlignment:
     """Global alignment in linear space, splitting rows and joining halves Myers-Miller style.
 
-    `vectorized` lets a uniform table's sweeps run sixteen cells at a time, which computes the same
-    rows; off, every sweep runs cell by cell, as a reference to check it against.
+    `vectorized` lets the sweeps run sixteen cells at a time, which computes the same rows; off, every
+    sweep runs cell by cell, as a reference to check it against.
     """
     var path_columns = List[Int32](length=len(first) + 1, fill=Int32(0))
     var path_layers = List[Layer](length=len(first) + 1, fill=Layer.ALIGNING)
@@ -243,7 +242,7 @@ def global_linear(
         DEFAULT_LEAF_CELLS,
         path_columns,
         path_layers,
-        uniform_table(scoring.substitutions, scoring.alphabet_size()) if vectorized else None,
+        vectorized,
     )
     var score = score_path(
         first,
@@ -261,59 +260,6 @@ def global_linear(
     return GappedAlignment(score, expanded[0], expanded[1])
 
 
-def local_linear(
-    first: ImmSpan[Scalar[SymbolDType], _], second: ImmSpan[Scalar[SymbolDType], _], scoring: Scoring
-) raises -> GappedAlignment:
-    """Local alignment in linear space, by reduction to the global problem.
-
-    A forward local sweep finds where the best alignment ends, a backward sweep over those prefixes
-    finds where it starts, and the global recursion then runs on that rectangle alone. Keeping one
-    well-understood global recursion rather than four subproblem modes is what Myers and Miller
-    themselves prescribe.
-    """
-    var alphabet_size = scoring.alphabet_size()
-    var last_row, last_column, score = serial_local_extremum[SweepHalf.FORWARD](
-        first, second, len(first), len(second), scoring.substitutions, alphabet_size, scoring.gaps
-    )
-    var path_columns = List[Int32](length=len(first) + 1, fill=Int32(0))
-    var path_layers = List[Layer](length=len(first) + 1, fill=Layer.ALIGNING)
-
-    var first_row = last_row
-    if score > 0:
-        var back_rows, back_columns, _ = serial_local_extremum[SweepHalf.REVERSE](
-            first, second, last_row, last_column, scoring.substitutions, alphabet_size, scoring.gaps
-        )
-        first_row = last_row - back_rows
-        var first_column = last_column - back_columns
-        path_columns[last_row] = Int32(last_column)
-        # The recursion runs on a copy, and only the rows of the core it solved are taken back.
-        var core_columns = path_columns.copy()
-        var core_layers = path_layers.copy()
-        serial_hirschberg(
-            first,
-            second,
-            first_row,
-            last_row,
-            first_column,
-            last_column,
-            scoring.substitutions,
-            alphabet_size,
-            scoring.gaps,
-            DEFAULT_LEAF_CELLS,
-            core_columns,
-            core_layers,
-            uniform_table(scoring.substitutions, scoring.alphabet_size()),
-        )
-        for index in range(first_row, last_row + 1):
-            path_columns[index] = core_columns[index]
-            path_layers[index] = core_layers[index]
-
-    var expanded = expand_path(
-        first, second, path_columns, path_layers, scoring.alphabet, AlignmentMode.LOCAL, first_row, last_row
-    )
-    return GappedAlignment(score, expanded[0], expanded[1])
-
-
 # endregion Linear-Space Host Traceback
 
 # region Routing
@@ -324,7 +270,7 @@ def host_score[
 ](first: ImmSpan[Scalar[SymbolDType], _], second: ImmSpan[Scalar[SymbolDType], _], scoring: Scoring) -> Int32:
     """The optimal score on the host: by wavefront for a global one under a table of one match and
     one mismatch score while it is cheaper (see `gap_affine`), else by full sweep, sixteen cells at a
-    time under such a table (see `vector_score`)."""
+    time under any table (see `vector_score`)."""
     var codes_first = List[UInt8](first)
     var codes_second = List[UInt8](second)
     comptime if mode == AlignmentMode.GLOBAL:
@@ -337,10 +283,8 @@ def host_score[
             var found = wavefront_score(codes_first, codes_second, penalties.value())
             if found:
                 return Int32(found.value())
-    var table = uniform_table(scoring.substitutions, scoring.alphabet_size())
-    if table:
-        return vector_score[mode](codes_first, codes_second, table.value()[0], table.value()[1], scoring.gaps)
-    return serial_score[mode](codes_first, codes_second, scoring.substitutions, scoring.alphabet_size(), scoring.gaps)
+    var lookup = SubstitutionLookup(scoring.substitutions, scoring.alphabet_size())
+    return vector_score[mode](codes_first, codes_second, lookup, scoring.gaps)
 
 
 def align_on_host[
@@ -351,71 +295,84 @@ def align_on_host[
     scoring: Scoring,
     stored_cells: Int,
 ) raises -> GappedAlignment:
-    """One pair on the host, stored while its matrix fits the budget and linear once it does not.
+    """One pair on the host, in memory that grows with the alignment rather than the matrix.
 
-    A global alignment under a table of one match and one mismatch score, whose gap costs a wavefront
-    can grow by, goes to the two-ended wavefront, traced back through its own fronts and split where
-    they would grow too large (see `gap_affine.wavefront_align`).
-
-    Under a table of one match and one mismatch score the matrix is swept sixteen cells at a time,
-    the same cells and so the same alignment (see `vector_align`); and a global alignment stores only
-    the band of diagonals every optimal path stays on, which its score bounds (see `optimal_band`),
-    so its memory grows with the length times the divergence rather than the matrix. Past the budget
-    the alignment recurses in linear space.
+    A local alignment is aligned by its span (see `local_by_span`). A global one under a table of one
+    match and one mismatch score, whose gap costs a wavefront can grow by, goes to the two-ended
+    wavefront, traced back through its own fronts and split where they would grow too large (see
+    `gap_affine.wavefront_align`). Under any other table its matrix is swept sixteen cells at a time,
+    storing only the band of diagonals every optimal path stays on, which its score bounds (see
+    `optimal_band`, `vector_align`); past `stored_cells` the alignment recurses in linear space.
     """
-    var table = uniform_table(scoring.substitutions, scoring.alphabet_size())
-    comptime if mode == AlignmentMode.GLOBAL:
-        if table and len(first) > 0 and len(second) > 0:
-            var reward = table.value()[0]
-            var mismatch = table.value()[1]
-            var codes_first = List[UInt8](first)
-            var codes_second = List[UInt8](second)
-            # The wavefront's work grows with the score rather than the matrix, and it never hands a
-            # pair back; a table it cannot grow by takes the band its score bounds.
-            var penalties = wavefront_penalties(
-                scoring.substitutions, scoring.alphabet_size(), Int(scoring.gaps.open), Int(scoring.gaps.extend)
-            )
-            if penalties:
-                var traced = wavefront_align(codes_first, codes_second, penalties.value(), scoring.alphabet)
-                return GappedAlignment(Int32(traced[0]), traced[1], traced[2])
-            var best = Int(host_score[mode](first, second, scoring))
-            var band = optimal_band(len(first), len(second), reward, mismatch, scoring.gaps, best)
-            var width = min(band[1], len(second)) - max(band[0], -len(first)) + 1
-            if (len(first) + 1) * width <= stored_cells:
-                return vector_align[mode](
-                    codes_first,
-                    codes_second,
-                    reward,
-                    mismatch,
-                    scoring.gaps,
-                    scoring.substitutions,
-                    scoring.alphabet_size(),
-                    scoring.alphabet,
-                    band[0],
-                    band[1],
-                )
-            return global_linear(first, second, scoring)
-    if len(first) * len(second) > stored_cells:
-        comptime if mode == AlignmentMode.LOCAL:
-            return local_linear(first, second, scoring)
-        else:
-            return global_linear(first, second, scoring)
-    if table:
-        var codes_first = List[UInt8](first)
-        var codes_second = List[UInt8](second)
-        return vector_align[mode](
+    comptime if mode == AlignmentMode.LOCAL:
+        return local_by_span(first, second, scoring, stored_cells)
+    return global_on_host(first, second, scoring, stored_cells)
+
+
+def global_on_host(
+    first: ImmSpan[Scalar[SymbolDType], _],
+    second: ImmSpan[Scalar[SymbolDType], _],
+    scoring: Scoring,
+    stored_cells: Int,
+    known: Optional[Int] = None,
+) raises -> GappedAlignment:
+    """`align_on_host`'s global alignment; with the score `known` beforehand, as a local alignment's span
+    knows it, the sweep that would find it to bound the band is skipped."""
+    if len(first) == 0 or len(second) == 0:
+        return serial_align[AlignmentMode.GLOBAL](
+            first, second, scoring.substitutions, scoring.alphabet_size(), scoring.gaps, scoring.alphabet
+        )
+    var codes_first = List[UInt8](first)
+    var codes_second = List[UInt8](second)
+    # The wavefront's work grows with the score rather than the matrix, and it never hands a pair back.
+    var penalties = wavefront_penalties(
+        scoring.substitutions, scoring.alphabet_size(), Int(scoring.gaps.open), Int(scoring.gaps.extend)
+    )
+    if penalties:
+        var traced = wavefront_align(codes_first, codes_second, penalties.value(), scoring.alphabet)
+        return GappedAlignment(Int32(traced[0]), traced[1], traced[2])
+    var lookup = SubstitutionLookup(scoring.substitutions, scoring.alphabet_size())
+    # Not `known.or_else(...)`, which would sweep for the score whether it is known or not.
+    var best: Int
+    if known:
+        best = known.value()
+    else:
+        best = Int(vector_score[AlignmentMode.GLOBAL](codes_first, codes_second, lookup, scoring.gaps))
+    var band = optimal_band(len(first), len(second), lookup.best, scoring.gaps, best)
+    var width = min(band[1], len(second)) - max(band[0], -len(first)) + 1
+    if (len(first) + 1) * width <= stored_cells:
+        return vector_align(
             codes_first,
             codes_second,
-            table.value()[0],
-            table.value()[1],
+            lookup,
             scoring.gaps,
             scoring.substitutions,
             scoring.alphabet_size(),
             scoring.alphabet,
+            band[0],
+            band[1],
         )
-    return serial_align[mode](
-        first, second, scoring.substitutions, scoring.alphabet_size(), scoring.gaps, scoring.alphabet
-    )
+    return global_linear(first, second, scoring)
+
+
+def local_by_span(
+    first: ImmSpan[Scalar[SymbolDType], _], second: ImmSpan[Scalar[SymbolDType], _], scoring: Scoring, stored_cells: Int
+) raises -> GappedAlignment:
+    """A local alignment by its span, as SSW finds one: the forward sweep's best cell ends it, in lanes
+    of 16 bits while the scores fit (see `tabulated_end`), a sweep back from there to where it earns its
+    score starts it (see `reach_back`), and the letters between are aligned globally, which scores the
+    same. Only the forward sweep covers the matrix; the rest grows with the alignment."""
+    var codes_first = List[UInt8](first)
+    var codes_second = List[UInt8](second)
+    var end = tabulated_end[ANYWHERE](Span(codes_first), Span(codes_second), scoring, EndsFree(), True)
+    var best = end[0]
+    if best <= 0:
+        return GappedAlignment(0, String(), String())
+    var lookup = SubstitutionLookup(scoring.substitutions, scoring.alphabet_size())
+    var start = reach_back(codes_first, codes_second, end[1], end[2], lookup, scoring.gaps, Int32(best))
+    var inner = global_on_host(first[start[0] : end[1]], second[start[1] : end[2]], scoring, stored_cells, best)
+    # A global alignment of the span scores what the local one does, and is one.
+    return inner^
 
 
 def align_on_device[

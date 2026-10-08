@@ -1,14 +1,18 @@
 # This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
 # MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """
-The host's affine-gap score by full sweep, sixteen cells at a time, for a table of one match and
-one mismatch score.
+The host's affine-gap sweeps under any substitution table, sixteen cells at a time.
 
-The same Gotoh recurrence and borders as `serial_score`, so the same score, swept by anti-diagonal:
+The same Gotoh recurrence and borders as `serial_score`, so the same scores, swept by anti-diagonal:
 every cell of `d = row + column` reads only diagonals `d - 1` and `d - 2`, so a whole diagonal is
 independent and fills vector lanes. Indexed by row, a diagonal's cells read the first sequence
-forward and the second backward, so the second is stored reversed and both load contiguously; a
-uniform table turns each substitution into one comparison.
+forward and the second backward, so the second is stored reversed and both load contiguously; each
+step scores its sixteen pairs at once (see `substitutions`).
+
+Three sweeps share the recurrence: the score, globally or locally (`vector_score`); the cell, swept
+back from a local alignment's end, where it earns its score, which is where it starts (`reach_back`);
+and a global alignment's three layers, stored in the band of diagonals its score bounds, to be traced
+(`vector_align`).
 """
 
 from .alignment import (
@@ -20,6 +24,7 @@ from .alignment import (
     reconstruct,
     serial_align,
 )
+from .substitutions import SubstitutionLookup
 
 comptime WIDTH = 16
 """Cells a step computes at once."""
@@ -27,23 +32,10 @@ comptime WIDTH = 16
 comptime Lanes = SIMD[DType.int32, WIDTH]
 
 
-def uniform_table(substitutions: List[Scalar[DType.int8]], alphabet_size: Int) -> Optional[Tuple[Int, Int]]:
-    """The match and mismatch scores of a table with one of each, or None."""
-    if alphabet_size < 1:
-        return None
-    var reward = Int(substitutions[0])
-    var mismatch = Int(substitutions[1]) if alphabet_size > 1 else reward - 1
-    for row in range(alphabet_size):
-        for column in range(alphabet_size):
-            if Int(substitutions[row * alphabet_size + column]) != (reward if row == column else mismatch):
-                return None
-    return (reward, mismatch)
-
-
 def vector_score[
     mode: AlignmentMode
-](first: List[UInt8], second: List[UInt8], reward: Int, mismatch: Int, gaps: AffineGapCosts) -> Int32:
-    """The optimal score under a uniform table, equal to `serial_score`'s."""
+](first: List[UInt8], second: List[UInt8], lookup: SubstitutionLookup, gaps: AffineGapCosts) -> Int32:
+    """The optimal score, equal to `serial_score`'s."""
     var rows = len(first)
     var columns = len(second)
     var open = gaps.open
@@ -83,10 +75,9 @@ def vector_score[
     one_back[1] = border(1)
     inserts_back[1] = one_back[1] + open + extend
 
+    var substitute = lookup.lanes[WIDTH]()
     var opening = Lanes(open)
     var extension = Lanes(extend)
-    var matched = Lanes(Int32(reward))
-    var mismatched = Lanes(Int32(mismatch))
     var zero = Lanes(0)
     var lane_rows = Lanes()
     comptime for lane in range(WIDTH):
@@ -105,10 +96,9 @@ def vector_score[
             var above_left = two_back.unsafe_ptr().unsafe_offset(row - 1).unsafe_load[width=WIDTH]()
             var mine = letters.unsafe_ptr().unsafe_offset(row).unsafe_load[width=WIDTH]()
             var theirs = reversed.unsafe_ptr().unsafe_offset(lag + row).unsafe_load[width=WIDTH]()
-            var substitution = mine.eq(theirs).select(matched, mismatched)
             var deletion = max(above + opening, above_delete + extension)
             var insertion = max(left + opening, left_insert + extension)
-            var score = max(above_left + substitution, max(deletion, insertion))
+            var score = max(above_left + substitute(mine, theirs), max(deletion, insertion))
             comptime if mode == AlignmentMode.LOCAL:
                 score = max(score, zero)
                 # Lanes past the diagonal's last row hold no cell.
@@ -133,13 +123,110 @@ def vector_score[
     return one_back[rows]
 
 
-def vector_align[
-    mode: AlignmentMode
-](
+def reach_back(
     first: List[UInt8],
     second: List[UInt8],
-    reward: Int,
-    mismatch: Int,
+    end_row: Int,
+    end_column: Int,
+    lookup: SubstitutionLookup,
+    gaps: AffineGapCosts,
+    target: Int32,
+) -> Tuple[Int, Int]:
+    """Where a local alignment ending at `(end_row, end_column)` and scoring `target`, the best there is,
+    starts: the first cell, by anti-diagonal and then row, that a global alignment from it to the end
+    scores `target` from.
+
+    The sweep runs back from the end over both prefixes, as a global one anchored there: a cell's score
+    is the best global alignment of the letters between it and the end. None can pass `target`, which no
+    local alignment passes, and the start of one that earns it reaches it, so the first cell that does
+    starts an optimal alignment, and the global alignment between it and the end is one. The sweep stops
+    on the diagonal it finds it on, so it covers about the alignment's own cells, not the prefixes'.
+    """
+    var rows = end_row
+    var columns = end_column
+    var open = gaps.open
+    var extend = gaps.extend
+
+    @inline(.always)
+    def border(length: Int) {imm open, imm extend} -> Int32:
+        """The score of a gap run of `length` along the anchored border."""
+        if length == 0:
+            return 0
+        return open + Int32(length - 1) * extend
+
+    # Row `i` reads the `i`-th letter back from the end; a diagonal reads the second sequence's prefix
+    # backward from the end, which stored for loads running forward is the prefix as it stands.
+    var letters = List[UInt8](length=rows + 1 + WIDTH, fill=0xFE)
+    for index in range(1, rows + 1):
+        letters[index] = first[end_row - index]
+    var reversed = List[UInt8](length=columns + WIDTH, fill=0xFF)
+    for index in range(columns):
+        reversed[index] = second[index]
+    var size = rows + 1 + WIDTH
+    var two_back = List[Int32](length=size, fill=0)
+    var one_back = List[Int32](length=size, fill=0)
+    var current = List[Int32](length=size, fill=0)
+    var deletes_back = List[Int32](length=size, fill=0)
+    var deletes = List[Int32](length=size, fill=0)
+    var inserts_back = List[Int32](length=size, fill=0)
+    var inserts = List[Int32](length=size, fill=0)
+    one_back[0] = border(1)
+    deletes_back[0] = one_back[0] + open + extend
+    one_back[1] = border(1)
+    inserts_back[1] = one_back[1] + open + extend
+
+    var substitute = lookup.lanes[WIDTH]()
+    var opening = Lanes(open)
+    var extension = Lanes(extend)
+    var wanted = Lanes(target)
+    var lane_rows = Lanes()
+    comptime for lane in range(WIDTH):
+        lane_rows[lane] = Int32(lane)
+    for diagonal in range(2, rows + columns + 1):
+        var low = max(1, diagonal - columns)
+        var high = min(rows, diagonal - 1)
+        var lag = columns - diagonal
+        var row = low
+        while row <= high:
+            var above = one_back.unsafe_ptr().unsafe_offset(row - 1).unsafe_load[width=WIDTH]()
+            var above_delete = deletes_back.unsafe_ptr().unsafe_offset(row - 1).unsafe_load[width=WIDTH]()
+            var left = one_back.unsafe_ptr().unsafe_offset(row).unsafe_load[width=WIDTH]()
+            var left_insert = inserts_back.unsafe_ptr().unsafe_offset(row).unsafe_load[width=WIDTH]()
+            var above_left = two_back.unsafe_ptr().unsafe_offset(row - 1).unsafe_load[width=WIDTH]()
+            var mine = letters.unsafe_ptr().unsafe_offset(row).unsafe_load[width=WIDTH]()
+            var theirs = reversed.unsafe_ptr().unsafe_offset(lag + row).unsafe_load[width=WIDTH]()
+            var deletion = max(above + opening, above_delete + extension)
+            var insertion = max(left + opening, left_insert + extension)
+            var score = max(above_left + substitute(mine, theirs), max(deletion, insertion))
+            var reached = score.ge(wanted) & (lane_rows + Int32(row)).le(Lanes(Int32(high)))
+            if reached.reduce_or():
+                # The lanes run by row, so the first that reached it is the diagonal's earliest.
+                for lane in range(WIDTH):
+                    if reached[lane]:
+                        var back_rows = row + lane
+                        return (end_row - back_rows, end_column - (diagonal - back_rows))
+            current.unsafe_ptr().unsafe_offset(row).unsafe_store(score)
+            deletes.unsafe_ptr().unsafe_offset(row).unsafe_store(deletion)
+            inserts.unsafe_ptr().unsafe_offset(row).unsafe_store(insertion)
+            row += WIDTH
+        if diagonal <= columns:
+            current[0] = border(diagonal)
+            deletes[0] = current[0] + open + extend
+        if diagonal <= rows:
+            current[diagonal] = border(diagonal)
+            inserts[diagonal] = current[diagonal] + open + extend
+        swap(two_back, one_back)
+        swap(one_back, current)
+        swap(deletes_back, deletes)
+        swap(inserts_back, inserts)
+    # The whole prefixes, which a caller with a score above zero never needs.
+    return (0, 0)
+
+
+def vector_align(
+    first: List[UInt8],
+    second: List[UInt8],
+    lookup: SubstitutionLookup,
     gaps: AffineGapCosts,
     substitutions: List[Scalar[DType.int8]],
     alphabet_size: Int,
@@ -147,21 +234,19 @@ def vector_align[
     low_diagonal: Int = Int.MIN,
     high_diagonal: Int = Int.MAX,
 ) -> GappedAlignment:
-    """`serial_align`'s alignment under a uniform table, its three layers swept sixteen cells at a time.
+    """`serial_align`'s global alignment, its three layers swept sixteen cells at a time.
 
     Only the cells on diagonals `low_diagonal ..= high_diagonal`, column minus row, are computed and
     stored, the rest reading as unreachable; given a band holding every optimal path (see
     `optimal_band`), those cells hold the same values as `serial_align`'s, so `reconstruct` walks the
     same path, in memory that grows with the band rather than the matrix. They are stored
     anti-diagonal by anti-diagonal, each diagonal's band contiguous by row, so a step loads its
-    neighbours from the two diagonals before as vectors (see `AntiDiagonalMajor`). A local
-    alignment takes the whole matrix, and starts where `serial_align`'s row-major scan first meets
-    the best score: the cell earliest by row, then column, among those holding it.
+    neighbours from the two diagonals before as vectors (see `AntiDiagonalMajor`).
     """
     var rows = len(first)
     var columns = len(second)
     if rows == 0 or columns == 0:
-        return serial_align[mode](first, second, substitutions, alphabet_size, gaps, alphabet)
+        return serial_align[AlignmentMode.GLOBAL](first, second, substitutions, alphabet_size, gaps, alphabet)
     var open = gaps.open
     var extend = gaps.extend
     var low_band = max(low_diagonal, -rows)
@@ -169,9 +254,7 @@ def vector_align[
 
     @inline(.always)
     def border(length: Int) {imm open, imm extend} -> Int32:
-        """The score of a gap run of `length` along the global border; the local border is zero."""
-        comptime if mode == AlignmentMode.LOCAL:
-            return 0
+        """The score of a gap run of `length` along the global border."""
         if length == 0:
             return 0
         return open + Int32(length - 1) * extend
@@ -217,17 +300,9 @@ def vector_align[
     score_cells[unsafe_offset=BAND_PADDING] = 0
     delete_cells[unsafe_offset=BAND_PADDING] = 0
     insert_cells[unsafe_offset=BAND_PADDING] = 0
+    var substitute = lookup.lanes[WIDTH]()
     var opening = Lanes(open)
     var extension = Lanes(extend)
-    var matched = Lanes(Int32(reward))
-    var mismatched = Lanes(Int32(mismatch))
-    var zero = Lanes(0)
-    var lane_rows = Lanes()
-    comptime for lane in range(WIDTH):
-        lane_rows[lane] = Int32(lane)
-    var best = Int32(0)
-    var best_row = 0
-    var best_column = 0
     for diagonal in range(1, diagonals):
         var first_row = lows[diagonal]
         var last_row = highs[diagonal]
@@ -249,29 +324,9 @@ def vector_align[
             var above_left = score_cells.unsafe_offset(two_back + row - 1).unsafe_load[width=WIDTH]()
             var mine = letters.unsafe_ptr().unsafe_offset(row).unsafe_load[width=WIDTH]()
             var theirs = reversed.unsafe_ptr().unsafe_offset(lag + row).unsafe_load[width=WIDTH]()
-            var substitution = mine.eq(theirs).select(matched, mismatched)
             var deletion = max(above + opening, above_delete + extension)
             var insertion = max(left + opening, left_insert + extension)
-            var score = max(above_left + substitution, max(deletion, insertion))
-            comptime if mode == AlignmentMode.LOCAL:
-                score = max(score, zero)
-                var counted = (lane_rows + Int32(row)).le(Lanes(Int32(high))).select(score, zero)
-                var top = counted.reduce_max()
-                if top > best or (top == best and top != 0):
-                    # The earliest lane holding it is the earliest cell of this diagonal's in row order.
-                    for lane in range(WIDTH):
-                        if counted[lane] == top:
-                            var cell_row = row + lane
-                            var cell_column = diagonal - cell_row
-                            if (
-                                top > best
-                                or cell_row < best_row
-                                or (cell_row == best_row and cell_column < best_column)
-                            ):
-                                best = top
-                                best_row = cell_row
-                                best_column = cell_column
-                            break
+            var score = max(above_left + substitute(mine, theirs), max(deletion, insertion))
             score_cells.unsafe_offset(here + row).unsafe_store(score)
             delete_cells.unsafe_offset(here + row).unsafe_store(deletion)
             insert_cells.unsafe_offset(here + row).unsafe_store(insertion)
@@ -288,11 +343,6 @@ def vector_align[
         for index in range(BAND_PADDING):
             unreachable(here + last_row + 1 + index)
 
-    var start_row = rows
-    var start_column = columns
-    comptime if mode == AlignmentMode.LOCAL:
-        start_row = best_row
-        start_column = best_column
     var layout = AntiDiagonalMajor(
         starts.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         lows.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
@@ -306,16 +356,17 @@ def vector_align[
         second,
         substitutions,
         alphabet_size,
-        start_row,
-        start_column,
+        rows,
+        columns,
         alphabet,
         gaps,
-        mode,
+        AlignmentMode.GLOBAL,
     )
-    var final_score = scores[layout.index(start_row, start_column)]
+    var final_score = scores[layout.index(rows, columns)]
     # The layout reads `starts` and `lows` through pointers, so both must outlive every use of it.
     _ = len(starts)
     _ = len(lows)
+    _ = len(lookup.cells)
     return GappedAlignment(final_score, reconstruction[0], reconstruction[1])
 
 
@@ -323,17 +374,16 @@ comptime UNREACHABLE = Int32(-(1 << 28))
 """A cell outside the band: far enough below any score that a few gap costs keep it there."""
 
 
-def optimal_band(
-    rows: Int, columns: Int, reward: Int, mismatch: Int, gaps: AffineGapCosts, score: Int
-) -> Tuple[Int, Int]:
-    """The diagonals, column minus row, every optimal global alignment of score `score` stays on.
+def optimal_band(rows: Int, columns: Int, reward: Int, gaps: AffineGapCosts, score: Int) -> Tuple[Int, Int]:
+    """The diagonals, column minus row, every optimal global alignment of score `score` stays on, under a
+    table whose largest score is `reward`.
 
-    For a global alignment the reward folds into penalties (see `gap_affine`): one of `n` and `m`
-    letters scoring `score` costs `a (n + m) - 2 score`, each gapped letter `2 e + a` of it. A path
-    reaching diagonal `t` past the start's 0 and the end's `m - n` spends at least the letters the
-    detour takes in gaps, `|m - n|` plus twice the detour, so an optimal one never strays further
-    than its cost allows. Every gap costs `2 e + a`; with nothing to spend on gaps the band is the
-    two diagonals and the run between them.
+    No substitution earns more than `reward`, so an alignment of `n` and `m` letters with `g` of them in
+    gaps scores at most `reward (n + m - g) / 2 + e g`, `e` the extension's score: each gapped letter
+    gives up at least `2 e + reward` of the most `reward (n + m)` it could score twice over. A path
+    reaching diagonal `t` past the start's 0 and the end's `m - n` gaps at least `|m - n|` letters plus
+    twice the detour, so an optimal one never strays further than what it gave up allows. With nothing
+    to spend on gaps the band is the two diagonals and the run between them.
     """
     var difference = columns - rows
     var per_gap = 2 * Int(-gaps.extend) + reward
