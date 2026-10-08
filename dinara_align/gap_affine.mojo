@@ -366,12 +366,19 @@ def padded(codes: Span[UInt8, _], sentinel: UInt8, reverse: Bool) -> List[UInt8]
     return out^
 
 
-def padded_into(mut out: List[UInt8], codes: Span[UInt8, _], sentinel: UInt8, reverse: Bool):
-    """`padded` written over `out`, whose memory is kept: the next pair of a batch allocates nothing."""
+comptime LINE_GUARD = 64
+"""A cache line of bytes before and after a search's own copy of a sequence, which `Wavefront.start`
+rewrites every pair and its fronts read at every cost: so it shares no line with another allocation,
+another worker's copy among them (see `OwnLines`)."""
+
+
+def padded_into(mut out: List[UInt8], codes: Span[UInt8, _], sentinel: UInt8, reverse: Bool, guard: Int = 0):
+    """`padded` written over `out`, whose memory is kept: the next pair of a batch allocates nothing.
+    The codes start `guard` bytes in, and as many follow the sentinels."""
     var count = len(codes)
-    out.resize(unsafe_uninit_length=count + PADDING)
+    out.resize(unsafe_uninit_length=guard + count + PADDING + guard)
     var source = codes.unsafe_ptr()
-    var destination = out.unsafe_ptr()
+    var destination = out.unsafe_ptr().unsafe_offset(guard)
     for index in range(count, count + PADDING):
         destination[unsafe_offset=index] = sentinel
     if not reverse:
@@ -896,8 +903,8 @@ struct Wavefront[pieces: Int](Movable):
         and rings held kept for the next pair of a batch (see `DistanceSpace`)."""
         self.columns = len(first)
         self.rows = len(second)
-        padded_into(self.first, first, FIRST_SENTINEL, reverse)
-        padded_into(self.second, second, SECOND_SENTINEL, reverse)
+        padded_into(self.first, first, FIRST_SENTINEL, reverse, LINE_GUARD)
+        padded_into(self.second, second, SECOND_SENTINEL, reverse, LINE_GUARD)
         self.penalties = penalties
         self.origin = origin
         self.band_low = max(band.low, -self.rows)
@@ -936,7 +943,12 @@ struct Wavefront[pieces: Int](Movable):
             kept = self.history.begin(low, high)[0]
         var reach = Int.MIN // 2
         for diagonal in range(low, high + 1):
-            var column = slide(self.first.unsafe_ptr(), self.second.unsafe_ptr(), max(diagonal, 0), diagonal)
+            var column = slide(
+                self.first.unsafe_ptr().unsafe_offset(LINE_GUARD),
+                self.second.unsafe_ptr().unsafe_offset(LINE_GUARD),
+                max(diagonal, 0),
+                diagonal,
+            )
             front[unsafe_offset=diagonal] = Int32(column)
             kept[unsafe_offset=diagonal] = Int32(column)
             reach = max(reach, 2 * column - diagonal)
@@ -1029,8 +1041,8 @@ struct Wavefront[pieces: Int](Movable):
             self.fronts.row(slot, gap_layer(last, False)),
             kept,
             flags,
-            self.first.unsafe_ptr(),
-            self.second.unsafe_ptr(),
+            self.first.unsafe_ptr().unsafe_offset(LINE_GUARD),
+            self.second.unsafe_ptr().unsafe_offset(LINE_GUARD),
             low,
             high,
             columns,
@@ -1047,7 +1059,12 @@ struct Wavefront[pieces: Int](Movable):
             comptime if record:
                 flags[unsafe_offset=opened] = UInt8(opened_layer) | opened_bit(opened_layer)
             if Int(front[unsafe_offset=opened]) < column:
-                column = slide(self.first.unsafe_ptr(), self.second.unsafe_ptr(), column, opened)
+                column = slide(
+                    self.first.unsafe_ptr().unsafe_offset(LINE_GUARD),
+                    self.second.unsafe_ptr().unsafe_offset(LINE_GUARD),
+                    column,
+                    opened,
+                )
                 front[unsafe_offset=opened] = Int32(column)
                 reach = max(reach, 2 * column - opened)
                 comptime if record:
@@ -1306,6 +1323,7 @@ def bidirectional[
     give_up: Bool,
     limit: Int,
     ceiling: Int = Int.MAX,
+    grown_alone: Bool = False,
 ) -> Int:
     """Grows the two searches a cost at a time each in turn, lowering `best` to the cheapest place an
     optimal path splits between them, until no cheaper one is left unchecked: `MET`. `OVER` once no
@@ -1330,6 +1348,10 @@ def bidirectional[
     the margin above would grow both to past `o + window`, which on short reads differing in a few
     letters was most of their time. Where the path splits may then differ among equally cheap ones, so
     an alignment, which the split decides, keeps the margin.
+
+    With `grown_alone`, the forward search has grown by itself, no further than its ring holds every
+    cost it grew, checking at each cost that it had not reached the end (see `forward_alone`): what
+    meeting the backward search's start at each of those costs would have checked.
     """
     var columns = forward.columns
     var rows = forward.rows
@@ -1339,7 +1361,10 @@ def bidirectional[
     # Each side's costs, from 0 up, every one of which met the other side's start: -1 for none.
     var forward_whole = -1
     var backward_whole = -1
-    if forward.cost == 0 and backward.cost == 0:
+    if grown_alone:
+        forward_whole = forward.cost
+        backward_whole = 0
+    elif forward.cost == 0 and backward.cost == 0:
         meet(forward, 0, backward, 0, best)
         forward_whole = 0
         backward_whole = 0
@@ -1467,29 +1492,67 @@ def searched_distance[
     ends_free: EndsFree,
     band: Band,
 ) -> Int:
-    """The two searches of `wavefront_distance`, built the first time and begun afresh after."""
-    var mirrored = band.mirrored(len(first) - len(second))
-    if forward.__bool__() and backward.__bool__():
+    """The two searches of `wavefront_distance`, built the first time and begun afresh after: the
+    forward one first by itself, while it may (see `forward_alone`), and the backward one only for a
+    pair that has not ended by then."""
+    if forward:
         forward.value().start(
             first, second, penalties, FREE_START, False, False, ends_free.first_begin, ends_free.second_begin, band
-        )
-        backward.value().start(
-            first, second, penalties, FREE_START, False, True, ends_free.first_end, ends_free.second_end, mirrored
         )
     else:
         forward = Wavefront[pieces](
             first, second, penalties, FREE_START, False, False, ends_free.first_begin, ends_free.second_begin, band
         )
+    var grown_alone = ends_free.first_end == 0 and ends_free.second_end == 0
+    if grown_alone:
+        var alone = forward_alone(forward.value(), ceiling)
+        if alone != GROWING:
+            return alone
+    var mirrored = band.mirrored(len(first) - len(second))
+    if backward:
+        backward.value().start(
+            first, second, penalties, FREE_START, False, True, ends_free.first_end, ends_free.second_end, mirrored
+        )
+    else:
         backward = Wavefront[pieces](
             first, second, penalties, FREE_START, False, True, ends_free.first_end, ends_free.second_end, mirrored
         )
     var best = Meeting.none()
-    if (
-        bidirectional[pieces, False, cost_only=True](forward.value(), backward.value(), best, False, Int.MAX, ceiling)
-        != MET
-    ):
+    var status = bidirectional[pieces, False, cost_only=True](
+        forward.value(), backward.value(), best, False, Int.MAX, ceiling, grown_alone
+    )
+    if status != MET:
         return -1
     return best.cost
+
+
+comptime GROWING = -2
+"""`forward_alone`'s answer for a pair it leaves to the two searches."""
+
+
+def forward_alone[pieces: Int](mut forward: Wavefront[pieces], ceiling: Int) -> Int:
+    """The least cost, found by the forward search alone; -1 once it passes `ceiling`; or `GROWING`
+    once the search has grown as far as its ring holds every cost it grew, `window` of them, and
+    leaves the rest to the two searches (see `bidirectional`'s `grown_alone`).
+
+    Costs grow from 0 up, so the first that reaches the end is the least. A pair differing in a few
+    letters ends within those costs, and the backward search, its sequences reversed and its rings
+    cleared, need not begin at all: on short reads at 1% error that was a third of their time. A
+    costlier pair loses nothing, its forward search grown no further than the two would have taken
+    it. Only for an end the alignment must reach, the last letter of each: there, reaching the end is
+    one diagonal's front reaching the last column, its alignment front holding the gaps' too."""
+    var target = forward.columns - forward.rows
+    var window = forward.penalties.window[pieces]()
+    while True:
+        var slot = forward.fronts.current
+        if forward.fronts.lows[slot] <= target and target <= forward.fronts.highs[slot]:
+            if Int(forward.fronts.row(slot, ALIGNED)[unsafe_offset=target]) >= forward.columns:
+                return forward.cost if forward.cost <= ceiling else -1
+        if forward.cost >= ceiling:
+            return -1
+        if forward.cost >= window:
+            return GROWING
+        forward.advance[False]()
 
 
 struct DistanceSpace(Movable):
