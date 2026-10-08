@@ -137,16 +137,18 @@ std::vector<int8_t> ksw2_table(int8_t match, int8_t mismatch) {
 }
 
 // KSW2's best extension score from both sequences' starts, a match 2, a mismatch -4, a gap of `k` letters
-// `6 + 2k`, no band and no Z-drop: the exact best stop, as dinara-align's `Mode.extension(2)` finds it.
-long ksw2_extension(const Pair &pair, const std::vector<int8_t> &table) {
+// `6 + 2k`, no band and no Z-drop: the exact best stop, as dinara-align's `Mode.extension(2)` finds it; with
+// an `end_bonus`, the best score reaching the query's end when it plus the bonus passes that stop, as
+// `Mode.extension(2, end_bonus=...)` chooses.
+long ksw2_extension(const Pair &pair, const std::vector<int8_t> &table, int end_bonus = 0) {
     std::vector<int8_t> query = codes(pair.query), target = codes(pair.reference);
     ksw_extz_t found;
     memset(&found, 0, sizeof(found));
     ksw_extz2_sse(nullptr, static_cast<int>(query.size()), reinterpret_cast<uint8_t *>(query.data()),
                   static_cast<int>(target.size()), reinterpret_cast<uint8_t *>(target.data()), 5, table.data(), 6, 2,
-                  -1, -1, 0, KSW_EZ_EXTZ_ONLY, &found);
+                  -1, -1, end_bonus, KSW_EZ_EXTZ_ONLY, &found);
     free(found.cigar);
-    return found.max;
+    return found.reach_end ? found.mqe : found.max;
 }
 
 // KSW2's global cost at two-piece gaps, a gap of `k` letters the less of `6 + 2k` and `24 + k`, from its
@@ -217,10 +219,11 @@ int main(int argc, char **argv) {
             time_tool("KSW2", workload, pairs, [&](const Pair &pair) { return ksw2_two_piece(pair, table); });
         }
 #endif
-    } else if (workload == "extension") {
+    } else if (workload.rfind("extension", 0) == 0) {
 #ifdef WITH_KSW2
         std::vector<int8_t> table = ksw2_table(2, -4);
-        time_tool("KSW2", workload, pairs, [&](const Pair &pair) { return ksw2_extension(pair, table); });
+        int bonus = workload == "extension-bonus" ? 50 : 0;
+        time_tool("KSW2", workload, pairs, [&](const Pair &pair) { return ksw2_extension(pair, table, bonus); });
 #endif
     } else if (workload.rfind("table", 0) == 0) {
         // A match 2, a transition -2, a transversion -4, a gap of `k` letters `4 + 2k`: an opening of 6 and an

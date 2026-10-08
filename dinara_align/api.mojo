@@ -174,7 +174,15 @@ def score(
         ) if two else extend[1](
             reference.as_bytes(), query.as_bytes(), penalties, band, at_end, -1, mode.zdrop, drop_extension
         )
-        return penalties.score(found[0], found[1] + found[2])
+        var best = penalties.score(found[0], found[1] + found[2])
+        if mode.end_bonus > 0 and not band.covers(columns, rows):
+            raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "an end bonus takes no band")
+        # The end bonus prefers the best extension reaching the query's far end, unless the Z-drop gave up.
+        if mode.end_bonus > 0 and not found[3]:
+            var reaching = score(reference, query, costs, mode.reaching_end(), band=band)
+            if reaching + mode.end_bonus > best:
+                return reaching
+        return best
     if mode.kind == Mode.ENDS and mode.is_global():
         var cost = wavefront_distance[2](
             reference.as_bytes(), query.as_bytes(), penalties, Int.MAX, EndsFree(), band
@@ -394,6 +402,8 @@ def extended_alignment(
     reference: String, query: String, costs: Costs, mode: Mode, band: Band, ties: Ties, eqx: Bool, limit: Int
 ) raises AlignmentError -> Alignment:
     """The best extension from `mode`'s anchor (see `Mode.extension`)."""
+    if mode.end_bonus > 0 and not band.covers(reference.byte_length(), query.byte_length()):
+        raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "an end bonus takes no band")
     var two = costs.pieces() == 2
     var penalties = rewarded_penalties(mode.match_score, costs)
     # The Z-drop's slack a diagonal is the cheapest extension, as KSW2 charges a long gap.
@@ -403,6 +413,11 @@ def extended_alignment(
     ) if two else extension_of[1](
         reference, query, penalties, eqx, mode.anchor, band, ties, -1, limit, mode.zdrop, drop_extension
     )
+    # The end bonus prefers the best extension reaching the query's far end, unless the Z-drop gave up.
+    if mode.end_bonus > 0 and not found.dropped:
+        var reaching = aligned_within(reference, query, costs, mode.reaching_end(), band, Int.MAX, ties, eqx, limit)
+        if reaching and reaching.value().score + mode.end_bonus > found.score:
+            return reaching.take()
     var columns = reference.byte_length()
     var rows = query.byte_length()
     var cost = mode.match_score * found.matches - found.score

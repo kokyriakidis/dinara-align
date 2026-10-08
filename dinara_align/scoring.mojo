@@ -464,8 +464,9 @@ def tabulated_end[
     kind: Int
 ](
     first: Span[UInt8, _], second: Span[UInt8, _], scoring: Scoring, ends: EndsFree, highest: Bool, zdrop: Int = -1
-) -> Tuple[Int, Int, Int]:
-    """The best score under `scoring` of an alignment `kind` allows, and where it ends, by the sweep
+) -> Tuple[Int, Int, Int, Bool]:
+    """The best score under `scoring` of an alignment `kind` allows, where it ends, and whether a Z-drop
+    gave the sweep up, by the sweep
     `scored.swept_cells` runs, each pair's score read from the table: `first` and `second` are codes
     into the alphabet. Lanes along the shorter sequence, 16 bits while the scores fit."""
     var gaps = gap_costs(scoring)
@@ -505,6 +506,27 @@ def ends_of(mode: Mode, columns: Int, rows: Int) -> EndsFree:
     )
 
 
+def extension_span(
+    first: List[Scalar[SymbolDType]], second: List[Scalar[SymbolDType]], scoring: Scoring, mode: Mode
+) -> Tuple[Int, Int, Int, Int, Int, Bool]:
+    """An extension's best stop under `scoring` and the span it covers, as `mode_span` gives them, and
+    whether the Z-drop gave the sweep up: by a sweep from its anchor for the end as late as an equally
+    good one allows."""
+    var columns = len(first)
+    var rows = len(second)
+    if mode.anchor == Anchor.END:
+        var back_first = List[Scalar[SymbolDType]](capacity=columns)
+        for index in range(columns - 1, -1, -1):
+            back_first.append(first[index])
+        var back_second = List[Scalar[SymbolDType]](capacity=rows)
+        for index in range(rows - 1, -1, -1):
+            back_second.append(second[index])
+        var found = tabulated_end[FROM_ORIGIN](back_first, back_second, scoring, EndsFree(), True, mode.zdrop)
+        return (found[0], columns - found[1], rows - found[2], columns, rows, found[3])
+    var found = tabulated_end[FROM_ORIGIN](first, second, scoring, EndsFree(), True, mode.zdrop)
+    return (found[0], 0, 0, found[1], found[2], found[3])
+
+
 def mode_span(
     first: List[Scalar[SymbolDType]], second: List[Scalar[SymbolDType]], scoring: Scoring, mode: Mode
 ) -> Tuple[Int, Int, Int, Int, Int]:
@@ -516,17 +538,13 @@ def mode_span(
     var columns = len(first)
     var rows = len(second)
     if mode.kind == Mode.EXTENSION:
-        if mode.anchor == Anchor.END:
-            var back_first = List[Scalar[SymbolDType]](capacity=columns)
-            for index in range(columns - 1, -1, -1):
-                back_first.append(first[index])
-            var back_second = List[Scalar[SymbolDType]](capacity=rows)
-            for index in range(rows - 1, -1, -1):
-                back_second.append(second[index])
-            var found = tabulated_end[FROM_ORIGIN](back_first, back_second, scoring, EndsFree(), True, mode.zdrop)
-            return (found[0], columns - found[1], rows - found[2], columns, rows)
-        var found = tabulated_end[FROM_ORIGIN](first, second, scoring, EndsFree(), True, mode.zdrop)
-        return (found[0], 0, 0, found[1], found[2])
+        var stop = extension_span(first, second, scoring, mode)
+        # The end bonus prefers the best extension reaching the query's far end, unless the Z-drop gave up.
+        if mode.end_bonus > 0 and not stop[5]:
+            var reaching = mode_span(first, second, scoring, mode.reaching_end())
+            if reaching[0] + mode.end_bonus > stop[0]:
+                return reaching
+        return (stop[0], stop[1], stop[2], stop[3], stop[4])
     var ends = ends_of(mode, columns, rows)
     var forward = tabulated_end[FROM_EDGE](first, second, scoring, ends, True)
     var end_column = forward[1]

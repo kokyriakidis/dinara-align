@@ -83,7 +83,7 @@ typedef struct {
  * least cost; above zero, the best score, a match earning it, as parasail's and hyalite's semi-global
  * modes count it. DINARA_EXTENSION: fixed at both sequences' starts, or with `anchor` nonzero their
  * ends, and free to stop anywhere, a match earning `match_score`: a seed's extension, as KSW2's, with
- * its Z-drop when `zdrop` is above zero. DINARA_LOCAL: any part of each, a match earning
+ * its Z-drop when `zdrop` is above zero, and its end bonus when `end_bonus` is. DINARA_LOCAL: any part of each, a match earning
  * `match_score`, Smith-Waterman, as abPOA's local mode. DINARA_OVERLAP: every end gap free, a
  * match earning `match_score`, semi-global, as parasail's `sg`. A null pointer is a global alignment.
  */
@@ -96,6 +96,7 @@ typedef struct {
     int64_t match_score;     /* What a match earns; zero for free ends' least cost. */
     int64_t anchor;          /* An extension: zero fixes it at the starts, nonzero at the ends. */
     int64_t zdrop;           /* An extension: its Z-drop when above zero, else none. */
+    int64_t end_bonus;       /* An extension: what reaching the query's far end earns, KSW2's end bonus. */
 } dinara_mode;
 
 /*
@@ -280,9 +281,11 @@ struct Mode {
         return scored;
     }
     /* The best-scoring alignment from one end, a match earning `match_score`; with `zdrop` above zero,
-     * given up once it falls that far below its best, as KSW2's Z-drop gives up. */
-    static Mode extension(int64_t match_score, Anchor anchor = Anchor::start, int64_t zdrop = 0) {
-        return {{DINARA_EXTENSION, 0, 0, 0, 0, match_score, anchor == Anchor::end ? 1 : 0, zdrop}};
+     * given up once it falls that far below its best, as KSW2's Z-drop gives up; with `end_bonus` above
+     * zero, aligned to the query's far end when that scores within the bonus of the best stop. */
+    static Mode extension(int64_t match_score, Anchor anchor = Anchor::start, int64_t zdrop = 0,
+                          int64_t end_bonus = 0) {
+        return {{DINARA_EXTENSION, 0, 0, 0, 0, match_score, anchor == Anchor::end ? 1 : 0, zdrop, end_bonus}};
     }
     /* The best-scoring alignment of any part of each, a match earning `match_score`: Smith-Waterman. */
     static Mode local(int64_t match_score) { return {{DINARA_LOCAL, 0, 0, 0, 0, match_score, 0, 0}}; }

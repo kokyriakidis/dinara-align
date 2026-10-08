@@ -93,6 +93,9 @@ def main() -> None:
     onward = da.align("ACGTTGCAAGGCTTTT", "ACGTTGCAAGGCGAGA", affine, da.Mode.extension(1))
     assert (onward.score, onward.cigar) == (12, "12=")
     assert da.align("ACGTTGCAAGGCTTTT", "ACGTTGCAAGGCGAGA", affine, da.Mode.extension(1, zdrop=5)).score == 12
+    # With an end bonus past what stopping short gains, the read is aligned to its end, at its own score.
+    whole = da.align("ACGTTGCAAGGCTTTT", "ACGTTGCAAGGCGAGA", affine, da.Mode.extension(1, end_bonus=1000))
+    assert whole.query_end == 16 and whole.score < 12, whole
     scores = da.local_scores("ACGTACGTAC" + "T" * 20 + "ACGTACGTAC", "ACGTACGTAC", affine, da.Mode.local(2), window=5)
     assert (scores.score, scores.second_score, scores.second_reference_end) == (20, 20, 10)
     dna = da.Scoring.dna()

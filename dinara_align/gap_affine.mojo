@@ -1992,14 +1992,15 @@ def free_ends_alignment[
 @fieldwise_init
 struct AffineExtension(Copyable, Movable, Writable):
     """The best score of an alignment fixed at one end of both sequences and free to stop anywhere, the
-    letters of each it covers from that end, the matches among them, and the alignment as a CIGAR over
-    those letters alone (see `Alignment`)."""
+    letters of each it covers from that end, the matches among them, the alignment as a CIGAR over
+    those letters alone (see `Alignment`), and whether a Z-drop gave the search up."""
 
     var score: Int
     var first_length: Int
     var second_length: Int
     var matches: Int
     var cigar: String
+    var dropped: Bool
 
 
 def extension_penalties(
@@ -2042,10 +2043,11 @@ def extend[
     known: Int = -1,
     zdrop: Int = -1,
     drop_extension: Int = 0,
-) -> Tuple[Int, Int, Int]:
+) -> Tuple[Int, Int, Int, Bool]:
     """Where the best-scoring alignment fixed at the origin ends, the end of both sequences with
-    `reverse`: its cost, and the letters of each sequence up to it. A `known` best score, when the
-    caller has one, ends the search at the first alignment earning it, the one it would keep.
+    `reverse`: its cost, the letters of each sequence up to it, and whether the Z-drop gave the search
+    up. A `known` best score, when the caller has one, ends the search at the first alignment earning
+    it, the one it would keep.
 
     A `zdrop` of zero or more gives up as WFA2-lib's Z-drop does: once the best score of a cost's front
     lies more than `zdrop` plus `drop_extension` a diagonal between it and the best so far below that
@@ -2060,7 +2062,7 @@ def extend[
     var columns = len(first)
     var rows = len(second)
     if columns == 0 or rows == 0 or penalties.reward == 0:
-        return (0, 0, 0)
+        return (0, 0, 0, False)
     var search = Wavefront[pieces](first, second, penalties, FREE_START, False, reverse, 0, 0, band)
     var reward = penalties.reward
     var scale = penalties.scale
@@ -2072,6 +2074,7 @@ def extend[
     var best_cost = 0
     var best_column = 0
     var best_row = 0
+    var dropped = False
     while True:
         var slot = search.fronts.current
         var cost = search.cost
@@ -2097,6 +2100,7 @@ def extend[
             elif top > Int.MIN and best - top > 2 * (
                 zdrop + drop_extension * abs(top_diagonal - (best_column - best_row))
             ):
+                dropped = True
                 break
         elif reach > Int.MIN // 4 and reward * reach - scale * cost > best:
             var front = search.fronts.row(slot, ALIGNED)
@@ -2120,7 +2124,7 @@ def extend[
         if cost - search.last_reached > window:
             break
         search.advance[False]()
-    return (best_cost, best_column, best_row)
+    return (best_cost, best_column, best_row, dropped)
 
 
 def traced_extension[
@@ -2141,7 +2145,7 @@ def traced_extension[
     var columns = len(a)
     var rows = len(b)
     if columns == 0 or rows == 0 or penalties.reward == 0 or known <= 0:
-        return AffineExtension(0, 0, 0, 0, String())
+        return AffineExtension(0, 0, 0, 0, String(), False)
     var search = Wavefront[pieces](a, b, penalties, FREE_START, True, True, 0, 0, Band())
     var reward = penalties.reward
     var scale = penalties.scale
@@ -2202,7 +2206,9 @@ def traced_extension[
         penalties,
         eqx,
     )
-    return AffineExtension(penalties.score(best_cost, best_column + best_row), best_column, best_row, matches, cigar^)
+    return AffineExtension(
+        penalties.score(best_cost, best_column + best_row), best_column, best_row, matches, cigar^, False
+    )
 
 
 def extension_of[
@@ -2273,4 +2279,5 @@ def extension_of[
         rows,
         matches,
         cigar_of(piece_first, piece_second, moves^, cost, penalties, eqx),
+        found[3],
     )

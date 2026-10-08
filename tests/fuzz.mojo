@@ -157,9 +157,10 @@ def random_mode(columns: Int, rows: Int) raises AlignmentError -> Mode:
         return Mode.INFIX.with_match_score(reward) if chance(0.5) else Mode.GLOBAL.with_match_score(reward)
     if kind == 7:
         var anchor = Anchor.END if chance(0.5) else Anchor.START
+        var bonus = Optional[Int](draw(0, 40)) if chance(0.4) else None
         if chance(0.3):
-            return Mode.extension(draw(0, 4), anchor, zdrop=draw(0, 60))
-        return Mode.extension(draw(0, 4), anchor)
+            return Mode.extension(draw(0, 4), anchor, zdrop=draw(0, 60), end_bonus=bonus)
+        return Mode.extension(draw(0, 4), anchor, end_bonus=bonus)
     if kind == 8:
         return Mode.local(reward)
     return Mode.overlap(reward)
@@ -222,6 +223,22 @@ def check(trial: Case) raises:
     """Every property of one trial; raises on the first that fails."""
     var model = model_of(trial.costs, trial.mode, trial.band)
     var best = optimum(model, trial.reference, trial.query)
+    if trial.mode.kind == Mode.EXTENSION and trial.mode.end_bonus > 0:
+        if not trial.band.covers(trial.reference.byte_length(), trial.query.byte_length()):
+            # An end bonus takes no band.
+            try:
+                _ = align(trial.reference, trial.query, trial.costs, trial.mode, band=trial.band)
+            except:
+                return
+            raise Error("an end bonus under a band was not refused")
+        # Without a Z-drop the bonus chooses: the best extension reaching the query's far end when it
+        # plus the bonus passes the best stop, and the one it reaches must then be the free ends' best.
+        if trial.mode.zdrop < 0:
+            var reaching_model = model_of(trial.costs, trial.mode.reaching_end(), trial.band)
+            var reaching = optimum(reaching_model, trial.reference, trial.query)
+            if best and reaching and reaching.value() + trial.mode.end_bonus > best.value():
+                model = reaching_model^
+                best = reaching
     var found: Alignment
     try:
         found = align(
@@ -454,9 +471,10 @@ def scoring_mode(columns: Int, rows: Int) raises AlignmentError -> Mode:
             query_end=allowance(rows),
         )
     var anchor = Anchor.END if chance(0.5) else Anchor.START
+    var bonus = Optional[Int](draw(0, 40)) if chance(0.4) else None
     if chance(0.3):
-        return Mode.extension(0, anchor, zdrop=draw(0, 40))
-    return Mode.extension(0, anchor)
+        return Mode.extension(0, anchor, zdrop=draw(0, 40), end_bonus=bonus)
+    return Mode.extension(0, anchor, end_bonus=bonus)
 
 
 def check_scoring(reference: String, query: String, scoring: Scoring, mode: Mode, eqx: Bool) raises:
@@ -481,7 +499,7 @@ def check_scoring(reference: String, query: String, scoring: Scoring, mode: Mode
     var model = Model(
         table^,
         pieces.copy(),
-        pieces^,
+        pieces.copy(),
         kind,
         mode.reference_start,
         mode.reference_end,
@@ -492,6 +510,26 @@ def check_scoring(reference: String, query: String, scoring: Scoring, mode: Mode
         1 << 60,
     )
     var best = optimum(model, reference, query).value()
+    if mode.kind == Mode.EXTENSION and mode.end_bonus > 0 and mode.zdrop < 0:
+        # The bonus chooses the best extension reaching the query's far end when it passes the best stop.
+        var reaching_mode = mode.reaching_end()
+        var reaching_model = Model(
+            model.table.copy(),
+            pieces.copy(),
+            pieces.copy(),
+            ENDS,
+            reaching_mode.reference_start,
+            reaching_mode.reference_end,
+            reaching_mode.query_start,
+            reaching_mode.query_end,
+            False,
+            -(1 << 60),
+            1 << 60,
+        )
+        var reaching = optimum(reaching_model, reference, query)
+        if reaching and reaching.value() + mode.end_bonus > best:
+            model = reaching_model^
+            best = reaching.value()
     var found = align(reference, query, scoring, mode, eqx=eqx)
     var earned = check_alignment(
         model,

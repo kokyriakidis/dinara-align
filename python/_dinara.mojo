@@ -86,14 +86,15 @@ def costs_of(fields: PythonObject) raises -> Costs:
 
 
 def mode_of(fields: PythonObject) raises -> Mode:
-    """`(kind, reference_start, reference_end, query_start, query_end, match_score, anchor, zdrop)`,
-    as `dinara_mode`; for a `Scoring`, kind `C_LOCAL` with a match score of zero is `Mode.LOCAL`."""
+    """`(kind, reference_start, reference_end, query_start, query_end, match_score, anchor, zdrop,
+    end_bonus)`, as `dinara_mode`, the last two -1 for none; for a `Scoring`, kind `C_LOCAL` with a match score of zero is `Mode.LOCAL`.
+    """
     var at = ints(fields)
     if at[0] == C_EXTENSION:
         var anchor = Anchor.END if at[6] != 0 else Anchor.START
-        if at[7] >= 0:
-            return Mode.extension(at[5], anchor, zdrop=at[7])
-        return Mode.extension(at[5], anchor)
+        var zdrop = Optional[Int](at[7]) if at[7] >= 0 else None
+        var bonus = Optional[Int](at[8]) if at[8] >= 0 else None
+        return Mode.extension(at[5], anchor, zdrop=zdrop, end_bonus=bonus)
     if at[0] == C_LOCAL:
         return Mode.LOCAL if at[5] == 0 else Mode.local(at[5])
     if at[0] == C_OVERLAP:

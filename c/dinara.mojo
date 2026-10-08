@@ -98,17 +98,17 @@ def costs_of(fields: OptionalPointer[Int, MutAnyOrigin]) raises AlignmentError -
 
 
 def mode_of(fields: OptionalPointer[Int, MutAnyOrigin]) raises AlignmentError -> Mode:
-    """`dinara_mode`: kind, the four free letter counts, the match score, the anchor and the Z-drop, none
-    unless above zero. Null is global.
+    """`dinara_mode`: kind, the four free letter counts, the match score, the anchor, and the Z-drop and
+    the end bonus, each none unless above zero. Null is global.
     Free ends with a match score of zero minimize the costs; above zero they maximize the score."""
     if not fields:
         return Mode.GLOBAL
     var at = fields.value()
     if at[unsafe_offset=0] == C_EXTENSION:
         var anchor = Anchor.END if at[unsafe_offset=6] != 0 else Anchor.START
-        if at[unsafe_offset=7] > 0:
-            return Mode.extension(at[unsafe_offset=5], anchor, zdrop=at[unsafe_offset=7])
-        return Mode.extension(at[unsafe_offset=5], anchor)
+        var zdrop = Optional[Int](at[unsafe_offset=7]) if at[unsafe_offset=7] > 0 else None
+        var bonus = Optional[Int](at[unsafe_offset=8]) if at[unsafe_offset=8] > 0 else None
+        return Mode.extension(at[unsafe_offset=5], anchor, zdrop=zdrop, end_bonus=bonus)
     if at[unsafe_offset=0] == C_LOCAL:
         return Mode.local(at[unsafe_offset=5])
     if at[unsafe_offset=0] == C_OVERLAP:

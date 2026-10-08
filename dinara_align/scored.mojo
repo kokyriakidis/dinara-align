@@ -54,9 +54,9 @@ def best_end[
     match_score: Int,
     ends: EndsFree = EndsFree(),
     highest: Bool = True,
-) -> Tuple[Int, Int, Int]:
-    """The best score of an alignment starting and ending where `kind` allows, and where it ends (see
-    `swept_cells`)."""
+) -> Tuple[Int, Int, Int, Bool]:
+    """The best score of an alignment starting and ending where `kind` allows, where it ends, and whether
+    a Z-drop gave the sweep up (see `swept_cells`)."""
     var unused = List[Int32]()
     var no_table = List[Scalar[dtype]]()
     return swept_cells[pieces, dtype, width, transposed, kind, False](
@@ -77,7 +77,7 @@ def swept_cells[
     alphabet: Int,
     zdrop: Int,
     mut kept: List[Int32],
-) -> Tuple[Int, Int, Int]:
+) -> Tuple[Int, Int, Int, Bool]:
     """The best score of an alignment starting and ending where `kind` allows, and the reference's and
     the query's letters up to where it ends: of several such ends, for a local alignment the furthest
     along both together, then along the reference; from the edges the one on the highest diagonal, the
@@ -187,7 +187,7 @@ def swept_cells[
         comptime if anywhere_end:
             comptime if columns_kept:
                 kept = List[Int32](length=len(reference) + 1, fill=0)
-            return (0, 0, 0)
+            return (0, 0, 0, False)
         # One sequence empty: the alignment lies along the other's edge, ending within its free letters,
         # the furthest such end on a tie.
         var length = rows + columns
@@ -207,12 +207,14 @@ def swept_cells[
         var down = reach if rows > 0 else 0
         var across = reach if columns > 0 else 0
         if transposed:
-            return (top, across, down)
-        return (top, down, across)
+            return (top, across, down, False)
+        return (top, down, across, False)
 
     var best = 0 if anywhere_end else Int.MIN
     var best_row = 0
     var best_diagonal = 0
+    # Whether a Z-drop gave the sweep up before it covered the matrix.
+    var dropped = False
 
     @inline(.always)
     def ending(
@@ -330,6 +332,7 @@ def swept_cells[
                     var lean = (diagonal - 2 * furthest) if transposed else (2 * furthest - diagonal)
                     var best_lean = (best_diagonal - 2 * best_row) if transposed else (2 * best_row - best_diagonal)
                     if best - most > zdrop + costs.extension * abs(lean - best_lean):
+                        dropped = True
                         break
         # The border cells of this diagonal, written after the lanes that may have run over them: free
         # within the letters free there, past them a gap. No interior cell reads a border's gap layers.
@@ -359,8 +362,8 @@ def swept_cells[
             kept[letters] = Int32(column_best[(columns - letters) if transposed else letters])
     # `best_row` counts the lanes' sequence, the rest of the diagonal the other's.
     if transposed:
-        return (best, best_diagonal - best_row, best_row)
-    return (best, best_row, best_diagonal - best_row)
+        return (best, best_diagonal - best_row, best_row, dropped)
+    return (best, best_row, best_diagonal - best_row, dropped)
 
 
 def narrow_enough[kind: Int](costs: Costs, match_score: Int, rows: Int, columns: Int) -> Bool:
@@ -391,7 +394,7 @@ def swept[
     match_score: Int,
     ends: EndsFree = EndsFree(),
     highest: Bool = True,
-) -> Tuple[Int, Int, Int]:
+) -> Tuple[Int, Int, Int, Bool]:
     """`best_end` with its lanes along the shorter sequence, 16 bits to a lane, thirty-two to an AVX-512
     register, while the scores fit, else 32."""
     var transposed = len(query) < len(reference)
@@ -433,7 +436,7 @@ def local_scores(
     column more than `window` reference letters from that end (see `LocalScores`), from each column's
     best the same sweep keeps."""
     var kept = List[Int32]()
-    var found: Tuple[Int, Int, Int]
+    var found: Tuple[Int, Int, Int, Bool]
     var flipped = len(query) < len(reference)
     var two = costs.pieces() == 2
     var none = EndsFree()
@@ -476,7 +479,9 @@ def local_scores(
     return LocalScores(found[0], found[1], found[2], second, second_end)
 
 
-def end_of(reference: Span[UInt8, _], query: Span[UInt8, _], costs: Costs, match_score: Int) -> Tuple[Int, Int, Int]:
+def end_of(
+    reference: Span[UInt8, _], query: Span[UInt8, _], costs: Costs, match_score: Int
+) -> Tuple[Int, Int, Int, Bool]:
     """A local alignment's best score and where it ends (see `best_end`)."""
     return swept[ANYWHERE](reference, query, costs, match_score)
 

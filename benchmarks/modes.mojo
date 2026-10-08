@@ -43,6 +43,8 @@ def answer(reference: String, query: String, workload: String, scoring: Scoring)
         return align(reference, query, Costs.affine(4, 6, 2), Mode.INFIX).cost
     if workload == "extension":
         return align(reference, query, Costs.affine(4, 6, 2), Mode.extension(2)).score
+    if workload == "extension-bonus":
+        return align(reference, query, Costs.affine(4, 6, 2), Mode.extension(2, end_bonus=50)).score
     if workload == "two-piece":
         return align(reference, query, Costs.two_piece(4, 6, 2, 24, 1)).cost
     if workload == "table-global":

@@ -157,6 +157,7 @@ class Mode:
     match_score: int = 0
     anchor: int = Anchor.START
     zdrop: int = -1
+    end_bonus: int = -1
 
     GLOBAL = None  # set below
     INFIX = None
@@ -181,10 +182,19 @@ class Mode:
         return replace(self, match_score=match_score)
 
     @staticmethod
-    def extension(match_score: int, anchor: int = Anchor.START, zdrop: Optional[int] = None) -> "Mode":
+    def extension(
+        match_score: int, anchor: int = Anchor.START, zdrop: Optional[int] = None, end_bonus: Optional[int] = None
+    ) -> "Mode":
         """The best-scoring alignment fixed at one end of both, free to stop anywhere: a seed's
-        extension, with KSW2's Z-drop when `zdrop` is given."""
-        return Mode(_EXTENSION, match_score=match_score, anchor=anchor, zdrop=-1 if zdrop is None else zdrop)
+        extension, with KSW2's Z-drop when `zdrop` is given, and with `end_bonus` aligned to the query's
+        far end when that scores within the bonus of the best stop, as KSW2's end bonus chooses."""
+        return Mode(
+            _EXTENSION,
+            match_score=match_score,
+            anchor=anchor,
+            zdrop=-1 if zdrop is None else zdrop,
+            end_bonus=-1 if end_bonus is None else end_bonus,
+        )
 
     @staticmethod
     def local(match_score: int) -> "Mode":
@@ -207,6 +217,7 @@ class Mode:
             self.match_score,
             self.anchor,
             self.zdrop,
+            self.end_bonus,
         )
 
 

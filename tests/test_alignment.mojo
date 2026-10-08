@@ -2421,7 +2421,7 @@ def test_local_sweeps_agree_in_either_width() raises:
             var a = reference.as_bytes()
             var b = query.as_bytes()
             # Lanes along either sequence, in either width, find the same end.
-            var found = List[Tuple[Int, Int, Int]]()
+            var found = List[Tuple[Int, Int, Int, Bool]]()
             if costs.pieces() == 1:
                 found.append(best_end[1, DType.int16, 32, False](a, b, costs, 2))
                 found.append(best_end[1, DType.int16, 32, True](a, b, costs, 2))
@@ -2436,6 +2436,44 @@ def test_local_sweeps_agree_in_either_width() raises:
                 assert_equal(found[index][0], found[0][0])
                 assert_equal(found[index][1], found[0][1])
                 assert_equal(found[index][2], found[0][2])
+
+
+def test_end_bonus_reaches_the_end_when_it_pays() raises:
+    """An extension's end bonus, KSW2's: the read is aligned to its end once the bonus passes what
+    stopping short gains, and not a point before, the comparison strict, as KSW2's is; the alignment
+    reaching the end scores its own score, the free ends' best. From either anchor, under `Costs` and a
+    `Scoring`, and refused under a band narrower than the pair."""
+    var reference = "ACGTTGCAAGGCTTACGATCAGGCGGGGGGGG"
+    var query = "ACGTTGCAAGGCTTACGATCAGGCTTTTATTT"
+    var costs = Costs.affine(4, 6, 2)
+    for from_end in [False, True]:
+        var anchor = Anchor.END if from_end else Anchor.START
+        var first = reversed_text(reference) if from_end else reference
+        var second = reversed_text(query) if from_end else query
+        var plain = Mode.extension(1, anchor)
+        var stop = align(first, second, costs, plain)
+        var reaching = score(first, second, costs, plain.reaching_end())
+        assert_true(reaching < stop.score)
+        var short = align(first, second, costs, Mode.extension(1, anchor, end_bonus=stop.score - reaching))
+        assert_equal(short.score, stop.score)
+        assert_equal(short.cigar, stop.cigar)
+        var whole = align(first, second, costs, Mode.extension(1, anchor, end_bonus=stop.score - reaching + 1))
+        assert_equal(whole.score, reaching)
+        assert_equal(whole.query_end - whole.query_start, second.byte_length())
+        assert_equal(
+            score(first, second, costs, Mode.extension(1, anchor, end_bonus=stop.score - reaching + 1)), reaching
+        )
+        with assert_raises(contains="end bonus"):
+            _ = align(first, second, costs, Mode.extension(1, anchor, end_bonus=5), band=Band.around(2))
+        var scoring = Scoring.dna()
+        var table_stop = align(first, second, scoring, Mode.extension(0, anchor))
+        var table_reaching = score(first, second, scoring, Mode.extension(0, anchor).reaching_end())
+        assert_true(table_reaching < table_stop.score)
+        var bonus = table_stop.score - table_reaching
+        assert_equal(align(first, second, scoring, Mode.extension(0, anchor, end_bonus=bonus)).score, table_stop.score)
+        var table_whole = align(first, second, scoring, Mode.extension(0, anchor, end_bonus=bonus + 1))
+        assert_equal(table_whole.score, table_reaching)
+        assert_equal(table_whole.query_end - table_whole.query_start, second.byte_length())
 
 
 def test_traced_extension_is_the_searched_one() raises:

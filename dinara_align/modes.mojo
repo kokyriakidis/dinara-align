@@ -194,6 +194,8 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     var anchor: Anchor
     var zdrop: Int
     """An extension's Z-drop, -1 for none (see `extension`)."""
+    var end_bonus: Int
+    """What an extension reaching the query's far end earns over its score, -1 for none (see `extension`)."""
 
     comptime ENDS = UInt8(0)
     """The kind of a global alignment and of every one with free ends."""
@@ -202,17 +204,17 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     comptime SMITH_WATERMAN = UInt8(2)
     """The kind of a local alignment (see `local`)."""
 
-    comptime GLOBAL = Self(Self.ENDS, 0, 0, 0, 0, 0, Anchor.START, -1)
+    comptime GLOBAL = Self(Self.ENDS, 0, 0, 0, 0, 0, Anchor.START, -1, -1)
     """Both sequences end to end."""
-    comptime INFIX = Self(Self.ENDS, UNBOUNDED, UNBOUNDED, 0, 0, 0, Anchor.START, -1)
+    comptime INFIX = Self(Self.ENDS, UNBOUNDED, UNBOUNDED, 0, 0, 0, Anchor.START, -1, -1)
     """The whole query against wherever in the reference it fits best: a read placed in a window."""
-    comptime PREFIX = Self(Self.ENDS, 0, UNBOUNDED, 0, 0, 0, Anchor.START, -1)
+    comptime PREFIX = Self(Self.ENDS, 0, UNBOUNDED, 0, 0, 0, Anchor.START, -1, -1)
     """The whole query against the reference's best prefix."""
-    comptime SUFFIX = Self(Self.ENDS, UNBOUNDED, 0, 0, 0, 0, Anchor.START, -1)
+    comptime SUFFIX = Self(Self.ENDS, UNBOUNDED, 0, 0, 0, 0, Anchor.START, -1, -1)
     """The whole query against the reference's best suffix."""
-    comptime REFERENCE_IN_QUERY = Self(Self.ENDS, 0, 0, UNBOUNDED, UNBOUNDED, 0, Anchor.START, -1)
+    comptime REFERENCE_IN_QUERY = Self(Self.ENDS, 0, 0, UNBOUNDED, UNBOUNDED, 0, Anchor.START, -1, -1)
     """`INFIX` the other way round: the whole reference against wherever in the query it fits best."""
-    comptime LOCAL = Self(Self.SMITH_WATERMAN, 0, 0, 0, 0, 0, Anchor.START, -1)
+    comptime LOCAL = Self(Self.SMITH_WATERMAN, 0, 0, 0, 0, 0, Anchor.START, -1, -1)
     """The best-scoring part of each under a `Scoring`, Smith-Waterman, whose table says what a match
     earns; under `Costs`, `local` names the reward."""
 
@@ -234,7 +236,9 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
             raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a free end of fewer than no letters")
         if match_score < 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "a match that costs")
-        return Self(Self.ENDS, reference_start, reference_end, query_start, query_end, match_score, Anchor.START, -1)
+        return Self(
+            Self.ENDS, reference_start, reference_end, query_start, query_end, match_score, Anchor.START, -1, -1
+        )
 
     def with_match_score(self, match_score: Int) raises AlignmentError -> Self:
         """These free ends with every match earning `match_score`: the best-scoring alignment, the
@@ -257,11 +261,12 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
             match_score,
             Anchor.START,
             -1,
+            -1,
         )
 
     @staticmethod
     def extension(
-        match_score: Int, anchor: Anchor = Anchor.START, *, zdrop: Optional[Int] = None
+        match_score: Int, anchor: Anchor = Anchor.START, *, zdrop: Optional[Int] = None, end_bonus: Optional[Int] = None
     ) raises AlignmentError -> Self:
         """The best-scoring alignment fixed at one end of both sequences, `anchor`, and free to stop
         anywhere: a read mapper's seed extension. A match earns `match_score` and every edit costs what
@@ -272,13 +277,40 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         search gives up once every alignment it is growing scores more than `zdrop`, plus a gap
         extension a diagonal between them, below the best so far, as WFA2-lib's Z-drop gauges it a cost
         at a time, and the best stop it found stands: a heuristic, faster on a seed whose read turns to
-        noise, which may miss a better stop past a divergent stretch."""
+        noise, which may miss a better stop past a divergent stretch.
+
+        With `end_bonus`, KSW2's and minimap2's `--end-bonus`, BWA-MEM's clipping penalty, an extension
+        that reaches the query's far end is preferred whenever its score plus the bonus passes the best
+        stop's: the read is aligned to its end unless stopping short gains more than the bonus. The one
+        reaching the end is the best of those that do, with the reference's far end free, and its score
+        is its own, the bonus only choosing it. As in KSW2, a search that the Z-drop gave up never
+        reaches the end. A bonus of zero changes nothing: no alignment reaching the end scores more
+        than the best stop."""
         if match_score < 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "a match that costs")
         var drop = zdrop.or_else(-1)
         if zdrop and drop < 0:
             raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a Z-drop below zero")
-        return Self(Self.EXTENSION, 0, 0, 0, 0, match_score, anchor, drop)
+        var bonus = end_bonus.or_else(-1)
+        if end_bonus and bonus < 0:
+            raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "an end bonus below zero")
+        return Self(Self.EXTENSION, 0, 0, 0, 0, match_score, anchor, drop, bonus)
+
+    def reaching_end(self) -> Self:
+        """The free ends an extension that reaches the query's far end takes, for its end bonus: from the
+        same anchor, the whole query against the reference, whose far end is free."""
+        var from_end = self.anchor == Anchor.END
+        return Self(
+            Self.ENDS,
+            UNBOUNDED if from_end else 0,
+            0 if from_end else UNBOUNDED,
+            0,
+            0,
+            self.match_score,
+            Anchor.START,
+            -1,
+            -1,
+        )
 
     @staticmethod
     def local(match_score: Int) raises AlignmentError -> Self:
@@ -288,7 +320,7 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         grows with the matrix, as every local aligner's does (see `scored`)."""
         if match_score <= 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "a local alignment needs a match that earns")
-        return Self(Self.SMITH_WATERMAN, 0, 0, 0, 0, match_score, Anchor.START, -1)
+        return Self(Self.SMITH_WATERMAN, 0, 0, 0, 0, match_score, Anchor.START, -1, -1)
 
     @staticmethod
     def overlap(match_score: Int) raises AlignmentError -> Self:
@@ -299,7 +331,7 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         matrix, as `local`'s does."""
         if match_score <= 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "an overlap needs a match that earns")
-        return Self(Self.ENDS, UNBOUNDED, UNBOUNDED, UNBOUNDED, UNBOUNDED, match_score, Anchor.START, -1)
+        return Self(Self.ENDS, UNBOUNDED, UNBOUNDED, UNBOUNDED, UNBOUNDED, match_score, Anchor.START, -1, -1)
 
     def is_global(self) -> Bool:
         """Whether these are free ends with none free: both sequences end to end, whatever a match earns."""

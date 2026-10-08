@@ -56,6 +56,7 @@ Modes:
   --mode extension:A[,end]         fixed at the start (or end) of both, a match earning A
   --match-score A                  free ends rewarded: the best score rather than the least cost
   --zdrop Z                        an extension gives up past a fall of Z (KSW2's Z-drop)
+  --end-bonus B                    an extension reaches the read's end when within B of its best (KSW2's)
 
 Options:
   --band W | --band LOW,HIGH       every move within diagonals -W..=W, or LOW..=HIGH
@@ -139,9 +140,9 @@ def costs_of(text: String) raises -> Costs:
     raise Error(String("--costs ", text, ": edit, linear:X,G, affine:X,O,E or two-piece:X,O,E,O2,E2"))
 
 
-def mode_of(text: String, match_score: Int, zdrop: Int) raises -> Mode:
+def mode_of(text: String, match_score: Int, zdrop: Int, end_bonus: Int) raises -> Mode:
     """The `Mode` a `--mode` value names; free ends take `--match-score` when above zero, an extension
-    `--zdrop` when zero or more, and the other modes their reward from the value itself."""
+    `--zdrop` and `--end-bonus` when zero or more, and the other modes their reward from the value itself."""
     var kind = String(text.split(":")[0])
     var values = numbers(String(text.split(":")[1])) if ":" in text and not text.endswith(",end") else List[Int]()
     var mode: Mode
@@ -166,9 +167,9 @@ def mode_of(text: String, match_score: Int, zdrop: Int) raises -> Mode:
     elif kind == "extension":
         var reward = Int(String(String(text.split(":")[1]).split(",")[0]))
         var anchor = Anchor.END if text.endswith(",end") else Anchor.START
-        if zdrop >= 0:
-            return Mode.extension(reward, anchor, zdrop=zdrop)
-        return Mode.extension(reward, anchor)
+        var drop = Optional[Int](zdrop) if zdrop >= 0 else None
+        var bonus = Optional[Int](end_bonus) if end_bonus >= 0 else None
+        return Mode.extension(reward, anchor, zdrop=drop, end_bonus=bonus)
     else:
         raise Error(String("--mode ", text, ": see --help"))
     return mode.with_match_score(match_score) if match_score > 0 else mode
@@ -218,6 +219,7 @@ def run() raises:
     var mode_text = String("global")
     var match_score = 0
     var zdrop = -1
+    var end_bonus = -1
     var band = Band()
     var max_cost = -1
     var ties = Ties.LEFT
@@ -244,6 +246,7 @@ def run() raises:
             "--mode",
             "--match-score",
             "--zdrop",
+            "--end-bonus",
             "--band",
             "--max-cost",
             "--ties",
@@ -269,6 +272,8 @@ def run() raises:
             match_score = Int(value)
         elif argument == "--zdrop":
             zdrop = Int(value)
+        elif argument == "--end-bonus":
+            end_bonus = Int(value)
         elif argument == "--band":
             var edges = numbers(value)
             band = Band.around(edges[0]) if len(edges) == 1 else Band(edges[0], edges[1])
@@ -304,7 +309,7 @@ def run() raises:
         costs = costs.with_deletions(values[0], values[1], values[2], values[3]) if len(
             values
         ) == 4 else costs.with_deletions(values[0], values[1])
-    var mode = mode_of(mode_text, match_score, zdrop)
+    var mode = mode_of(mode_text, match_score, zdrop, end_bonus)
 
     # The pairs: names, references and queries.
     var names = List[String]()

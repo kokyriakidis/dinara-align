@@ -637,16 +637,17 @@ something (see `with_match_score`), as parasail's and hyalite's do.
 | `match_score` | `Int` | What a match earns: in an extension or a local alignment, which maximize a score, and with free ends when asked (see `with_match_score`); zero elsewhere, the costs alone minimized. |
 | `anchor` | `Anchor` |  |
 | `zdrop` | `Int` | An extension's Z-drop, -1 for none (see `extension`). |
+| `end_bonus` | `Int` | What an extension reaching the query's far end earns over its score, -1 for none (see `extension`). |
 
 - `Mode.ENDS` = `UInt8(0)`: The kind of a global alignment and of every one with free ends.
 - `Mode.EXTENSION` = `UInt8(1)`: The kind of an extension from one end (see `extension`).
 - `Mode.SMITH_WATERMAN` = `UInt8(2)`: The kind of a local alignment (see `local`).
-- `Mode.GLOBAL` = `Mode(Mode.ENDS, Int(0), Int(0), Int(0), Int(0), Int(0), Anchor.START, Int(-1))`: Both sequences end to end.
-- `Mode.INFIX` = `Mode(Mode.ENDS, Int(1152921504606846976), Int(1152921504606846976), Int(0), Int(0), Int(0), Anchor.START, Int(-1))`: The whole query against wherever in the reference it fits best: a read placed in a window.
-- `Mode.PREFIX` = `Mode(Mode.ENDS, Int(0), Int(1152921504606846976), Int(0), Int(0), Int(0), Anchor.START, Int(-1))`: The whole query against the reference's best prefix.
-- `Mode.SUFFIX` = `Mode(Mode.ENDS, Int(1152921504606846976), Int(0), Int(0), Int(0), Int(0), Anchor.START, Int(-1))`: The whole query against the reference's best suffix.
-- `Mode.REFERENCE_IN_QUERY` = `Mode(Mode.ENDS, Int(0), Int(0), Int(1152921504606846976), Int(1152921504606846976), Int(0), Anchor.START, Int(-1))`: `INFIX` the other way round: the whole reference against wherever in the query it fits best.
-- `Mode.LOCAL` = `Mode(Mode.SMITH_WATERMAN, Int(0), Int(0), Int(0), Int(0), Int(0), Anchor.START, Int(-1))`: The best-scoring part of each under a `Scoring`, Smith-Waterman, whose table says what a match earns; under `Costs`, `local` names the reward.
+- `Mode.GLOBAL` = `Mode(Mode.ENDS, Int(0), Int(0), Int(0), Int(0), Int(0), Anchor.START, Int(-1), Int(-1))`: Both sequences end to end.
+- `Mode.INFIX` = `Mode(Mode.ENDS, Int(1152921504606846976), Int(1152921504606846976), Int(0), Int(0), Int(0), Anchor.START, Int(-1), Int(-1))`: The whole query against wherever in the reference it fits best: a read placed in a window.
+- `Mode.PREFIX` = `Mode(Mode.ENDS, Int(0), Int(1152921504606846976), Int(0), Int(0), Int(0), Anchor.START, Int(-1), Int(-1))`: The whole query against the reference's best prefix.
+- `Mode.SUFFIX` = `Mode(Mode.ENDS, Int(1152921504606846976), Int(0), Int(0), Int(0), Int(0), Anchor.START, Int(-1), Int(-1))`: The whole query against the reference's best suffix.
+- `Mode.REFERENCE_IN_QUERY` = `Mode(Mode.ENDS, Int(0), Int(0), Int(1152921504606846976), Int(1152921504606846976), Int(0), Anchor.START, Int(-1), Int(-1))`: `INFIX` the other way round: the whole reference against wherever in the query it fits best.
+- `Mode.LOCAL` = `Mode(Mode.SMITH_WATERMAN, Int(0), Int(0), Int(0), Int(0), Int(0), Anchor.START, Int(-1), Int(-1))`: The best-scoring part of each under a `Scoring`, Smith-Waterman, whose table says what a match earns; under `Costs`, `local` names the reward.
 
 #### `ends_free`
 
@@ -667,7 +668,7 @@ These free ends with every match earning `match_score`: the best-scoring alignme
 #### `extension`
 
 ```mojo
-def Mode.extension(match_score: Int, anchor: Anchor = Anchor.START, *, zdrop: Optional[Int] = None) -> Self
+def Mode.extension(match_score: Int, anchor: Anchor = Anchor.START, *, zdrop: Optional[Int] = None, end_bonus: Optional[Int] = None) -> Self
 ```
 
 The best-scoring alignment fixed at one end of both sequences, `anchor`, and free to stop anywhere: a read mapper's seed extension. A match earns `match_score` and every edit costs what `Costs` charges; aligning nothing scores zero. A reward is what makes stopping a choice: with costs alone, aligning nothing would always win.
@@ -677,6 +678,22 @@ search gives up once every alignment it is growing scores more than `zdrop`, plu
 extension a diagonal between them, below the best so far, as WFA2-lib's Z-drop gauges it a cost
 at a time, and the best stop it found stands: a heuristic, faster on a seed whose read turns to
 noise, which may miss a better stop past a divergent stretch.
+
+With `end_bonus`, KSW2's and minimap2's `--end-bonus`, BWA-MEM's clipping penalty, an extension
+that reaches the query's far end is preferred whenever its score plus the bonus passes the best
+stop's: the read is aligned to its end unless stopping short gains more than the bonus. The one
+reaching the end is the best of those that do, with the reference's far end free, and its score
+is its own, the bonus only choosing it. As in KSW2, a search that the Z-drop gave up never
+reaches the end. A bonus of zero changes nothing: no alignment reaching the end scores more
+than the best stop.
+
+#### `reaching_end`
+
+```mojo
+def reaching_end(self) -> Self
+```
+
+The free ends an extension that reaches the query's far end takes, for its end bonus: from the same anchor, the whole query against the reference, whose far end is free.
 
 #### `local`
 

@@ -14,6 +14,7 @@ score.
 | prefix-edit | `Costs.edit()`, `Mode.PREFIX` | Edlib's SHW, WFA2-lib's ends-free edit |
 | infix-affine | `Costs.affine(4, 6, 2)`, `Mode.INFIX` | WFA2-lib's ends-free gap-affine |
 | extension | `Costs.affine(4, 6, 2)`, `Mode.extension(2)` | KSW2's `extz2`, extension only, no Z-drop |
+| extension-bonus | the same with `end_bonus=50` | KSW2's `extz2` with an end bonus of 50 |
 | two-piece | `Costs.two_piece(4, 6, 2, 24, 1)`, global | KSW2's `extd2`, WFA2-lib's two-piece gap-affine |
 | table-global, table-local | a `Scoring` with transitions apart from transversions | parasail, and SSW locally |
 
@@ -43,6 +44,7 @@ WORKLOADS = [
     "prefix-edit",
     "infix-affine",
     "extension",
+    "extension-bonus",
     "two-piece",
     "table-global",
     "table-local",
@@ -103,6 +105,15 @@ def generate() -> None:
     write("two-piece", two_piece)
     write("table-global", [(reference, mutate(reference, 0.1, "ACGT", rng)) for reference in (sequence(1_000) for _ in range(100))])
     write("table-local", placed(20, 1_000, 10_000, 0.1))
+
+    # Reads that follow the reference at 5% and end in a short stretch of noise, which an end bonus may
+    # or may not align through: last, so every earlier workload's pairs stay as they were.
+    bonus = []
+    for _ in range(200):
+        reference = sequence(2_000)
+        follows = rng.randint(300, 1_400)
+        bonus.append((reference, mutate(reference[:follows], 0.05, "ACGT", rng) + sequence(rng.randint(0, 80))))
+    write("extension-bonus", bonus)
 
 
 def build_rivals() -> Path:

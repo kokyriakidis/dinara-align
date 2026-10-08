@@ -164,6 +164,10 @@ int main() {
                                            Mode::extension(1, dinara::Anchor::end));
     CHECK(left.score == 12 && left.cigar == "12=" && left.reference_start == 10 && left.query_start == 10);
     CHECK(dinara::align("ACGTTGCAAGGCTTTT", "ACGTTGCAAGGCGAGA", two_piece, Mode::extension(1)).score == 12);
+    // With an end bonus past what stopping short gains, the read is aligned to its end, at its own score.
+    dinara::Alignment whole =
+        dinara::align("ACGTTGCAAGGCTTTT", "ACGTTGCAAGGCGAGA", affine, Mode::extension(1, dinara::Anchor::start, 0, 1000));
+    CHECK(whole.query_end == 16 && whole.score < 12);
     // A Z-drop gives up at the noise: the matching stretch past it is never reached.
     std::string seed_core(40, 'A'), noise_a = "CGTCGTCGTGCTGCTGACGT", noise_b = "TGCATGCATTGACGTACGTG",
                                     rest = std::string(30, 'C') + std::string(30, 'G') + std::string(30, 'T');
