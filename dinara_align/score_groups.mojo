@@ -320,8 +320,15 @@ def grouped_scores[
     var results_buffer = zeroed[ScoreDType](scope, pairs)
     scope.context.synchronize()
     # A second context on the same device is a second stream, the copies': each chunk crosses the bus
-    # there while the kernels score the chunk before, and the kernels wait only for their own chunk.
+    # there while the kernels score the chunk before, and the kernels wait only for their own chunk. A
+    # device whose driver has no streams to offer (Metal's) copies on the kernels' own, in order.
     var copier = DeviceContext(device_id=gpu_id)
+    var streams = True
+    try:
+        var probe = copier.create_event()
+        copier.stream().record_event(probe)
+    except:
+        streams = False
     var codes_by_byte = Array[UInt8, 256](fill=UNKNOWN_SYMBOL)
     var alphabet_bytes = alphabet.as_bytes()
     for index in range(size):
@@ -381,18 +388,20 @@ def grouped_scores[
         var chunk_pairs = bounds[stop_stretch] - first_pair
         var first_word = begins[first_stretch]
         var chunk_words = begins[stop_stretch] - first_word
+        ref copies = copier if streams else scope.context
         if chunk_words > 0:
-            copier.enqueue_copy(
+            copies.enqueue_copy(
                 codes_buffer.create_sub_buffer[DType.uint32](first_word, chunk_words),
                 codes.create_sub_buffer[DType.uint32](first_word, chunk_words),
             )
-        copier.enqueue_copy(
+        copies.enqueue_copy(
             shapes_buffer.create_sub_buffer[DType.uint32](3 * first_pair, 3 * chunk_pairs),
             shapes.create_sub_buffer[DType.uint32](3 * first_pair, 3 * chunk_pairs),
         )
-        var landed = copier.create_event()
-        copier.stream().record_event(landed)
-        scope.context.stream().enqueue_wait_for(landed)
+        if streams:
+            var landed = copier.create_event()
+            copier.stream().record_event(landed)
+            scope.context.stream().enqueue_wait_for(landed)
         comptime for packing in range(3):
             comptime letter_bits = [2, 4, 8][packing]
             if bits == letter_bits:
