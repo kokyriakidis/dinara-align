@@ -2,7 +2,7 @@
 # MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #
 # Derived from AffineGaps (https://github.com/unum-science/AffineGaps), Copyright Ash Vardanian, under the
-# Apache License, Version 2.0: see LICENSES/Apache-2.0.txt and NOTICE.
+# Apache License, Version 2.0, and changed since: see LICENSES/Apache-2.0.txt and NOTICE.
 """
 Gotoh affine-gap alignment for CPU and GPU, with the reconstruction itself on the device.
 

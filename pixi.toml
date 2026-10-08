@@ -60,8 +60,6 @@ build-python = "bash scripts/build_python.sh"
 build-wheel = { cmd = "python3 scripts/build_wheel.py", depends-on = ["build-python"] }
 # Builds the Python package and runs its tests against it.
 test-python = { cmd = "PYTHONPATH=$PIXI_PROJECT_ROOT/build/python python3 tests/test_python.py", depends-on = ["build-python"] }
-# Regenerates the ported kernels from an AffineGaps checkout: `pixi run port /path/to/AffineGaps`.
-port = "python3 scripts/port_from_affinegaps.py"
 
 [target.linux-64.dependencies]
 patchelf = ">=0.19.2,<0.20"
