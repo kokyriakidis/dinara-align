@@ -26,7 +26,7 @@ A pinned rival's times do not change, so each harness times every rival once on 
 | Tool                                                                            | Commit    | License    | What it is run on                                                          |
 | :------------------------------------------------------------------------------ | :-------- | :--------- | :------------------------------------------------------------------------- |
 | dinara-align                                                                    | this tree | MPL-2.0    | the read batches and the affine pairs, on the CPU and on the GPU where one answers |
-| dinara-align (bit-parallel, …)                                                  | this tree | MPL-2.0    | the edit-distance workloads: `distance` and `align` at unit costs, ported from A\*PA2-simple, on one thread and on all of them |
+| dinara-align (bit-parallel, …)                                                  | this tree | MPL-2.0    | the edit-distance workloads: `distance` and `align` at unit costs, ported from A\*PA2-simple, on one thread, pair by pair and as a batch |
 | [hyalite](https://github.com/Psy-Fer/hyalite)                                   | `0189bcb` | MIT        | the read batches and the affine pairs, global mode (`Mode::Nw`), one CPU thread with its NEON or AVX2 kernels |
 | [A\*PA, A\*PA2](https://github.com/RagnarGrootKoerkamp/astar-pairwise-aligner) | `bf2e14e` | MPL-2.0    | the edit-distance workloads, because it computes edit distance and nothing else |
 | [Edlib](https://github.com/Martinsos/edlib), [WFA2-lib](https://github.com/smarco/WFA2-lib) through [pa-bench](https://github.com/pairwise-alignment/pa-bench) | `af7a50d` | MIT | the edit-distance workloads: the other exact aligners A\*PA2's evaluation compares against, with its parameters |
@@ -34,7 +34,7 @@ A pinned rival's times do not change, so each harness times every rival once on 
 
 A\*PA runs four of its aligners: A\*PA2-full (its default), A\*PA2-simple, the original A\*PA, and `astarpa2_nw`, a bit-parallel full-matrix Needleman-Wunsch that is the closest like-for-like to a full sweep.
 The three A\*PA2 aligners run twice, with traceback and without, so each has a score row and an alignment row; the original A\*PA has no cost-only entry point and reports its alignment alone.
-`a*pa2-nw` against `dinara-align (bit-parallel, 1 thread)` is the same algorithm in Rust and in Mojo; the all-threads column is the same kernel tiled across cores, which A\*PA does not do.
+`a*pa2-nw` against `dinara-align (bit-parallel, 1 thread)` is the same algorithm in Rust and in Mojo.
 A\*PA2-simple's score-only mode is slower than its alignment mode on long pairs, so read its best row, not its score row, as its speed.
 
 pa-bench's `pa-wrapper` builds the rest of A\*PA2's comparison, each as its evaluation configured it: Edlib (band doubling over Myers' bit-vectors), BiWFA (WFA2-lib's bidirectional wavefront, its lowest-memory mode), and WFA (WFA2-lib keeping every wavefront, its fastest alignment).
@@ -66,53 +66,53 @@ dinara-align writes its default scoring to the data directory and hyalite reads 
 
 ## Results
 
-Measured with `pixi run bench --full`, which took about five minutes, on the Intel Core i9-7900X of A\*PA2's results below (ten cores at a fixed 3.3 GHz, turbo boost and hyper-threading off, 91 GB) with an NVIDIA GeForce RTX 2070, unpinned on the otherwise idle machine so dinara-align's batches use every core, every tool built for the machine's own instruction set, AVX-512 included (`--cpu native`, the default), dinara-align at `de08654`, the rivals as measured at `6dcb6fa`.
+Measured with `pixi run bench --full`, which took about five minutes, on the Intel Core i9-7900X of A\*PA2's results below (ten cores at a fixed 3.3 GHz, turbo boost and hyper-threading off, 91 GB) with an NVIDIA GeForce RTX 2070, on the otherwise idle machine, every column on one core, dinara-align's CPU column as every rival's, since a library runs on its caller's thread (see Short-Read Batches for every core), every tool built for the machine's own instruction set, AVX-512 included (`--cpu native`, the default), dinara-align at `6d11d88`, the rivals as measured at `6dcb6fa`.
 Hyalite built with Rust 1.92, A\*PA with the nightly its repository pins, both with `-C target-cpu=native`.
 A dash marks a task the tool does not offer, or a workload it is not run on.
 
 | workload | task | dinara-align (cpu) | dinara-align (gpu) | dinara-align (bit-parallel, 1 thread) | hyalite | a*pa2-full | a*pa2-simple | a*pa2-nw | a*pa | edlib | biwfa | wfa | agree |
 | :-- | :-- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | :-: |
-| reads-150bp | score | 2.5 ms | 1.72 ms | — | 282 ms | — | — | — | — | — | — | — | ✓ |
-| reads-150bp | alignment | 12.7 ms | 13.7 ms | — | 2.09 s | — | — | — | — | — | — | — | ✓ |
-| reads-1kbp | score | 6.23 ms | 6.13 ms | — | 1.11 s | — | — | — | — | — | — | — | ✓ |
-| reads-1kbp | alignment | 26.8 ms | 14 ms | — | 14.8 s | — | — | — | — | — | — | — | ✓ |
-| affine-1k | score | 77 µs | 890 µs | — | 1.12 ms | — | — | — | — | — | — | — | ✓ |
-| affine-1k | alignment | 139 µs | 1.58 ms | — | 14.6 ms | — | — | — | — | — | — | — | ✓ |
-| affine-10k | score | 2.52 ms | 6.41 ms | — | 142 ms | — | — | — | — | — | — | — | ✓ |
-| affine-10k | alignment | 3.56 ms | 8.75 ms | — | 1.83 s | — | — | — | — | — | — | — | ✓ |
-| affine-100k | score | 238 ms | 81.8 ms | — | 15.8 s | — | — | — | — | — | — | — | ✓ |
-| affine-100k | alignment | 482 ms | 173 ms | — | 186 s | — | — | — | — | — | — | — | ✓ |
+| reads-150bp | score | 4.57 ms | 1.69 ms | — | 282 ms | — | — | — | — | — | — | — | ✓ |
+| reads-150bp | alignment | 15.9 ms | 13.9 ms | — | 2.09 s | — | — | — | — | — | — | — | ✓ |
+| reads-1kbp | score | 33.1 ms | 5.31 ms | — | 1.11 s | — | — | — | — | — | — | — | ✓ |
+| reads-1kbp | alignment | 247 ms | 14.1 ms | — | 14.8 s | — | — | — | — | — | — | — | ✓ |
+| affine-1k | score | 77 µs | 891 µs | — | 1.12 ms | — | — | — | — | — | — | — | ✓ |
+| affine-1k | alignment | 140 µs | 1.58 ms | — | 14.6 ms | — | — | — | — | — | — | — | ✓ |
+| affine-10k | score | 2.53 ms | 6.41 ms | — | 142 ms | — | — | — | — | — | — | — | ✓ |
+| affine-10k | alignment | 3.56 ms | 8.84 ms | — | 1.83 s | — | — | — | — | — | — | — | ✓ |
+| affine-100k | score | 239 ms | 81.7 ms | — | 15.8 s | — | — | — | — | — | — | — | ✓ |
+| affine-100k | alignment | 462 ms | 174 ms | — | 186 s | — | — | — | — | — | — | — | ✓ |
 | edit-1k-1% | score | — | — | 2 µs | — | 43 µs | 17 µs | 19 µs | — | 26 µs | 3 µs | 3 µs | ✓ |
 | edit-1k-1% | alignment | — | — | 2 µs | — | 45 µs | 18 µs | 207 µs | 307 µs | 106 µs | 6 µs | 4 µs | ✓ |
 | edit-1k-5% | score | — | — | 4 µs | — | 43 µs | 17 µs | 19 µs | — | 25 µs | 8 µs | 8 µs | ✓ |
-| edit-1k-5% | alignment | — | — | 6 µs | — | 49 µs | 20 µs | 201 µs | 289 µs | 110 µs | 17 µs | 10 µs | ✓ |
-| edit-1k-15% | score | — | — | 13 µs | — | 33 µs | 17 µs | 19 µs | — | 64 µs | 41 µs | 41 µs | ✓ |
-| edit-1k-15% | alignment | — | — | 31 µs | — | 64 µs | 45 µs | 206 µs | 883 µs | 159 µs | 72 µs | 48 µs | ✓ |
-| edit-10k-1% | score | — | — | 15 µs | — | 807 µs | 781 µs | 1.42 ms | — | 384 µs | 39 µs | 39 µs | ✓ |
-| edit-10k-1% | alignment | — | — | 22 µs | — | 833 µs | 145 µs | 17.6 ms | 2.82 ms | 1.97 ms | 82 µs | 51 µs | ✓ |
-| edit-10k-5% | score | — | — | 137 µs | — | 584 µs | 1.37 ms | 1.39 ms | — | 597 µs | 472 µs | 463 µs | ✓ |
-| edit-10k-5% | alignment | — | — | 276 µs | — | 663 µs | 282 µs | 17.3 ms | 2.57 ms | 2.56 ms | 917 µs | 570 µs | ✓ |
-| edit-10k-15% | score | — | — | 173 µs | — | 859 µs | 2.36 ms | 1.41 ms | — | 1.67 ms | 3.11 ms | 3.11 ms | ✓ |
+| edit-1k-5% | alignment | — | — | 7 µs | — | 49 µs | 20 µs | 201 µs | 289 µs | 110 µs | 17 µs | 10 µs | ✓ |
+| edit-1k-15% | score | — | — | 12 µs | — | 33 µs | 17 µs | 19 µs | — | 64 µs | 41 µs | 41 µs | ✓ |
+| edit-1k-15% | alignment | — | — | 32 µs | — | 64 µs | 45 µs | 206 µs | 883 µs | 159 µs | 72 µs | 48 µs | ✓ |
+| edit-10k-1% | score | — | — | 14 µs | — | 807 µs | 781 µs | 1.42 ms | — | 384 µs | 39 µs | 39 µs | ✓ |
+| edit-10k-1% | alignment | — | — | 21 µs | — | 833 µs | 145 µs | 17.6 ms | 2.82 ms | 1.97 ms | 82 µs | 51 µs | ✓ |
+| edit-10k-5% | score | — | — | 136 µs | — | 584 µs | 1.37 ms | 1.39 ms | — | 597 µs | 472 µs | 463 µs | ✓ |
+| edit-10k-5% | alignment | — | — | 277 µs | — | 663 µs | 282 µs | 17.3 ms | 2.57 ms | 2.56 ms | 917 µs | 570 µs | ✓ |
+| edit-10k-15% | score | — | — | 168 µs | — | 859 µs | 2.36 ms | 1.41 ms | — | 1.67 ms | 3.11 ms | 3.11 ms | ✓ |
 | edit-10k-15% | alignment | — | — | 352 µs | — | 1.26 ms | 885 µs | 17.8 ms | 80.1 ms | 4.55 ms | 6.3 ms | 3.67 ms | ✓ |
-| edit-100k-1% | score | — | — | 742 µs | — | 5.34 ms | 151 ms | 133 ms | — | 8.31 ms | 1.66 ms | 1.67 ms | ✓ |
-| edit-100k-1% | alignment | — | — | 1.07 ms | — | 5.55 ms | 3.1 ms | 1.85 s | 38 ms | 39.2 ms | 3.44 ms | 2.39 ms | ✓ |
-| edit-100k-5% | score | — | — | 3.82 ms | — | 5.65 ms | 226 ms | 134 ms | — | 57.7 ms | 37.4 ms | 37.4 ms | ✓ |
+| edit-100k-1% | score | — | — | 735 µs | — | 5.34 ms | 151 ms | 133 ms | — | 8.31 ms | 1.66 ms | 1.67 ms | ✓ |
+| edit-100k-1% | alignment | — | — | 1.06 ms | — | 5.55 ms | 3.1 ms | 1.85 s | 38 ms | 39.2 ms | 3.44 ms | 2.39 ms | ✓ |
+| edit-100k-5% | score | — | — | 3.8 ms | — | 5.65 ms | 226 ms | 134 ms | — | 57.7 ms | 37.4 ms | 37.4 ms | ✓ |
 | edit-100k-5% | alignment | — | — | 4.56 ms | — | 6.35 ms | 14.1 ms | 1.83 s | 33.7 ms | 129 ms | 77.3 ms | 51.5 ms | ✓ |
-| edit-100k-15% | score | — | — | 8.26 ms | — | 19.8 ms | 201 ms | 134 ms | — | 88.2 ms | 297 ms | 296 ms | ✓ |
-| edit-100k-15% | alignment | — | — | 14 ms | — | 23.1 ms | 22.9 ms | 1.83 s | 13.8 s | 251 ms | 602 ms | 690 ms | ✓ |
+| edit-100k-15% | score | — | — | 8.31 ms | — | 19.8 ms | 201 ms | 134 ms | — | 88.2 ms | 297 ms | 296 ms | ✓ |
+| edit-100k-15% | alignment | — | — | 14.1 ms | — | 23.1 ms | 22.9 ms | 1.83 s | 13.8 s | 251 ms | 602 ms | 690 ms | ✓ |
 
 ## Reading the Numbers
 
 - **Every answer agreed**, so each row compares tools answering the same question. The answers are the optimal scores and distances: a sum and a position-weighted sum per workload, so a reordered batch cannot pass.
-- **On edit distance, dinara-align on one thread beats or matches every exact aligner on every workload**, distance and alignment alike: 22 against WFA's 51 µs and A\*PA2-simple's 145 µs aligning 10 kbp at 1%, 276 against A\*PA2-simple's 282 µs at 10 kbp and 5%, a tie, 4.56 against A\*PA2-full's 6.35 ms at 100 kbp and 5%, 14 against A\*PA2-simple's 22.9 ms at 100 kbp and 15%, 742 µs against WFA's 1.67 ms scoring 100 kbp at 1%, and 13 against A\*PA2-simple's 17 µs scoring 1 kbp at 15%, where a short pair's diagonal transition gives way to the whole matrix once it would cost more. Its alignment follows a fixed rule for ties (see `Ties`), traced a tile at a time by a forward search, which costs about twice what its alignment of divergent long pairs took before that rule. The ties are the 1 kbp pairs at 1 and 5%, a few microseconds each, where BiWFA and WFA run the same diagonal transition.
+- **On edit distance, dinara-align on one thread beats or matches every exact aligner on every workload**, distance and alignment alike: 21 against WFA's 51 µs and A\*PA2-simple's 145 µs aligning 10 kbp at 1%, 276 against A\*PA2-simple's 282 µs at 10 kbp and 5%, a tie, 4.54 against A\*PA2-full's 6.35 ms at 100 kbp and 5%, 14 against A\*PA2-simple's 22.9 ms at 100 kbp and 15%, 733 µs against WFA's 1.67 ms scoring 100 kbp at 1%, and 12 against A\*PA2-simple's 17 µs scoring 1 kbp at 15%, where a short pair's diagonal transition gives way to the whole matrix once it would cost more. Its alignment follows a fixed rule for ties (see `Ties`), traced a tile at a time by a forward search, which costs about twice what its alignment of divergent long pairs took before that rule. The ties are the 1 kbp pairs at 1 and 5%, a few microseconds each, where BiWFA and WFA run the same diagonal transition.
 - **Near-identical pairs run diagonal transition**, as WFA does, before any band: one front keeping its history for a close alignment, and two from both ends otherwise, as BiWFA scores, keeping both histories for an alignment and tracing it back through each from where they met. It stays on while it costs less than the band would, which at 1 to 3% divergence covers most pairs up to tens of kbp.
 - **A band re-aims its first bound as it sweeps.** The bound starts from a projection of the first few edits, which strays by up to half either way. At an eighth, a quarter and half of the columns, the band projects the distance from its own climb, hundreds of edits in, lowering the bound when it was set too high and giving the round up early when it was set too low. Only a distance within the final bound is accepted, so the answer stays exact.
 - **Long, moderately divergent pairs prune with A\*PA2-full's seed heuristic.** From about 1,500 projected edits up to one in seven bases, the first sequence is cut into 12-base seeds, their exact matches in the second are found by a rolling hash, and matches that cannot shorten any path over the next 14 seeds are dropped, as A\*PA's local pruning drops them. The band then keeps a row only while its score plus the seeds still ahead, less the longest chain of matches it can still reach, fits the bound. At 2 to 3% divergence that bound at the origin lands within 1% of the distance, so the band starts just past it and finishes in one round. A\*PA2-full also prunes matches between rounds, which dinara-align leaves out, as its rounds now rarely number more than two. On AVX-512, whose band runs fast beside the seeds' setup, seeds are used only from 86 kbp, where they start to pay there.
 - **Long, divergent pairs match seeds within one edit**, as A\*PA's `r = 2` does. Past about one edit in fifteen bases most exact 12-base seeds are broken and the bound at the origin falls far short: 8,277 for a distance of 12,196 on a 100 kbp pair at 15%. Seeds of 16 bases that may match with one edit, charging two edits where they match nowhere, put it at 11,304. Each match is found by the half of it that matches exactly, a check on its quarters turns most chance lookups away, and an exact match's one-edit neighbours are left out, which keeps the bound a lower bound. They are used from 64 kbp, where the band they save outgrows their setup, when the projection says one edit in ten bases or under 40% of the exact seeds chain.
-- **Global affine scores run a wavefront from both ends.** Under a table of one match and one mismatch score, as `Scoring.dna()` is, the match reward folds away for a global alignment (Eizenga and Lindquist), and WFA's three-layer wavefront then searches by cost, from the origin and from the corner at once until they meet: 238 ms against hyalite's 15.8 s at 100 kbp, 77 µs against 1.12 ms at 1 kbp. A pair whose projected wavefront would cost more than a full sweep is handed to the sweep, which runs sixteen cells at a time by anti-diagonal and also serves local scores.
-- **Global affine alignments are traced back through the same wavefront's fronts**, five bytes a diagonal kept from each end and the path walked from where they met, a pair whose fronts would pass 80 MB split where an optimal path crosses: 139 µs against hyalite's 14.6 ms at 1 kbp, 3.56 ms against 1.83 s at 10 kbp and 482 ms against 186 s at 100 kbp; dinara-align's own GPU sweep is slower on the 1 and 10 kbp pairs, 1.58 and 8.75 ms, and faster on the 100 kbp one, 173 ms. A tie between optimal paths may resolve differently from the GPU's, the score the same. Under any other table the matrix is swept sixteen cells at a time by anti-diagonal, each pair's score read by comparison, by byte shuffle from a register for a table of up to sixteen entries, or gathered from memory for a larger one: a global alignment stores only the band of diagonals its score bounds, a local one is found by its span and aligned globally (see Other Modes), and past `max_memory`, 80 MB by default, a global one splits on rows in linear space, Myers and Miller's way.
-- **The other rivals run on one CPU thread.** dinara-align's CPU batches spread their pairs over every thread, which the reads rows show, a batch's global scores many pairs at once besides, one a lane of a SIMD register over a band each pair's cost proves (see Short-Read Batches): 2.5 ms scoring the 150 bp reads, 6.23 ms the 1 kbp ones. The single affine pairs, and every edit-distance pair, run on one thread.
-- **dinara-align's GPU times include the overheads a caller pays**: opening the device context on every call, copying sequences over, and copying results back. That is why a single short pair is slower on the GPU than on the CPU, while the reads batches, every pair in one launch, several to a warp (see Short-Read Batches), run fastest there: 1.72 against 2.5 ms scoring the 150 bp reads, 6.13 against 6.23 ms the 1 kbp ones.
+- **Global affine scores run a wavefront from both ends.** Under a table of one match and one mismatch score, as `Scoring.dna()` is, the match reward folds away for a global alignment (Eizenga and Lindquist), and WFA's three-layer wavefront then searches by cost, from the origin and from the corner at once until they meet: 239 ms against hyalite's 15.8 s at 100 kbp, 77 µs against 1.12 ms at 1 kbp. A pair whose projected wavefront would cost more than a full sweep is handed to the sweep, which runs sixteen cells at a time by anti-diagonal and also serves local scores.
+- **Global affine alignments are traced back through the same wavefront's fronts**, five bytes a diagonal kept from each end and the path walked from where they met, a pair whose fronts would pass 80 MB split where an optimal path crosses: 140 µs against hyalite's 14.6 ms at 1 kbp, 3.56 ms against 1.83 s at 10 kbp and 462 ms against 186 s at 100 kbp; dinara-align's own GPU sweep is slower on the 1 and 10 kbp pairs, 1.58 and 8.84 ms, and faster on the 100 kbp one, 174 ms. A tie between optimal paths may resolve differently from the GPU's, the score the same. Under any other table the matrix is swept sixteen cells at a time by anti-diagonal, each pair's score read by comparison, by byte shuffle from a register for a table of up to sixteen entries, or gathered from memory for a larger one: a global alignment stores only the band of diagonals its score bounds, a local one is found by its span and aligned globally (see Other Modes), and past `max_memory`, 80 MB by default, a global one splits on rows in linear space, Myers and Miller's way.
+- **Every CPU column is one core.** dinara-align, a library, runs on its caller's thread and starts no threads of its own: an application spreads its calls over its threads, as the command line does (see Short-Read Batches, on every core). The reads rows are each one call over the whole batch, its global scores and alignments many pairs at once, one a lane of a SIMD register over a band each pair's cost proves, each alignment traced from the flags its band kept: 4.57 ms scoring the 150 bp reads and 15.9 ms aligning them, against hyalite's 282 ms and 2.09 s.
+- **dinara-align's GPU times include the overheads a caller pays**: opening the device context on every call, copying sequences over, and copying results back. That is why a single short pair is slower on the GPU than on the CPU, while the reads batches, every pair in one launch, several to a warp (see Short-Read Batches), run fastest there, the device against one core: 1.69 against 4.57 ms scoring the 150 bp reads, 5.31 against 33.1 ms the 1 kbp ones, and 14.1 against 247 ms aligning those.
 - **hyalite's traceback budget is 1 GiB.** It keeps the whole matrix when it fits and switches to a checkpointed sweep above that, as the 100 kbp pairs do. dinara-align switches to its linear-space recursion above six million cells on the host and one million on the device.
 - **A\*PA answers only edit distance**, and its time depends on how similar the sequences are, as do the bit-parallel path's and dinara-align's global affine score and alignment; the local alignments and hyalite's columns do not.
 - **One machine, one fixed pair per workload, one run.** The rows of microseconds move by a few percent between runs; read a difference of that size as a tie. Rerun on your own hardware before quoting any of this.
@@ -122,30 +122,30 @@ A dash marks a task the tool does not offer, or a workload it is not run on.
 `pa_bench.py` runs the exact aligners of A\*PA2's evaluation, with its parameters, and WFA beside BiWFA, on its own datasets: Oxford Nanopore reads and SARS-CoV-2 genomes from pa-bench's release, and the uniform-error pairs pa-generate regenerates exactly from the evaluation's seed and lock.
 Each dataset is a fixed shuffled sample of about 2 Mbp and at least four pairs, the same for every tool; each tool aligns its pairs with traceback, once each, as pa-bench times them, within a budget of five seconds, and every cost is checked against every other tool's and against the costs A\*PA2's published results recorded.
 The rivals are pinned, so their results are kept and reused until `--fresh`; a second table gives each tool's peak resident memory.
-dinara-align also runs as a batch on all ten threads, `alignments` over the whole sample, one pair a thread, whose column is the batch's wall-clock time over its pairs, a throughput where the others are each one pair's latency.
+dinara-align also runs as a batch, `alignments` over the whole sample in one call on the same one thread, whose column is the call's time over its pairs, a throughput where the others are each one pair's latency: at unit costs a batch takes the bit-parallel sweep pair by pair, as single calls do.
 
-Measured on the i9-7900X of A\*PA2's results below, unpinned on the otherwise idle machine, every tool built for its own instruction set, dinara-align at `2673fe3`; a count marks a tool its budget, or WFA's 8 GiB cap, stopped partway, and more than the budget one that finished no pair:
+Measured on the i9-7900X of A\*PA2's results below, unpinned on the otherwise idle machine, every tool built for its own instruction set, dinara-align at `6d11d88`; a count marks a tool its budget, or WFA's 8 GiB cap, stopped partway, and more than the budget one that finished no pair:
 
-| dataset | pairs | mean length | dinara-align (bit-parallel, 1 thread) | dinara-align (bit-parallel, batch, 10 threads) | a*pa2-full | a*pa2-simple | a*pa | edlib | biwfa | wfa | agree |
+| dataset | pairs | mean length | dinara-align (bit-parallel, 1 thread) | dinara-align (bit-parallel, batch, 1 thread) | a*pa2-full | a*pa2-simple | a*pa | edlib | biwfa | wfa | agree |
 | :-- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | :-: |
-| ont-1k | 1221 of 12477 | 0.818 kbp | 22 µs | 3 µs | 81 µs | 48 µs | 616 µs | 142 µs | 47 µs | 31 µs | ✓ |
-| ont-10k | 277 of 5000 | 3.6 kbp | 164 µs | 24 µs | 393 µs | 248 µs | 15.5 ms | 1.12 ms | 885 µs | 598 µs | ✓ |
-| ont-50k | 104 of 10000 | 9.52 kbp | 590 µs | 87 µs | 1.28 ms | 940 µs | 221 ms (25/104) | 6.15 ms | 9.1 ms | 6.36 ms | ✓ |
-| ont-500k | 4 of 50 | 638 kbp | 116 ms | 64.9 ms | 283 ms | 686 ms | > 5 s | > 5 s | > 5 s | > 5 s | ✓ |
-| ont-500k-genvar | 4 of 48 | 659 kbp | 143 ms | 48.4 ms | 225 ms | 511 ms | > 5 s | 5.2 s (1/4) | > 5 s | > 5 s | ✓ |
-| sars-cov-2 | 33 of 10000 | 29.6 kbp | 279 µs | 96 µs | 2.01 ms | 728 µs | 6.56 ms | 8.63 ms | 998 µs | 988 µs | ✓ |
-| Uniform-t10000000-n3000-e0.05 | 333 of 3333 | 3 kbp | 41 µs | 7 µs | 175 µs | 61 µs | 267 µs | 857 µs | 88 µs | 58 µs | ✓ |
-| Uniform-t10000000-n10000-e0.05 | 99 of 1000 | 10 kbp | 285 µs | 44 µs | 787 µs | 292 µs | 937 µs | 3.97 ms | 615 µs | 439 µs | ✓ |
-| Uniform-t10000000-n30000-e0.05 | 33 of 333 | 30 kbp | 947 µs | 151 µs | 2.45 ms | 1.72 ms | 3.11 ms | 14.9 ms | 5.82 ms | 4.31 ms | ✓ |
-| Uniform-t10000000-n100000-e0.05 | 10 of 100 | 100 kbp | 4.82 ms | 1.12 ms | 8.31 ms | 15.5 ms | 12.3 ms | 147 ms | 62.9 ms | 46.5 ms | ✓ |
-| Uniform-t10000000-n300000-e0.05 | 4 of 33 | 300 kbp | 19.6 ms | 6.72 ms | 27.5 ms | 65.5 ms | 38.5 ms | 758 ms | 536 ms | 454 ms | ✓ |
-| Uniform-t10000000-n1000000-e0.05 | 4 of 10 | 1e+03 kbp | 61.9 ms | 19.3 ms | 125 ms | 862 ms | 158 ms | > 5 s | > 5 s | > 5 s | ✓ |
-| Uniform-t10000000-n3000-e0.15 | 333 of 3333 | 3 kbp | 114 µs | 16 µs | 202 µs | 153 µs | 1.56 ms | 910 µs | 417 µs | 311 µs | ✓ |
-| Uniform-t10000000-n10000-e0.15 | 99 of 1000 | 10 kbp | 407 µs | 55 µs | 916 µs | 786 µs | 6.55 ms | 5.9 ms | 4.86 ms | 2.98 ms | ✓ |
-| Uniform-t10000000-n30000-e0.15 | 33 of 333 | 30 kbp | 1.69 ms | 222 µs | 4.07 ms | 2.62 ms | 23.5 ms | 24.7 ms | 42.2 ms | 26.8 ms | ✓ |
-| Uniform-t10000000-n100000-e0.15 | 9 of 100 | 100 kbp | 11.1 ms | 1.58 ms | 16.4 ms | 24.5 ms | 99.8 ms | 263 ms | 454 ms | 311 ms | ✓ |
-| Uniform-t10000000-n300000-e0.15 | 4 of 33 | 300 kbp | 44.8 ms | 14.2 ms | 125 ms | 293 ms | 474 ms | 2.54 s (2/4) | 4.06 s (1/4) | 4.65 s (1/4) | ✓ |
-| Uniform-t10000000-n1000000-e0.15 | 4 of 10 | 1e+03 kbp | 265 ms | 71.1 ms | 1.33 s | 1.35 s | 2.09 s (2/4) | > 5 s | > 5 s | > 5 s | ✓ |
+| ont-1k | 1221 of 12477 | 0.818 kbp | 22 µs | 22 µs | 81 µs | 48 µs | 616 µs | 142 µs | 47 µs | 31 µs | ✓ |
+| ont-10k | 277 of 5000 | 3.6 kbp | 163 µs | 160 µs | 393 µs | 248 µs | 15.5 ms | 1.12 ms | 885 µs | 598 µs | ✓ |
+| ont-50k | 104 of 10000 | 9.52 kbp | 586 µs | 567 µs | 1.28 ms | 940 µs | 221 ms (25/104) | 6.15 ms | 9.1 ms | 6.36 ms | ✓ |
+| ont-500k | 4 of 50 | 638 kbp | 116 ms | 115 ms | 283 ms | 686 ms | > 5 s | > 5 s | > 5 s | > 5 s | ✓ |
+| ont-500k-genvar | 4 of 48 | 659 kbp | 145 ms | 144 ms | 225 ms | 511 ms | > 5 s | 5.2 s (1/4) | > 5 s | > 5 s | ✓ |
+| sars-cov-2 | 33 of 10000 | 29.6 kbp | 279 µs | 254 µs | 2.01 ms | 728 µs | 6.56 ms | 8.63 ms | 998 µs | 988 µs | ✓ |
+| Uniform-t10000000-n3000-e0.05 | 333 of 3333 | 3 kbp | 42 µs | 41 µs | 175 µs | 61 µs | 267 µs | 857 µs | 88 µs | 58 µs | ✓ |
+| Uniform-t10000000-n10000-e0.05 | 99 of 1000 | 10 kbp | 283 µs | 282 µs | 787 µs | 292 µs | 937 µs | 3.97 ms | 615 µs | 439 µs | ✓ |
+| Uniform-t10000000-n30000-e0.05 | 33 of 333 | 30 kbp | 917 µs | 909 µs | 2.45 ms | 1.72 ms | 3.11 ms | 14.9 ms | 5.82 ms | 4.31 ms | ✓ |
+| Uniform-t10000000-n100000-e0.05 | 10 of 100 | 100 kbp | 4.77 ms | 4.71 ms | 8.31 ms | 15.5 ms | 12.3 ms | 147 ms | 62.9 ms | 46.5 ms | ✓ |
+| Uniform-t10000000-n300000-e0.05 | 4 of 33 | 300 kbp | 19.4 ms | 19.2 ms | 27.5 ms | 65.5 ms | 38.5 ms | 758 ms | 536 ms | 454 ms | ✓ |
+| Uniform-t10000000-n1000000-e0.05 | 4 of 10 | 1e+03 kbp | 62.5 ms | 61.6 ms | 125 ms | 862 ms | 158 ms | > 5 s | > 5 s | > 5 s | ✓ |
+| Uniform-t10000000-n3000-e0.15 | 333 of 3333 | 3 kbp | 112 µs | 113 µs | 202 µs | 153 µs | 1.56 ms | 910 µs | 417 µs | 311 µs | ✓ |
+| Uniform-t10000000-n10000-e0.15 | 99 of 1000 | 10 kbp | 402 µs | 404 µs | 916 µs | 786 µs | 6.55 ms | 5.9 ms | 4.86 ms | 2.98 ms | ✓ |
+| Uniform-t10000000-n30000-e0.15 | 33 of 333 | 30 kbp | 1.69 ms | 1.65 ms | 4.07 ms | 2.62 ms | 23.5 ms | 24.7 ms | 42.2 ms | 26.8 ms | ✓ |
+| Uniform-t10000000-n100000-e0.15 | 9 of 100 | 100 kbp | 11.3 ms | 11.2 ms | 16.4 ms | 24.5 ms | 99.8 ms | 263 ms | 454 ms | 311 ms | ✓ |
+| Uniform-t10000000-n300000-e0.15 | 4 of 33 | 300 kbp | 45.1 ms | 45 ms | 125 ms | 293 ms | 474 ms | 2.54 s (2/4) | 4.06 s (1/4) | 4.65 s (1/4) | ✓ |
+| Uniform-t10000000-n1000000-e0.15 | 4 of 10 | 1e+03 kbp | 262 ms | 261 ms | 1.33 s | 1.35 s | 2.09 s (2/4) | > 5 s | > 5 s | > 5 s | ✓ |
 
 
 ## Affine Costs
@@ -157,31 +157,31 @@ dinara-align answers with `align` under `Costs.affine`, a CIGAR as the others ha
 pixi run bench-astarpa2 --affine 4,6,2
 ```
 
-At WFA's costs (4, 6, 2) on the i9-7900X above, pinned to one core, every tool built for its own instruction set, dinara-align at `2673fe3`, each tool five seconds a sample; a count marks a tool its budget stopped partway, and more than the budget one that finished no pair:
+At WFA's costs (4, 6, 2) on the i9-7900X above, pinned to one core, every tool built for its own instruction set, dinara-align at `6d11d88`, each tool five seconds a sample; a count marks a tool its budget stopped partway, and more than the budget one that finished no pair:
 
 | dataset | pairs | mean length | dinara-align | WFA | BiWFA | KSW2 | agree |
 | :-- | --: | --: | --: | --: | --: | --: | :-: |
-| ont-1k | 1221 of 12477 | 0.818 kbp | 139 µs | 190 µs | 329 µs | 1.13 ms | ✓ |
-| ont-10k | 277 of 5000 | 3.6 kbp | 1.84 ms | 4.84 ms | 6.96 ms | 31.1 ms (161/277) | ✓ |
-| ont-50k | 104 of 10000 | 9.52 kbp | 22.5 ms | 69.2 ms (82/104) | 69.4 ms (82/104) | 366 ms (16/104) | ✓ |
+| ont-1k | 1221 of 12477 | 0.818 kbp | 113 µs | 190 µs | 329 µs | 1.13 ms | ✓ |
+| ont-10k | 277 of 5000 | 3.6 kbp | 1.69 ms | 4.84 ms | 6.96 ms | 31.3 ms (160/277) | ✓ |
+| ont-50k | 104 of 10000 | 9.52 kbp | 21.8 ms | 69.1 ms (82/104) | 69.4 ms (82/104) | 365 ms (16/104) | ✓ |
 | ont-500k | 4 of 50 | 638 kbp | > 5 s | > 5 s | > 5 s | > 5 s | ✓ |
 | ont-500k-genvar | 4 of 48 | 659 kbp | > 5 s | > 5 s | > 5 s | > 5 s | ✓ |
-| sars-cov-2 | 33 of 10000 | 29.6 kbp | 877 µs | 2.08 ms | 1.98 ms | 89.6 ms | ✓ |
-| Uniform-t10000000-n3000-e0.05 | 333 of 3333 | 3 kbp | 347 µs | 589 µs | 1.01 ms | 6.27 ms | ✓ |
-| Uniform-t10000000-n10000-e0.05 | 99 of 1000 | 10 kbp | 2.37 ms | 6.42 ms | 9.38 ms | 97.9 ms (52/99) | ✓ |
-| Uniform-t10000000-n30000-e0.05 | 33 of 333 | 30 kbp | 18.8 ms | 56.8 ms | 75.4 ms | 1.36 s (4/33) | ✓ |
-| Uniform-t10000000-n100000-e0.05 | 10 of 100 | 100 kbp | 310 ms | 765 ms (7/10) | 780 ms (7/10) | > 5 s | ✓ |
-| Uniform-t10000000-n300000-e0.05 | 4 of 33 | 300 kbp | 3.15 s (1/4) | > 5 s | > 5 s | > 5 s | ✓ |
+| sars-cov-2 | 33 of 10000 | 29.6 kbp | 808 µs | 2.08 ms | 1.98 ms | 89.6 ms | ✓ |
+| Uniform-t10000000-n3000-e0.05 | 333 of 3333 | 3 kbp | 288 µs | 589 µs | 1.01 ms | 6.27 ms | ✓ |
+| Uniform-t10000000-n10000-e0.05 | 99 of 1000 | 10 kbp | 2.19 ms | 6.42 ms | 9.38 ms | 99 ms (51/99) | ✓ |
+| Uniform-t10000000-n30000-e0.05 | 33 of 333 | 30 kbp | 18.3 ms | 56.8 ms | 75.4 ms | 1.36 s (4/33) | ✓ |
+| Uniform-t10000000-n100000-e0.05 | 10 of 100 | 100 kbp | 303 ms | 773 ms (7/10) | 780 ms (7/10) | > 5 s | ✓ |
+| Uniform-t10000000-n300000-e0.05 | 4 of 33 | 300 kbp | 3.06 s (1/4) | > 5 s | > 5 s | > 5 s | ✓ |
 | Uniform-t10000000-n1000000-e0.05 | 4 of 10 | 1e+03 kbp | > 5 s | > 5 s | > 5 s | > 5 s | ✓ |
-| Uniform-t10000000-n3000-e0.15 | 333 of 3333 | 3 kbp | 1.42 ms | 3.64 ms | 5.9 ms | 19 ms (263/333) | ✓ |
-| Uniform-t10000000-n10000-e0.15 | 99 of 1000 | 10 kbp | 12.8 ms | 39.2 ms | 54.3 ms (93/99) | 204 ms (25/99) | ✓ |
-| Uniform-t10000000-n30000-e0.15 | 33 of 333 | 30 kbp | 156 ms (32/33) | 391 ms (13/33) | 461 ms (11/33) | 2.48 s (2/33) | ✓ |
-| Uniform-t10000000-n100000-e0.15 | 9 of 100 | 100 kbp | 2.09 s (2/9) | > 5 s | 5.16 s (1/9) | > 5 s | ✓ |
+| Uniform-t10000000-n3000-e0.15 | 333 of 3333 | 3 kbp | 1.29 ms | 3.64 ms | 5.9 ms | 19 ms (264/333) | ✓ |
+| Uniform-t10000000-n10000-e0.15 | 99 of 1000 | 10 kbp | 12.2 ms | 39.2 ms | 54.3 ms (93/99) | 206 ms (25/99) | ✓ |
+| Uniform-t10000000-n30000-e0.15 | 33 of 333 | 30 kbp | 151 ms | 392 ms (13/33) | 461 ms (11/33) | 2.49 s (2/33) | ✓ |
+| Uniform-t10000000-n100000-e0.15 | 9 of 100 | 100 kbp | 2.06 s (2/9) | > 5 s | 5.16 s (1/9) | > 5 s | ✓ |
 | Uniform-t10000000-n300000-e0.15 | 4 of 33 | 300 kbp | > 5 s | > 5 s | > 5 s | > 5 s | ✓ |
 | Uniform-t10000000-n1000000-e0.15 | 4 of 10 | 1e+03 kbp | > 5 s | > 5 s | > 5 s | > 5 s | ✓ |
 
-- **dinara-align is the fastest on every dataset any tool finished,** 1.4 to 3.1 times faster than WFA: 139 against 190 µs on ont-1k, 1.84 against 4.84 ms on ont-10k, 877 µs against 2.08 ms on the SARS-CoV-2 genomes, and 12.8 against 39.2 ms on 10 kbp at 15%. Its CIGAR follows a fixed rule for ties (see `Ties`), its search grown on to the optimum and traced back from the far end, which costs the short pairs most: 139 µs on ont-1k where it took 111 before that rule. BiWFA beats WFA only on the genomes and where WFA's budget runs out.
-- **It alone finishes every ont-50k read,** in 22.5 ms on average, where WFA and BiWFA each finish 82 of the 104 within the budget, and it finishes more of the 100 and 300 kbp pairs than anyone.
+- **dinara-align is the fastest on every dataset any tool finished,** 1.7 to 3.2 times faster than WFA: 113 against 190 µs on ont-1k, 1.69 against 4.84 ms on ont-10k, 808 µs against 2.08 ms on the SARS-CoV-2 genomes, and 12.2 against 39.2 ms on 10 kbp at 15%. Its CIGAR follows a fixed rule for ties (see `Ties`), its search grown on to the optimum and traced back from the far end. BiWFA beats WFA only on the genomes and where WFA's budget runs out.
+- **It alone finishes every ont-50k read,** in 21.8 ms on average, where WFA and BiWFA each finish 82 of the 104 within the budget, and it finishes more of the 100 and 300 kbp pairs than anyone.
 - **KSW2's band doubles from eight diagonals against a loose bound,** so it times out on most reads past 1 kbp.
 - **No aligner finishes a 500 kbp read or a 1 Mbp pair in five seconds:** the wavefront's work grows with the square of the cost, and gap-affine costs have no seed heuristic here to prune it (see TODO.md).
 
@@ -189,21 +189,21 @@ Growth of peak memory aligning each pair, median / largest, as A\*PA2's Table 10
 
 | dataset | dinara-align | WFA | BiWFA | KSW2 |
 | :-- | --: | --: | --: | --: |
-| ont-1k | 0.0 / 1.0 MB | 0.0 / 3.0 MB | 0.0 / 1.5 MB | 0.0 / 0.9 MB |
+| ont-1k | 0.0 / 0.8 MB | 0.0 / 3.0 MB | 0.0 / 1.5 MB | 0.0 / 0.9 MB |
 | ont-10k | 0.0 / 22 MB | 0.0 / 97 MB | 0.0 / 2.2 MB | 0.0 / 58 MB |
-| ont-50k | 0.0 / 85 MB | 0.0 / 1420 MB | 0.0 / 4.4 MB | 0.0 / 317 MB |
+| ont-50k | 0.0 / 84 MB | 0.0 / 1420 MB | 0.0 / 4.4 MB | 0.0 / 317 MB |
 | sars-cov-2 | 0.0 / 11 MB | 0.0 / 51 MB | 0.0 / 2.4 MB | 0.0 / 211 MB |
-| Uniform-t10000000-n3000-e0.05 | 0.0 / 1.9 MB | 0.0 / 5.4 MB | 0.0 / 1.8 MB | 0.0 / 3.2 MB |
-| Uniform-t10000000-n10000-e0.05 | 0.0 / 7.1 MB | 0.0 / 29 MB | 0.0 / 1.8 MB | 0.0 / 40 MB |
+| Uniform-t10000000-n3000-e0.05 | 0.0 / 1.7 MB | 0.0 / 5.4 MB | 0.0 / 1.8 MB | 0.0 / 3.2 MB |
+| Uniform-t10000000-n10000-e0.05 | 0.0 / 6.9 MB | 0.0 / 29 MB | 0.0 / 1.8 MB | 0.0 / 40 MB |
 | Uniform-t10000000-n30000-e0.05 | 0.0 / 46 MB | 0.0 / 212 MB | 0.0 / 2.9 MB | 31 / 455 MB |
-| Uniform-t10000000-n100000-e0.05 | 0.0 / 86 MB | 12 / 2413 MB | 0.0 / 9.1 MB | — |
-| Uniform-t10000000-n300000-e0.05 | 97 / 97 MB | — | — | — |
-| Uniform-t10000000-n3000-e0.15 | 0.0 / 4.5 MB | 0.0 / 18 MB | 0.0 / 1.4 MB | 0.0 / 12 MB |
-| Uniform-t10000000-n10000-e0.15 | 0.0 / 35 MB | 0.0 / 160 MB | 0.0 / 3.2 MB | 0.0 / 79 MB |
-| Uniform-t10000000-n30000-e0.15 | 0.0 / 101 MB | 0.5 / 1416 MB | 0.0 / 5.5 MB | 796 / 796 MB |
-| Uniform-t10000000-n100000-e0.15 | 85 / 85 MB | — | 16 / 16 MB | — |
+| Uniform-t10000000-n100000-e0.05 | 0.1 / 89 MB | 12 / 2413 MB | 0.0 / 9.1 MB | — |
+| Uniform-t10000000-n300000-e0.05 | 98 / 98 MB | — | — | — |
+| Uniform-t10000000-n3000-e0.15 | 0.0 / 4.1 MB | 0.0 / 18 MB | 0.0 / 1.4 MB | 0.0 / 12 MB |
+| Uniform-t10000000-n10000-e0.15 | 0.0 / 35 MB | 0.0 / 160 MB | 0.0 / 3.1 MB | 0.0 / 79 MB |
+| Uniform-t10000000-n30000-e0.15 | 0.0 / 88 MB | 0.5 / 1416 MB | 0.0 / 5.5 MB | 796 / 796 MB |
+| Uniform-t10000000-n100000-e0.15 | 97 / 97 MB | — | 16 / 16 MB | — |
 
-dinara-align keeps under a tenth of WFA's memory on the largest pairs (86 against 2413 MB at 100 kbp), as its traceback keeps a byte of flags and the column of one front a diagonal, from fronts each half as long; BiWFA, keeping only its last few fronts, stays smallest.
+dinara-align keeps under a tenth of WFA's memory on the largest pairs (89 against 2413 MB at 100 kbp), as its traceback keeps a byte of flags and the column of one front a diagonal, from fronts each half as long; BiWFA, keeping only its last few fronts, stays smallest.
 
 ## Local and Overlap Alignment
 
@@ -214,19 +214,19 @@ pixi run bench-local   # builds and times SSW, parasail and abPOA the first time
 ```
 
 Every tool scores a match 2, a mismatch -4 and a gap of `k` letters `6 + 2k` (dinara-align's `Mode.local(2)` and `Mode.overlap(2)` under `Costs.affine(4, 6, 2)`), and every tool's scores must agree on every pair, or the run fails; none disagreed.
-A tool's time is the faster of two passes over a workload, its mean per pair, on one thread of the Skylake-X, pinned (see A\*PA2's results below for the machine), every tool built for its own instruction set, AVX-512 included, at `b132767`.
+A tool's time is the faster of two passes over a workload, its mean per pair, on one thread of the Skylake-X, pinned (see A\*PA2's results below for the machine), every tool built for its own instruction set, AVX-512 included, dinara-align at `6d11d88`.
 abPOA aligns to a graph, so its time includes adding the reference to one, as any pairwise use of it pays; SSW and abPOA have no overlap or infix mode.
 The infix row scores with a reward, `Mode.INFIX.with_match_score(2)`, as parasail's `sg_dx` and hyalite's HW do; without one, dinara-align's `Mode.INFIX` minimizes the costs, Edlib's way, on the bit-parallel sweep at unit costs or the wavefront at any others.
 
 | workload | dinara-align | SSW | parasail | abPOA | hyalite |
 | :-- | --: | --: | --: | --: | --: |
-| local, 600 short noisy pairs (20 to 700 bp) | **36 µs** | 52 µs | 67 µs | 175 µs | 845 µs |
-| local, 1 kbp read at 10% in a 10 kbp window | **1.62 ms** | 3.21 ms | 4.77 ms | 16.8 ms | 162 ms |
-| local, 10 kbp at 5% against 12 kbp | **46.5 ms** | 85.1 ms | 288 ms | 205 ms | 2.29 s |
-| overlap, 2 kbp reads overlapping by 0.5 to 1.5 kbp | **2.29 ms** | — | 15.3 ms | — | 42.7 ms |
-| infix with a reward, 1 kbp read at 10% placed whole in a 3 kbp window | **1.46 ms** | — | 14.9 ms | — | 45.7 ms |
+| local, 600 short noisy pairs (20 to 700 bp) | **35 µs** | 52 µs | 66 µs | 173 µs | 843 µs |
+| local, 1 kbp read at 10% in a 10 kbp window | **1.47 ms** | 3.19 ms | 4.70 ms | 16.7 ms | 160 ms |
+| local, 10 kbp at 5% against 12 kbp | **49.0 ms** | 85.0 ms | 285 ms | 207 ms | 2.29 s |
+| overlap, 2 kbp reads overlapping by 0.5 to 1.5 kbp | **2.22 ms** | — | 15.3 ms | — | 42.5 ms |
+| infix with a reward, 1 kbp read at 10% placed whole in a 3 kbp window | **1.43 ms** | — | 14.8 ms | — | 45.4 ms |
 
-- **dinara-align is the fastest on every workload**, 1.4 to 2 times SSW on local alignment, and 7 and 10 times parasail on overlaps and scored infixes.
+- **dinara-align is the fastest on every workload**, 1.5 to 2.2 times SSW on local alignment, and 7 and 10 times parasail on overlaps and scored infixes.
 - **Its sweep runs by anti-diagonal in 16-bit lanes along the shorter sequence,** while the scores fit, and finds only the best end; an extension back from that end, stopping once it earns the sweep's score, gives the alignment, traced as it searched. SSW sweeps striped (Farrar), whose lazy pass runs most of every column when a long alignment scores high, as on the 10 kbp pairs.
 
 ## Other Modes
@@ -237,24 +237,24 @@ Free ends, seed extension, two-piece gaps and substitution tables of more than o
 pixi run bench-modes   # builds and times Edlib, WFA2-lib, KSW2, parasail and SSW the first time; then seconds
 ```
 
-Every tool aligns every pair with its CIGAR on one thread of the Skylake-X, pinned, every tool built for its own instruction set, AVX-512 included, dinara-align at `843aeb2`; a tool's time is the faster of two passes over a workload, its mean per pair, and every tool's costs or scores must agree on every pair, or the run fails; none disagreed.
+Every tool aligns every pair with its CIGAR on one thread of the Skylake-X, pinned, every tool built for its own instruction set, AVX-512 included, dinara-align at `6d11d88`; a tool's time is the faster of two passes over a workload, its mean per pair, and every tool's costs or scores must agree on every pair, or the run fails; none disagreed.
 WFA2-lib runs exact, keeping every front, its WF-adaptive heuristic off.
 KSW2 extends with no Z-drop: it gauges one by anti-diagonal and dinara-align as WFA2-lib does, a cost at a time, so the two would stop at different places and their times compare different work.
 Deletions priced apart from insertions are left out: no rival offers them.
 
 | workload | dinara-align | Edlib | WFA2-lib | KSW2 | parasail | SSW |
 | :-- | --: | --: | --: | --: | --: | --: |
-| infix at unit costs, 1 kbp read at 10% placed whole in a 3 kbp window | **145 µs** | 270 µs | 986 µs | — | — | — |
-| infix at unit costs, 10 kbp read at 5% in a 30 kbp window | **3.32 ms** | 13.4 ms | 53.7 ms | — | — | — |
-| prefix at unit costs, 1 kbp read at 10% against 2 kbp of reference | **46 µs** | 114 µs | 47 µs | — | — | — |
-| infix at WFA's (4, 6, 2), the 1 kbp reads above | **3.01 ms** | — | 4.10 ms | — | — | — |
-| extension, a match 2 at (4, 6, 2), 300 to 1,400 bases at 5% then noise | **726 µs** | — | — | 2.07 ms | — | — |
-| the same with an end bonus of 50, 0 to 80 bases of noise at the end | **154 µs** | — | — | 1.23 ms | — | — |
-| two-piece gaps (4, 6, 2, 24, 1), 5 kbp at 5% with three indels of 100 to 400 bp | **8.33 ms** | — | 15.9 ms | 46.7 ms | — | — |
-| a table, match 2, transition -2, transversion -4, global, 1 kbp at 10% | **552 µs** | — | — | — | 2.94 ms | — |
-| the same table, local, 1 kbp read at 10% in a 10 kbp window | **2.55 ms** | — | — | — | 5.16 ms | 3.27 ms |
+| infix at unit costs, 1 kbp read at 10% placed whole in a 3 kbp window | **143 µs** | 270 µs | 986 µs | — | — | — |
+| infix at unit costs, 10 kbp read at 5% in a 30 kbp window | **3.31 ms** | 13.4 ms | 53.7 ms | — | — | — |
+| prefix at unit costs, 1 kbp read at 10% against 2 kbp of reference | **45 µs** | 114 µs | 47 µs | — | — | — |
+| infix at WFA's (4, 6, 2), the 1 kbp reads above | **3.00 ms** | — | 4.10 ms | — | — | — |
+| extension, a match 2 at (4, 6, 2), 300 to 1,400 bases at 5% then noise | **728 µs** | — | — | 2.07 ms | — | — |
+| the same with an end bonus of 50, 0 to 80 bases of noise at the end | **168 µs** | — | — | 1.23 ms | — | — |
+| two-piece gaps (4, 6, 2, 24, 1), 5 kbp at 5% with three indels of 100 to 400 bp | **8.33 ms** | — | 15.9 ms | 46.6 ms | — | — |
+| a table, match 2, transition -2, transversion -4, global, 1 kbp at 10% | **527 µs** | — | — | — | 2.94 ms | — |
+| the same table, local, 1 kbp read at 10% in a 10 kbp window | **2.67 ms** | — | — | — | 5.16 ms | 3.27 ms |
 
-- **dinara-align is the fastest on every workload**: 1.9 and 4 times Edlib on infixes, 1.4 times WFA2-lib on an infix at its costs, 2.9 times KSW2 on extension and 8 times with an end bonus, 1.9 times WFA2-lib on two-piece gaps and 5.3 times parasail on a table globally. The prefix search ties WFA2-lib's diagonal transition, 46 against 47 µs.
+- **dinara-align is the fastest on every workload**: 1.9 and 4 times Edlib on infixes, 1.4 times WFA2-lib on an infix at its costs, 2.8 times KSW2 on extension and 7 times with an end bonus, 1.9 times WFA2-lib on two-piece gaps and 5.6 times parasail on a table globally. The prefix search ties WFA2-lib's diagonal transition, 45 against 47 µs.
 - **An end bonus aligns a read to its end when that scores within the bonus of the best stop**, as KSW2's `end_bonus` and BWA-MEM's clipping penalty decide, and both tools choose the same alignment on every read. The extension's own search weighs it, keeping the best of its points on the read's last row as it grows and going on only while one could still win, so a read ending in a short stretch of noise costs less than a plain extension of a long one.
 - **Some rows move by up to a fifth between commits that do not touch them.** The infix at WFA's costs has measured 3.1 and 3.75 ms on the same code path: the same instructions and branches, 6.3 billion of them, in 2.1 or 2.9 billion cycles depending on where unrelated code places its loop. The Skylake-X penalises a jump that crosses a 32-byte boundary (Intel's JCC erratum fix), and Mojo offers no option to keep branches off such boundaries; later x86 cores are not affected. Read a difference of that size between commits as noise.
 - **The prefix search sweeps only the band its bound allows**, which Edlib's prefix mode does not: the band's top moves down with the diagonal, no column past the read's length plus the best end so far is swept, and a try whose band has already emptied stops. The part of the reference it finds is then aligned globally by the edit-distance traceback.
@@ -269,16 +269,18 @@ Its reads are not ours to ship, so the pairs here are drawn to the same shape fr
 pixi run bench-batch   # builds the rivals the first time; then a minute or two
 ```
 
-Every tool scores the whole batch on all ten threads of the Skylake-X, the rivals through OpenMP, one aligner a thread, and its time is the faster of two passes; every tool's costs must agree, summed and position-weighted, or the run fails. WFA2-lib runs exact, its score alone, its WF-adaptive heuristic off. dinara-align on the GPU is `scores` on the RTX 2070, the faster of five calls once three have brought the device's clocks up, each the whole call: packing the batch, copying it over, scoring it and copying back. dinara-align at `a30c6b4`, every rival measured again beside it, the closer of two runs.
+Every tool scores the whole batch twice: on one core, as a library runs on its caller's thread, and on all ten cores of the Skylake-X, each tool's calls spread by its own driver, the rivals' through OpenMP, one aligner a thread, and dinara-align's by the benchmark program, the batch cut before the clock starts into forty pieces, each one `distances` call, each thread taking the next piece as it finishes; the library itself starts no threads. A time is the faster of two passes; every tool's costs must agree, summed and position-weighted, or the run fails. WFA2-lib runs exact, its score alone, its WF-adaptive heuristic off. dinara-align on the GPU is `scores` on the RTX 2070, the faster of five calls once three have brought the device's clocks up, each the whole call: packing the batch, copying it over, scoring it and copying back. dinara-align at `6d11d88`, every rival measured again beside it on one core and on ten.
 
-| workload | dinara-align | dinara-align GPU | WFA2-lib | KSW2 | parasail | Edlib |
-| :-- | --: | --: | --: | --: | --: | --: |
-| affine, `distances(..., Costs.affine(1, 2, 1))`, on the GPU `scores` at the same scores; KSW2's `extz2` and parasail's striped `nw`, scores alone | **31 ms** | 43 ms | 118 ms | 1.21 s | 2.32 s | — |
-| unit costs, `distances(...)`; WFA2-lib exact, score alone; Edlib's NW distance | **32 ms** | — | 48 ms | — | — | 219 ms |
+| workload | threads | dinara-align | dinara-align GPU | WFA2-lib | KSW2 | parasail | Edlib |
+| :-- | :-- | --: | --: | --: | --: | --: | --: |
+| affine, `distances(..., Costs.affine(1, 2, 1))`, on the GPU `scores` at the same scores; KSW2's `extz2` and parasail's striped `nw`, scores alone | one core | **230 ms** | — | 1.06 s | 10.9 s | 21.7 s | — |
+| unit costs, `distances(...)`; WFA2-lib exact, score alone; Edlib's NW distance | one core | **209 ms** | — | 450 ms | — | — | 2 s |
+| affine, `distances(..., Costs.affine(1, 2, 1))`, on the GPU `scores` at the same scores; KSW2's `extz2` and parasail's striped `nw`, scores alone | 10 cores | **30 ms** | 44 ms | 115 ms | 1.18 s | 2.34 s | — |
+| unit costs, `distances(...)`; WFA2-lib exact, score alone; Edlib's NW distance | 10 cores | **27 ms** | — | 48 ms | — | — | 223 ms |
 
-- **On the CPU a batch of global distances runs many pairs at once**, one a 16-bit lane of a register, 32 under AVX-512, the inter-sequence vectorization SeqAn's and parasail's batch modes sweep whole matrices with, here over a band of diagonals each pair's own cost proves (`lanes`): a path visiting a diagonal past the end diagonal and the main one runs a gap out to it and one back, so it costs at least their two openings and extensions, and a cost no dearer than every path off the band is the least. The first band is the end and main diagonals and one more either side; the pairs it does not prove, a seventh here, are scored again over every diagonal a cheaper path could visit. Every pair goes first into a byte whose additions saturate, 64 to an AVX-512 register, as SSW and parasail do, a cost under 255 exact, and a pair whose byte saturates into 16 bits after. Their letters go side by side eight positions at a time, a lane's eight one load, the block turned in registers. One thread scores a pair in 0.38 µs at the affine costs and 0.35 at unit costs, WFA2-lib in 2.16 and 0.90; the other run took 35 and 31 ms, WFA2-lib 132 and 62.
-- **On the GPU the batch takes 42 ms**, the device busy for about 35 of them. A warp scores several pairs at once, a group of lanes to each, every lane holding a run of its pair's columns in registers and handing its last on by shuffle, the shape Accelign's paper describes, chosen for the batch from the compiled ones by the fewest cells it sweeps, not tuned for a device: a 148-base read takes sixteen lanes of ten columns. The cells of a global alignment are held shifted by their row and column times the gap extension, which takes Gotoh's recurrence from five additions a cell to three, what Hopper's fused add-and-max instructions do in hardware, done by algebra on any device. The batch crosses the bus two bits a base from page-locked memory, in chunks packed on every thread while the device scores the chunk before, and is unpacked on the device. Tried on the RTX 2070 and dropped as slower: scores as floats, each column's substitutions held in a register, and row letters handed on by shuffle. Accelign's own case study ran on a Grace Hopper GH200 with 16-bit arithmetic and DPX instructions, which the RTX 2070 has neither of; its kernels scored its 10 million reads at 3.8 TCUPS, these about 0.36.
-- **Pairs the lanes do not take go one at a time**: free ends, and a pair whose dearest path would not fit 16 bits. For those the two-ended wavefront and the bit-parallel sweep remain, each worker keeping its searches' memory from pair to pair, the forward search alone taking a cheap pair as far as its ring holds, and every worker's memory kept two cache lines clear of another's, since x86's L2 fetches lines in pairs.
+- **On the CPU a batch of global distances runs many pairs at once**, one a 16-bit lane of a register, 32 under AVX-512, the inter-sequence vectorization SeqAn's and parasail's batch modes sweep whole matrices with, here over a band of diagonals each pair's own cost proves (`lanes`): a path visiting a diagonal past the end diagonal and the main one runs a gap out to it and one back, so it costs at least their two openings and extensions, and a cost no dearer than every path off the band is the least. The first band is the end and main diagonals and one more either side; the pairs it does not prove, a seventh here, are scored again over every diagonal a cheaper path could visit. Every pair goes first into a byte whose additions saturate, 64 to an AVX-512 register, as SSW and parasail do, a cost under 255 exact, and a pair whose byte saturates into 16 bits after. Their letters go side by side eight positions at a time, a lane's eight one load, the block turned in registers. One core scores a pair in 0.46 µs at the affine costs and 0.42 at unit costs, WFA2-lib in 2.12 and 0.90; the second pass's pairs go by the width of their bands, so a group's lanes need bands alike, and a group stops once every lane's row has passed what a byte or the cap holds, no row costing less than the one before.
+- **On the GPU the batch takes 44 ms**, the device busy for about 35 of them. A warp scores several pairs at once, a group of lanes to each, every lane holding a run of its pair's columns in registers and handing its last on by shuffle, the shape Accelign's paper describes, chosen for the batch from the compiled ones by the fewest cells it sweeps, not tuned for a device: a 148-base read takes sixteen lanes of ten columns. The cells of a global alignment are held shifted by their row and column times the gap extension, which takes Gotoh's recurrence from five additions a cell to three, what Hopper's fused add-and-max instructions do in hardware, done by algebra on any device. The batch crosses the bus two bits a base from page-locked memory, in chunks packed on the host threads the caller gives it while the device scores the chunk before, and is unpacked on the device. Tried on the RTX 2070 and dropped as slower: scores as floats, each column's substitutions held in a register, and row letters handed on by shuffle. Accelign's own case study ran on a Grace Hopper GH200 with 16-bit arithmetic and DPX instructions, which the RTX 2070 has neither of; its kernels scored its 10 million reads at 3.8 TCUPS, these about 0.36.
+- **Pairs the lanes do not take go one at a time**: a pair whose dearest path would not fit 16 bits, and with free ends one with an empty side. For those the two-ended wavefront and the bit-parallel sweep remain, each worker keeping its searches' memory from pair to pair, the forward search alone taking a cheap pair as far as its ring holds, and every worker's memory kept two cache lines clear of another's, since x86's L2 fetches lines in pairs.
 
 ## A\*PA2's Results, Redone
 
@@ -433,4 +435,4 @@ From `pixi run bench-astarpa2` on the same machine, over its samples of each dat
 
 ### Beyond one thread
 
-All of the above is one thread, as A\*PA2's evaluation measures, and one pair always runs on one thread. dinara-align also aligns batches of pairs across threads, one pair a thread, which the evaluation runs none of the others doing. On this machine's ten cores, from `pixi run bench-astarpa2`, a batch takes 3 µs a read on ont-1k, 24 µs on ont-10k and 48.4 ms on four ont-500k-genvar reads, against 31 µs, 248 µs and 225 ms for the fastest other aligner on one thread.
+All of the above is one thread, as A\*PA2's evaluation measures, and one pair always runs on one thread. dinara-align, a library, runs every call on its caller's thread and keeps no state between calls, so an application spreads its pairs over its own threads, as `dinara-align`'s command line does over every thread it may use; Short-Read Batches times that spread on all ten cores, 30 ms for 500,000 reads at the affine costs where WFA2-lib takes 115.
