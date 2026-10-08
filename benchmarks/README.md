@@ -3,9 +3,10 @@
 Times dinara-align against other exact global DNA aligners on the same inputs, and refuses to report a time for any workload where the tools disagree on the answer.
 
 ```bash
-pixi run bench                    # 1 kbp and 10 kbp workloads, about a minute
-pixi run bench --full             # adds the 100 kbp pairs, about four and a half minutes
+pixi run bench                    # 1 kbp and 10 kbp workloads, about a minute the first time, then seconds
+pixi run bench --full             # adds the 100 kbp pairs, about four and a half minutes the first time
 pixi run bench --install-rust     # also installs the nightly Rust A*PA needs, under .cache/
+pixi run bench --remeasure        # times the pinned rivals again rather than replaying their kept rows
 ```
 
 The table prints to the terminal and lands in `.cache/results/results.md`, with every raw row in `results.tsv`.
@@ -20,6 +21,7 @@ That table lands in `.cache/results/astarpa2.md`; see [A\*PA2's Evaluation](#apa
 ## What Runs
 
 Every rival is cloned at a pinned commit into `.cache/` and built there; nothing of theirs is vendored into this repository.
+A pinned rival's times do not change, so each harness times every rival once on a machine and keeps its rows, and a later run replays them and times dinara-align alone, in seconds; a new pin, runner, workload or CPU, or `--remeasure`, times the rival again. Every answer is still checked against every other.
 
 | Tool                                                                            | Commit    | License    | What it is run on                                                          |
 | :------------------------------------------------------------------------------ | :-------- | :--------- | :------------------------------------------------------------------------- |
@@ -208,7 +210,7 @@ dinara-align keeps under a tenth of WFA's memory on the largest pairs (86 agains
 Local alignment, Smith-Waterman, overlap alignment, every end gap free, and a read placed whole in a window with a reward, each with its CIGAR, against the aligners that offer them:
 
 ```bash
-pixi run bench-local   # builds SSW, parasail and abPOA the first time; then a few minutes
+pixi run bench-local   # builds and times SSW, parasail and abPOA the first time, a few minutes; then seconds
 ```
 
 Every tool scores a match 2, a mismatch -4 and a gap of `k` letters `6 + 2k` (dinara-align's `Mode.local(2)` and `Mode.overlap(2)` under `Costs.affine(4, 6, 2)`), and every tool's scores must agree on every pair, or the run fails; none disagreed.
@@ -232,7 +234,7 @@ The infix row scores with a reward, `Mode.INFIX.with_match_score(2)`, as parasai
 Free ends, seed extension, two-piece gaps and substitution tables of more than one mismatch score, each against the aligners that offer the same mode, on DNA:
 
 ```bash
-pixi run bench-modes   # builds Edlib, WFA2-lib's library and KSW2 the first time; then a few minutes
+pixi run bench-modes   # builds and times Edlib, WFA2-lib, KSW2, parasail and SSW the first time; then seconds
 ```
 
 Every tool aligns every pair with its CIGAR on one thread of the Skylake-X, pinned, every tool built for its own instruction set, AVX-512 included, dinara-align at `9767ca4`; a tool's time is the faster of two passes over a workload, its mean per pair, and every tool's costs or scores must agree on every pair, or the run fails; none disagreed.

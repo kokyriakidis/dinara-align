@@ -3,9 +3,10 @@
 # MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """Times dinara-align against other exact global DNA aligners, and checks that every answer agrees.
 
-    pixi run bench                    # 1k and 10k workloads, about a minute
-    pixi run bench --full             # adds the 100k DNA pairs, about five minutes
+    pixi run bench                    # 1k and 10k workloads, about a minute the first time
+    pixi run bench --full             # adds the 100k DNA pairs, about five minutes the first time
     pixi run bench --install-rust     # also installs the nightly A*PA needs, privately
+    pixi run bench --remeasure        # times the rivals again rather than replaying their kept rows
 
 Every rival is cloned at a pinned commit into `benchmarks/.cache/` and built there; nothing of
 theirs is vendored. Inputs are generated from a fixed seed, so two runs time the same pairs. Each
@@ -17,6 +18,11 @@ Every runner times each measurement the same way, warm and in-process: a call sh
 of a second is repeated in twenty batches and the fastest batch's average kept, a longer one is
 timed once. So one run of each runner is enough.
 
+The rivals are pinned, so each one is timed once and its rows kept (see `kept_rows`): a later run
+replays them, and only dinara-align runs again, until a pin, a runner's source, a workload or the CPU
+changes, or `--remeasure` asks. A rerun takes seconds. The same holds for `local_bench.py` and
+`mode_bench.py`; `pa_bench.py` keeps its rivals' results its own way, by budget.
+
 Every tool is built for the same CPU, `--cpu` (see `set_cpu`): by default the host's own, each
 compiler told so, Rust by `-C target-cpu`, C and C++ by `-march` or `-mcpu`, and Mojo by
 `--target-cpu`, so no tool runs a narrower instruction set than another. A*PA's kernels take their
@@ -25,6 +31,8 @@ pairs of 128-bit ones. Each table names the CPU it was built for and the process
 """
 
 import argparse
+import hashlib
+import json
 import os
 import platform
 import random
@@ -39,6 +47,10 @@ ROOT = HERE.parent
 CACHE = HERE / ".cache"
 DATA = CACHE / "data"
 RESULTS = CACHE / "results"
+KEPT_RIVALS = CACHE / "rival-results.json"
+"""Every rival's rows from an earlier run, by what they depend on (see `kept_rows`)."""
+REMEASURE = False
+"""Whether the rivals run again even where rows for the same inputs are kept (see `kept_rows`)."""
 
 RIVALS = {
     "hyalite": ("https://github.com/Psy-Fer/hyalite", "0189bcbfaf9e2fa57c7fb07ad7356e02c1d259f1"),
@@ -258,6 +270,39 @@ def mojo_runner() -> Path:
     return binary
 
 
+def fingerprint(*paths: Path) -> str:
+    """A hash of every file at or under `paths`, by name and content: a changed workload, driver or lock
+    is a different fingerprint, and a rebuilt binary or a touched file is not."""
+    digest = hashlib.sha1()
+    for path in paths:
+        files = [path] if path.is_file() else sorted(item for item in path.rglob("*") if item.is_file())
+        for file in files:
+            digest.update(file.name.encode())
+            digest.update(file.read_bytes())
+    return digest.hexdigest()[:16]
+
+
+def kept_rows(tool: str, pins: list, inputs: list, measure):
+    """`measure()`'s rows for a rival, measured once and kept.
+
+    A rival is pinned, so the same commits and driver built for the same CPU give the same times on the
+    same workload files: its rows are kept under all of those, `pins` the rival repositories it builds
+    from and `inputs` the files its driver and its workloads are, and replayed until any of them
+    changes, or `REMEASURE` asks for a fresh run. dinara-align, whose code changes, runs every time.
+    """
+    commits = "-".join(RIVALS[name][1][:12] for name in pins)
+    key = "\t".join([tool, commits, fingerprint(*inputs), CPU])
+    kept = json.loads(KEPT_RIVALS.read_text()) if KEPT_RIVALS.exists() else {}
+    if key in kept and not REMEASURE:
+        print(f"{tool}: kept from an earlier run", file=sys.stderr, flush=True)
+        return kept[key]
+    rows = measure()
+    kept[key] = rows
+    KEPT_RIVALS.parent.mkdir(parents=True, exist_ok=True)
+    KEPT_RIVALS.write_text(json.dumps(kept))
+    return rows
+
+
 # endregion Rivals
 
 # region Report
@@ -343,16 +388,26 @@ def main() -> None:
     parser.add_argument("--install-rust", action="store_true", help="install A*PA's nightly under the cache")
     parser.add_argument("--repeat", type=int, default=1, help="runs per tool, keeping the fastest (default 1)")
     parser.add_argument("--cpu", default="native", help="the CPU every tool is built for (default: the host's)")
+    parser.add_argument("--remeasure", action="store_true", help="run the rivals again, not their kept rows")
     options = parser.parse_args()
     set_cpu(options.cpu)
+    global REMEASURE
+    REMEASURE = options.remeasure
 
     generate(options.full)
     # dinara-align runs first: it writes the DNA scoring every other runner reads.
     rows = run(mojo_runner(), "dinara-align", options.repeat)
+    # Every runner reads the workload files at the data folder's top, and the scoring dinara-align wrote.
+    workloads = sorted(path for path in DATA.iterdir() if path.is_file())
+    repeated = f"repeat {options.repeat}"
 
     if shutil.which("cargo"):
-        fetch("hyalite")
-        rows += run(cargo_runner("hyalite", dict(os.environ)), "hyalite", options.repeat)
+        rows += kept_rows(
+            f"hyalite, {repeated}",
+            ["hyalite"],
+            [HERE / "hyalite", *workloads],
+            lambda: fetch("hyalite") and run(cargo_runner("hyalite", dict(os.environ)), "hyalite", options.repeat),
+        )
     else:
         print("skipping hyalite: no `cargo` on PATH", file=sys.stderr)
 
@@ -360,12 +415,21 @@ def main() -> None:
     if nightly is None:
         print("skipping A*PA: it needs `rustup` for its pinned nightly; pass --install-rust", file=sys.stderr)
     else:
-        fetch("astar-pairwise-aligner")
-        rows += run(cargo_runner("astarpa", nightly), "A*PA", options.repeat)
+        rows += kept_rows(
+            f"A*PA, {repeated}",
+            ["astar-pairwise-aligner"],
+            [HERE / "astarpa", *workloads],
+            lambda: fetch("astar-pairwise-aligner") and run(cargo_runner("astarpa", nightly), "A*PA", options.repeat),
+        )
 
     if shutil.which("cargo"):
-        fetch("pa-bench")
-        rows += run(cargo_runner("pa-wrapper", dict(os.environ)), "Edlib and WFA2-lib", options.repeat)
+        rows += kept_rows(
+            f"Edlib and WFA2-lib, {repeated}",
+            ["pa-bench"],
+            [HERE / "pa-wrapper", *workloads],
+            lambda: fetch("pa-bench")
+            and run(cargo_runner("pa-wrapper", dict(os.environ)), "Edlib and WFA2-lib", options.repeat),
+        )
     else:
         print("skipping Edlib and WFA2-lib: no `cargo` on PATH", file=sys.stderr)
 

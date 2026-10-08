@@ -5,7 +5,8 @@
 gap-affine costs, seed extension, two-piece gaps, and substitution tables with more than one mismatch
 score.
 
-    pixi run bench-modes     # builds the rivals the first time, a few minutes; then a few minutes more
+    pixi run bench-modes     # builds and times the rivals the first time, a few minutes; then seconds
+    pixi run bench-modes --remeasure   # times the rivals again rather than replaying their kept rows
 
 | workload | dinara-align | rivals |
 | :-- | :-- | :-- |
@@ -32,7 +33,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import run
-from run import CACHE, DATA, HERE, RESULTS, ROOT, build_note, c_cpu_flag, fetch, mojo_cpu_args, mutate
+from run import CACHE, DATA, HERE, RESULTS, ROOT, build_note, c_cpu_flag, fetch, kept_rows, mojo_cpu_args, mutate
 
 MODES = DATA / "modes"
 BUILD = CACHE / "modes"
@@ -171,18 +172,39 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--cpu", default="native", help="the CPU every tool is built for (default: the host's)")
     parser.add_argument("--only", nargs="*", help="run these workloads alone")
+    parser.add_argument("--remeasure", action="store_true", help="run the rivals again, not their kept rows")
     arguments = parser.parse_args()
     run.set_cpu(arguments.cpu)
+    run.REMEASURE = arguments.remeasure
     generate()
     ours = build_ours()
-    rivals = build_rivals()
+    # The rivals' driver is built only when some workload has no kept rows for it (see `run.kept_rows`).
+    built = {}
+
+    def rows_of(command: list) -> list:
+        """One runner's rows on one workload."""
+        print(f"{Path(command[-1]).stem}: {Path(command[0]).name} ...", file=sys.stderr, flush=True)
+        output = subprocess.run([str(part) for part in command], check=True, capture_output=True, text=True).stdout
+        return [line.split("\t") for line in output.strip().splitlines()]
+
+    def rivals() -> Path:
+        """The driver over Edlib, WFA2-lib, KSW2, parasail and SSW, built once."""
+        if "rivals" not in built:
+            built["rivals"] = build_rivals()
+        return built["rivals"]
+
     rows = []
     for workload in arguments.only or WORKLOADS:
         path = MODES / f"{workload}.tsv"
-        for command in ([str(ours), str(path)], [str(rivals), str(path)]):
-            print(f"{workload}: {Path(command[0]).name} ...", file=sys.stderr, flush=True)
-            output = subprocess.run(command, check=True, capture_output=True, text=True).stdout
-            rows.extend(line.split("\t") for line in output.strip().splitlines())
+        rows.extend(rows_of([ours, path]))
+        rows.extend(
+            kept_rows(
+                f"Edlib, WFA2-lib, KSW2, parasail and SSW on {workload}",
+                ["edlib", "WFA2-lib", "ksw2", "parasail", "SSW"],
+                [HERE / "modes" / "rivals.cpp", path],
+                lambda: rows_of([rivals(), path]),
+            )
+        )
     answers = defaultdict(dict)
     times = defaultdict(dict)
     for tool, workload, seconds, answer in rows:

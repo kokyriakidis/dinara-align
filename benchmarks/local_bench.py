@@ -3,7 +3,8 @@
 # MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """Times dinara-align's local, overlap and scored infix alignment against SSW, parasail, abPOA and hyalite.
 
-    pixi run bench-local     # builds the rivals the first time, a few minutes; then about a minute
+    pixi run bench-local     # builds and times the rivals the first time, a few minutes; then seconds
+    pixi run bench-local --remeasure   # times the rivals again rather than replaying their kept rows
 
 Every tool aligns every pair with its CIGAR at the same scores: a match 2, a mismatch -4, a gap of
 `k` letters `6 + 2k` (dinara-align's `Mode.local(2)` and `Mode.overlap(2)` under
@@ -25,7 +26,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import run
-from run import CACHE, DATA, HERE, RESULTS, ROOT, build_note, c_cpu_flag, cargo_runner, fetch, mojo_cpu_args, mutate
+from run import CACHE, DATA, HERE, RESULTS, ROOT, build_note, c_cpu_flag, cargo_runner, fetch, kept_rows, mojo_cpu_args, mutate
 
 LOCAL = DATA / "local"
 BUILD = CACHE / "local"
@@ -151,22 +152,47 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--cpu", default="native", help="the CPU every tool is built for (default: the host's)")
-    run.set_cpu(parser.parse_args().cpu)
+    parser.add_argument("--remeasure", action="store_true", help="run the rivals again, not their kept rows")
+    options = parser.parse_args()
+    run.set_cpu(options.cpu)
+    run.REMEASURE = options.remeasure
     generate()
     ours = build_ours()
-    rivals = build_rivals()
-    fetch("hyalite")
-    hyalite = cargo_runner("hyalite", dict(__import__("os").environ)) if shutil.which("cargo") else None
+    # The rivals are built only when some workload has no kept rows for them (see `run.kept_rows`).
+    built = {}
+
+    def rows_of(command: list) -> list:
+        """One runner's rows on one workload."""
+        print(f"{Path(command[-1]).stem}: {Path(command[0]).name} ...", file=sys.stderr, flush=True)
+        output = subprocess.run([str(part) for part in command], check=True, capture_output=True, text=True).stdout
+        return [line.split("\t") for line in output.strip().splitlines()]
+
+    def rivals() -> Path:
+        """The C driver over SSW, parasail and abPOA, built once."""
+        if "rivals" not in built:
+            built["rivals"] = build_rivals()
+        return built["rivals"]
+
+    def hyalite() -> Path:
+        """hyalite's runner, built once."""
+        if "hyalite" not in built:
+            fetch("hyalite")
+            built["hyalite"] = cargo_runner("hyalite", dict(__import__("os").environ))
+        return built["hyalite"]
+
     rows = []
     for workload in WORKLOADS:
         path = LOCAL / f"{workload}.tsv"
-        commands = [[str(ours), str(path)], [str(rivals), str(path)]]
-        if hyalite:
-            commands.append([str(hyalite), "local", str(path)])
-        for command in commands:
-            print(f"{workload}: {Path(command[0]).name} ...", file=sys.stderr, flush=True)
-            output = subprocess.run(command, check=True, capture_output=True, text=True).stdout
-            rows.extend(line.split("\t") for line in output.strip().splitlines())
+        rows.extend(rows_of([ours, path]))
+        rows.extend(
+            kept_rows(f"SSW, parasail and abPOA on {workload}", ["SSW", "parasail", "abPOA"],
+                      [HERE / "local" / "rivals.c", path], lambda: rows_of([rivals(), path]))
+        )
+        if shutil.which("cargo"):
+            rows.extend(
+                kept_rows(f"hyalite on {workload}", ["hyalite"], [HERE / "hyalite", path],
+                          lambda: rows_of([hyalite(), "local", path]))
+            )
     answers = defaultdict(set)
     times = defaultdict(dict)
     for tool, workload, task, seconds, answer in rows:
