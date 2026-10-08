@@ -34,7 +34,7 @@ from dinara_align import (
     score,
     search,
 )
-from dinara_align.api import aligned_within, cost_within
+from dinara_align.api import aligned_within, bits_serve, cost_within
 from dinara_align.common import next_share, spread
 from dinara_align.gap_affine import KEPT_BYTES, Penalties, SearchSpace, cigar_of, penalties_of
 from dinara_align.lanes import LaneCosts, Texts, lane_alignments, lane_distances
@@ -557,6 +557,7 @@ def dinara_distances(
             found_ptr,
             settled_ptr,
             wanted_mode,
+            not bits_serve(wanted_costs, wanted_mode, asked.band, cap),
         )
         for index in range(pairs):
             laned[index] = settled[index] and not before[index]
@@ -637,7 +638,10 @@ def dinara_alignments(
     var found_ptr = found.unsafe_ptr()
     var laned_ptr = laned.unsafe_ptr()
     var path_ptr = paths.unsafe_ptr()
-    var lane_costs = LaneCosts.of(wanted_costs, wanted_mode)
+    # As `alignments` sends them: unit costs the bit-parallel sweep serves take it pair by pair.
+    var lane_costs = LaneCosts.of(wanted_costs, wanted_mode) if not bits_serve(
+        wanted_costs, wanted_mode, asked.band, asked.max_cost if capped else Int.MAX
+    ) else None
     var penalties: Optional[Penalties] = None
     if lane_costs:
         try:

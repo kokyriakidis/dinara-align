@@ -376,6 +376,14 @@ struct LaneSpace[value: DType](Movable):
     var columns: Int
     var row_ends: SIMD[DType.int16, lanes_of[Self.value]()]
     var column_ends: SIMD[DType.int16, lanes_of[Self.value]()]
+    var stop: Int
+    """The cost past which a lane is done with: once every lane's row has reached it, or its last row, the
+    sweep stops (see `swept`); a byte's 255, or a cap's next cost."""
+    var stopped: Bool
+    """Whether the last sweep stopped early so."""
+    var limits: SIMD[Self.value, lanes_of[Self.value]()]
+    """Each lane's own stop besides, where only a cost under it is worth finding: a first band's proof,
+    when the pairs it does not prove go elsewhere."""
     var free: Bool
     """Whether any lane has free letters at an end, which its own allowances below give."""
     var last_columns: List[Int]
@@ -404,6 +412,9 @@ struct LaneSpace[value: DType](Movable):
         self.columns = 0
         self.row_ends = SIMD[DType.int16, lanes_of[Self.value]()](-1)
         self.column_ends = SIMD[DType.int16, lanes_of[Self.value]()](0)
+        self.stop = Int.MAX
+        self.stopped = False
+        self.limits = SIMD[Self.value, lanes_of[Self.value]()](Scalar[Self.value](far_of[Self.value]()))
         self.free = False
         self.last_columns = List[Int]()
         self.last_lanes = List[SIMD[DType.bool, lanes_of[Self.value]()]]()
@@ -592,6 +603,7 @@ def pieced_band_costs[
     comptime Lanes = SIMD[value, WIDTH]
     comptime FAR = far_of[value]()
     var columns = space.columns
+    space.stopped = False
     space.scores.resize(columns + 2, Lanes(FAR))
     space.deletions.resize(columns + 2, Lanes(FAR))
     comptime if pieces == 2:
@@ -615,6 +627,9 @@ def pieced_band_costs[
     while row < space.rows:
         var next = min(row + every, space.rows)
         swept[value, pieces, False, False, tabled](space, low, high, costs, row, next, found)
+        if space.stopped:
+            # Every lane done: its walk, if any, stays in the rows kept so far.
+            break
         if next % every == 0 and next < space.rows:
             saved_row[value, pieces](space, low, high, next)
         row = next
@@ -788,6 +803,8 @@ def swept[
     var insert_extend2 = Lanes(held[value](costs.insertion_extension2))
     var row_source = space.row_letters.unsafe_ptr()
     var column_source = space.column_letters.unsafe_ptr()
+    var stopping = space.stop <= FAR
+    var stop = min(Lanes(Scalar[value](min(space.stop, FAR))), space.limits)
     for row in range(start + 1, end + 1):
         var first = max(row + low, 0)
         var last = min(row + high, columns)
@@ -817,6 +834,8 @@ def swept[
                 deletions2[unsafe_offset=first - 1] = Lanes(FAR)
         var insertion = Lanes(FAR)
         var insertion2 = Lanes(FAR)
+        # The row's least cost so far, the left edge's among them.
+        var least = left
         # This row's flags, indexed by column.
         var row_flags = flags.unsafe_offset((row - start - 1) * span - row - low)
         for column in range(first, last + 1):
@@ -870,6 +889,8 @@ def swept[
                 row_flags[unsafe_offset=column] = flag
             deletions[unsafe_offset=column] = deletion
             scores[unsafe_offset=column] = score
+            comptime if not record:
+                least = min(least, score)
             diagonal = above
             left = score
         # A lane whose reference ends on this row reads its corner, if the band holds it; with free ends,
@@ -883,6 +904,13 @@ def swept[
                         var column = Int(column_ends[lane])
                         if column >= max(row + low, 0) and column <= last:
                             found[lane] = scores[unsafe_offset=column][lane]
+        # No row costs less than the one before, every cell coming from it or from its left at no saving:
+        # once every lane's row has reached `stop`, or the lane has passed its last row, no lane can end
+        # under it, and the sweep has nothing left to find.
+        comptime if not record:
+            if stopping and (least.ge(stop) | row_ends.le(Int16(row))).reduce_and():
+                space.stopped = True
+                return
 
 
 def lane_distances[
@@ -898,22 +926,31 @@ def lane_distances[
     costs_out: MutPointer[Optional[Int], _],
     settled: MutPointer[Bool, _],
     mode: Mode = Mode.GLOBAL,
+    retry: Bool = True,
 ) -> Int:
     """Every pair `settled` does not already mark that the lanes hold, its distance within `reference_band`
     with the letters `mode` leaves free at either end into `costs_out`, None past `max_cost` or with no
     path inside the band, and `settled` set; the others left for the caller, a pair with an empty side
     among them when an end is free. The pairs settled here: first in bytes, where every step's cost fits
-    one, then in 16 bits."""
+    one, then in 16 bits. Without `retry`, only those a first band proves: the rest are left for a search
+    of the caller's that does better on the wide band their proof would need (see `api.bits_serve`)."""
     var before = 0
     for index in range(pairs):
         before += Int(settled[unsafe_offset=index])
+    var declined = List[Int]()
     if costs.fits_bytes():
-        lane_stage[T, DType.uint8](
-            pairs, references, queries, costs, reference_band, max_cost, workers, costs_out, settled, mode
+        declined = lane_stage[T, DType.uint8](
+            pairs, references, queries, costs, reference_band, max_cost, workers, costs_out, settled, mode, retry
         )
-    lane_stage[T, DType.int16](
-        pairs, references, queries, costs, reference_band, max_cost, workers, costs_out, settled, mode
+    # A pair a byte held but its first band did not prove is the caller's: 16 bits would only sweep the
+    # same band again. It is kept from them, marked, and unmarked after.
+    for index in declined:
+        settled[unsafe_offset=index] = True
+    _ = lane_stage[T, DType.int16](
+        pairs, references, queries, costs, reference_band, max_cost, workers, costs_out, settled, mode, retry
     )
+    for index in declined:
+        settled[unsafe_offset=index] = False
     # A stage leaves what its lanes cannot hold, so the pairs settled are counted, not assumed.
     var after = 0
     for index in range(pairs):
@@ -1035,7 +1072,8 @@ def lane_stage[
     costs_out: MutPointer[Optional[Int], _],
     settled: MutPointer[Bool, _],
     mode: Mode,
-):
+    retry: Bool,
+) -> List[Int]:
     """`lane_distances` in lanes of `value`: every pair `settled` does not mark and the lanes hold settled,
     a pair whose byte saturates left.
 
@@ -1045,7 +1083,7 @@ def lane_stage[
     comptime WIDTH = lanes_of[value]()
     var band = Band(-reference_band.high, -reference_band.low)
     if pairs == 0:
-        return
+        return List[Int]()
     var free = not mode.is_global()
     var order = dealt[T, value](pairs, references, queries, costs, workers, settled, Band(), free)
     var placed = len(order)
@@ -1071,6 +1109,7 @@ def lane_stage[
         imm band,
         imm max_cost,
         imm mode,
+        imm retry,
         imm groups,
         imm first_workers,
         imm placed,
@@ -1081,6 +1120,9 @@ def lane_stage[
     }:
         """Takes groups until none is left, settling every pair its band proves."""
         ref space = space_ptr[unsafe_offset=worker]
+        # A byte is done at its 255; 16 bits at the cap's next cost, if there is a cap they hold.
+        space.stop = far_of[value]() if value == DType.uint8 or max_cost >= far_of[value]() - 1 else max_cost + 1
+        space.limits = SIMD[value, WIDTH](Scalar[value](far_of[value]()))
         var last_share = 0
         while True:
             var share = next_share(taken, groups, first_workers, last_share)
@@ -1101,12 +1143,30 @@ def lane_stage[
                     high = max(high, max(ends.start_high(), ends.end_high(end)) + 1)
                 low = max(low, band.low)
                 high = min(high, band.high)
+                # A pair left to the caller unless this band proves it is done with once its cost passes
+                # every path off the band (see `proof`), which a row reaching that shows.
+                space.limits = SIMD[value, WIDTH](Scalar[value](far_of[value]()))
+                if not retry:
+                    for lane in range(len(space.members)):
+                        var index = space.members[lane]
+                        var rows = references.length(index)
+                        var columns = queries.length(index)
+                        var off = off_band_of(low, high, band, costs, rows, columns, LaneEnds.of(mode, rows, columns))
+                        if off < far_of[value]() and off <= max_cost:
+                            space.limits[lane] = Scalar[value](off + 1)
                 var found = band_costs(references, queries, space, low, high, costs, False, 0, mode)
                 for lane in range(len(space.members)):
                     var index = space.members[lane]
                     var cost = Int(found[lane])
                     var rows = references.length(index)
                     var columns = queries.length(index)
+                    if not retry and cost >= Int(space.limits[lane]):
+                        # Past its proof, or stopped there: the caller's, whatever a byte would say.
+                        space.retries[0].append(index)
+                        space.retries[0].append(cost)
+                        space.retries[0].append(low)
+                        space.retries[0].append(high)
+                        continue
                     var verdict = proof[value, False](
                         index,
                         cost,
@@ -1135,8 +1195,14 @@ def lane_stage[
         for worker in range(workers):
             retries.extend(Span(spaces[worker].retries[bucket]))
     var unproven = len(retries) // 4
+    if not retry:
+        # The pairs a first band left unproven, for the caller's own search.
+        var declined = List[Int](capacity=unproven)
+        for slot in range(unproven):
+            declined.append(retries[4 * slot])
+        return declined^
     if unproven == 0:
-        return
+        return List[Int]()
     var retry_ptr = retries.unsafe_ptr()
     var retry_groups = ceildiv(unproven, WIDTH)
     var retaken = Atomic[Int64](0)
@@ -1161,6 +1227,9 @@ def lane_stage[
     }:
         """Takes groups of unproven pairs until none is left, settling each."""
         ref space = space_ptr[unsafe_offset=worker]
+        # A byte is done at its 255; 16 bits at the cap's next cost, if there is a cap they hold.
+        space.stop = far_of[value]() if value == DType.uint8 or max_cost >= far_of[value]() - 1 else max_cost + 1
+        space.limits = SIMD[value, WIDTH](Scalar[value](far_of[value]()))
         var last_share = 0
         while True:
             var share = next_share(retaken, retry_groups, second_workers, last_share)
@@ -1184,6 +1253,7 @@ def lane_stage[
                     settled[unsafe_offset=space.members[lane]] = True
 
     spread(second_pass, second_workers, second_workers)
+    return List[Int]()
 
 
 comptime BUCKETS = 24
@@ -1198,6 +1268,19 @@ comptime UNHELD = 2
 """`proof`'s verdict: a byte saturated, the pair left for 16 bits."""
 comptime FILED = 3
 """`proof`'s verdict: filed for a wider band."""
+
+
+@always_inline
+def off_band_of(low: Int, high: Int, band: Band, costs: LaneCosts, rows: Int, columns: Int, ends: LaneEnds) -> Int:
+    """The least any path off diagonals `low ..= high` costs, of a pair of `rows` reference letters and
+    `columns` query letters and the free letters `ends`, or `Int.MAX` when no path leaves them: a path
+    cannot leave the matrix, nor `band`."""
+    var end = columns - rows
+    var top = min(band.high, columns)
+    var bottom = max(band.low, -rows)
+    var beyond_high = costs.off_band(high + 1, end, ends) if high < top else Int.MAX
+    var beyond_low = costs.off_band(low - 1, end, ends) if low > bottom else Int.MAX
+    return min(beyond_high, beyond_low)
 
 
 @always_inline
@@ -1432,8 +1515,9 @@ def lane_alignments[
     costs_out: MutPointer[Optional[Int], _],
     moves_out: MutPointer[List[UInt8], _],
     settled: MutPointer[Bool, _],
+    retry: Bool = True,
 ) -> Int:
-    """`lane_distances` for alignments: every pair `settled` does not mark that a byte's lanes hold, its
+    """`lane_distances` for alignments, `retry` as it takes it: every pair `settled` does not mark that a byte's lanes hold, its
     global cost within `reference_band` into `costs_out` and its path's moves, right to left as
     `gap_affine.solve` appends them, into `moves_out`, None past `max_cost` or with no path inside the
     band, and `settled` set. The path is the one `Ties` picks, `Ties.LEFT` with `left`: the rule run over
@@ -1460,6 +1544,7 @@ def lane_alignments[
             costs_out,
             moves_out,
             settled,
+            retry,
         )
     var after = 0
     for index in range(pairs):
@@ -1482,6 +1567,7 @@ def lane_alignment_stage[
     costs_out: MutPointer[Optional[Int], _],
     moves_out: MutPointer[List[UInt8], _],
     settled: MutPointer[Bool, _],
+    retry: Bool,
 ):
     """`lane_alignments` in lanes of `value`, as `lane_stage` runs `lane_distances`'s, each band's flags
     kept and every pair it proves traced before the next group takes them; a band proves a pair only when
@@ -1529,6 +1615,9 @@ def lane_alignment_stage[
     }:
         """Takes groups until none is left, settling and tracing every pair its band proves."""
         ref space = space_ptr[unsafe_offset=worker]
+        # A byte is done at its 255; 16 bits at the cap's next cost, if there is a cap they hold.
+        space.stop = far_of[value]() if value == DType.uint8 or max_cost >= far_of[value]() - 1 else max_cost + 1
+        space.limits = SIMD[value, WIDTH](Scalar[value](far_of[value]()))
         var walks = List[Walk]()
         var last_share = 0
         while True:
@@ -1588,7 +1677,7 @@ def lane_alignment_stage[
         for worker in range(workers):
             retries.extend(Span(spaces[worker].retries[bucket]))
     var unproven = len(retries) // 4
-    if unproven == 0:
+    if unproven == 0 or not retry:
         return
     var retry_ptr = retries.unsafe_ptr()
     var retry_groups = ceildiv(unproven, WIDTH)
@@ -1616,6 +1705,9 @@ def lane_alignment_stage[
     }:
         """Takes groups of unproven pairs until none is left, settling and tracing each."""
         ref space = space_ptr[unsafe_offset=worker]
+        # A byte is done at its 255; 16 bits at the cap's next cost, if there is a cap they hold.
+        space.stop = far_of[value]() if value == DType.uint8 or max_cost >= far_of[value]() - 1 else max_cost + 1
+        space.limits = SIMD[value, WIDTH](Scalar[value](far_of[value]()))
         var walks = List[Walk]()
         var last_share = 0
         while True:
