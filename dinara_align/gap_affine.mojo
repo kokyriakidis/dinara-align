@@ -366,10 +366,13 @@ def padded(codes: Span[UInt8, _], sentinel: UInt8, reverse: Bool) -> List[UInt8]
     return out^
 
 
-comptime LINE_GUARD = 64
-"""A cache line of bytes before and after a search's own copy of a sequence, which `Wavefront.start`
-rewrites every pair and its fronts read at every cost: so it shares no line with another allocation,
-another worker's copy among them (see `OwnLines`)."""
+comptime LINE_GUARD = 128
+"""The bytes kept clear before and after memory one worker writes as it goes, its search's copies of
+the sequences and its slots' bounds (see `OwnLines`), so it shares no cache line with another worker's.
+Two lines, not one: x86's L2 fetches lines in aligned pairs, so a worker writing one line of a pair
+takes the other from whichever core holds it. With one line clear, ten threads on the Skylake-X still
+fetched 3.4 million lines from other cores over 2 million short reads; with two, 0.3 million, and they
+spent as many cycles a pair as one thread does."""
 
 
 def padded_into(mut out: List[UInt8], codes: Span[UInt8, _], sentinel: UInt8, reverse: Bool, guard: Int = 0):
@@ -530,15 +533,15 @@ def unreach(cells: MutPointer[Int32, _], count: Int):
 
 
 struct OwnLines(Movable):
-    """`Int`s indexed as a list's, on cache lines no other allocation shares: a cache line of nothing
-    either side of them.
+    """`Int`s indexed as a list's, on cache lines no other allocation shares: `LINE_GUARD` bytes of
+    nothing either side of them.
 
     `Fronts` writes its slots' bounds and reaches at every cost. As lists of their own, a few words
     each, the allocator packed them beside another thread's, and a batch's workers took the line
     from each other at every write: on the Skylake-X ten threads spent twice one thread's cycles a
     pair, 40 lines fetched from another core a pair, where ten processes ran as one does."""
 
-    comptime GUARD = 64 // size_of[Int]()
+    comptime GUARD = LINE_GUARD // size_of[Int]()
     var items: List[Int]
 
     def __init__(out self, length: Int, fill: Int):
