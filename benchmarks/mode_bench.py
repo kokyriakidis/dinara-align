@@ -3,7 +3,7 @@
 # MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """Times dinara-align's other modes against the aligners that offer the same one: free ends at unit and
 gap-affine costs, seed extension, two-piece gaps, and substitution tables with more than one mismatch
-score, DNA and protein.
+score.
 
     pixi run bench-modes     # builds the rivals the first time, a few minutes; then a few minutes more
 
@@ -15,7 +15,6 @@ score, DNA and protein.
 | extension | `Costs.affine(4, 6, 2)`, `Mode.extension(2)` | KSW2's `extz2`, extension only, no Z-drop |
 | two-piece | `Costs.two_piece(4, 6, 2, 24, 1)`, global | KSW2's `extd2`, WFA2-lib's two-piece gap-affine |
 | table-global, table-local | a `Scoring` with transitions apart from transversions | parasail, and SSW locally |
-| protein-local | a `Scoring` of BLOSUM62, a gap of `k` letters `10 + k` | parasail, SSW |
 
 Every tool aligns every pair with its CIGAR, on one thread, and its time is the faster of two passes over
 a workload, its mean per pair. Its answer, the sum and position-weighted sum of its costs or scores, must
@@ -27,7 +26,6 @@ work. Deletions priced apart from insertions are left out too: no rival here off
 """
 
 import random
-import re
 import subprocess
 import sys
 from collections import defaultdict
@@ -47,9 +45,7 @@ WORKLOADS = [
     "two-piece",
     "table-global",
     "table-local",
-    "protein-local",
 ]
-AMINO_ACIDS = "ARNDCQEGHILKMFPSTWYV"
 
 
 def generate() -> None:
@@ -106,29 +102,6 @@ def generate() -> None:
     write("two-piece", two_piece)
     write("table-global", [(reference, mutate(reference, 0.1, "ACGT", rng)) for reference in (sequence(1_000) for _ in range(100))])
     write("table-local", placed(20, 1_000, 10_000, 0.1))
-    protein = []
-    for _ in range(200):
-        core = sequence(rng.randint(150, 400), AMINO_ACIDS)
-        reference = sequence(rng.randint(0, 100), AMINO_ACIDS) + core + sequence(rng.randint(0, 100), AMINO_ACIDS)
-        protein.append((reference, mutate(core, 0.3, AMINO_ACIDS, rng)))
-    write("protein-local", protein)
-
-
-def write_blosum62(parasail: Path) -> Path:
-    """parasail's BLOSUM62 as a file dinara-align's runner reads: its alphabet on the first line, then its
-    rows, so both sides score from one table."""
-    # The rows carry comments naming their letters, which must not read as cells.
-    header = re.sub(r"/\*.*?\*/", "", (parasail / "parasail" / "matrices" / "blosum62.h").read_text(), flags=re.S)
-    alphabet = re.search(r'"([A-Z*]+)"', header[header.index("parasail_blosum62 = {") :]).group(1)
-    # From past the array's brace, so the 62 of its name is not read as a cell.
-    body = header[header.index("parasail_blosum62_[] = {") + len("parasail_blosum62_[] = {") :]
-    cells = [int(value) for value in re.findall(r"-?\d+", body[: body.index("};")])]
-    assert len(cells) == len(alphabet) ** 2, "parasail's BLOSUM62 is not square in its alphabet"
-    path = MODES / "blosum62.txt"
-    size = len(alphabet)
-    rows = [" ".join(str(cell) for cell in cells[row * size : (row + 1) * size]) for row in range(size)]
-    path.write_text(alphabet + "\n" + "\n".join(rows) + "\n")
-    return path
 
 
 def build_rivals() -> Path:
@@ -201,13 +174,12 @@ def main() -> None:
     arguments = parser.parse_args()
     run.set_cpu(arguments.cpu)
     generate()
-    matrix = write_blosum62(fetch("parasail"))
     ours = build_ours()
     rivals = build_rivals()
     rows = []
     for workload in arguments.only or WORKLOADS:
         path = MODES / f"{workload}.tsv"
-        for command in ([str(ours), str(path), str(matrix)], [str(rivals), str(path)]):
+        for command in ([str(ours), str(path)], [str(rivals), str(path)]):
             print(f"{workload}: {Path(command[0]).name} ...", file=sys.stderr, flush=True)
             output = subprocess.run(command, check=True, capture_output=True, text=True).stdout
             rows.extend(line.split("\t") for line in output.strip().splitlines())

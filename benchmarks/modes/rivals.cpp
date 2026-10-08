@@ -7,7 +7,7 @@
 //     rivals <workload file>
 //
 // Edlib (HW, SHW) and WFA2-lib (ends-free) for free ends, KSW2 for the extension and two-piece gaps, WFA2-lib
-// for two-piece gaps, parasail and SSW for substitution tables. Each pair of the file,
+// for two-piece gaps, parasail and SSW for a DNA substitution table. Each pair of the file,
 // `name<TAB>reference<TAB>query`, is aligned by each tool that offers the workload's mode; a tool's time is
 // the faster of two passes over the file, its mean per pair, and its answer the sum and position-weighted sum
 // of each pair's cost, or score where the mode rewards matches. Prints
@@ -241,15 +241,6 @@ int main(int argc, char **argv) {
             time_tool("SSW", workload, pairs, [&](const Pair &pair) { return ssw(pair, table, 5, code_of, 6, 2); });
         }
         parasail_matrix_free(matrix);
-    } else if (workload == "protein-local") {
-        // BLOSUM62, a gap of `k` letters `10 + k`: an opening of 11 and an extension of 1.
-        const parasail_matrix_t *matrix = parasail_matrix_lookup("blosum62");
-        int size = matrix->size;
-        std::vector<int8_t> table(size * size);
-        for (int cell = 0; cell < size * size; ++cell) table[cell] = static_cast<int8_t>(matrix->matrix[cell]);
-        time_tool("parasail", workload, pairs, [&](const Pair &pair) { return parasail(pair, matrix, 11, 1, true); });
-        auto code_of = [matrix](char c) -> int8_t { return static_cast<int8_t>(matrix->mapper[static_cast<unsigned char>(c)]); };
-        time_tool("SSW", workload, pairs, [&](const Pair &pair) { return ssw(pair, table, size, code_of, 11, 1); });
     }
     return 0;
 }

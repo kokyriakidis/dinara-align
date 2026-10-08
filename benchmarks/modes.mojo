@@ -4,7 +4,7 @@
 The side of `mode_bench.py` dinara-align runs: each workload's mode, with its CIGAR, one pair at a time on one
 thread.
 
-    mojo build -I . benchmarks/modes.mojo -o <binary> && <binary> <workload file> <BLOSUM62 file>
+    mojo build -I . benchmarks/modes.mojo -o <binary> && <binary> <workload file>
 
 The workload's name picks the call (see `mode_bench.py`); the time is the faster of two passes over the
 file, its mean per pair, and the answer the sum and position-weighted sum of each pair's cost, or of its
@@ -31,18 +31,6 @@ def dna_table() raises -> Scoring:
             else:
                 cells.append(-4)
     return Scoring.tabulated(BASES, cells^, -4, -2)
-
-
-def blosum62(path: String) raises -> Scoring:
-    """BLOSUM62, parasail's, as `mode_bench.py` wrote it, a gap of `k` letters `-(10 + k)`: parasail's and
-    SSW's opening of 11 and extension of 1."""
-    var lines = open(path, "r").read().split("\n")
-    var alphabet = String(lines[0])
-    var cells = List[Int8]()
-    for row in range(1, alphabet.byte_length() + 1):
-        for value in lines[row].split(" "):
-            cells.append(Int8(Int(String(value))))
-    return Scoring.tabulated(alphabet, cells^, -10, -1)
 
 
 def answer(reference: String, query: String, workload: String, scoring: Scoring) raises -> Int:
@@ -76,7 +64,7 @@ def main() raises:
         references.append(String(fields[1]))
         queries.append(String(fields[2]))
     var workload = names[0]
-    var scoring = blosum62(String(argv()[2])) if workload == "protein-local" else dna_table()
+    var scoring = dna_table()
     var best = Float64.MAX
     var total = 0
     var weighted = 0
