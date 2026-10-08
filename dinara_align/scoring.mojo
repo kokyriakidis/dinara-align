@@ -47,6 +47,7 @@ from .common import (
     Placement,
     SubstitutionDType,
     SymbolDType,
+    UNKNOWN_SYMBOL,
     translate,
     uniform_matrix,
 )
@@ -190,18 +191,76 @@ struct BatchTape(Movable):
 
 
 def pack_batch(
-    firsts: List[String], seconds: List[String], indices: List[Int], alphabet: String
+    firsts: List[String], seconds: List[String], indices: List[Int], alphabet: String, threads: Int = 1
 ) raises AlignmentError -> BatchTape:
-    """The named pairs concatenated onto one tape, with offsets marking where each sequence begins."""
-    var sequences = List[Scalar[SymbolDType]]()
-    var offsets = List[Scalar[OffsetDType]]()
+    """The named pairs concatenated onto one tape, with offsets marking where each sequence begins.
+
+    Where each sequence goes is worked out first, and then each of `threads` writes its stretch of the
+    pairs' codes straight onto the tape: one thread translating a sequence at a time into a list of
+    its own took three times as long as the kernel that scored 500,000 short reads. A letter outside
+    the alphabet raises as `translate` does, for the first pair in order holding one."""
+    var codes_by_byte = Array[UInt8, 256](fill=UNKNOWN_SYMBOL)
+    var alphabet_bytes = alphabet.as_bytes()
+    for index in range(len(alphabet_bytes)):
+        codes_by_byte[Int(alphabet_bytes[index])] = UInt8(index)
+    var pairs = len(indices)
+    var offsets = List[Scalar[OffsetDType]](capacity=2 * pairs + 1)
     offsets.append(0)
+    var length = 0
     for index in indices:
-        sequences.extend(translate(firsts[index], alphabet))
-        offsets.append(Scalar[OffsetDType](len(sequences)))
-        sequences.extend(translate(seconds[index], alphabet))
-        offsets.append(Scalar[OffsetDType](len(sequences)))
+        length += firsts[index].byte_length()
+        offsets.append(Scalar[OffsetDType](length))
+        length += seconds[index].byte_length()
+        offsets.append(Scalar[OffsetDType](length))
+    var sequences = List[Scalar[SymbolDType]](capacity=length)
+    sequences.resize(unsafe_uninit_length=length)
+    var failed = List[Bool](length=pairs, fill=False)
+    var tape = sequences.unsafe_ptr()
+    var places = offsets.unsafe_ptr()
+    var flags = failed.unsafe_ptr()
+    var stretches = max(min(threads, pairs), 1)
+
+    def encode(
+        stretch: Int,
+    ) {
+        imm firsts,
+        imm seconds,
+        imm indices,
+        imm codes_by_byte,
+        imm pairs,
+        imm stretches,
+        imm tape,
+        imm places,
+        imm flags,
+    }:
+        """The codes of stretch `stretch`'s pairs onto the tape, flagging a pair holding a letter
+        outside the alphabet."""
+        for slot in range(pairs * stretch // stretches, pairs * (stretch + 1) // stretches):
+            var index = indices[slot]
+            var known = encoded_into(firsts[index], codes_by_byte, tape.unsafe_offset(Int(places[2 * slot])))
+            known = encoded_into(seconds[index], codes_by_byte, tape.unsafe_offset(Int(places[2 * slot + 1]))) and known
+            if not known:
+                flags[unsafe_offset=slot] = True
+
+    parallelize(encode, stretches, stretches)
+    for slot in range(pairs):
+        if failed[slot]:
+            # The pair's own translation raises the error the serial packing raised.
+            _ = translate(firsts[indices[slot]], alphabet)
+            _ = translate(seconds[indices[slot]], alphabet)
     return BatchTape(sequences^, offsets^)
+
+
+@always_inline
+def encoded_into(text: String, codes_by_byte: Array[UInt8, 256], target: MutPointer[Scalar[SymbolDType], _]) -> Bool:
+    """Writes `text`'s codes from `target` on, and whether every letter had one."""
+    var bytes = text.unsafe_ptr()
+    var unknown = False
+    for position in range(text.byte_length()):
+        var code = codes_by_byte[Int(bytes[unsafe_offset=position])]
+        unknown = unknown or code == UNKNOWN_SYMBOL
+        target[unsafe_offset=position] = Scalar[SymbolDType](code)
+    return not unknown
 
 
 def paired_length(firsts: List[String], seconds: List[String]) raises AlignmentError -> Int:
@@ -760,7 +819,7 @@ def scores_with[
                 scoring.gaps,
             )
     if len(banded) > 0:
-        var tape = pack_batch(firsts, seconds, banded, scoring.alphabet)
+        var tape = pack_batch(firsts, seconds, banded, scoring.alphabet, resolved.threads)
         var scored = device_scores[mode](
             scope, tape.sequences, tape.offsets, scoring.substitutions, scoring.alphabet_size(), scoring.gaps
         )
@@ -832,7 +891,7 @@ def alignments_with[
                 resolved,
             )
     if len(batchable) > 0:
-        var tape = pack_batch(firsts, seconds, batchable, scoring.alphabet)
+        var tape = pack_batch(firsts, seconds, batchable, scoring.alphabet, resolved.threads)
         var aligned = device_alignments[mode](
             scope, tape.sequences, tape.offsets, scoring.substitutions, scoring.alphabet, scoring.gaps
         )
