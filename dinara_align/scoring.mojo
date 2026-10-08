@@ -820,15 +820,15 @@ def scores_with[
                 scoring.gaps,
             )
     if len(banded) > 0:
-        var tape = pack_batch(firsts, seconds, banded, scoring.alphabet, resolved.threads)
         # Several pairs a warp where the batch is narrow enough, a warp a pair otherwise.
         var grouped = grouped_scores[mode](
-            scope, tape.sequences, tape.offsets, scoring.substitutions, scoring.alphabet_size(), scoring.gaps
+            scope, firsts, seconds, banded, scoring.alphabet, scoring.substitutions, scoring.gaps, resolved.threads
         )
         var scored: List[Int32]
         if grouped:
             scored = grouped.take()
         else:
+            var tape = pack_batch(firsts, seconds, banded, scoring.alphabet, resolved.threads)
             scored = device_scores[mode](
                 scope, tape.sequences, tape.offsets, scoring.substitutions, scoring.alphabet_size(), scoring.gaps
             )

@@ -17,23 +17,33 @@ of 148 bases used half its updates. A pair wider than the widest shape goes to t
 The groups of a warp step together, as far as the warp's longest pair needs, so every shuffle has
 every lane: a lane whose pair has ended, or whose warp has no pair for it, computes nothing that is
 read. Scores only, no traceback.
+
+The pairs travel packed: each letter in as few bits as the alphabet needs, two for DNA, sixteen to a
+32-bit word, each sequence from a word of its own, so the threads packing a batch never share a word;
+and each pair three numbers, the word its first sequence starts at and the two lengths, its second
+sequence from the next word after its first. They are packed straight into page-locked memory, which
+the device copies from at the bus's full rate: 500,000 short reads went over as 150 MB of bytes from
+pageable memory, 20 ms, a fifth of the batch's time.
 """
 
 from std.math import ceildiv, clamp
 from std.memory import stack_allocation
 from std.memory.pointer import AddressSpace
+from max.algorithm import parallelize
 from max.gpu import WARP_SIZE, barrier, block_idx, thread_idx
 from max.gpu.primitives.warp import shuffle_up, shuffle_xor
 
-from .alignment import AffineGapCosts, AlignmentMode, gotoh_cell
+from .alignment import AffineGapCosts, AlignmentMode
+from .bit_parallel import base_codes, not_bases
 from .common import (
     DeviceScope,
     MAX_ALPHABET_SIZE,
-    OffsetDType,
     ScoreDType,
     SubstitutionDType,
-    SymbolDType,
     THREADS_PER_BLOCK,
+    UNKNOWN_SYMBOL,
+    allocate,
+    translate,
     upload,
     zeroed,
 )
@@ -45,11 +55,24 @@ comptime SHAPE_COLUMNS: Array[Int, 12] = [8, 12, 16, 8, 12, 16, 8, 12, 16, 8, 12
 comptime SHAPES = 12
 
 
+def unpack_kernel[bits: Int](codes: Pointer[UInt32, MutAnyOrigin], letters: Pointer[UInt8, MutAnyOrigin], words: Int32):
+    """Each word of the packed tape as its letters, a byte each, one thread a word: the tape crosses
+    the bus packed, and the scoring kernel reads a byte where unpacking a letter itself every step cost
+    it a fifth of its time."""
+    comptime per_word = 32 // bits
+    var index = Int(block_idx.x) * THREADS_PER_BLOCK + Int(thread_idx.x)
+    if index >= Int(words):
+        return
+    var word = codes[unsafe_offset=index]
+    comptime for slot in range(per_word):
+        letters[unsafe_offset=index * per_word + slot] = UInt8((word >> UInt32(slot * bits)) & UInt32((1 << bits) - 1))
+
+
 def group_score_kernel[
-    mode: AlignmentMode, lanes: Int, columns_per_lane: Int
+    mode: AlignmentMode, lanes: Int, columns_per_lane: Int, per_word: Int
 ](
-    sequences: Pointer[Scalar[SymbolDType], MutAnyOrigin],
-    offsets: Pointer[Scalar[OffsetDType], MutAnyOrigin],
+    letters: Pointer[UInt8, MutAnyOrigin],
+    shapes: Pointer[UInt32, MutAnyOrigin],
     substitutions: Pointer[Scalar[SubstitutionDType], MutAnyOrigin],
     results: Pointer[Scalar[ScoreDType], MutAnyOrigin],
     pairs: Int32,
@@ -58,18 +81,28 @@ def group_score_kernel[
     extend: Int32,
 ):
     """Scores `THREADS_PER_BLOCK // lanes` pairs a block, `lanes` lanes a pair (see the module's
-    notes). Pair `p`'s first sequence runs from `offsets[2 p]`, its second from `offsets[2 p + 1]` to
-    `offsets[2 p + 2]`; the first's letters are the rows."""
+    notes), a letter a byte of `letters`, the tape unpacked. Pair `p`'s first sequence starts at word
+    `shapes[3 p]`, `per_word` letters a word, and is `shapes[3 p + 1]` letters long, the rows;
+    its second, `shapes[3 p + 2]` letters, the columns, starts at the next word after the first's last.
+
+    A global alignment's cells are held shifted by their row plus their column times `extend`, so Gotoh's
+    recurrence takes three additions a cell where it takes five: a gap's layer becomes the larger of the
+    cell before plus `open - extend` and the layer's own value there, and a cell the largest of the one
+    diagonally before plus its substitution less `2 extend`, kept so in the table, and the two layers.
+    The matrix's borders all become `open - extend`, and the corner is shifted back. What a GPU with
+    fused add-and-max instructions does in hardware, this does by algebra on any. A local alignment's
+    cells are held as they are, since its floor of zero would move with every cell."""
     comptime pairs_per_block = THREADS_PER_BLOCK // lanes
+    comptime shifted = mode == AlignmentMode.GLOBAL
     var width = Int(alphabet_size)
-    var table = stack_allocation[
-        MAX_ALPHABET_SIZE * MAX_ALPHABET_SIZE, Scalar[SubstitutionDType], address_space=AddressSpace.SHARED
-    ]()
+    var table = stack_allocation[MAX_ALPHABET_SIZE * MAX_ALPHABET_SIZE, Int32, address_space=AddressSpace.SHARED]()
     for index in range(Int(thread_idx.x), width * width, THREADS_PER_BLOCK):
-        table[unsafe_offset=index] = substitutions[unsafe_offset=index]
+        var substitution = Int32(substitutions[unsafe_offset=index])
+        comptime if shifted:
+            substitution -= 2 * extend
+        table[unsafe_offset=index] = substitution
     barrier()
 
-    var scoring = AffineGapCosts(open, extend)
     var thread = Int(thread_idx.x)
     var member = thread % lanes
     var pair = Int(block_idx.x) * pairs_per_block + thread // lanes
@@ -79,10 +112,10 @@ def group_score_kernel[
     var rows = 0
     var columns = 0
     if live:
-        first_start = Int(offsets[unsafe_offset=2 * pair])
-        second_start = Int(offsets[unsafe_offset=2 * pair + 1])
-        rows = second_start - first_start
-        columns = Int(offsets[unsafe_offset=2 * pair + 2]) - second_start
+        first_start = Int(shapes[unsafe_offset=3 * pair]) * per_word
+        rows = Int(shapes[unsafe_offset=3 * pair + 1])
+        columns = Int(shapes[unsafe_offset=3 * pair + 2])
+        second_start = first_start + ceildiv(rows, per_word) * per_word
 
     # The warp steps as far as its longest pair needs, every lane in every step.
     var steps = Int32(rows + lanes)
@@ -96,29 +129,21 @@ def group_score_kernel[
     var symbols = Array[Int32, columns_per_lane](fill=0)
     comptime for slot in range(columns_per_lane):
         var column = clamp(first_column + slot, 0, max(columns - 1, 0))
-        symbols[slot] = Int32(sequences[unsafe_offset=second_start + column])
+        symbols[slot] = Int32(letters[unsafe_offset=second_start + column])
 
-    # Row zero: a global alignment pays a gap for every column it starts past; a local one nothing.
-    var scores = Array[Int32, columns_per_lane](fill=0)
-    var deletions = Array[Int32, columns_per_lane](fill=0)
-    comptime for slot in range(columns_per_lane):
-        comptime if mode == AlignmentMode.GLOBAL:
-            scores[slot] = scoring.open + Int32(first_column + slot) * scoring.extend
-        deletions[slot] = scores[slot] + scoring.open + scoring.extend
-    var edge_score = Int32(0)
-    comptime if mode == AlignmentMode.GLOBAL:
-        edge_score = scoring.open + Int32(first_column + columns_per_lane - 1) * scoring.extend
-    var edge_insertion = edge_score + scoring.open + scoring.extend
-    var above_left_carry = Int32(0)
-    comptime if mode == AlignmentMode.GLOBAL:
-        above_left_carry = 0 if first_column == 0 else scoring.open + Int32(first_column - 1) * scoring.extend
-
+    # The border: a global alignment's, shifted, `open - extend` but at the origin, which is 0; a local
+    # one's 0. A gap layer at the border is a gap's cost more than the cell, so a path never takes it.
+    var opening = open - extend
+    var border = Int32(0)
+    comptime if shifted:
+        border = opening
+    var scores = Array[Int32, columns_per_lane](fill=border)
+    var deletions = Array[Int32, columns_per_lane](fill=border + open + extend)
+    var edge_score = border
+    var edge_insertion = border + open + extend
+    var above_left_carry = border if first_column > 0 else Int32(0)
     var reported = Int32(0)
-    comptime if mode == AlignmentMode.GLOBAL:
-        var letters = rows + columns
-        reported = 0 if letters == 0 else scoring.open + Int32(letters - 1) * scoring.extend
     var best = Int32(0)
-
     for step in range(1, Int(steps) + 1):
         var row = step - member
         # The lane before hands over its last column of this row, which it computed a step ago; the
@@ -126,40 +151,37 @@ def group_score_kernel[
         var left_score = shuffle_up(edge_score, 1)
         var left_insertion = shuffle_up(edge_insertion, 1)
         if member == 0:
-            var border = Int32(0)
-            comptime if mode == AlignmentMode.GLOBAL:
-                var here = clamp(row, 0, rows)
-                border = 0 if here == 0 else scoring.open + Int32(here - 1) * scoring.extend
-            left_score = border
-            left_insertion = border + scoring.open + scoring.extend
+            left_score = border if row > 0 else Int32(0)
+            left_insertion = border + open + extend
         var above_left = above_left_carry
         above_left_carry = left_score
         if row >= 1 and row <= rows:
-            var symbol = Int(sequences[unsafe_offset=first_start + row - 1])
+            var row_base = Int(letters[unsafe_offset=first_start + row - 1]) * width
             var running_score = left_score
             var running_insertion = left_insertion
             comptime for slot in range(columns_per_lane):
-                var substitution = Int32(table[unsafe_offset=symbol * width + Int(symbols[slot])])
-                var computed = gotoh_cell[mode](
-                    above_left,
-                    scores[slot],
-                    deletions[slot],
-                    running_score,
-                    running_insertion,
-                    substitution,
-                    scoring,
-                )
-                above_left = scores[slot]
-                scores[slot] = computed.score
-                deletions[slot] = computed.deletion
-                running_score = computed.score
-                running_insertion = computed.insertion
+                var diagonal = above_left + table[unsafe_offset=row_base + Int(symbols[slot])]
+                var deletion: Int32
+                var insertion: Int32
+                comptime if shifted:
+                    deletion = max(scores[slot] + opening, deletions[slot])
+                    insertion = max(running_score + opening, running_insertion)
+                else:
+                    deletion = max(scores[slot] + open, deletions[slot] + extend)
+                    insertion = max(running_score + open, running_insertion + extend)
+                var score = max(max(diagonal, deletion), insertion)
                 comptime if mode == AlignmentMode.LOCAL:
+                    score = max(score, 0)
                     if slot < owned:
-                        best = max(best, computed.score)
+                        best = max(best, score)
+                above_left = scores[slot]
+                scores[slot] = score
+                deletions[slot] = deletion
+                running_score = score
+                running_insertion = insertion
             edge_score = running_score
             edge_insertion = running_insertion
-            comptime if mode == AlignmentMode.GLOBAL:
+            comptime if shifted:
                 if row == rows and owned > 0 and first_column + owned == columns:
                     reported = scores[owned - 1]
 
@@ -172,10 +194,15 @@ def group_score_kernel[
         if live and member == 0:
             results[unsafe_offset=pair] = best
     else:
-        # The lane holding the last column holds the corner; with no columns, the first lane.
-        var corner = member == 0 if columns == 0 else (owned > 0 and first_column + owned == columns)
-        if live and corner:
-            results[unsafe_offset=pair] = reported
+        # The lane holding the last column holds the corner, shifted back; with no columns, or no rows,
+        # the corner is the border's, a gap over the other side or nothing.
+        var letters_total = Int32(rows + columns)
+        var corner = Int32(0) if letters_total == 0 else open + (letters_total - 1) * extend
+        if rows > 0 and columns > 0:
+            corner = reported + letters_total * extend
+        var holder = member == 0 if columns == 0 or rows == 0 else (owned > 0 and first_column + owned == columns)
+        if live and holder:
+            results[unsafe_offset=pair] = corner
 
 
 def shape_for(longest_rows: Int, longest_columns: Int) -> Int:
@@ -198,46 +225,198 @@ def grouped_scores[
     mode: AlignmentMode
 ](
     scope: DeviceScope,
-    sequences: ImmSpan[Scalar[SymbolDType], _],
-    offsets: List[Scalar[OffsetDType]],
+    firsts: List[String],
+    seconds: List[String],
+    indices: List[Int],
+    alphabet: String,
     substitutions: ImmSpan[Scalar[SubstitutionDType], _],
-    alphabet_size: Int,
     scoring: AffineGapCosts,
+    threads: Int,
 ) raises -> Optional[List[Int32]]:
-    """Every pair's score, several pairs a warp (see the module's notes), or None when the batch's
-    widest second sequence is wider than any shape spans."""
-    var pairs = (len(offsets) - 1) // 2
+    """The named pairs' scores, several pairs a warp (see the module's notes), or None when the widest
+    second sequence among them is wider than any shape spans. A letter outside the alphabet raises as
+    `translate` does, for the first pair in order holding one."""
+    var pairs = len(indices)
+    if pairs == 0:
+        return None
+    var size = alphabet.byte_length()
+    var bits = 2 if size <= 4 else (4 if size <= 16 else 8)
+    var per_word = 32 // bits
+    var bases = alphabet == "ACGT"
+    var stretches = max(min(threads, pairs), 1)
+
+    # Each stretch of the pairs measured by a thread of its own: its words on the tape, its longest
+    # first and second sequences.
+    var measures = List[Int](length=3 * stretches, fill=0)
+    var measure_ptr = measures.unsafe_ptr()
+
+    def measure(
+        stretch: Int,
+    ) {imm firsts, imm seconds, imm indices, imm pairs, imm stretches, imm per_word, imm measure_ptr}:
+        """Stretch `stretch`'s words and longest sides."""
+        var words = 0
+        var rows = 0
+        var columns = 0
+        for slot in range(pairs * stretch // stretches, pairs * (stretch + 1) // stretches):
+            var first = firsts[indices[slot]].byte_length()
+            var second = seconds[indices[slot]].byte_length()
+            words += ceildiv(first, per_word) + ceildiv(second, per_word)
+            rows = max(rows, first)
+            columns = max(columns, second)
+        measure_ptr[unsafe_offset=3 * stretch] = words
+        measure_ptr[unsafe_offset=3 * stretch + 1] = rows
+        measure_ptr[unsafe_offset=3 * stretch + 2] = columns
+
+    parallelize(measure, stretches, stretches)
     var longest_rows = 0
     var longest_columns = 0
-    for pair in range(pairs):
-        longest_rows = max(longest_rows, Int(offsets[2 * pair + 1]) - Int(offsets[2 * pair]))
-        longest_columns = max(longest_columns, Int(offsets[2 * pair + 2]) - Int(offsets[2 * pair + 1]))
+    var words = 0
+    var begins = List[Int](capacity=stretches)
+    for stretch in range(stretches):
+        begins.append(words)
+        words += measures[3 * stretch]
+        longest_rows = max(longest_rows, measures[3 * stretch + 1])
+        longest_columns = max(longest_columns, measures[3 * stretch + 2])
     var chosen = shape_for(longest_rows, longest_columns)
-    if chosen < 0 or pairs == 0:
+    if chosen < 0:
         return None
-    var sequences_buffer = upload(scope, sequences)
-    var offsets_buffer = upload(scope, offsets)
+
+    # The pinned memory, and every thread packing its stretch into it.
+    var shapes = scope.context.enqueue_create_host_buffer[DType.uint32](3 * pairs)
+    var codes = scope.context.enqueue_create_host_buffer[DType.uint32](max(words, 1))
+    scope.context.synchronize()
+    var codes_by_byte = Array[UInt8, 256](fill=UNKNOWN_SYMBOL)
+    var alphabet_bytes = alphabet.as_bytes()
+    for index in range(size):
+        codes_by_byte[Int(alphabet_bytes[index])] = UInt8(index)
+    var failed = List[Bool](length=pairs, fill=False)
+    var tape = codes.unsafe_ptr()
+    var places = shapes.unsafe_ptr()
+    var flags = failed.unsafe_ptr()
+    var begin_ptr = begins.unsafe_ptr()
+
+    def pack(
+        stretch: Int,
+    ) {
+        imm firsts,
+        imm seconds,
+        imm indices,
+        imm codes_by_byte,
+        imm pairs,
+        imm stretches,
+        imm bits,
+        imm per_word,
+        imm bases,
+        imm tape,
+        imm places,
+        imm flags,
+        imm begin_ptr,
+    }:
+        """Stretch `stretch`'s pairs onto the tape and their places, flagging a pair holding a letter
+        outside the alphabet."""
+        var start = begin_ptr[unsafe_offset=stretch]
+        for slot in range(pairs * stretch // stretches, pairs * (stretch + 1) // stretches):
+            var index = indices[slot]
+            var first = firsts[index].byte_length()
+            var second = seconds[index].byte_length()
+            places[unsafe_offset=3 * slot] = UInt32(start)
+            places[unsafe_offset=3 * slot + 1] = UInt32(first)
+            places[unsafe_offset=3 * slot + 2] = UInt32(second)
+            var known = packed_into(firsts[index], codes_by_byte, bits, per_word, bases, tape.unsafe_offset(start))
+            start += ceildiv(first, per_word)
+            known = (
+                packed_into(seconds[index], codes_by_byte, bits, per_word, bases, tape.unsafe_offset(start)) and known
+            )
+            start += ceildiv(second, per_word)
+            if not known:
+                flags[unsafe_offset=slot] = True
+
+    parallelize(pack, stretches, stretches)
+    for slot in range(pairs):
+        if failed[slot]:
+            # The pair's own translation raises the error a serial packing would have raised.
+            _ = translate(firsts[indices[slot]], alphabet)
+            _ = translate(seconds[indices[slot]], alphabet)
+
+    var codes_buffer = allocate[DType.uint32](scope, max(words, 1))
+    scope.context.enqueue_copy(codes_buffer, codes)
+    var letters_buffer = allocate[DType.uint8](scope, max(words, 1) * per_word)
+    var shapes_buffer = allocate[DType.uint32](scope, 3 * pairs)
+    scope.context.enqueue_copy(shapes_buffer, shapes)
     var substitutions_buffer = upload(scope, substitutions)
     var results_buffer = zeroed[ScoreDType](scope, pairs)
-    comptime for shape in range(SHAPES):
-        if shape == chosen:
-            comptime lanes = SHAPE_LANES[shape]
-            comptime kernel = group_score_kernel[mode, lanes, SHAPE_COLUMNS[shape]]
-            scope.context.enqueue_function[kernel](
-                sequences_buffer.unsafe_ptr(),
-                offsets_buffer.unsafe_ptr(),
-                substitutions_buffer.unsafe_ptr(),
-                results_buffer.unsafe_ptr(),
-                Int32(pairs),
-                Int32(alphabet_size),
-                scoring.open,
-                scoring.extend,
-                grid_dim=ceildiv(pairs, THREADS_PER_BLOCK // lanes),
+    comptime for packing in range(3):
+        comptime letter_bits = [2, 4, 8][packing]
+        if bits == letter_bits:
+            scope.context.enqueue_function[unpack_kernel[letter_bits]](
+                codes_buffer.unsafe_ptr(),
+                letters_buffer.unsafe_ptr(),
+                Int32(words),
+                grid_dim=ceildiv(max(words, 1), THREADS_PER_BLOCK),
                 block_dim=THREADS_PER_BLOCK,
             )
+            comptime for shape in range(SHAPES):
+                if shape == chosen:
+                    comptime lanes = SHAPE_LANES[shape]
+                    comptime kernel = group_score_kernel[mode, lanes, SHAPE_COLUMNS[shape], 32 // letter_bits]
+                    scope.context.enqueue_function[kernel](
+                        letters_buffer.unsafe_ptr(),
+                        shapes_buffer.unsafe_ptr(),
+                        substitutions_buffer.unsafe_ptr(),
+                        results_buffer.unsafe_ptr(),
+                        Int32(pairs),
+                        Int32(size),
+                        scoring.open,
+                        scoring.extend,
+                        grid_dim=ceildiv(pairs, THREADS_PER_BLOCK // lanes),
+                        block_dim=THREADS_PER_BLOCK,
+                    )
     scope.context.synchronize()
     var results = List[Int32](capacity=pairs)
     with results_buffer.map_to_host() as host:
         for index in range(pairs):
             results.append(host[index])
     return results^
+
+
+comptime PAIR_SHIFTS = SIMD[DType.uint32, 16](0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30)
+"""Where each of sixteen two-bit codes sits in its word."""
+
+
+@always_inline
+def packed_into(
+    text: String,
+    codes_by_byte: Array[UInt8, 256],
+    bits: Int,
+    per_word: Int,
+    bases: Bool,
+    target: MutPointer[UInt32, _],
+) -> Bool:
+    """Writes `text`'s letters `bits` bits each, `per_word` to a word, from `target` on, and whether
+    every letter is in the alphabet. Over `ACGT` itself, sixteen letters a word at once: their codes
+    are those `bit_parallel.base_codes` reads off their ASCII bits, in the alphabet's own order."""
+    var bytes = text.unsafe_ptr()
+    var length = text.byte_length()
+    var unknown = False
+    var position = 0
+    var word_index = 0
+    if bases:
+        var others = SIMD[DType.bool, 16](fill=False)
+        while position + 16 <= length:
+            var chunk = bytes.unsafe_offset(position).unsafe_load[width=16]()
+            others |= not_bases[16](chunk)
+            target[unsafe_offset=word_index] = (base_codes[16](chunk).cast[DType.uint32]() << PAIR_SHIFTS).reduce_or()
+            word_index += 1
+            position += 16
+        unknown = others.reduce_or()
+    while position < length:
+        var word = UInt32(0)
+        var stop = min(position + per_word, length)
+        for at in range(position, stop):
+            var code = codes_by_byte[Int(bytes[unsafe_offset=at])]
+            unknown = unknown or code == UNKNOWN_SYMBOL
+            word |= UInt32(code) << UInt32((at - position) * bits)
+        target[unsafe_offset=word_index] = word
+        word_index += 1
+        position = stop
+    return not unknown
