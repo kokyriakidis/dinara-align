@@ -20,6 +20,7 @@ from max.algorithm import parallelize
 
 from dinara_align import (
     DEFAULT_MAX_MEMORY,
+    Alignment,
     AlignmentError,
     Anchor,
     Band,
@@ -35,8 +36,8 @@ from dinara_align import (
 )
 from dinara_align.api import aligned_within
 from dinara_align.common import hardware_threads, next_share
-from dinara_align.gap_affine import KEPT_BYTES, SearchSpace, penalties_of
-from dinara_align.lanes import LaneCosts, Texts, lane_distances
+from dinara_align.gap_affine import KEPT_BYTES, Penalties, SearchSpace, cigar_of, penalties_of
+from dinara_align.lanes import LaneCosts, Texts, lane_alignments, lane_distances
 
 comptime UNSUPPORTED_SYMBOLS = -1
 """A 0xFE or 0xFF byte, which the wavefront's sentinels are and UTF-8 never holds."""
@@ -223,21 +224,25 @@ def align_into(
         )
         if not found:
             return ABOVE_MAX if capped else OUTSIDE_BAND
-        ref result = found.value()
-        var text = copied(result.cigar)
-        if not text:
-            return OUT_OF_MEMORY
-        alignment[unsafe_offset=0] = result.cost
-        alignment[unsafe_offset=1] = result.score
-        alignment[unsafe_offset=2] = result.reference_start
-        alignment[unsafe_offset=3] = result.reference_end
-        alignment[unsafe_offset=4] = result.query_start
-        alignment[unsafe_offset=5] = result.query_end
-        alignment.unsafe_offset(6).unsafe_bitcast[MutPointer[UInt8, MutAnyOrigin]]()[] = text.value()
-        alignment[unsafe_offset=7] = result.cigar.byte_length()
-        return 0
+        return written(found.value(), alignment)
     except error:
         return failure(error)
+
+
+def written(result: Alignment, alignment: MutPointer[Int, MutAnyOrigin]) -> Int:
+    """`result` into `alignment`, a `dinara_alignment`, its CIGAR copied for C; zero, or `OUT_OF_MEMORY`."""
+    var text = copied(result.cigar)
+    if not text:
+        return OUT_OF_MEMORY
+    alignment[unsafe_offset=0] = result.cost
+    alignment[unsafe_offset=1] = result.score
+    alignment[unsafe_offset=2] = result.reference_start
+    alignment[unsafe_offset=3] = result.reference_end
+    alignment[unsafe_offset=4] = result.query_start
+    alignment[unsafe_offset=5] = result.query_end
+    alignment.unsafe_offset(6).unsafe_bitcast[MutPointer[UInt8, MutAnyOrigin]]()[] = text.value()
+    alignment[unsafe_offset=7] = result.cigar.byte_length()
+    return 0
 
 
 comptime ALIGNMENT_FIELDS = 8
@@ -531,8 +536,60 @@ def dinara_alignments(
     var taken = Atomic[Int64](0)
     var workers = workers_for(pairs, threads)
 
+    # Global alignments go many pairs at once into the lanes of a register, as `alignments` sends them
+    # (see `lanes.lane_alignments`): every pair whose bytes the library takes. A pair the library refuses,
+    # and every pair of costs it refuses or of other modes, goes one at a time for its own code.
+    var capped = asked.max_cost >= 0
+    var settled = List[Bool](length=pairs, fill=False)
+    var found = List[Optional[Int]](length=pairs, fill=None)
+    var laned = List[Bool](length=pairs, fill=False)
+    var paths = List[List[UInt8]](capacity=pairs)
+    for _ in range(pairs):
+        paths.append(List[UInt8]())
+    var settled_ptr = settled.unsafe_ptr()
+    var found_ptr = found.unsafe_ptr()
+    var laned_ptr = laned.unsafe_ptr()
+    var path_ptr = paths.unsafe_ptr()
+    var lane_costs = LaneCosts.of(wanted_costs, wanted_mode)
+    var penalties: Optional[Penalties] = None
+    if lane_costs:
+        try:
+            penalties = penalties_of(wanted_costs)
+        except:
+            lane_costs = None
+    var limit = asked.max_memory // KEPT_BYTES
+    if lane_costs:
+
+        def refuse(stretch: Int) {imm}:
+            """Marks stretch `stretch`'s pairs holding bytes the library refuses, which the lanes leave."""
+            for index in range(pairs * stretch // workers, pairs * (stretch + 1) // workers):
+                if not plain_bytes(references[unsafe_offset=index], reference_lengths[unsafe_offset=index]) or not (
+                    plain_bytes(queries[unsafe_offset=index], query_lengths[unsafe_offset=index])
+                ):
+                    settled_ptr[unsafe_offset=index] = True
+
+        parallelize(refuse, workers, workers)
+        var before = settled.copy()
+        _ = lane_alignments(
+            pairs,
+            ByteTexts.of(references, reference_lengths),
+            ByteTexts.of(queries, query_lengths),
+            lane_costs.value(),
+            asked.band,
+            asked.max_cost if capped else Int.MAX,
+            asked.ties == Ties.LEFT,
+            workers,
+            asked.max_memory,
+            found_ptr,
+            path_ptr,
+            settled_ptr,
+        )
+        for index in range(pairs):
+            laned[index] = settled[index] and not before[index]
+
     def work(slot: Int) {mut taken, imm}:
-        """Takes the next pairs not yet taken and writes each one's alignment and status, until none is left."""
+        """Takes the next pairs not yet taken and writes each one's alignment and status, until none is left;
+        a pair the lanes settled has its CIGAR spelled from their path."""
         var last = 0
         var space = SearchSpace()
         while True:
@@ -540,6 +597,26 @@ def dinara_alignments(
             if share[0] >= pairs:
                 return
             for index in range(share[0], share[1]):
+                if laned_ptr[unsafe_offset=index]:
+                    if not found_ptr[unsafe_offset=index]:
+                        statuses[unsafe_offset=index] = ABOVE_MAX if capped else OUTSIDE_BAND
+                        continue
+                    var cost = found_ptr[unsafe_offset=index].value()
+                    var columns = reference_lengths[unsafe_offset=index]
+                    var rows = query_lengths[unsafe_offset=index]
+                    ref scaled = penalties.value()
+                    # As `alignments` keeps them: only a pair the searches would never split for memory.
+                    if 2 * (cost // scaled.scale + 1) * (columns + rows + 1) <= limit:
+                        var first = sequence(references[unsafe_offset=index], columns)
+                        var second = sequence(queries[unsafe_offset=index], rows)
+                        var moves = List[UInt8]()
+                        swap(moves, path_ptr[unsafe_offset=index])
+                        var cigar = cigar_of(first, second, moves^, cost // scaled.scale, scaled, asked.eqx)
+                        statuses[unsafe_offset=index] = written(
+                            Alignment(cost, -cost, cigar^, 0, columns, 0, rows),
+                            alignments.unsafe_offset(index * ALIGNMENT_FIELDS),
+                        )
+                        continue
                 statuses[unsafe_offset=index] = align_into(
                     references[unsafe_offset=index],
                     reference_lengths[unsafe_offset=index],

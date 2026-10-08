@@ -269,6 +269,17 @@ int main() {
         CHECK(batch[index].cost == distances[index]);
         CHECK(batch[index].cigar == dinara::align(pairs[index].first, pairs[index].second).cigar);
     }
+    // Affine batches too, which go many pairs at once into the lanes, each CIGAR the one either rule picks.
+    for (dinara::Ties ties : {dinara::Ties::left, dinara::Ties::right}) {
+        std::vector<dinara::Alignment> affine_batch =
+            dinara::alignments(firsts, seconds, Costs::affine(4, 6, 2), Mode::global(), {}, ties);
+        for (size_t index = 0; index < affine_batch.size(); ++index) {
+            dinara::Alignment single =
+                dinara::align(pairs[index].first, pairs[index].second, Costs::affine(4, 6, 2), Mode::global(), {}, ties);
+            CHECK(affine_batch[index].cost == affine_costs[index]);
+            CHECK(affine_batch[index].cigar == single.cigar);
+        }
+    }
     // Under a cap, the pairs past it come back empty, the rest as they were.
     int64_t cap = distances[1];
     std::vector<std::optional<int64_t>> within = dinara::distances_within(firsts, seconds, cap);

@@ -281,8 +281,16 @@ def side_by_side[
         if reverse:
             var source = texts.letters(index)
             var destination = lanes.unsafe_offset(lane * stride)
-            for position in range(count):
+            comptime CHUNK = 16
+            var position = 0
+            while position + CHUNK <= count:
+                destination.unsafe_offset(position).unsafe_store(
+                    source.unsafe_offset(count - position - CHUNK).unsafe_load[width=CHUNK]().reversed()
+                )
+                position += CHUNK
+            while position < count:
                 destination[unsafe_offset=position] = source[unsafe_offset=count - 1 - position]
+                position += 1
         else:
             Span(unsafe_ptr=lanes.unsafe_offset(lane * stride), length=count).copy_from(
                 Span(unsafe_ptr=texts.letters(index), length=count)
@@ -863,6 +871,26 @@ def proof[
     return FILED
 
 
+def reverse_bytes(bytes: MutPointer[UInt8, _], count: Int):
+    """Turns `count` bytes back to front in place, sixteen from either end at a time."""
+    comptime CHUNK = 16
+    var front = 0
+    var back = count
+    while back - front >= 2 * CHUNK:
+        var head = bytes.unsafe_offset(front).unsafe_load[width=CHUNK]()
+        var tail = bytes.unsafe_offset(back - CHUNK).unsafe_load[width=CHUNK]()
+        bytes.unsafe_offset(front).unsafe_store(tail.reversed())
+        bytes.unsafe_offset(back - CHUNK).unsafe_store(head.reversed())
+        front += CHUNK
+        back -= CHUNK
+    while back - front >= 2:
+        back -= 1
+        var kept = bytes[unsafe_offset=front]
+        bytes[unsafe_offset=front] = bytes[unsafe_offset=back]
+        bytes[unsafe_offset=back] = kept
+        front += 1
+
+
 def traced[
     value: DType
 ](space: LaneSpace[value], lane: Int, rows: Int, columns: Int, low: Int, high: Int, mut moves: List[UInt8]):
@@ -873,32 +901,47 @@ def traced[
     comptime WIDTH = lanes_of[value]()
     var span = high - low + 1
     var flags = space.flags.unsafe_ptr().unsafe_bitcast[UInt8]().unsafe_offset(lane)
+    # The moves go straight into the list's room, at most a letter of either sequence each.
+    var start = len(moves)
+    moves.reserve(start + rows + columns)
+    var out = moves.unsafe_ptr().unsafe_offset(start)
+    var written = 0
     var row = rows
     var column = columns
+    # The cell's flag, `WIDTH` bytes apart: a row up is a span less a diagonal, a column left a diagonal.
+    var cell = ((row - 1) * span + column - row - low) * WIDTH
     var layer = ALIGNED
     while row > 0 and column > 0:
-        var flag = flags[unsafe_offset=((row - 1) * span + column - row - low) * WIDTH]
+        var flag = flags[unsafe_offset=cell]
         if layer == ALIGNED:
             layer = Int(flag & SOURCE_MASK)
             if layer == ALIGNED:
-                moves.append(UInt8(ALIGNED))
+                out[unsafe_offset=written] = UInt8(ALIGNED)
+                written += 1
                 row -= 1
                 column -= 1
+                cell -= span * WIDTH
             continue
         var extended = flag & extended_bit(layer) != 0
         if layer % 2 == 1:
             # A deletion: a reference letter alone, down a row.
-            moves.append(UInt8(FIRST_GAP))
+            out[unsafe_offset=written] = UInt8(FIRST_GAP)
             row -= 1
+            cell -= (span - 1) * WIDTH
         else:
-            moves.append(UInt8(SECOND_GAP))
+            out[unsafe_offset=written] = UInt8(SECOND_GAP)
             column -= 1
+            cell -= WIDTH
+        written += 1
         if not extended:
             layer = ALIGNED
     for _ in range(row):
-        moves.append(UInt8(FIRST_GAP))
+        out[unsafe_offset=written] = UInt8(FIRST_GAP)
+        written += 1
     for _ in range(column):
-        moves.append(UInt8(SECOND_GAP))
+        out[unsafe_offset=written] = UInt8(SECOND_GAP)
+        written += 1
+    moves.resize(unsafe_uninit_length=start + written)
 
 
 def lane_alignments[
@@ -988,7 +1031,7 @@ def settle_traced[
         traced[value](space, lane, rows, columns, low, high, moves)
         if left:
             # Traced over both sequences reversed, from the origin on: turned right to left.
-            moves.reverse()
+            reverse_bytes(moves.unsafe_ptr(), len(moves))
         moves_out[unsafe_offset=index] = moves^
         costs_out[unsafe_offset=index] = Optional[Int](cost)
     else:
