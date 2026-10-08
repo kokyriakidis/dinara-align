@@ -69,6 +69,8 @@ def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int, latest: 
     column at a time, its horizontal masks read at the pattern's last row, which seldom ends a word.
     A word entering the band, or entering it again, starts from `+1` all down its left edge, the cost
     of a real path, so every score is at least the true one and those within the bound are exact.
+    Without `free_start` the sweep also stops at the first column no end past it could match the best
+    end found so far in, and once no row of a tile's right edge is within the bound.
     """
     var columns = profile.columns
     var rows = profile.rows
@@ -90,8 +92,18 @@ def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int, latest: 
     # The last row reachable within the bound at the current left edge, and the words swept so far.
     var reach = min(bound, rows)
     var swept = 0
+    # Without a free start the band's top moves down too: the first word it keeps, and the score at that
+    # word's top on the current left edge, which the words left above it carry.
+    var top = 0
+    var anchor = 0
     var first_column = 0
     while first_column < columns:
+        comptime if not free_start:
+            # From the global border, the last row at column `c` costs at least `c - rows`: the length
+            # the text has run past the pattern. So no column past `rows + best` matches the best so
+            # far, a later equal one included, and the sweep ends there.
+            if first_column >= rows + best:
+                break
         var end_column = min(first_column + BAND_COLUMNS, columns)
         var end_word = min(ceildiv(min(reach + (end_column - first_column), rows), WORD_BITS), words)
         end_word = max(end_word, 1)
@@ -100,18 +112,29 @@ def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int, latest: 
             frontier.vertical_plus[word] = ALL_ONES
             frontier.vertical_minus[word] = 0
         swept = end_word
+        comptime if not free_start:
+            # A row more than `bound` above a column's diagonal scores more than `bound` there and on
+            # every column after, so the words wholly above row `first_column - bound` leave the band,
+            # their scores carried into the anchor. The top word then reads `+1` from above, the cost of
+            # a real path, as the global band's does: every score stays at least the true one, and one
+            # within the bound, whose optimal path stays inside the band, exact.
+            var new_top = min(max(top, (first_column - bound) // WORD_BITS), end_word - 1, last)
+            for word in range(top, new_top):
+                anchor += word_value(frontier.vertical_plus[word], frontier.vertical_minus[word])
+            top = new_top
         if end_word == words:
             # The last row's score at the left edge, read down it before the tile is swept, so it
             # agrees with the words' state however long the row was out of the band: the top border,
-            # every word above, and the last word to the pattern's last row.
-            score = first_column if not free_start else 0
-            for word in range(last):
+            # or the anchor at the band's top, every word between, and the last word to the pattern's
+            # last row.
+            score = (anchor if top > 0 else first_column) if not free_start else 0
+            for word in range(top, last):
                 score += word_value(frontier.vertical_plus[word], frontier.vertical_minus[word])
             var through = ALL_ONES if bit == UInt64(WORD_BITS - 1) else (UInt64(1) << (bit + 1)) - 1
             score += word_value(frontier.vertical_plus[last] & through, frontier.vertical_minus[last] & through)
         var fast_end = min(end_word, last)
-        if fast_end > 0:
-            sweep.words(profile.symbols(first_column, end_column), 0, fast_end, first_column, end_column)
+        if fast_end > top:
+            sweep.words(profile.symbols(first_column, end_column), top, fast_end, first_column, end_column)
         if end_word == words:
             var vertical_plus = frontier.vertical_plus[last]
             var vertical_minus = frontier.vertical_minus[last]
@@ -143,13 +166,22 @@ def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int, latest: 
         # Down the right edge, each word's top and bottom scores bound its least, the rows a step
         # apart: at least `(top + bottom - 64) / 2`. The band reaches the last word that may hold
         # a score within the bound.
-        var running = end_column if not free_start else 0
+        # The anchor before any word leaves is the top border's score at the left edge, the column.
+        if top == 0:
+            anchor = first_column
+        anchor += end_column - first_column
+        var running = anchor if not free_start else 0
         reach = 0
-        for word in range(end_word):
+        for word in range(top, end_word):
             var top = running
             running += word_value(frontier.vertical_plus[word], frontier.vertical_minus[word])
             if (top + running - WORD_BITS) // 2 <= bound:
                 reach = min((word + 1) * WORD_BITS, rows)
+        comptime if not free_start:
+            # Nothing on the right edge within the bound: every later cell is reached across it, so none
+            # is within the bound either, and the try has failed. A free start begins anew anywhere.
+            if reach == 0:
+                break
         first_column = end_column
     return (best, best_column)
 

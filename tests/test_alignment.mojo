@@ -728,12 +728,13 @@ def test_infix_and_prefix_match_the_dynamic_program() raises:
     gives, and aligned to the part of the text reported, which the alignment rebuilds.
 
     Patterns across word boundaries, from empty to longer than the text, planted mutated copies of a
-    piece of the text and unrelated ones, with an `N` among the symbols too.
+    piece of the text and unrelated ones, with an `N` among the symbols too; a long text under a long
+    pattern moves the prefix search's band far down.
     """
     seed(23)
     var unit = Scoring.edit_distance("ACGTN")
-    for pattern_length in [0, 1, 63, 64, 65, 129, 300]:
-        for text_length in [0, 1, 200, 700]:
+    for pattern_length in [0, 1, 63, 64, 65, 129, 300, 1000]:
+        for text_length in [0, 1, 200, 700, 2500]:
             for rate in [0.0, 0.05, 0.2]:
                 for prefix in [False, True]:
                     var text = random_sequence(text_length, text_length, "ACGTN")
