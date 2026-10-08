@@ -98,7 +98,8 @@ def main() raises:
     comptime if has_accelerator():
         if workload == "illumina-affine" and threads > 1:
             var scoring = Scoring.uniform(0, -1, -2, -1)
-            var device = Placement.on_gpu(0, Placement.default().threads)
+            # The host threads that pack the batch for the device, which this program asks for.
+            var device = Placement.on_gpu(0, threads)
             var fastest = Float64.MAX
             for attempt in range(8):
                 var started = perf_counter_ns()
