@@ -1217,6 +1217,7 @@ struct Meeting(ImplicitlyCopyable, TrivialRegisterPassable):
         return Meeting(Int.MAX, ALIGNED, 0, 0, 0, 0)
 
 
+@always_inline
 def meet[
     pieces: Int
 ](
@@ -1227,7 +1228,29 @@ def meet[
     mut best: Meeting,
 ):
     """Lowers `best` to where the forward fronts of one cost and the backward fronts of another
-    overlap, if that costs less.
+    overlap, if that costs less (see `overlap`). Most pairs of costs can do neither, which the two
+    checks here show in place: a call apiece was a fifth of a short read's time."""
+    if forward_cost + backward_cost - forward.penalties.widest_opening[pieces]() >= best.cost:
+        return
+    var ahead = forward.fronts.back(forward.cost - forward_cost)
+    var behind = backward.fronts.back(backward.cost - backward_cost)
+    # A front's furthest anti-diagonal bounds all its layers': the two must add up to the matrix's.
+    if forward.fronts.reach[ahead] + backward.fronts.reach[behind] < forward.columns + forward.rows:
+        return
+    overlap(forward, forward_cost, backward, backward_cost, best)
+
+
+@inline(.never)
+def overlap[
+    pieces: Int
+](
+    mut forward: Wavefront[pieces],
+    forward_cost: Int,
+    mut backward: Wavefront[pieces],
+    backward_cost: Int,
+    mut best: Meeting,
+):
+    """`meet`'s search of the diagonals both fronts hold, for the cheapest place they overlap.
 
     The backward front's diagonal `target - k` mirrors the forward's `k`, and its column `c` the
     forward's `columns - c`. Two alignment fronts overlap where their columns add up to `columns` or
@@ -1239,13 +1262,8 @@ def meet[
     var rows = forward.rows
     var penalties = forward.penalties
     var total = forward_cost + backward_cost
-    if total - penalties.widest_opening[pieces]() >= best.cost:
-        return
     var ahead = forward.fronts.back(forward.cost - forward_cost)
     var behind = backward.fronts.back(backward.cost - backward_cost)
-    # A front's furthest anti-diagonal bounds all its layers': the two must add up to the matrix's.
-    if forward.fronts.reach[ahead] + backward.fronts.reach[behind] < columns + rows:
-        return
     var target = columns - rows
     var low = max(forward.fronts.lows[ahead], target - backward.fronts.highs[behind])
     var high = min(forward.fronts.highs[ahead], target - backward.fronts.lows[behind])

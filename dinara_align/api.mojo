@@ -297,7 +297,8 @@ def cost_within(
     var penalties = space.penalties_for(costs)
     if max_cost < 0:
         return None
-    var ceiling = max_cost // penalties.scale
+    # No cap is the usual case, and a 64-bit division per pair counts when short reads take a microsecond.
+    var ceiling = Int.MAX if max_cost == Int.MAX else max_cost // penalties.scale
     var cost: Int
     if costs.pieces() == 2:
         cost = wavefront_distance[2](reference.as_bytes(), query.as_bytes(), penalties, ceiling, space, ends, band)
