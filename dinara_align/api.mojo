@@ -41,7 +41,7 @@ from .scored import (
     rewarded_alignment,
     swept,
 )
-from .lanes import LaneCosts, StringTexts, lane_alignments, lane_distances
+from .lanes import LaneCosts, StringTexts, lane_alignments, lane_distances, lane_free_alignments
 from .gap_affine import (
     AffineCigar,
     DEFAULT_MAX_MEMORY,
@@ -1081,8 +1081,9 @@ def capped_alignments(
     var out = results.unsafe_ptr()
     var failed = List[Bool](length=pairs, fill=False)
     var flags = failed.unsafe_ptr()
-    # Global costs: as many pairs at once as a register holds lanes, each traced from the flags its band
-    # kept (see `lanes`); every other pair, and every pair of other costs and modes, one at a time.
+    # Costs alone: as many pairs at once as a register holds lanes, each traced from the flags its band
+    # kept (see `lanes`), with free ends the span the tie rule picks first; every other pair, and every pair
+    # of a mode that scores, one at a time.
     var settled = List[Bool](length=pairs, fill=False)
     var settled_ptr = settled.unsafe_ptr()
     var laned = List[Optional[Int]](length=pairs, fill=None)
@@ -1091,13 +1092,37 @@ def capped_alignments(
     for _ in range(pairs):
         paths.append(List[UInt8]())
     var path_ptr = paths.unsafe_ptr()
+    # Each laned pair's span: the reference's first letter and the one past its last, then the query's.
+    var spans = List[Int](length=4 * pairs, fill=0)
+    var span_ptr = spans.unsafe_ptr()
     # Unit costs the bit-parallel sweep serves take it pair by pair, faster than the lanes on short reads and
     # long alike: 1.26 against 1.44 us a 150 bp read, 21.9 against 23.5 a 1 kbp read at 10%, on the Skylake-X.
-    var lane_costs = LaneCosts.of(costs, mode) if not bits_serve(costs, mode, band, max_cost) else None
+    # Free ends take the lanes only with no band, which would bound the span's search too.
+    var unbanded = band.covers(1 << 40, 1 << 40)
+    var lane_costs = LaneCosts.of(costs, mode, unbanded) if not bits_serve(costs, mode, band, max_cost) else None
     var penalties: Optional[Penalties] = None
-    if lane_costs:
+    if lane_costs and not mode.is_global():
+        penalties = penalties_of(costs)
+        lane_free_alignments(
+            references,
+            queries,
+            lane_costs.value(),
+            mode,
+            max_cost,
+            ties == Ties.RIGHT,
+            workers,
+            limit * KEPT_BYTES,
+            laned_ptr,
+            path_ptr,
+            span_ptr,
+            settled_ptr,
+        )
+    elif lane_costs:
         # Costs the searches would refuse raise here, as a pair's search would raise them.
         penalties = penalties_of(costs)
+        for index in range(pairs):
+            span_ptr[unsafe_offset=4 * index + 1] = references[index].byte_length()
+            span_ptr[unsafe_offset=4 * index + 3] = queries[index].byte_length()
         _ = lane_alignments(
             pairs,
             StringTexts(references.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
@@ -1136,6 +1161,7 @@ def capped_alignments(
         imm settled_ptr,
         imm laned_ptr,
         imm path_ptr,
+        imm span_ptr,
         imm penalties,
     }:
         """Takes the next pairs in `order` until none is left, storing each one's capped alignment or flagging
@@ -1152,19 +1178,45 @@ def capped_alignments(
                     continue
                 if settled_ptr[unsafe_offset=index]:
                     var cost = laned_ptr[unsafe_offset=index].value()
-                    var columns = references[index].byte_length()
-                    var rows = queries[index].byte_length()
+                    var first_start = span_ptr[unsafe_offset=4 * index]
+                    var first_end = span_ptr[unsafe_offset=4 * index + 1]
+                    var second_start = span_ptr[unsafe_offset=4 * index + 2]
+                    var second_end = span_ptr[unsafe_offset=4 * index + 3]
                     ref scaled = penalties.value()
-                    # The lanes follow the tie rule across the whole pair; the searches would too unless they
+                    # The lanes follow the tie rule across the whole span; the searches would too unless they
                     # split it, which they never do while both sides' fronts, each at most a diagonal of the
                     # matrix at every cost, stay within `limit`. A pair they might split takes them.
-                    if 2 * (cost // scaled.scale + 1) * (columns + rows + 1) <= limit:
+                    var letters = first_end - first_start + second_end - second_start
+                    if 2 * (cost // scaled.scale + 1) * (letters + 1) <= limit:
                         var moves = List[UInt8]()
                         swap(moves, path_ptr[unsafe_offset=index])
-                        var cigar = cigar_of(
-                            references[index], queries[index], moves^, cost // scaled.scale, scaled, eqx
+                        var whole = (
+                            first_start == 0
+                            and second_start == 0
+                            and first_end == references[index].byte_length()
+                            and second_end == queries[index].byte_length()
                         )
-                        out[unsafe_offset=index] = Alignment(cost, -cost, cigar^, 0, columns, 0, rows)
+                        var cigar: String
+                        if whole:
+                            cigar = cigar_of(
+                                references[index], queries[index], moves^, cost // scaled.scale, scaled, eqx
+                            )
+                        else:
+                            cigar = cigar_of(
+                                String(
+                                    StringSlice(unsafe_from_utf8=references[index].as_bytes()[first_start:first_end])
+                                ),
+                                String(
+                                    StringSlice(unsafe_from_utf8=queries[index].as_bytes()[second_start:second_end])
+                                ),
+                                moves^,
+                                cost // scaled.scale,
+                                scaled,
+                                eqx,
+                            )
+                        out[unsafe_offset=index] = Alignment(
+                            cost, -cost, cigar^, first_start, first_end, second_start, second_end
+                        )
                         continue
                 try:
                     out[unsafe_offset=index] = aligned_within(

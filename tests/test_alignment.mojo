@@ -2690,6 +2690,65 @@ def test_lane_free_ends_match_single_pairs() raises:
                     assert_equal(capped[index].or_else(-1), expected.or_else(-1))
 
 
+def test_lane_free_alignments_match_single_pairs() raises:
+    """A batch of alignments with free ends, which goes many pairs at once into the lanes, the end, then
+    the start, then the span's own alignment (see `lanes.lane_free_alignments`), gives each pair the
+    alignment a call of its own gives, its span and its CIGAR the ones either tie rule picks: reads in
+    windows, prefixes and suffixes, a read holding the reference, a few letters free at each end and an
+    overlap's, under unit, affine, linear and two-piece costs, with a cap and too little memory for a
+    group's flags, empty sides and unrelated pairs among them."""
+    seed(53)
+    var references = List[String]()
+    var queries = List[String]()
+    for trial in range(120):
+        var reference = random_sequence(0, 260, DNA_ALPHABET)
+        references.append(reference)
+        if trial % 6 == 0:
+            queries.append(random_sequence(0, 200, DNA_ALPHABET))
+        else:
+            var bytes = reference.as_bytes()
+            var start = Int(random_ui64(0, UInt64(len(bytes) // 4)))
+            var stop = len(bytes) - Int(random_ui64(0, UInt64(len(bytes) // 4)))
+            var piece = String(StringSlice(unsafe_from_utf8=bytes[start : max(start, stop)]))
+            queries.append(mutated(piece, [0.0, 0.02, 0.1][trial % 3], 6))
+    var modes: List[Mode] = [
+        Mode.INFIX,
+        Mode.PREFIX,
+        Mode.SUFFIX,
+        Mode.REFERENCE_IN_QUERY,
+        Mode.ends_free(reference_start=8, reference_end=8, query_start=3, query_end=3),
+        Mode.ends_free(reference_end=40, query_start=40),
+    ]
+    var all_costs: List[Costs] = [
+        Costs.edit(),
+        Costs.affine(4, 6, 2),
+        Costs.linear(2, 3),
+        Costs.two_piece(4, 6, 2, 24, 1),
+    ]
+    for costs in all_costs:
+        for mode in modes:
+            for ties in [Ties.LEFT, Ties.RIGHT]:
+                for memory in [DEFAULT_MAX_MEMORY, 20000]:
+                    var whole = alignments(references, queries, costs, mode, ties=ties, threads=3, max_memory=memory)
+                    for index in range(len(references)):
+                        var single = align(references[index], queries[index], costs, mode, ties=ties, max_memory=memory)
+                        assert_equal(whole[index].cost, single.cost)
+                        assert_equal(whole[index].cigar, single.cigar)
+                        assert_equal(whole[index].reference_start, single.reference_start)
+                        assert_equal(whole[index].reference_end, single.reference_end)
+                        assert_equal(whole[index].query_start, single.query_start)
+                        assert_equal(whole[index].query_end, single.query_end)
+                var capped = alignments(references, queries, costs, mode, max_cost=30, ties=ties, threads=3)
+                for index in range(len(references)):
+                    var expected = align(references[index], queries[index], costs, mode, max_cost=30, ties=ties)
+                    assert_equal(Bool(capped[index]), Bool(expected))
+                    if expected:
+                        assert_equal(capped[index].value().cost, expected.value().cost)
+                        assert_equal(capped[index].value().cigar, expected.value().cigar)
+                        assert_equal(capped[index].value().reference_start, expected.value().reference_start)
+                        assert_equal(capped[index].value().query_start, expected.value().query_start)
+
+
 def test_long_prefixes_find_their_distance() raises:
     """A read of a few kbp at up to a fifth divergence placed at a reference's start costs at unit costs
     what the wavefront finds, its CIGAR spending it: the bit-parallel prefix search gives a try up at a

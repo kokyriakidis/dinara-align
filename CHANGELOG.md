@@ -29,8 +29,9 @@ Apache-2.0 as well (see NOTICE).
   places them, or right, WFA2-lib's CIGAR byte for byte; with free ends the span first, by the same
   rule, whichever search found the cost, under any band or cap.
 - Bands of diagonals, cost caps (`max_cost`), and batches (`distances`, `alignments`, `scores`),
-  capped too, many pairs at once in the lanes of a SIMD register: global costs and alignments, free
-  ends, local scores and tables of up to sixteen entries.
+  capped too, many pairs at once in the lanes of a SIMD register: costs and alignments, globally and
+  with free ends, an alignment's span found first, its end then its start, as the rule for ties picks
+  it; local scores; and tables of up to sixteen entries.
 - Every call runs on its caller's own thread and starts none unless asked (`threads`), and keeps no
   state between calls, so an application calls it from as many threads as it likes and spreads its
   work itself. An `Aligner`, one a thread, keeps its searches' memory from call to call; in C,

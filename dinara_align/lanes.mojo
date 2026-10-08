@@ -76,6 +76,12 @@ struct StringTexts(Texts, TrivialRegisterPassable):
 
     var items: ImmPointer[String, ImmUntrackedOrigin]
 
+    @staticmethod
+    def of(items: List[String]) -> Self:
+        """`items`' sequences, which must outlive the texts: a list read only through them is destroyed
+        after its last use by name, so its owner keeps it to the end of the texts' use (`_ = items^`)."""
+        return Self(items.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]())
+
     @always_inline
     def length(self, index: Int) -> Int:
         return self.items[unsafe_offset=index].byte_length()
@@ -390,6 +396,11 @@ struct LaneSpace[value: DType](Movable):
     var end_rows: SIMD[DType.int16, lanes_of[Self.value]()]
     var start_columns: SIMD[DType.int16, lanes_of[Self.value]()]
     var end_columns: SIMD[DType.int16, lanes_of[Self.value]()]
+    var found_diagonals: SIMD[DType.int16, lanes_of[Self.value]()]
+    """With free ends, the diagonal of the cell each lane's least cost so far ends on (see `ends_reached`)."""
+    var lowest_end: Bool
+    """Of the cells a lane may end on at its least cost, whether `found_diagonals` keeps the one on the
+    lowest diagonal, or the highest."""
     var members: List[Int]
     var retries: List[List[Int]]
     """The pairs its first bands did not prove, filed by the width of the band that will (see
@@ -418,6 +429,8 @@ struct LaneSpace[value: DType](Movable):
         self.end_rows = SIMD[DType.int16, lanes_of[Self.value]()](0)
         self.start_columns = SIMD[DType.int16, lanes_of[Self.value]()](0)
         self.end_columns = SIMD[DType.int16, lanes_of[Self.value]()](0)
+        self.found_diagonals = SIMD[DType.int16, lanes_of[Self.value]()](0)
+        self.lowest_end = True
         self.members = List[Int]()
         self.retries = List[List[Int]]()
         for _ in range(BUCKETS):
@@ -607,6 +620,7 @@ def pieced_band_costs[
     first_row[value, pieces](space, low, high, costs)
     var found = Lanes(FAR)
     if space.free:
+        space.found_diagonals = SIMD[DType.int16, lanes_of[value]()](0)
         ends_reached[value](space, low, high, 0, found)
         swept[value, pieces, False, True, tabled](space, low, high, costs, 0, space.rows, found)
         return found
@@ -725,23 +739,31 @@ def band_flags[value: DType](mut space: LaneSpace[value], low: Int, high: Int, c
 
 def ends_reached[
     value: DType
-](space: LaneSpace[value], low: Int, high: Int, row: Int, mut found: SIMD[value, lanes_of[value]()]):
+](mut space: LaneSpace[value], low: Int, high: Int, row: Int, mut found: SIMD[value, lanes_of[value]()]):
     """Lowers each lane's `found` to its cells on row `row` an alignment may end on: its last column, on
     a row its free reference letters reach, and on its last row, every column its free query letters do;
-    inside the band. The last columns a column at a time, every lane ending on it at once."""
+    inside the band. The last columns a column at a time, every lane ending on it at once. Each lane's
+    `space.found_diagonals` follows the cell, of those at its least cost the one on the lowest diagonal,
+    or with `space.lowest_end` off the highest."""
     comptime WIDTH = lanes_of[value]()
     comptime Lanes = SIMD[value, WIDTH]
+    comptime Diagonals = SIMD[DType.int16, WIDTH]
     var last_rows = space.row_ends
     var reached = (last_rows - space.end_rows).le(Int16(row)) & last_rows.ge(Int16(row))
     if not reached.reduce_or():
         return
     var first = max(row + low, 0)
     var last = min(row + high, space.columns)
+    var lowest = space.lowest_end
     for slot in range(len(space.last_columns)):
         var column = space.last_columns[slot]
         if column >= first and column <= last:
-            var ending = space.last_lanes[slot] & reached
-            found = min(found, ending.select(space.scores[column], Lanes(far_of[value]())))
+            var cell = space.scores[column]
+            var diagonal = Diagonals(Int16(column - row))
+            var nearer = diagonal.lt(space.found_diagonals) if lowest else diagonal.gt(space.found_diagonals)
+            var taken = space.last_lanes[slot] & reached & (cell.lt(found) | (cell.eq(found) & nearer))
+            found = taken.select(cell, found)
+            space.found_diagonals = taken.select(diagonal, space.found_diagonals)
     # A lane's free query letters on its last row, once.
     var finishing = last_rows.eq(Int16(row)) & space.end_columns.gt(0)
     if finishing.reduce_or():
@@ -749,9 +771,16 @@ def ends_reached[
             if finishing[lane]:
                 var column = Int(space.column_ends[lane])
                 var best = found[lane]
+                var best_diagonal = Int(space.found_diagonals[lane])
                 for end in range(max(column - Int(space.end_columns[lane]), first), min(column, last) + 1):
-                    best = min(best, space.scores[end][lane])
+                    var cell = space.scores[end][lane]
+                    var diagonal = end - row
+                    var nearer = diagonal < best_diagonal if lowest else diagonal > best_diagonal
+                    if cell < best or (cell == best and nearer):
+                        best = cell
+                        best_diagonal = diagonal
                 found[lane] = best
+                space.found_diagonals[lane] = Int16(best_diagonal)
 
 
 def swept[
@@ -931,12 +960,33 @@ def lane_distances[
     var before = 0
     for index in range(pairs):
         before += Int(settled[unsafe_offset=index])
+    var unlocated = List[Int](length=1, fill=0)
     if costs.fits_bytes():
         lane_stage[T, DType.uint8](
-            pairs, references, queries, costs, reference_band, max_cost, workers, costs_out, settled, mode
+            pairs,
+            references,
+            queries,
+            costs,
+            reference_band,
+            max_cost,
+            workers,
+            costs_out,
+            settled,
+            mode,
+            unlocated.unsafe_ptr(),
         )
     lane_stage[T, DType.int16](
-        pairs, references, queries, costs, reference_band, max_cost, workers, costs_out, settled, mode
+        pairs,
+        references,
+        queries,
+        costs,
+        reference_band,
+        max_cost,
+        workers,
+        costs_out,
+        settled,
+        mode,
+        unlocated.unsafe_ptr(),
     )
     # A stage leaves what its lanes cannot hold, so the pairs settled are counted, not assumed.
     var after = 0
@@ -1067,7 +1117,7 @@ def widest_last[value: DType](spaces: List[LaneSpace[value]], workers: Int) -> L
 
 
 def lane_stage[
-    T: Texts, value: DType
+    T: Texts, value: DType, located: Bool = False
 ](
     pairs: Int,
     references: T,
@@ -1079,9 +1129,14 @@ def lane_stage[
     costs_out: MutPointer[Optional[Int], _],
     settled: MutPointer[Bool, _],
     mode: Mode,
+    ends_out: MutPointer[Int, _],
+    lowest_end: Bool = True,
 ):
     """`lane_distances` in lanes of `value`: every pair `settled` does not mark and the lanes hold settled,
-    a pair whose byte saturates left.
+    a pair whose byte saturates left. With `located`, as `lane_ends` needs, each pair's band proves its
+    cost only when no path off it costs as little, so every optimal path lies inside, and the diagonal of
+    the cell its alignment ends on goes to `ends_out`: of those at its least cost, the lowest, or with
+    `lowest_end` off the highest.
 
     The band is the library's, its diagonals the reference's position less the query's; the lanes run
     the reference down the rows, their diagonals the query's position less the reference's, so they
@@ -1122,9 +1177,12 @@ def lane_stage[
         imm costs_out,
         imm settled,
         imm space_ptr,
+        imm ends_out,
+        imm lowest_end,
     }:
         """Takes groups until none is left, settling every pair its band proves."""
         ref space = space_ptr[unsafe_offset=worker]
+        space.lowest_end = lowest_end
         # A byte is done at its 255; 16 bits at the cap's next cost, if there is a cap they hold.
         space.stop = far_of[value]() if value == DType.uint8 or max_cost >= far_of[value]() - 1 else max_cost + 1
         var last_share = 0
@@ -1153,7 +1211,7 @@ def lane_stage[
                     var cost = Int(found[lane])
                     var rows = references.length(index)
                     var columns = queries.length(index)
-                    var verdict = proof[value, False](
+                    var verdict = proof[value, located](
                         index,
                         cost,
                         rows,
@@ -1170,6 +1228,8 @@ def lane_stage[
                         var kept = verdict == PROVEN and cost <= max_cost
                         costs_out[unsafe_offset=index] = Optional[Int](cost) if kept else None
                         settled[unsafe_offset=index] = True
+                        comptime if located:
+                            ends_out[unsafe_offset=index] = Int(space.found_diagonals[lane])
 
     spread(first_pass, first_workers, first_workers)
 
@@ -1201,9 +1261,12 @@ def lane_stage[
         imm costs_out,
         imm settled,
         imm space_ptr,
+        imm ends_out,
+        imm lowest_end,
     }:
         """Takes groups of unproven pairs until none is left, settling each."""
         ref space = space_ptr[unsafe_offset=worker]
+        space.lowest_end = lowest_end
         # A byte is done at its 255; 16 bits at the cap's next cost, if there is a cap they hold.
         space.stop = far_of[value]() if value == DType.uint8 or max_cost >= far_of[value]() - 1 else max_cost + 1
         var last_share = 0
@@ -1223,10 +1286,13 @@ def lane_stage[
                 for lane in range(len(space.members)):
                     var slot = group * WIDTH + lane
                     # A path as cheap as the first band's cost the first band found already; one cheaper is
-                    # under 255, so no byte saturates on it.
+                    # under 255, so no byte saturates on it. Located, the band holds the first one, every
+                    # optimal path with it.
                     var cost = min(Int(found[lane]), retry_ptr[unsafe_offset=4 * slot + 1])
                     costs_out[unsafe_offset=space.members[lane]] = Optional[Int](cost) if cost <= max_cost else None
                     settled[unsafe_offset=space.members[lane]] = True
+                    comptime if located:
+                        ends_out[unsafe_offset=space.members[lane]] = Int(space.found_diagonals[lane])
 
     spread(second_pass, second_workers, second_workers)
 
@@ -1699,6 +1765,251 @@ def lane_alignment_stage[
                     )
 
     spread(second_pass, second_workers, second_workers)
+
+
+def lane_ends[
+    T: Texts
+](
+    pairs: Int,
+    references: T,
+    queries: T,
+    costs: LaneCosts,
+    max_cost: Int,
+    workers: Int,
+    costs_out: MutPointer[Optional[Int], _],
+    ends_out: MutPointer[Int, _],
+    settled: MutPointer[Bool, _],
+    mode: Mode,
+    lowest_end: Bool,
+):
+    """`lane_distances` with `mode`'s free ends and no band, each pair's cost proven only where every optimal
+    path lies in its band, and the diagonal of the cell its alignment ends on into `ends_out`: of those at
+    its least cost, the lowest, or with `lowest_end` off the highest. A pair with an empty side is left."""
+    if costs.fits_bytes():
+        lane_stage[T, DType.uint8, True](
+            pairs,
+            references,
+            queries,
+            costs,
+            Band(),
+            max_cost,
+            workers,
+            costs_out,
+            settled,
+            mode,
+            ends_out,
+            lowest_end,
+        )
+    lane_stage[T, DType.int16, True](
+        pairs, references, queries, costs, Band(), max_cost, workers, costs_out, settled, mode, ends_out, lowest_end
+    )
+
+
+def reversed_text(letters: ImmPointer[UInt8, _], start: Int, end: Int) -> String:
+    """Bytes `start ..< end` from `letters`, back to front."""
+    var bytes = List[UInt8](Span(unsafe_ptr=letters.unsafe_offset(start), length=end - start))
+    reverse_bytes(bytes.unsafe_ptr(), len(bytes))
+    return String(unsafe_from_utf8=bytes^)
+
+
+def part_text(text: String, start: Int, end: Int) -> String:
+    """`text`'s bytes `start ..< end`."""
+    return String(StringSlice(unsafe_from_utf8=text.as_bytes()[start:end]))
+
+
+def lane_free_alignments(
+    references: List[String],
+    queries: List[String],
+    costs: LaneCosts,
+    mode: Mode,
+    max_cost: Int,
+    right: Bool,
+    workers: Int,
+    budget: Int,
+    costs_out: MutPointer[Optional[Int], _],
+    moves_out: MutPointer[List[UInt8], _],
+    spans_out: MutPointer[Int, _],
+    settled: MutPointer[Bool, _],
+):
+    """Every pair's alignment with `mode`'s free ends, no band, in lanes, as `gap_affine.free_ends_alignment`
+    finds it one pair at a time: its cost into `costs_out`, None past `max_cost`; the span it aligns into
+    `spans_out`, four numbers a pair, the reference's first letter and the one past its last, then the
+    query's; and the moves of the global alignment of that span, right to left, into `moves_out`; and
+    `settled` set. A pair the lanes do not settle at every step is left to the caller.
+
+    The span is the rule's (see `Ties`), run over both sequences reversed with `right`: the end on the
+    lowest of the lanes' diagonals, query less reference, an optimal alignment reaches, found by `lane_ends`
+    from the starts; then the start on the lowest such diagonal too, of those an optimal alignment ending
+    there leaves, by `lane_ends` again, back from that end over its reversed prefixes; then the span's own
+    global alignment by `lane_alignments`, the tie rule the other way round with `right`, at the same
+    cost. A pair whose end lies on the first row or column, a path running along it, is left."""
+    var pairs = len(references)
+    if pairs == 0:
+        return
+    var rows_of = List[Int](capacity=pairs)
+    var columns_of = List[Int](capacity=pairs)
+    for index in range(pairs):
+        rows_of.append(references[index].byte_length())
+        columns_of.append(queries[index].byte_length())
+    # The rule's frame: both sequences reversed with `right`, the free letters swapped end for end.
+    var frame_mode = Mode(
+        Mode.ENDS, mode.reference_end, mode.reference_start, mode.query_end, mode.query_start, 0, mode.anchor, -1, -1
+    ) if right else mode
+    var frame_references = List[String](length=pairs, fill=String())
+    var frame_queries = List[String](length=pairs, fill=String())
+    if right:
+        var reference_ptr = frame_references.unsafe_ptr()
+        var query_ptr = frame_queries.unsafe_ptr()
+
+        def turn(stretch: Int) {imm references, imm queries, imm reference_ptr, imm query_ptr, imm pairs, imm workers}:
+            """Stretch `stretch`'s pairs back to front."""
+            for index in range(pairs * stretch // workers, pairs * (stretch + 1) // workers):
+                reference_ptr[unsafe_offset=index] = reversed_text(
+                    references[index].unsafe_ptr(), 0, references[index].byte_length()
+                )
+                query_ptr[unsafe_offset=index] = reversed_text(
+                    queries[index].unsafe_ptr(), 0, queries[index].byte_length()
+                )
+
+        spread(turn, workers, workers)
+    # Each list read through its own texts, both alive throughout.
+    var firsts = StringTexts.of(frame_references) if right else StringTexts.of(references)
+    var seconds = StringTexts.of(frame_queries) if right else StringTexts.of(queries)
+
+    # The end: its cost and its diagonal, the lowest at that cost.
+    var found = List[Optional[Int]](length=pairs, fill=None)
+    var ends = List[Int](length=pairs, fill=0)
+    var reached = List[Bool](length=pairs, fill=False)
+    lane_ends(
+        pairs,
+        firsts,
+        seconds,
+        costs,
+        max_cost,
+        workers,
+        found.unsafe_ptr(),
+        ends.unsafe_ptr(),
+        reached.unsafe_ptr(),
+        frame_mode,
+        True,
+    )
+    # Each pair's span in the frame: rows `0`, then `1`, columns `2` and `3`.
+    var spans = List[Int](length=4 * pairs, fill=0)
+    var spanning = List[Bool](length=pairs, fill=False)
+    var starts_free = frame_mode.reference_start > 0 or frame_mode.query_start > 0
+    var back_references = List[String](length=pairs, fill=String())
+    var back_queries = List[String](length=pairs, fill=String())
+    var backed = List[Bool](length=pairs, fill=True)
+    for index in range(pairs):
+        if not reached[index]:
+            continue
+        if not found[index]:
+            costs_out[unsafe_offset=index] = None
+            settled[unsafe_offset=index] = True
+            continue
+        var rows = rows_of[index]
+        var columns = columns_of[index]
+        var diagonal = ends[index]
+        var end_row = rows if diagonal <= columns - rows else columns - diagonal
+        var end_column = rows + diagonal if diagonal <= columns - rows else columns
+        if end_row == 0 or end_column == 0:
+            continue
+        spanning[index] = True
+        spans[4 * index + 1] = end_row
+        spans[4 * index + 3] = end_column
+        if starts_free:
+            back_references[index] = reversed_text(firsts.letters(index), 0, end_row)
+            back_queries[index] = reversed_text(seconds.letters(index), 0, end_column)
+            backed[index] = False
+    _ = frame_references^
+    _ = frame_queries^
+
+    # The start, back from the end over its reversed prefixes, the frame's free starts their free ends: of
+    # the cells an optimal alignment leaves from, the one on the lowest diagonal in the frame, the highest
+    # here.
+    if starts_free:
+        var back_mode = Mode(
+            Mode.ENDS, 0, frame_mode.reference_start, 0, frame_mode.query_start, 0, mode.anchor, -1, -1
+        )
+        var back_found = List[Optional[Int]](length=pairs, fill=None)
+        var back_ends = List[Int](length=pairs, fill=0)
+        lane_ends(
+            pairs,
+            StringTexts.of(back_references),
+            StringTexts.of(back_queries),
+            costs,
+            max_cost,
+            workers,
+            back_found.unsafe_ptr(),
+            back_ends.unsafe_ptr(),
+            backed.unsafe_ptr(),
+            back_mode,
+            False,
+        )
+        _ = back_references^
+        _ = back_queries^
+        for index in range(pairs):
+            if not spanning[index]:
+                continue
+            spanning[index] = False
+            if not backed[index] or not back_found[index] or back_found[index].value() != found[index].value():
+                continue
+            var rows = spans[4 * index + 1]
+            var columns = spans[4 * index + 3]
+            var diagonal = back_ends[index]
+            var back_row = rows if diagonal <= columns - rows else columns - diagonal
+            var back_column = rows + diagonal if diagonal <= columns - rows else columns
+            spans[4 * index] = rows - back_row
+            spans[4 * index + 2] = columns - back_column
+            spanning[index] = True
+
+    # The span's global alignment, at the same cost, the tie rule its own way.
+    var span_references = List[String](length=pairs, fill=String())
+    var span_queries = List[String](length=pairs, fill=String())
+    var span_settled = List[Bool](length=pairs, fill=True)
+    for index in range(pairs):
+        if not spanning[index]:
+            continue
+        var rows = rows_of[index]
+        var columns = columns_of[index]
+        # In the batch's own order, unreversed.
+        var row_start = rows - spans[4 * index + 1] if right else spans[4 * index]
+        var row_end = rows - spans[4 * index] if right else spans[4 * index + 1]
+        var column_start = columns - spans[4 * index + 3] if right else spans[4 * index + 2]
+        var column_end = columns - spans[4 * index + 2] if right else spans[4 * index + 3]
+        spans[4 * index] = row_start
+        spans[4 * index + 1] = row_end
+        spans[4 * index + 2] = column_start
+        spans[4 * index + 3] = column_end
+        span_references[index] = part_text(references[index], row_start, row_end)
+        span_queries[index] = part_text(queries[index], column_start, column_end)
+        span_settled[index] = False
+    var span_costs = List[Optional[Int]](length=pairs, fill=None)
+    _ = lane_alignments(
+        pairs,
+        StringTexts.of(span_references),
+        StringTexts.of(span_queries),
+        costs,
+        Band(),
+        max_cost,
+        not right,
+        workers,
+        budget,
+        span_costs.unsafe_ptr(),
+        moves_out,
+        span_settled.unsafe_ptr(),
+    )
+    _ = span_references^
+    _ = span_queries^
+    for index in range(pairs):
+        if not spanning[index] or not span_settled[index] or not span_costs[index]:
+            continue
+        if span_costs[index].value() != found[index].value():
+            continue
+        costs_out[unsafe_offset=index] = span_costs[index]
+        comptime for field in range(4):
+            spans_out[unsafe_offset=4 * index + field] = spans[4 * index + field]
+        settled[unsafe_offset=index] = True
 
 
 def lane_local_scores[
