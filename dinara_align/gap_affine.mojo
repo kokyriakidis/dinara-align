@@ -508,6 +508,20 @@ comptime BLOCK_SHIFT = 40
 comptime BLOCK_MASK = (1 << BLOCK_SHIFT) - 1
 
 
+@always_inline
+def unreach(cells: MutPointer[Int32, _], count: Int):
+    """Marks `count` cells from `cells` unreached, a vector at a time: a pair's rings are cleared once
+    a search, which on a short pair costing a few gaps was a quarter of its time one cell at a time."""
+    comptime WIDTH = 16
+    var index = 0
+    while index + WIDTH <= count:
+        cells.unsafe_offset(index).unsafe_store(SIMD[DType.int32, WIDTH](UNREACHED))
+        index += WIDTH
+    while index < count:
+        cells[unsafe_offset=index] = UNREACHED
+        index += 1
+
+
 struct OwnLines(Movable):
     """`Int`s indexed as a list's, on cache lines no other allocation shares: a cache line of nothing
     either side of them.
@@ -595,9 +609,7 @@ struct Fronts[layers: Int](Movable):
         self.base = self.width // 2
         var size = Self.layers * slots * self.stride
         self.buffer.resize(unsafe_uninit_length=size)
-        var cells = self.buffer.unsafe_ptr()
-        for index in range(size):
-            cells[unsafe_offset=index] = UNREACHED
+        unreach(self.buffer.unsafe_ptr(), size)
         self.lows.reset(slots, 1)
         self.highs.reset(slots, 0)
         self.reach.reset(slots, Int.MIN // 2)
@@ -642,8 +654,7 @@ struct Fronts[layers: Int](Movable):
         self.spare.resize(unsafe_uninit_length=rows * new_stride)
         var source = self.buffer.unsafe_ptr()
         var destination = self.spare.unsafe_ptr()
-        for index in range(rows * new_stride):
-            destination[unsafe_offset=index] = UNREACHED
+        unreach(destination, rows * new_stride)
         for row in range(rows):
             Span(unsafe_ptr=destination.unsafe_offset(row * new_stride + shift), length=size).copy_from(
                 Span(unsafe_ptr=source.unsafe_offset(row * self.stride), length=size)
@@ -1287,7 +1298,7 @@ def meet[
 
 
 def bidirectional[
-    pieces: Int, record: Bool
+    pieces: Int, record: Bool, cost_only: Bool = False
 ](
     mut forward: Wavefront[pieces],
     mut backward: Wavefront[pieces],
@@ -1310,14 +1321,28 @@ def bidirectional[
     half the optimum, and the two together about half the diagonals one search grows alone. By the
     same count, once both have passed half of `ceiling` with that margin and found nothing within it,
     nothing is, and a capped search stops there, short of the optimum.
+
+    With `cost_only`, when only `best.cost` matters and not where the path splits, the search may stop
+    sooner. The other side's start, its cost-0 front, is where every path ends: so once a side's every
+    cost up to `c` has been checked against it, every path costing `c` or less has been found, and a
+    best within one of `c` is the optimum. The ring holds that front only while the other side is
+    within `window` of its start, so this ends the search on the cheap pairs, two cheap searches where
+    the margin above would grow both to past `o + window`, which on short reads differing in a few
+    letters was most of their time. Where the path splits may then differ among equally cheap ones, so
+    an alignment, which the split decides, keeps the margin.
     """
     var columns = forward.columns
     var rows = forward.rows
     var letters = columns + rows
     var o = forward.penalties.widest_opening[pieces]()
     var window = forward.penalties.window[pieces]()
+    # Each side's costs, from 0 up, every one of which met the other side's start: -1 for none.
+    var forward_whole = -1
+    var backward_whole = -1
     if forward.cost == 0 and backward.cost == 0:
         meet(forward, 0, backward, 0, best)
+        forward_whole = 0
+        backward_whole = 0
     var budget = columns * rows // CELLS_PER_STEP
     var next_check = CHECK_START
     while True:
@@ -1327,16 +1352,28 @@ def bidirectional[
             return OVER
         if best.cost != Int.MAX and reached >= best.cost - 1 + o + window:
             return MET
+        comptime if cost_only:
+            var whole = max(forward_whole, backward_whole)
+            if best.cost <= whole + 1 or (ceiling < Int.MAX and ceiling <= whole):
+                return OVER if best.cost > ceiling else MET
         if forward.cost <= backward.cost:
+            var before = forward.cost
             forward.advance[record]()
             var ahead = forward.cost
-            for behind in range(max(0, ahead - window, backward.cost - window), backward.cost + 1):
+            var lowest = max(0, ahead - window, backward.cost - window)
+            for behind in range(lowest, backward.cost + 1):
                 meet(forward, ahead, backward, behind, best)
+            if lowest == 0 and forward_whole == before:
+                forward_whole = ahead
         else:
+            var before = backward.cost
             backward.advance[record]()
             var behind = backward.cost
-            for ahead in range(max(0, behind - window, forward.cost - window), forward.cost + 1):
+            var lowest = max(0, behind - window, forward.cost - window)
+            for ahead in range(lowest, forward.cost + 1):
                 meet(forward, ahead, backward, behind, best)
+            if lowest == 0 and backward_whole == before:
+                backward_whole = behind
         # A band can starve a search: once its last `window` costs reached nothing, no later one will,
         # and the costs the other side may still meet it at have passed.
         if best.cost == Int.MAX and (
@@ -1371,7 +1408,7 @@ def wavefront_score(
     var forward = Wavefront[1](Span(first), Span(second), penalties, FREE_START, False, False)
     var backward = Wavefront[1](Span(first), Span(second), penalties, FREE_START, False, True)
     var best = Meeting.none()
-    if bidirectional[1, False](forward, backward, best, give_up, Int.MAX) != MET:
+    if bidirectional[1, False, cost_only=True](forward, backward, best, give_up, Int.MAX) != MET:
         return None
     return penalties.score(best.cost, letters)
 
@@ -1447,7 +1484,10 @@ def searched_distance[
             first, second, penalties, FREE_START, False, True, ends_free.first_end, ends_free.second_end, mirrored
         )
     var best = Meeting.none()
-    if bidirectional[pieces, False](forward.value(), backward.value(), best, False, Int.MAX, ceiling) != MET:
+    if (
+        bidirectional[pieces, False, cost_only=True](forward.value(), backward.value(), best, False, Int.MAX, ceiling)
+        != MET
+    ):
         return -1
     return best.cost
 
@@ -1460,6 +1500,9 @@ struct DistanceSpace(Movable):
     var backward: Optional[Wavefront[1]]
     var forward2: Optional[Wavefront[2]]
     var backward2: Optional[Wavefront[2]]
+    var costs: Optional[Costs]
+    """The costs the last pair took, whose `penalties` a batch's next pairs take again."""
+    var penalties: Optional[Penalties]
 
     def __init__(out self):
         """No searches yet: the first pair builds them."""
@@ -1467,6 +1510,16 @@ struct DistanceSpace(Movable):
         self.backward = None
         self.forward2 = None
         self.backward2 = None
+        self.costs = None
+        self.penalties = None
+
+    def penalties_for(mut self, costs: Costs) raises AlignmentError -> Penalties:
+        """`penalties_of(costs)`, worked out once for a batch's costs and not again for each pair: their
+        common factor's divisions were a tenth of a short read's time."""
+        if not self.costs or self.costs.value() != costs:
+            self.penalties = penalties_of(costs)
+            self.costs = costs
+        return self.penalties.value()
 
 
 def unpaid_letters(columns: Int, rows: Int, ends_free: EndsFree, band: Band) -> Int:

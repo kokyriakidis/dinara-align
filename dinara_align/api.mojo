@@ -294,7 +294,7 @@ def cost_within(
             # More symbols than the sweep takes: the wavefront takes any.
             if error.kind != ErrorKind.UNKNOWN_SYMBOL:
                 raise error
-    var penalties = penalties_of(costs)
+    var penalties = space.penalties_for(costs)
     if max_cost < 0:
         return None
     var ceiling = max_cost // penalties.scale
