@@ -642,33 +642,58 @@ def alignments(
 # region Batches
 
 
-def longest_first(references: List[String], queries: List[String]) -> List[Int]:
+def longest_first(references: List[String], queries: List[String], workers: Int) -> List[Int]:
     """The pairs' indices, the longest pair first: taken in that order by whichever thread is free, the
     long pairs start first and the short ones fill in around them, so none is left alone at the end
     holding up the rest.
 
     Balancing a batch needs no finer order than lengths within an eighth of each other, so the pairs
-    are dealt into such classes, two passes and no sort: the order costs the batch's one thread next to
-    nothing, as a sort's would not beside many threads' work on short pairs. Within a class, the batch's
-    own order."""
+    are dealt into such classes, no sort, within a class in the batch's own order. Each of `workers`
+    counts its stretch of the batch's classes and then places its stretch's pairs: on one thread the
+    order of short reads took as long as a fifteenth of the work ten threads did on them."""
     comptime CLASSES = 8 * 62
     var pairs = len(references)
-    var classes = List[Int](length=pairs, fill=0)
-    var starts = List[Int](length=CLASSES + 1, fill=0)
-    for index in range(pairs):
-        var length = references[index].byte_length() + queries[index].byte_length()
-        # Lengths below 16 are classes of their own; past that, a power of two and its top three bits
-        # under the leading one, longest the lowest class.
-        var shift = max(60 - Int(count_leading_zeros(UInt64(length))), 0)
-        var found = CLASSES - 1 - (8 * shift + (length >> shift))
-        classes[index] = found
-        starts[found + 1] += 1
-    for slot in range(CLASSES):
-        starts[slot + 1] += starts[slot]
-    var order = List[Int](length=pairs, fill=0)
-    for index in range(pairs):
-        order[starts[classes[index]]] = index
-        starts[classes[index]] += 1
+    # A stretch holds at least as many pairs as there are classes, so summing its counts costs no more
+    # than counting them did.
+    var stretches = max(min(workers, pairs // CLASSES), 1)
+    var classes = List[Int](capacity=pairs)
+    classes.resize(unsafe_uninit_length=pairs)
+    var order = List[Int](capacity=pairs)
+    order.resize(unsafe_uninit_length=pairs)
+    var starts = List[Int](length=stretches * CLASSES, fill=0)
+    var class_ptr = classes.unsafe_ptr()
+    var order_ptr = order.unsafe_ptr()
+    var start_ptr = starts.unsafe_ptr()
+
+    def count(stretch: Int) {imm references, imm queries, imm pairs, imm stretches, imm class_ptr, imm start_ptr}:
+        """Each pair of stretch `stretch` its class, and the stretch's count of each."""
+        var counts = start_ptr.unsafe_offset(stretch * CLASSES)
+        for index in range(pairs * stretch // stretches, pairs * (stretch + 1) // stretches):
+            var length = references[index].byte_length() + queries[index].byte_length()
+            # Lengths below 16 are classes of their own; past that, a power of two and its top three
+            # bits under the leading one, longest the lowest class.
+            var shift = max(60 - Int(count_leading_zeros(UInt64(length))), 0)
+            var found = CLASSES - 1 - (8 * shift + (length >> shift))
+            class_ptr[unsafe_offset=index] = found
+            counts[unsafe_offset=found] += 1
+
+    def place(stretch: Int) {imm pairs, imm stretches, imm class_ptr, imm order_ptr, imm start_ptr}:
+        """Each pair of stretch `stretch` at the next place its class has for the stretch."""
+        var next = start_ptr.unsafe_offset(stretch * CLASSES)
+        for index in range(pairs * stretch // stretches, pairs * (stretch + 1) // stretches):
+            var found = class_ptr[unsafe_offset=index]
+            order_ptr[unsafe_offset=next[unsafe_offset=found]] = index
+            next[unsafe_offset=found] += 1
+
+    parallelize(count, stretches, stretches)
+    # Each stretch's first place in each class: the classes in turn, each stretch's pairs in turn.
+    var placed = 0
+    for found in range(CLASSES):
+        for stretch in range(stretches):
+            var counted = starts[stretch * CLASSES + found]
+            starts[stretch * CLASSES + found] = placed
+            placed += counted
+    parallelize(place, stretches, stretches)
     return order^
 
 
@@ -774,7 +799,7 @@ def capped_distances(
     var out = results.unsafe_ptr()
     var failed = List[Bool](length=pairs, fill=False)
     var flags = failed.unsafe_ptr()
-    var order = longest_first(references, queries)
+    var order = longest_first(references, queries, workers)
     var taken = Atomic[Int64](0)
 
     def distance_worker(
@@ -886,7 +911,7 @@ def capped_alignments(
     var out = results.unsafe_ptr()
     var failed = List[Bool](length=pairs, fill=False)
     var flags = failed.unsafe_ptr()
-    var order = longest_first(references, queries)
+    var order = longest_first(references, queries, workers)
     var taken = Atomic[Int64](0)
 
     def alignment_worker(
