@@ -237,7 +237,7 @@ Free ends, seed extension, two-piece gaps and substitution tables of more than o
 pixi run bench-modes   # builds and times Edlib, WFA2-lib, KSW2, parasail and SSW the first time; then seconds
 ```
 
-Every tool aligns every pair with its CIGAR on one thread of the Skylake-X, pinned, every tool built for its own instruction set, AVX-512 included, dinara-align at the commit adding the end bonus; a tool's time is the faster of two passes over a workload, its mean per pair, and every tool's costs or scores must agree on every pair, or the run fails; none disagreed.
+Every tool aligns every pair with its CIGAR on one thread of the Skylake-X, pinned, every tool built for its own instruction set, AVX-512 included, dinara-align at `6fe5e43`; a tool's time is the faster of two passes over a workload, its mean per pair, and every tool's costs or scores must agree on every pair, or the run fails; none disagreed.
 WFA2-lib runs exact, keeping every front, its WF-adaptive heuristic off.
 KSW2 extends with no Z-drop: it gauges one by anti-diagonal and dinara-align as WFA2-lib does, a cost at a time, so the two would stop at different places and their times compare different work.
 Deletions priced apart from insertions are left out: no rival offers them.
