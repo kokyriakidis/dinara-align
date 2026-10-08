@@ -69,14 +69,20 @@ struct Device(Equatable, ImplicitlyCopyable, TrivialRegisterPassable):
 
 
 @always_inline
-def next_share(mut taken: Atomic[Int64], count: Int, workers: Int) -> Tuple[Int, Int]:
-    """The next items a worker of `workers` takes from `count`, `taken` of them already handed out: a
-    share of what is left, half of it divided among the workers, and never less than one, so the shares
-    shrink as the work runs out and the last ones balance the workers, as OpenMP's guided schedule
-    deals them. One item at a time would send the counter's cache line from core to core for every
-    one, which on short pairs costs as much as aligning them."""
+def next_share(mut taken: Atomic[Int64], count: Int, workers: Int, mut last: Int) -> Tuple[Int, Int]:
+    """The next items a worker of `workers` takes from `count`, `taken` of them already handed out, and
+    `last` the size of its last share, 0 before its first.
+
+    A share is half of what is left divided among the workers, as OpenMP's guided schedule deals them,
+    so the shares shrink as the work runs out and the last ones balance the workers; but never more
+    than twice the worker's last, starting from one. The batch's longest pairs come first and can cost
+    several times the rest, and a first share of a twentieth of the batch left one worker holding them
+    while the others finished: on the Skylake-X half again the batch's time. Doubling from one spreads
+    them over every worker, and a worker reaches the guided size within a few shares, each one taking
+    the counter's cache line once."""
     var left = count - Int(taken.load())
-    var share = max(left // (2 * max(workers, 1)), 1)
+    var share = max(min(left // (2 * max(workers, 1)), 2 * last), 1)
+    last = share
     var first = Int(taken.fetch_add(Int64(share)))
     return (first, min(first + share, count))
 

@@ -61,6 +61,7 @@ searches find keeping only their last few costs, and each piece is aligned the s
 """
 
 from std.math import gcd
+from std.sys import size_of
 
 from .errors import AlignmentError, ErrorKind
 from .modes import Anchor, Band, Costs, Ties
@@ -507,6 +508,34 @@ comptime BLOCK_SHIFT = 40
 comptime BLOCK_MASK = (1 << BLOCK_SHIFT) - 1
 
 
+struct OwnLines(Movable):
+    """`Int`s indexed as a list's, on cache lines no other allocation shares: a cache line of nothing
+    either side of them.
+
+    `Fronts` writes its slots' bounds and reaches at every cost. As lists of their own, a few words
+    each, the allocator packed them beside another thread's, and a batch's workers took the line
+    from each other at every write: on the Skylake-X ten threads spent twice one thread's cycles a
+    pair, 40 lines fetched from another core a pair, where ten processes ran as one does."""
+
+    comptime GUARD = 64 // size_of[Int]()
+    var items: List[Int]
+
+    def __init__(out self, length: Int, fill: Int):
+        """`length` entries, each `fill`."""
+        self.items = List[Int](length=length + 2 * Self.GUARD, fill=fill)
+
+    @always_inline
+    def __getitem__(ref self, index: Int) -> ref[self.items] Int:
+        """Entry `index`, unchecked past the list's own bounds."""
+        return self.items.unsafe_ptr()[unsafe_offset=index + Self.GUARD]
+
+    def reset(mut self, length: Int, fill: Int):
+        """As new with `length` entries, each `fill`, the memory kept."""
+        self.items.resize(unsafe_uninit_length=length + 2 * Self.GUARD)
+        for index in range(length):
+            self[index] = fill
+
+
 struct Fronts[layers: Int](Movable):
     """The last `slots` costs' fronts, `layers` a cost, in rings indexed by cost, each over the
     diagonals reached.
@@ -528,9 +557,13 @@ struct Fronts[layers: Int](Movable):
     """Where each row starts after the last: `width` and a cache line more (see `ROW_PADDING`)."""
     var base: Int
     var buffer: List[Int32]
-    var lows: List[Int]
-    var highs: List[Int]
-    var reach: List[Int]
+    var spare: List[Int32]
+    """The memory `grow` widens the rows into, the old rows' afterwards: a batch's worker keeps both, so
+    its pairs allocate nothing once it is warm, where memory freed on one core and taken on another
+    would have to be fetched from that core's cache."""
+    var lows: OwnLines
+    var highs: OwnLines
+    var reach: OwnLines
     """Each slot's furthest anti-diagonal, `2 column - diagonal`, over its alignment front."""
     var least: Int
     """The diagonals a front may ever read: the matrix's and two either side, and a lane group past."""
@@ -546,9 +579,10 @@ struct Fronts[layers: Int](Movable):
         self.stride = self.width + ROW_PADDING
         self.base = self.width // 2
         self.buffer = List[Int32](length=Self.layers * slots * self.stride, fill=UNREACHED)
-        self.lows = List[Int](length=slots, fill=1)
-        self.highs = List[Int](length=slots, fill=0)
-        self.reach = List[Int](length=slots, fill=Int.MIN // 2)
+        self.spare = List[Int32]()
+        self.lows = OwnLines(slots, 1)
+        self.highs = OwnLines(slots, 0)
+        self.reach = OwnLines(slots, Int.MIN // 2)
 
     def reset(mut self, slots: Int, columns: Int, rows: Int):
         """As new for `slots` costs over a `columns` by `rows` matrix, the memory the rings held kept."""
@@ -564,13 +598,9 @@ struct Fronts[layers: Int](Movable):
         var cells = self.buffer.unsafe_ptr()
         for index in range(size):
             cells[unsafe_offset=index] = UNREACHED
-        self.lows.resize(unsafe_uninit_length=slots)
-        self.highs.resize(unsafe_uninit_length=slots)
-        self.reach.resize(unsafe_uninit_length=slots)
-        for slot in range(slots):
-            self.lows[slot] = 1
-            self.highs[slot] = 0
-            self.reach[slot] = Int.MIN // 2
+        self.lows.reset(slots, 1)
+        self.highs.reset(slots, 0)
+        self.reach.reset(slots, Int.MIN // 2)
 
     @inline(.always)
     def back(self, lag: Int) -> Int:
@@ -609,14 +639,16 @@ struct Fronts[layers: Int](Movable):
         var shift = first - new_first
         var rows = Self.layers * self.slots
         var new_stride = new_size + ROW_PADDING
-        var wider = List[Int32](length=rows * new_stride, fill=UNREACHED)
+        self.spare.resize(unsafe_uninit_length=rows * new_stride)
         var source = self.buffer.unsafe_ptr()
-        var destination = wider.unsafe_ptr()
+        var destination = self.spare.unsafe_ptr()
+        for index in range(rows * new_stride):
+            destination[unsafe_offset=index] = UNREACHED
         for row in range(rows):
             Span(unsafe_ptr=destination.unsafe_offset(row * new_stride + shift), length=size).copy_from(
                 Span(unsafe_ptr=source.unsafe_offset(row * self.stride), length=size)
             )
-        self.buffer = wider^
+        swap(self.buffer, self.spare)
         self.width = new_size
         self.stride = new_stride
         self.base = -new_first

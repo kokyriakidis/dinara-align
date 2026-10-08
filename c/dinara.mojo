@@ -412,8 +412,9 @@ def dinara_distances(
 
     def work(slot: Int) {mut taken, imm}:
         """Takes the next pairs not yet taken and writes each one's least cost or code, until none is left."""
+        var last = 0
         while True:
-            var share = next_share(taken, pairs, workers)
+            var share = next_share(taken, pairs, workers, last)
             if share[0] >= pairs:
                 return
             for index in range(share[0], share[1]):
@@ -464,8 +465,9 @@ def dinara_alignments(
 
     def work(slot: Int) {mut taken, imm}:
         """Takes the next pairs not yet taken and writes each one's alignment and status, until none is left."""
+        var last = 0
         while True:
-            var share = next_share(taken, pairs, workers)
+            var share = next_share(taken, pairs, workers, last)
             if share[0] >= pairs:
                 return
             for index in range(share[0], share[1]):

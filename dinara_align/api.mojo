@@ -796,8 +796,9 @@ def capped_distances(
         """Takes the next pairs in `order` until none is left, storing each one's capped cost or flagging that
         it raised, its searches kept from pair to pair."""
         var space = DistanceSpace()
+        var last = 0
         while True:
-            var share = next_share(taken, pairs, workers)
+            var share = next_share(taken, pairs, workers, last)
             if share[0] >= pairs:
                 return
             for dealt in range(share[0], share[1]):
@@ -909,8 +910,9 @@ def capped_alignments(
     }:
         """Takes the next pairs in `order` until none is left, storing each one's capped alignment or flagging
         that it raised."""
+        var last = 0
         while True:
-            var share = next_share(taken, pairs, workers)
+            var share = next_share(taken, pairs, workers, last)
             if share[0] >= pairs:
                 return
             for dealt in range(share[0], share[1]):
@@ -978,8 +980,9 @@ def search(
         def work(slot: Int) {mut taken, imm}:
             """Scores the next unclaimed references against the query until none is left, flagging any that
             raised."""
+            var last = 0
             while True:
-                var share = next_share(taken, count, workers)
+                var share = next_share(taken, count, workers, last)
                 if share[0] >= count:
                     return
                 for index in range(share[0], share[1]):
