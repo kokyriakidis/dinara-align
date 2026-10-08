@@ -31,6 +31,7 @@ from std.memory import stack_allocation
 from std.memory.pointer import AddressSpace
 from max.algorithm import parallelize
 from max.gpu import WARP_SIZE, barrier, block_idx, thread_idx
+from max.gpu.host import DeviceContext
 from max.gpu.primitives.warp import shuffle_up, shuffle_xor
 
 from .alignment import AffineGapCosts, AlignmentMode
@@ -48,11 +49,12 @@ from .common import (
     zeroed,
 )
 
-comptime SHAPE_LANES: Array[Int, 12] = [4, 4, 4, 8, 8, 8, 16, 16, 16, 32, 32, 32]
+comptime SHAPE_LANES: Array[Int, 18] = [8, 8, 8, 8, 8, 8, 16, 16, 16, 16, 16, 16, 32, 32, 32, 32, 32, 32]
 """Each compiled shape's lanes a pair."""
-comptime SHAPE_COLUMNS: Array[Int, 12] = [8, 12, 16, 8, 12, 16, 8, 12, 16, 8, 12, 16]
-"""Each compiled shape's columns a lane: a pair spans 32 to 512 columns in steps of about a third."""
-comptime SHAPES = 12
+comptime SHAPE_COLUMNS: Array[Int, 18] = [6, 8, 10, 12, 14, 16, 6, 8, 10, 12, 14, 16, 6, 8, 10, 12, 14, 16]
+"""Each compiled shape's columns a lane: a pair spans 48 to 512 columns, in steps of an eighth or less, so
+a read is swept little wider than it is."""
+comptime SHAPES = 18
 
 
 def unpack_kernel[bits: Int](codes: Pointer[UInt32, MutAnyOrigin], letters: Pointer[UInt8, MutAnyOrigin], words: Int32):
@@ -232,6 +234,7 @@ def grouped_scores[
     substitutions: ImmSpan[Scalar[SubstitutionDType], _],
     scoring: AffineGapCosts,
     threads: Int,
+    gpu_id: Int,
 ) raises -> Optional[List[Int32]]:
     """The named pairs' scores, several pairs a warp (see the module's notes), or None when the widest
     second sequence among them is wider than any shape spans. A letter outside the alphabet raises as
@@ -243,21 +246,47 @@ def grouped_scores[
     var bits = 2 if size <= 4 else (4 if size <= 16 else 8)
     var per_word = 32 // bits
     var bases = alphabet == "ACGT"
-    var stretches = max(min(threads, pairs), 1)
+    var workers = max(threads, 1)
 
-    # Each stretch of the pairs measured by a thread of its own: its words on the tape, its longest
-    # first and second sequences.
+    # The batch goes over in chunks, each packed while the device scores the one before: the first as
+    # many pairs as the device holds at once in the narrowest pairs a block, each after twice the last,
+    # so only the first chunk's packing waits and the device, slower a pair than the packing, never does.
+    # Each chunk is split into a stretch a thread.
+    var holds = (
+        scope.specs.streaming_multiprocessors
+        * scope.specs.max_blocks_per_multiprocessor
+        * (THREADS_PER_BLOCK // WARP_SIZE)
+    )
+    var chunk_starts = List[Int]()
+    var bounds = List[Int]()
+    var chunk_size = max(holds, 1)
+    var first = 0
+    while first < pairs:
+        var last = min(first + chunk_size, pairs)
+        chunk_starts.append(len(bounds))
+        var parts = min(workers, last - first)
+        for part in range(parts):
+            bounds.append(first + (last - first) * part // parts)
+        first = last
+        chunk_size *= 2
+    chunk_starts.append(len(bounds))
+    bounds.append(pairs)
+    var stretches = len(bounds) - 1
+
+    # Every stretch measured on every thread: its words on the tape, its longest first and second
+    # sequences.
     var measures = List[Int](length=3 * stretches, fill=0)
     var measure_ptr = measures.unsafe_ptr()
+    var bound_ptr = bounds.unsafe_ptr()
 
     def measure(
         stretch: Int,
-    ) {imm firsts, imm seconds, imm indices, imm pairs, imm stretches, imm per_word, imm measure_ptr}:
+    ) {imm firsts, imm seconds, imm indices, imm per_word, imm measure_ptr, imm bound_ptr}:
         """Stretch `stretch`'s words and longest sides."""
         var words = 0
         var rows = 0
         var columns = 0
-        for slot in range(pairs * stretch // stretches, pairs * (stretch + 1) // stretches):
+        for slot in range(bound_ptr[unsafe_offset=stretch], bound_ptr[unsafe_offset=stretch + 1]):
             var first = firsts[indices[slot]].byte_length()
             var second = seconds[indices[slot]].byte_length()
             words += ceildiv(first, per_word) + ceildiv(second, per_word)
@@ -267,24 +296,32 @@ def grouped_scores[
         measure_ptr[unsafe_offset=3 * stretch + 1] = rows
         measure_ptr[unsafe_offset=3 * stretch + 2] = columns
 
-    parallelize(measure, stretches, stretches)
+    parallelize(measure, stretches, min(workers, stretches))
     var longest_rows = 0
     var longest_columns = 0
     var words = 0
-    var begins = List[Int](capacity=stretches)
+    var begins = List[Int](capacity=stretches + 1)
     for stretch in range(stretches):
         begins.append(words)
         words += measures[3 * stretch]
         longest_rows = max(longest_rows, measures[3 * stretch + 1])
         longest_columns = max(longest_columns, measures[3 * stretch + 2])
+    begins.append(words)
     var chosen = shape_for(longest_rows, longest_columns)
     if chosen < 0:
         return None
 
-    # The pinned memory, and every thread packing its stretch into it.
     var shapes = scope.context.enqueue_create_host_buffer[DType.uint32](3 * pairs)
     var codes = scope.context.enqueue_create_host_buffer[DType.uint32](max(words, 1))
+    var codes_buffer = allocate[DType.uint32](scope, max(words, 1))
+    var letters_buffer = allocate[DType.uint8](scope, max(words, 1) * per_word)
+    var shapes_buffer = allocate[DType.uint32](scope, 3 * pairs)
+    var substitutions_buffer = upload(scope, substitutions)
+    var results_buffer = zeroed[ScoreDType](scope, pairs)
     scope.context.synchronize()
+    # A second context on the same device is a second stream, the copies': each chunk crosses the bus
+    # there while the kernels score the chunk before, and the kernels wait only for their own chunk.
+    var copier = DeviceContext(device_id=gpu_id)
     var codes_by_byte = Array[UInt8, 256](fill=UNKNOWN_SYMBOL)
     var alphabet_bytes = alphabet.as_bytes()
     for index in range(size):
@@ -295,83 +332,104 @@ def grouped_scores[
     var flags = failed.unsafe_ptr()
     var begin_ptr = begins.unsafe_ptr()
 
-    def pack(
-        stretch: Int,
-    ) {
-        imm firsts,
-        imm seconds,
-        imm indices,
-        imm codes_by_byte,
-        imm pairs,
-        imm stretches,
-        imm bits,
-        imm per_word,
-        imm bases,
-        imm tape,
-        imm places,
-        imm flags,
-        imm begin_ptr,
-    }:
-        """Stretch `stretch`'s pairs onto the tape and their places, flagging a pair holding a letter
-        outside the alphabet."""
-        var start = begin_ptr[unsafe_offset=stretch]
-        for slot in range(pairs * stretch // stretches, pairs * (stretch + 1) // stretches):
-            var index = indices[slot]
-            var first = firsts[index].byte_length()
-            var second = seconds[index].byte_length()
-            places[unsafe_offset=3 * slot] = UInt32(start)
-            places[unsafe_offset=3 * slot + 1] = UInt32(first)
-            places[unsafe_offset=3 * slot + 2] = UInt32(second)
-            var known = packed_into(firsts[index], codes_by_byte, bits, per_word, bases, tape.unsafe_offset(start))
-            start += ceildiv(first, per_word)
-            known = (
-                packed_into(seconds[index], codes_by_byte, bits, per_word, bases, tape.unsafe_offset(start)) and known
-            )
-            start += ceildiv(second, per_word)
-            if not known:
-                flags[unsafe_offset=slot] = True
+    for chunk in range(len(chunk_starts) - 1):
+        var first_stretch = chunk_starts[chunk]
+        var stop_stretch = chunk_starts[chunk + 1]
 
-    parallelize(pack, stretches, stretches)
+        def pack(
+            part: Int,
+        ) {
+            imm firsts,
+            imm seconds,
+            imm indices,
+            imm codes_by_byte,
+            imm bits,
+            imm per_word,
+            imm bases,
+            imm tape,
+            imm places,
+            imm flags,
+            imm begin_ptr,
+            imm bound_ptr,
+            imm first_stretch,
+        }:
+            """Stretch `first_stretch + part`'s pairs onto the tape and their places, flagging a pair
+            holding a letter outside the alphabet."""
+            var stretch = first_stretch + part
+            var start = begin_ptr[unsafe_offset=stretch]
+            for slot in range(bound_ptr[unsafe_offset=stretch], bound_ptr[unsafe_offset=stretch + 1]):
+                var index = indices[slot]
+                var first = firsts[index].byte_length()
+                var second = seconds[index].byte_length()
+                places[unsafe_offset=3 * slot] = UInt32(start)
+                places[unsafe_offset=3 * slot + 1] = UInt32(first)
+                places[unsafe_offset=3 * slot + 2] = UInt32(second)
+                var known = packed_into(firsts[index], codes_by_byte, bits, per_word, bases, tape.unsafe_offset(start))
+                start += ceildiv(first, per_word)
+                known = (
+                    packed_into(seconds[index], codes_by_byte, bits, per_word, bases, tape.unsafe_offset(start))
+                    and known
+                )
+                start += ceildiv(second, per_word)
+                if not known:
+                    flags[unsafe_offset=slot] = True
+
+        parallelize(pack, stop_stretch - first_stretch, stop_stretch - first_stretch)
+
+        # The chunk's tape and places over, unpacked, scored: all enqueued, the host on to the next.
+        var first_pair = bounds[first_stretch]
+        var chunk_pairs = bounds[stop_stretch] - first_pair
+        var first_word = begins[first_stretch]
+        var chunk_words = begins[stop_stretch] - first_word
+        if chunk_words > 0:
+            copier.enqueue_copy(
+                codes_buffer.create_sub_buffer[DType.uint32](first_word, chunk_words),
+                codes.create_sub_buffer[DType.uint32](first_word, chunk_words),
+            )
+        copier.enqueue_copy(
+            shapes_buffer.create_sub_buffer[DType.uint32](3 * first_pair, 3 * chunk_pairs),
+            shapes.create_sub_buffer[DType.uint32](3 * first_pair, 3 * chunk_pairs),
+        )
+        var landed = copier.create_event()
+        copier.stream().record_event(landed)
+        scope.context.stream().enqueue_wait_for(landed)
+        comptime for packing in range(3):
+            comptime letter_bits = [2, 4, 8][packing]
+            if bits == letter_bits:
+                if chunk_words > 0:
+                    scope.context.enqueue_function[unpack_kernel[letter_bits]](
+                        codes_buffer.create_sub_buffer[DType.uint32](first_word, chunk_words).unsafe_ptr(),
+                        letters_buffer.create_sub_buffer[DType.uint8](
+                            first_word * per_word, chunk_words * per_word
+                        ).unsafe_ptr(),
+                        Int32(chunk_words),
+                        grid_dim=ceildiv(chunk_words, THREADS_PER_BLOCK),
+                        block_dim=THREADS_PER_BLOCK,
+                    )
+                comptime for shape in range(SHAPES):
+                    if shape == chosen:
+                        comptime lanes = SHAPE_LANES[shape]
+                        comptime kernel = group_score_kernel[mode, lanes, SHAPE_COLUMNS[shape], 32 // letter_bits]
+                        scope.context.enqueue_function[kernel](
+                            letters_buffer.unsafe_ptr(),
+                            shapes_buffer.create_sub_buffer[DType.uint32](3 * first_pair, 3 * chunk_pairs).unsafe_ptr(),
+                            substitutions_buffer.unsafe_ptr(),
+                            results_buffer.create_sub_buffer[ScoreDType](first_pair, chunk_pairs).unsafe_ptr(),
+                            Int32(chunk_pairs),
+                            Int32(size),
+                            scoring.open,
+                            scoring.extend,
+                            grid_dim=ceildiv(chunk_pairs, THREADS_PER_BLOCK // lanes),
+                            block_dim=THREADS_PER_BLOCK,
+                        )
+
+    scope.context.synchronize()
+    copier.synchronize()
     for slot in range(pairs):
         if failed[slot]:
             # The pair's own translation raises the error a serial packing would have raised.
             _ = translate(firsts[indices[slot]], alphabet)
             _ = translate(seconds[indices[slot]], alphabet)
-
-    var codes_buffer = allocate[DType.uint32](scope, max(words, 1))
-    scope.context.enqueue_copy(codes_buffer, codes)
-    var letters_buffer = allocate[DType.uint8](scope, max(words, 1) * per_word)
-    var shapes_buffer = allocate[DType.uint32](scope, 3 * pairs)
-    scope.context.enqueue_copy(shapes_buffer, shapes)
-    var substitutions_buffer = upload(scope, substitutions)
-    var results_buffer = zeroed[ScoreDType](scope, pairs)
-    comptime for packing in range(3):
-        comptime letter_bits = [2, 4, 8][packing]
-        if bits == letter_bits:
-            scope.context.enqueue_function[unpack_kernel[letter_bits]](
-                codes_buffer.unsafe_ptr(),
-                letters_buffer.unsafe_ptr(),
-                Int32(words),
-                grid_dim=ceildiv(max(words, 1), THREADS_PER_BLOCK),
-                block_dim=THREADS_PER_BLOCK,
-            )
-            comptime for shape in range(SHAPES):
-                if shape == chosen:
-                    comptime lanes = SHAPE_LANES[shape]
-                    comptime kernel = group_score_kernel[mode, lanes, SHAPE_COLUMNS[shape], 32 // letter_bits]
-                    scope.context.enqueue_function[kernel](
-                        letters_buffer.unsafe_ptr(),
-                        shapes_buffer.unsafe_ptr(),
-                        substitutions_buffer.unsafe_ptr(),
-                        results_buffer.unsafe_ptr(),
-                        Int32(pairs),
-                        Int32(size),
-                        scoring.open,
-                        scoring.extend,
-                        grid_dim=ceildiv(pairs, THREADS_PER_BLOCK // lanes),
-                        block_dim=THREADS_PER_BLOCK,
-                    )
-    scope.context.synchronize()
     var results = List[Int32](capacity=pairs)
     with results_buffer.map_to_host() as host:
         for index in range(pairs):

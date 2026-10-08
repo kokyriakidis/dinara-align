@@ -822,7 +822,15 @@ def scores_with[
     if len(banded) > 0:
         # Several pairs a warp where the batch is narrow enough, a warp a pair otherwise.
         var grouped = grouped_scores[mode](
-            scope, firsts, seconds, banded, scoring.alphabet, scoring.substitutions, scoring.gaps, resolved.threads
+            scope,
+            firsts,
+            seconds,
+            banded,
+            scoring.alphabet,
+            scoring.substitutions,
+            scoring.gaps,
+            resolved.threads,
+            resolved.gpu_id,
         )
         var scored: List[Int32]
         if grouped:
