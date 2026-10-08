@@ -2560,6 +2560,55 @@ def test_sam_fields_describe_the_alignment() raises:
         assert_equal(rebuilt_reference(piece, found.cigar, found.mismatch_string(reference, query)), part)
 
 
+def gotoh_cost(first: String, second: String, mismatch: Int, opening: Int, extension: Int) -> Int:
+    """The least global cost by Gotoh's full matrix, a gap of `k` letters `opening + k extension`: the
+    test's own, sharing nothing with the library."""
+    comptime FAR = 1 << 50
+    var a = first.as_bytes()
+    var b = second.as_bytes()
+    var n = len(a)
+    var m = len(b)
+    var h = List[List[Int]]()
+    var d = List[List[Int]]()
+    var g = List[List[Int]]()
+    for _ in range(n + 1):
+        h.append(List[Int](length=m + 1, fill=FAR))
+        d.append(List[Int](length=m + 1, fill=FAR))
+        g.append(List[Int](length=m + 1, fill=FAR))
+    h[0][0] = 0
+    for i in range(1, n + 1):
+        d[i][0] = opening + i * extension
+        h[i][0] = d[i][0]
+    for j in range(1, m + 1):
+        g[0][j] = opening + j * extension
+        h[0][j] = g[0][j]
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            d[i][j] = min(h[i - 1][j] + opening + extension, d[i - 1][j] + extension)
+            g[i][j] = min(h[i][j - 1] + opening + extension, g[i][j - 1] + extension)
+            var diagonal = h[i - 1][j - 1] + (0 if a[i - 1] == b[j - 1] else mismatch)
+            h[i][j] = min(diagonal, min(d[i][j], g[i][j]))
+    return h[n][m]
+
+
+def test_dear_gaps_cost_what_the_matrix_says() raises:
+    """Gap costs far dearer than a mismatch leave most costs reachable by no path, which a search must
+    not pay for: the distance and the score of pairs up to 40 letters, unrelated and close, empty
+    sides among them, are the full matrix's, at an opening of 100,000 and at ordinary costs alike."""
+    seed(71)
+    for costs in [(4, 100_000, 10_000), (3, 50_000, 1), (1, 2, 1)]:
+        var mismatch = costs[0]
+        var opening = costs[1]
+        var extension = costs[2]
+        var scoring = Scoring.uniform(0, -mismatch, -opening, -extension)
+        for trial in range(25):
+            var first = random_sequence(0, 40, DNA_ALPHABET)
+            var second = random_sequence(0, 40, DNA_ALPHABET) if trial % 2 == 0 else mutated(first, 0.15, 4)
+            var expected = gotoh_cost(first, second, mismatch, opening, extension)
+            assert_equal(distance(first, second, Costs.affine(mismatch, opening, extension)), expected)
+            assert_equal(score(first, second, scoring, GLOBAL), -expected)
+
+
 def test_batches_reuse_their_searches_cleanly() raises:
     """A batch's worker keeps its searches from pair to pair (see `gap_affine.DistanceSpace`), so a pair
     must never see the last one's state: long pairs after short and short after long, identical and

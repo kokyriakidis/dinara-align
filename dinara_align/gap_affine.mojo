@@ -964,6 +964,12 @@ struct Wavefront[pieces: Int](Movable):
         if record:
             self.history.finish(low, high)
 
+    @always_inline
+    def reached_at(self, cost: Int) -> Bool:
+        """Whether this search's front of `cost`, one of the last `window` it grew, reached any cell."""
+        var slot = self.fronts.back(self.cost - cost)
+        return self.fronts.lows[slot] <= self.fronts.highs[slot]
+
     def advance[record: Bool](mut self):
         """Grows the next cost's fronts from the ring, and with `record` keeps what the traceback needs
         of them."""
@@ -1408,8 +1414,12 @@ def bidirectional[
             forward.advance[record]()
             var ahead = forward.cost
             var lowest = max(0, ahead - window, backward.cost - window)
-            for behind in range(lowest, backward.cost + 1):
-                meet(forward, ahead, backward, behind, best)
+            # A front that reached no cell meets nothing. Under gap costs far dearer than a mismatch most
+            # costs are reachable by no path, and checking each against every cost of the other side's
+            # window took a pair of 16 letters a second and a half at an opening of 100,000.
+            if forward.reached_at(ahead):
+                for behind in range(lowest, backward.cost + 1):
+                    meet(forward, ahead, backward, behind, best)
             if lowest == 0 and forward_whole == before:
                 forward_whole = ahead
         else:
@@ -1417,8 +1427,9 @@ def bidirectional[
             backward.advance[record]()
             var behind = backward.cost
             var lowest = max(0, behind - window, forward.cost - window)
-            for ahead in range(lowest, forward.cost + 1):
-                meet(forward, ahead, backward, behind, best)
+            if backward.reached_at(behind):
+                for ahead in range(lowest, forward.cost + 1):
+                    meet(forward, ahead, backward, behind, best)
             if lowest == 0 and backward_whole == before:
                 backward_whole = behind
         # A band can starve a search: once its last `window` costs reached nothing, no later one will,
