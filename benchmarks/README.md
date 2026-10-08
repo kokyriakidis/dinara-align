@@ -237,7 +237,7 @@ Free ends, seed extension, two-piece gaps and substitution tables of more than o
 pixi run bench-modes   # builds and times Edlib, WFA2-lib, KSW2, parasail and SSW the first time; then seconds
 ```
 
-Every tool aligns every pair with its CIGAR on one thread of the Skylake-X, pinned, every tool built for its own instruction set, AVX-512 included, dinara-align at `c6c6a92`; a tool's time is the faster of two passes over a workload, its mean per pair, and every tool's costs or scores must agree on every pair, or the run fails; none disagreed.
+Every tool aligns every pair with its CIGAR on one thread of the Skylake-X, pinned, every tool built for its own instruction set, AVX-512 included, dinara-align at `843aeb2`; a tool's time is the faster of two passes over a workload, its mean per pair, and every tool's costs or scores must agree on every pair, or the run fails; none disagreed.
 WFA2-lib runs exact, keeping every front, its WF-adaptive heuristic off.
 KSW2 extends with no Z-drop: it gauges one by anti-diagonal and dinara-align as WFA2-lib does, a cost at a time, so the two would stop at different places and their times compare different work.
 Deletions priced apart from insertions are left out: no rival offers them.
@@ -247,18 +247,38 @@ Deletions priced apart from insertions are left out: no rival offers them.
 | infix at unit costs, 1 kbp read at 10% placed whole in a 3 kbp window | **145 µs** | 270 µs | 986 µs | — | — | — |
 | infix at unit costs, 10 kbp read at 5% in a 30 kbp window | **3.32 ms** | 13.4 ms | 53.7 ms | — | — | — |
 | prefix at unit costs, 1 kbp read at 10% against 2 kbp of reference | **46 µs** | 114 µs | 47 µs | — | — | — |
-| infix at WFA's (4, 6, 2), the 1 kbp reads above | **3.75 ms** | — | 4.10 ms | — | — | — |
-| extension, a match 2 at (4, 6, 2), 300 to 1,400 bases at 5% then noise | **785 µs** | — | — | 2.07 ms | — | — |
-| the same with an end bonus of 50, 0 to 80 bases of noise at the end | **186 µs** | — | — | 1.23 ms | — | — |
-| two-piece gaps (4, 6, 2, 24, 1), 5 kbp at 5% with three indels of 100 to 400 bp | **9.25 ms** | — | 15.9 ms | 46.7 ms | — | — |
-| a table, match 2, transition -2, transversion -4, global, 1 kbp at 10% | **546 µs** | — | — | — | 2.94 ms | — |
-| the same table, local, 1 kbp read at 10% in a 10 kbp window | **2.53 ms** | — | — | — | 5.16 ms | 3.27 ms |
+| infix at WFA's (4, 6, 2), the 1 kbp reads above | **3.01 ms** | — | 4.10 ms | — | — | — |
+| extension, a match 2 at (4, 6, 2), 300 to 1,400 bases at 5% then noise | **726 µs** | — | — | 2.07 ms | — | — |
+| the same with an end bonus of 50, 0 to 80 bases of noise at the end | **154 µs** | — | — | 1.23 ms | — | — |
+| two-piece gaps (4, 6, 2, 24, 1), 5 kbp at 5% with three indels of 100 to 400 bp | **8.33 ms** | — | 15.9 ms | 46.7 ms | — | — |
+| a table, match 2, transition -2, transversion -4, global, 1 kbp at 10% | **552 µs** | — | — | — | 2.94 ms | — |
+| the same table, local, 1 kbp read at 10% in a 10 kbp window | **2.55 ms** | — | — | — | 5.16 ms | 3.27 ms |
 
-- **dinara-align is the fastest on every workload**: 1.9 and 4 times Edlib on infixes, 2.6 times KSW2 on extension and 6.6 times with an end bonus, 1.7 times WFA2-lib on two-piece gaps and 5.4 times parasail on a table globally. The prefix search ties WFA2-lib's diagonal transition, 46 against 47 µs.
+- **dinara-align is the fastest on every workload**: 1.9 and 4 times Edlib on infixes, 1.4 times WFA2-lib on an infix at its costs, 2.9 times KSW2 on extension and 8 times with an end bonus, 1.9 times WFA2-lib on two-piece gaps and 5.3 times parasail on a table globally. The prefix search ties WFA2-lib's diagonal transition, 46 against 47 µs.
 - **An end bonus aligns a read to its end when that scores within the bonus of the best stop**, as KSW2's `end_bonus` and BWA-MEM's clipping penalty decide, and both tools choose the same alignment on every read. The extension's own search weighs it, keeping the best of its points on the read's last row as it grows and going on only while one could still win, so a read ending in a short stretch of noise costs less than a plain extension of a long one.
 - **Some rows move by up to a fifth between commits that do not touch them.** The infix at WFA's costs has measured 3.1 and 3.75 ms on the same code path: the same instructions and branches, 6.3 billion of them, in 2.1 or 2.9 billion cycles depending on where unrelated code places its loop. The Skylake-X penalises a jump that crosses a 32-byte boundary (Intel's JCC erratum fix), and Mojo offers no option to keep branches off such boundaries; later x86 cores are not affected. Read a difference of that size between commits as noise.
 - **The prefix search sweeps only the band its bound allows**, which Edlib's prefix mode does not: the band's top moves down with the diagonal, no column past the read's length plus the best end so far is swept, and a try whose band has already emptied stops. The part of the reference it finds is then aligned globally by the edit-distance traceback.
 - **A table of more than one mismatch score sweeps sixteen cells at a time**, by anti-diagonal, each pair's score read by byte shuffle from a register when the table has at most sixteen entries, as DNA's four letters do, and gathered from memory otherwise. A local alignment is found as SSW finds one: a 16-bit sweep for its end, one anchored there for the first cell that earns its score, its start, and the span between aligned globally. A global one stores only the band of diagonals its score bounds. Both used to sweep a cell at a time: 13.3 ms globally and 133 ms locally.
+
+## Short-Read Batches
+
+Accelign's short-read case study (Kallenborn et al., BMC Bioinformatics 2026) scores millions of Illumina reads against the reference sections BWA placed them in, on every thread: each pair's global score alone, a match 0, a mismatch −1 and a gap of `k` letters `−(2 + k)`, dinara-align's `Costs.affine(1, 2, 1)`.
+Its reads are not ours to ship, so the pairs here are drawn to the same shape from a fixed seed: 500,000 reads of 148 bp at 1% error against sections of their source, most the read's own 148 bp, a fifth with up to 22 bases fewer or 30 more at either end.
+
+```bash
+pixi run bench-batch   # builds the rivals the first time; then a minute or two
+```
+
+Every tool scores the whole batch on all ten threads of the Skylake-X, the rivals through OpenMP, one aligner a thread, and its time is the faster of two passes; every tool's costs must agree, summed and position-weighted, or the run fails. WFA2-lib runs exact, its score alone, its WF-adaptive heuristic off. dinara-align at `843aeb2`, every rival measured again beside it.
+
+| workload | dinara-align | WFA2-lib | KSW2 | parasail | Edlib |
+| :-- | --: | --: | --: | --: | --: |
+| affine, `distances(..., Costs.affine(1, 2, 1))`; KSW2's `extz2` and parasail's striped `nw`, scores alone | **113 ms** | 116 ms | 1.21 s | 2.37 s | — |
+| unit costs, `distances(...)`; Edlib's NW distance | **87 ms** | — | — | — | 231 ms |
+
+- **The affine row is close, and its margin moves between runs**: four runs back to back took dinara-align 105 to 107 ms and WFA2-lib 116 to 128 ms. On one thread dinara-align scores a pair in 1.89 µs and WFA2-lib in 2.16: 0.55 against 0.45 µs on the pairs of equal lengths, mostly a mismatch or two, and 2.7 against 3.2 µs on those an indel or a flank sets apart.
+- **A distance this cheap is mostly setting up**, so the forward search alone takes it as far as its ring holds every cost it grew, and the first cost to reach the end is the least; the backward search begins only for a pair that has not ended by then. Each worker keeps its searches, their memory and the costs' common factor from pair to pair.
+- **Ten threads cost no more a pair than one.** Each worker's memory that it writes as it goes, its search's sequences and its slots' bounds, keeps two cache lines clear either side, since x86's L2 fetches lines in pairs: with that, the cycles ten threads spend a pair are one thread's, where a batch once ran at a third of that speed with workers taking lines from each other's cores. Shares of the batch start at one pair and double, so the longest pairs, which come first, spread over every worker, and the order itself is dealt into length classes by all of them.
 
 ## A\*PA2's Results, Redone
 
