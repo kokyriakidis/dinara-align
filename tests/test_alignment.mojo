@@ -23,6 +23,7 @@ from dinara_align import (
     Anchor,
     Band,
     Costs,
+    DEFAULT_MAX_MEMORY,
     Mode,
     Placement,
     Scoring,
@@ -2682,10 +2683,11 @@ def test_lane_scores_match_single_pairs() raises:
 
 
 def test_batches_reuse_their_searches_cleanly() raises:
-    """A batch's worker keeps its searches from pair to pair (see `gap_affine.DistanceSpace`), so a pair
+    """A batch's worker keeps its searches from pair to pair (see `gap_affine.SearchSpace`), so a pair
     must never see the last one's state: long pairs after short and short after long, identical and
     unrelated, an empty side, under one and two gap pieces and deletions priced apart, globally and with
-    free ends, each pair's batch cost the one a call of its own gives."""
+    free ends, each pair's batch cost the one a call of its own gives, and each alignment the one a call
+    of its own gives under either tie rule, with its kept fronts whole or split for want of memory."""
     seed(91)
     var references = List[String]()
     var queries = List[String]()
@@ -2708,6 +2710,18 @@ def test_batches_reuse_their_searches_cleanly() raises:
                 var found = distances(references, queries, costs, mode, threads=threads)
                 for index in range(len(references)):
                     assert_equal(found[index], distance(references[index], queries[index], costs, mode))
+                for ties in [Ties.LEFT, Ties.RIGHT]:
+                    for memory in [DEFAULT_MAX_MEMORY, 3000]:
+                        var aligned = alignments(
+                            references, queries, costs, mode, ties=ties, threads=threads, max_memory=memory
+                        )
+                        for index in range(len(references)):
+                            var single = align(
+                                references[index], queries[index], costs, mode, ties=ties, max_memory=memory
+                            )
+                            assert_equal(aligned[index].cost, single.cost)
+                            assert_equal(aligned[index].cigar, single.cigar)
+                            assert_equal(aligned[index].reference_start, single.reference_start)
 
 
 def test_capped_batches_match_single_pairs() raises:

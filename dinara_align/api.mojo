@@ -43,7 +43,7 @@ from .lanes import LaneCosts, StringTexts, lane_distances
 from .gap_affine import (
     AffineCigar,
     DEFAULT_MAX_MEMORY,
-    DistanceSpace,
+    SearchSpace,
     EndsFree,
     KEPT_BYTES,
     Spanned,
@@ -269,15 +269,15 @@ def cost_within(
     reference: String, query: String, costs: Costs, mode: Mode, band: Band, max_cost: Int
 ) raises AlignmentError -> Optional[Int]:
     """The least cost, or None when it would pass `max_cost` (`Int.MAX` for no cap) or none fits `band`."""
-    var space = DistanceSpace()
+    var space = SearchSpace()
     return cost_within(reference, query, costs, mode, band, max_cost, space)
 
 
 def cost_within(
-    reference: String, query: String, costs: Costs, mode: Mode, band: Band, max_cost: Int, mut space: DistanceSpace
+    reference: String, query: String, costs: Costs, mode: Mode, band: Band, max_cost: Int, mut space: SearchSpace
 ) raises AlignmentError -> Optional[Int]:
     """`cost_within` through `space`'s searches, which a batch's worker keeps from pair to pair (see
-    `gap_affine.DistanceSpace`)."""
+    `gap_affine.SearchSpace`)."""
     if mode.is_scored():
         raise AlignmentError(
             ErrorKind.INVALID_ARGUMENT, "a mode with a match score maximizes a score, which `align` finds"
@@ -324,8 +324,25 @@ def aligned_within(
     """An optimal alignment, or None when its cost would pass `max_cost` (`Int.MAX` for no cap) or none
     fits `band`: the least costly one, or for a mode that maximizes a score the best-scoring one, its
     kept fronts within `limit` diagonals."""
+    var space = SearchSpace()
+    return aligned_within(reference, query, costs, mode, band, max_cost, ties, eqx, limit, space)
+
+
+def aligned_within(
+    reference: String,
+    query: String,
+    costs: Costs,
+    mode: Mode,
+    band: Band,
+    max_cost: Int,
+    ties: Ties,
+    eqx: Bool,
+    limit: Int,
+    mut space: SearchSpace,
+) raises AlignmentError -> Optional[Alignment]:
+    """`aligned_within` through `space`'s searches, which a batch's worker keeps from pair to pair."""
     if not mode.is_scored():
-        return least_costly(reference, query, costs, mode, band, max_cost, ties, eqx, limit)
+        return least_costly(reference, query, costs, mode, band, max_cost, ties, eqx, limit, space)
     if max_cost != Int.MAX:
         raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a mode with a match score takes no cost cap")
     _ = penalties_of(costs)
@@ -354,9 +371,11 @@ def least_costly(
     ties: Ties,
     eqx: Bool,
     limit: Int,
+    mut space: SearchSpace,
 ) raises AlignmentError -> Optional[Alignment]:
     """The least costly alignment with `mode`'s free ends: by the bit-parallel sweep where it serves the
-    pair (see `swept_by_bits`), else by the wavefront, the same alignment at the same costs."""
+    pair (see `swept_by_bits`), else by the wavefront, the same alignment at the same costs, through
+    `space`'s searches."""
     var columns = reference.byte_length()
     var rows = query.byte_length()
     var ends = free_ends(mode, columns, rows)
@@ -375,25 +394,29 @@ def least_costly(
         except error:
             if error.kind != ErrorKind.UNKNOWN_SYMBOL:
                 raise error
-    var penalties = penalties_of(costs)
+    var penalties = space.penalties_for(costs)
     if max_cost < 0:
         return None
-    var ceiling = max_cost // penalties.scale
+    var ceiling = Int.MAX if max_cost == Int.MAX else max_cost // penalties.scale
     if mode.is_global():
         var found: Optional[AffineCigar]
         if costs.pieces() == 2:
-            found = cigar_within[2](reference, query, penalties, eqx, ceiling, band, ties, limit)
+            found = cigar_within[2](reference, query, penalties, eqx, ceiling, space, band, ties, limit)
         else:
-            found = cigar_within[1](reference, query, penalties, eqx, ceiling, band, ties, limit)
+            found = cigar_within[1](reference, query, penalties, eqx, ceiling, space, band, ties, limit)
         if not found:
             return None
         var cost = found.value().cost
         return Alignment(cost, -cost, found.take().cigar, 0, columns, 0, rows)
     var spanned: Optional[Spanned]
     if costs.pieces() == 2:
-        spanned = free_ends_alignment[2](reference, query, penalties, eqx, ceiling, ends, band, ties, limit)
+        spanned = free_ends_alignment[2](
+            space.forward2, space.backward2, reference, query, penalties, eqx, ceiling, ends, band, ties, limit
+        )
     else:
-        spanned = free_ends_alignment[1](reference, query, penalties, eqx, ceiling, ends, band, ties, limit)
+        spanned = free_ends_alignment[1](
+            space.forward, space.backward, reference, query, penalties, eqx, ceiling, ends, band, ties, limit
+        )
     if not spanned:
         return None
     ref found = spanned.value()
@@ -583,10 +606,11 @@ def alignments(
             imm chunks,
         }:
             """Aligns chunk `chunk` of the pairs, flagging any pair that raised for the serial retry below."""
+            var space = SearchSpace()
             for index in range(pairs * chunk // chunks, pairs * (chunk + 1) // chunks):
                 try:
                     out[unsafe_offset=index] = scoring_alignment(
-                        references[index], queries[index], scoring, mode, single, stored_cells, eqx
+                        references[index], queries[index], scoring, mode, single, stored_cells, eqx, space
                     )
                 except:
                     flags[unsafe_offset=index] = True
@@ -844,7 +868,7 @@ def capped_distances(
     }:
         """Takes the next pairs in `order` until none is left, storing each one's capped cost or flagging that
         it raised, its searches kept from pair to pair; a pair the lanes settled it leaves."""
-        var space = DistanceSpace()
+        var space = SearchSpace()
         var last = 0
         while True:
             var share = next_share(taken, pairs, workers, last)
@@ -962,6 +986,7 @@ def capped_alignments(
         """Takes the next pairs in `order` until none is left, storing each one's capped alignment or flagging
         that it raised."""
         var last = 0
+        var space = SearchSpace()
         while True:
             var share = next_share(taken, pairs, workers, last)
             if share[0] >= pairs:
@@ -970,7 +995,7 @@ def capped_alignments(
                 var index = order[dealt]
                 try:
                     out[unsafe_offset=index] = aligned_within(
-                        references[index], queries[index], costs, mode, band, max_cost, ties, eqx, limit
+                        references[index], queries[index], costs, mode, band, max_cost, ties, eqx, limit, space
                     )
                 except:
                     flags[unsafe_offset=index] = True

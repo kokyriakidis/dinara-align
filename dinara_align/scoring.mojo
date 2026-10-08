@@ -59,6 +59,7 @@ from .gap_affine import (
     EndsFree,
     Penalties,
     cigar_of,
+    SearchSpace,
     solve,
     wavefront_align,
     wavefront_penalties,
@@ -662,6 +663,21 @@ def scoring_alignment(
     its score, its cost minus the score. Global and local alignments take Gotoh's sweeps on either
     device (see `align_with`), and a local one's spans are found where its letters lie; free ends and
     extensions, on the host, find their span by sweep (see `mode_span`) and align it globally."""
+    var space = SearchSpace()
+    return scoring_alignment(first, second, scoring, mode, placement, stored_cells, eqx, space)
+
+
+def scoring_alignment(
+    first: String,
+    second: String,
+    scoring: Scoring,
+    mode: Mode,
+    placement: Optional[Placement],
+    stored_cells: Int,
+    eqx: Bool,
+    mut space: SearchSpace,
+) raises -> Alignment:
+    """`scoring_alignment` through `space`'s searches, which a batch's worker keeps from pair to pair."""
     if mode.match_score > 0:
         raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a Scoring's table holds what a match earns")
     var on_host = not placement or placement.value().device != Device.GPU
@@ -676,7 +692,15 @@ def scoring_alignment(
             var codes_second = translate(second, scoring.alphabet)
             var moves = List[UInt8](capacity=len(codes_first) + len(codes_second))
             var cost = solve[1](
-                Span(codes_first), Span(codes_second), penalties.value(), FREE_START, FREE_START, HISTORY_LIMIT, moves
+                space.forward,
+                space.backward,
+                Span(codes_first),
+                Span(codes_second),
+                penalties.value(),
+                FREE_START,
+                FREE_START,
+                HISTORY_LIMIT,
+                moves,
             )
             var score = penalties.value().score(cost, len(codes_first) + len(codes_second))
             var cigar = cigar_of(first, second, moves^, cost, penalties.value(), eqx)

@@ -20,7 +20,6 @@ from max.algorithm import parallelize
 
 from dinara_align import (
     DEFAULT_MAX_MEMORY,
-    Alignment,
     AlignmentError,
     Anchor,
     Band,
@@ -29,14 +28,14 @@ from dinara_align import (
     LocalScores,
     Mode,
     Ties,
-    align,
     distance,
     local_scores,
     score,
     search,
 )
+from dinara_align.api import aligned_within
 from dinara_align.common import hardware_threads, next_share
-from dinara_align.gap_affine import penalties_of
+from dinara_align.gap_affine import KEPT_BYTES, SearchSpace, penalties_of
 from dinara_align.lanes import LaneCosts, Texts, lane_distances
 
 comptime UNSUPPORTED_SYMBOLS = -1
@@ -197,41 +196,33 @@ def align_into(
     mode: Mode,
     asked: Options,
     alignment: MutPointer[Int, MutAnyOrigin],
+    mut space: SearchSpace,
 ) -> Int:
-    """One pair's optimal alignment into `alignment`, zero, or its code (see `dinara_align`)."""
+    """One pair's optimal alignment into `alignment`, zero, or its code (see `dinara_align`), through
+    `space`'s searches, which a batch's worker keeps from pair to pair."""
     if not plain_bytes(reference, reference_length) or not plain_bytes(query, query_length):
         return UNSUPPORTED_SYMBOLS
+    var capped = asked.max_cost >= 0
+    if capped and mode.kind != Mode.ENDS:
+        return INVALID_MODE
     try:
         var first = sequence(reference, reference_length)
         var second = sequence(query, query_length)
-        var found: Optional[Alignment]
-        if asked.max_cost < 0 or mode.kind != Mode.ENDS:
-            if asked.max_cost >= 0:
-                return INVALID_MODE
-            found = align(
-                first,
-                second,
-                costs,
-                mode,
-                band=asked.band,
-                ties=asked.ties,
-                eqx=asked.eqx,
-                max_memory=asked.max_memory,
-            )
-        else:
-            found = align(
-                first,
-                second,
-                costs,
-                mode,
-                max_cost=asked.max_cost,
-                band=asked.band,
-                ties=asked.ties,
-                eqx=asked.eqx,
-                max_memory=asked.max_memory,
-            )
-            if not found:
-                return ABOVE_MAX
+        # As `align` finds it, with or without the cap.
+        var found = aligned_within(
+            first,
+            second,
+            costs,
+            mode,
+            asked.band,
+            asked.max_cost if capped else Int.MAX,
+            asked.ties,
+            asked.eqx,
+            asked.max_memory // KEPT_BYTES,
+            space,
+        )
+        if not found:
+            return ABOVE_MAX if capped else OUTSIDE_BAND
         ref result = found.value()
         var text = copied(result.cigar)
         if not text:
@@ -290,6 +281,7 @@ def dinara_align(
     NUL-terminated, in memory from C's `malloc` as its length is known only once the alignment is, which
     the caller frees with `dinara_free`. Returns zero, or a negative code, and then no CIGAR."""
     try:
+        var space = SearchSpace()
         return align_into(
             reference,
             reference_length,
@@ -299,6 +291,7 @@ def dinara_align(
             mode_of(mode),
             options_of(options),
             alignment,
+            space,
         )
     except error:
         return failure(error)
@@ -541,6 +534,7 @@ def dinara_alignments(
     def work(slot: Int) {mut taken, imm}:
         """Takes the next pairs not yet taken and writes each one's alignment and status, until none is left."""
         var last = 0
+        var space = SearchSpace()
         while True:
             var share = next_share(taken, pairs, workers, last)
             if share[0] >= pairs:
@@ -555,6 +549,7 @@ def dinara_alignments(
                     wanted_mode,
                     asked,
                     alignments.unsafe_offset(index * ALIGNMENT_FIELDS),
+                    space,
                 )
 
     parallelize(work, workers, workers)

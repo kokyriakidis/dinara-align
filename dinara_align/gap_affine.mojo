@@ -424,8 +424,10 @@ struct History(Movable):
     var highs: List[Int]
     var columns: List[List[Int32]]
     var flags: List[List[UInt8]]
+    var filled: Int
+    """The blocks in use, the first of `columns`; those after are a batch's earlier pairs', kept for the next."""
     var used: Int
-    """Entries taken from the last block."""
+    """Entries taken from the last block in use."""
     var kept: Int
     """Diagonals kept in all, what `HISTORY_LIMIT` bounds."""
     var next_block: Int
@@ -441,28 +443,46 @@ struct History(Movable):
         self.highs = List[Int]()
         self.columns = List[List[Int32]]()
         self.flags = List[List[UInt8]]()
+        self.filled = 0
         self.used = 0
         self.kept = 0
         self.next_block = max(capacity, 1024)
         self.pending_start = 0
         self.pending_low = 0
 
+    def reset(mut self, capacity: Int):
+        """As new, its first block to hold `capacity` diagonals, the blocks it holds kept for the costs
+        to come: a batch's worker then takes no memory for a pair's kept fronts once it is warm."""
+        self.starts.clear()
+        self.lows.clear()
+        self.highs.clear()
+        self.filled = 0
+        self.used = 0
+        self.kept = 0
+        self.next_block = max(capacity, 1024)
+
     def begin(mut self, low: Int, high: Int) -> Tuple[Slot, MutPointer[UInt8, MutUntrackedOrigin]]:
         """Room for the next cost's columns and flags on `low ..= high` and a lane group past, each
         indexed by diagonal, which the step fills before `finish` keeps them."""
         var needed = high - low + 1 + LANES
-        if len(self.columns) == 0 or self.used + needed > len(self.columns[len(self.columns) - 1]):
-            # A block is only ever written, never filled first, so its pages arrive as the step reaches them.
-            var size = max(self.next_block, needed)
-            var block = List[Int32](capacity=size)
-            block.resize(unsafe_uninit_length=size)
-            var block_flags = List[UInt8](capacity=size)
-            block_flags.resize(unsafe_uninit_length=size)
-            self.columns.append(block^)
-            self.flags.append(block_flags^)
+        if self.filled == 0 or self.used + needed > len(self.columns[self.filled - 1]):
+            if self.filled == len(self.columns) or len(self.columns[self.filled]) < needed:
+                # A block is only ever written, never filled first, so its pages arrive as the step reaches them.
+                var size = max(self.next_block, needed)
+                var block = List[Int32](capacity=size)
+                block.resize(unsafe_uninit_length=size)
+                var block_flags = List[UInt8](capacity=size)
+                block_flags.resize(unsafe_uninit_length=size)
+                if self.filled == len(self.columns):
+                    self.columns.append(block^)
+                    self.flags.append(block_flags^)
+                else:
+                    self.columns[self.filled] = block^
+                    self.flags[self.filled] = block_flags^
+            self.filled += 1
             self.used = 0
             self.next_block = min(2 * self.next_block, HISTORY_BLOCK)
-        var last = len(self.columns) - 1
+        var last = self.filled - 1
         self.pending_start = self.used
         self.pending_low = low
         return (
@@ -472,7 +492,7 @@ struct History(Movable):
 
     def finish(mut self, low: Int, high: Int):
         """Keeps the cost `begin` made room for on `low ..= high`, inside that room; none when `low > high`."""
-        var block = (len(self.columns) - 1) << BLOCK_SHIFT
+        var block = (self.filled - 1) << BLOCK_SHIFT
         self.lows.append(low)
         self.highs.append(high)
         if low > high:
@@ -904,7 +924,7 @@ struct Wavefront[pieces: Int](Movable):
         band: Band = Band(),
     ):
         """This search begun afresh over a new pair, as `__init__` begins one, the memory its sequences
-        and rings held kept for the next pair of a batch (see `DistanceSpace`)."""
+        and rings held kept for the next pair of a batch (see `SearchSpace`)."""
         self.columns = len(first)
         self.rows = len(second)
         padded_into(self.first, first, FIRST_SENTINEL, reverse, LINE_GUARD)
@@ -917,7 +937,7 @@ struct Wavefront[pieces: Int](Movable):
         # Every source a cost reads lies at most this far back, and a slot is reused after as many.
         self.fronts.reset(penalties.window[Self.pieces]() + 1, self.columns, self.rows)
         # A search keeps a few diagonals a letter on close pairs, so its lists rarely grow on them.
-        self.history = History(
+        self.history.reset(
             min(HISTORY_KEPT_PER_LETTER * (self.columns + self.rows), HISTORY_LIMIT // 2) if record else 0
         )
         self.cost = 0
@@ -1484,7 +1504,7 @@ def wavefront_distance[
     """The least cost of a global alignment of two encoded sequences, the letters `ends_free` allows
     left unaligned for nothing, inside `band`, or -1 when every one costs more than `ceiling` or none
     stays inside: the two searches keeping only their rings, no fronts for a traceback."""
-    var space = DistanceSpace()
+    var space = SearchSpace()
     return wavefront_distance[pieces](first, second, penalties, ceiling, space, ends_free, band)
 
 
@@ -1495,7 +1515,7 @@ def wavefront_distance[
     second: Span[UInt8, _],
     penalties: Penalties,
     ceiling: Int,
-    mut space: DistanceSpace,
+    mut space: SearchSpace,
     ends_free: EndsFree = EndsFree(),
     band: Band = Band(),
 ) -> Int:
@@ -1528,28 +1548,18 @@ def searched_distance[
     """The two searches of `wavefront_distance`, built the first time and begun afresh after: the
     forward one first by itself, while it may (see `forward_alone`), and the backward one only for a
     pair that has not ended by then."""
-    if forward:
-        forward.value().start(
-            first, second, penalties, FREE_START, False, False, ends_free.first_begin, ends_free.second_begin, band
-        )
-    else:
-        forward = Wavefront[pieces](
-            first, second, penalties, FREE_START, False, False, ends_free.first_begin, ends_free.second_begin, band
-        )
+    begun(
+        forward, first, second, penalties, FREE_START, False, False, ends_free.first_begin, ends_free.second_begin, band
+    )
     var grown_alone = ends_free.first_end == 0 and ends_free.second_end == 0
     if grown_alone:
         var alone = forward_alone(forward.value(), ceiling)
         if alone != GROWING:
             return alone
     var mirrored = band.mirrored(len(first) - len(second))
-    if backward:
-        backward.value().start(
-            first, second, penalties, FREE_START, False, True, ends_free.first_end, ends_free.second_end, mirrored
-        )
-    else:
-        backward = Wavefront[pieces](
-            first, second, penalties, FREE_START, False, True, ends_free.first_end, ends_free.second_end, mirrored
-        )
+    begun(
+        backward, first, second, penalties, FREE_START, False, True, ends_free.first_end, ends_free.second_end, mirrored
+    )
     var best = Meeting.none()
     var status = bidirectional[pieces, False, cost_only=True](
         forward.value(), backward.value(), best, False, Int.MAX, ceiling, grown_alone
@@ -1557,6 +1567,27 @@ def searched_distance[
     if status != MET:
         return -1
     return best.cost
+
+
+def begun[
+    pieces: Int
+](
+    mut search: Optional[Wavefront[pieces]],
+    first: Span[UInt8, _],
+    second: Span[UInt8, _],
+    penalties: Penalties,
+    origin: Int,
+    record: Bool,
+    reverse: Bool,
+    free_first: Int = 0,
+    free_second: Int = 0,
+    band: Band = Band(),
+):
+    """`search` begun over a new pair as `Wavefront.start` begins it, or built the first time."""
+    if search:
+        search.value().start(first, second, penalties, origin, record, reverse, free_first, free_second, band)
+    else:
+        search = Wavefront[pieces](first, second, penalties, origin, record, reverse, free_first, free_second, band)
 
 
 comptime GROWING = -2
@@ -1588,9 +1619,10 @@ def forward_alone[pieces: Int](mut forward: Wavefront[pieces], ceiling: Int) -> 
         forward.advance[False]()
 
 
-struct DistanceSpace(Movable):
+struct SearchSpace(Movable):
     """A batch worker's two searches of each gap shape, kept from pair to pair so a pair reuses the
-    memory the last one's sequences and rings took (see `Wavefront.start`)."""
+    memory the last one's sequences, rings and kept fronts took (see `Wavefront.start`), for a distance
+    or an alignment alike."""
 
     var forward: Optional[Wavefront[1]]
     var backward: Optional[Wavefront[1]]
@@ -1795,6 +1827,31 @@ def solve[
     band: Band = Band(),
     ties: Ties = Ties.LEFT,
 ) -> Int:
+    """`solve` with searches of its own."""
+    var forward: Optional[Wavefront[pieces]] = None
+    var backward: Optional[Wavefront[pieces]] = None
+    return solve[pieces](
+        forward, backward, first, second, penalties, start, finish, limit, moves, keep, ceiling, band, ties
+    )
+
+
+def solve[
+    pieces: Int
+](
+    mut forward_search: Optional[Wavefront[pieces]],
+    mut backward_search: Optional[Wavefront[pieces]],
+    first: Span[UInt8, _],
+    second: Span[UInt8, _],
+    penalties: Penalties,
+    start: Int,
+    finish: Int,
+    limit: Int,
+    mut moves: List[UInt8],
+    keep: Bool = True,
+    ceiling: Int = Int.MAX,
+    band: Band = Band(),
+    ties: Ties = Ties.LEFT,
+) -> Int:
     """Appends an optimal path's moves right to left and returns its cost, from an origin as `start`
     allows and to a corner the backward search's origin `finish` allows (see `FREE_START`), a global
     alignment inside `band`; or, when every path costs more than `ceiling` or none stays inside, appends
@@ -1828,8 +1885,10 @@ def solve[
         for _ in range(rows):
             moves.append(UInt8(SECOND_GAP))
         return cost
-    var forward = Wavefront[pieces](first, second, penalties, start, keep, False, 0, 0, band)
-    var backward = Wavefront[pieces](first, second, penalties, finish, keep, True, 0, 0, band.mirrored(columns - rows))
+    begun(forward_search, first, second, penalties, start, keep, False, 0, 0, band)
+    begun(backward_search, first, second, penalties, finish, keep, True, 0, 0, band.mirrored(columns - rows))
+    ref forward = forward_search.value()
+    ref backward = backward_search.value()
     var best = Meeting.none()
     if keep:
         var status = bidirectional[pieces, True](forward, backward, best, False, limit, ceiling)
@@ -1858,19 +1917,38 @@ def solve[
             trace(forward.history, penalties, best.layer, best.forward_cost, best.diagonal, best.column, moves)
             return best.cost
         # Too large to keep: the searches go on from where they stopped keeping only their rings.
-        forward.history = History()
-        backward.history = History()
+        forward.history.reset(0)
+        backward.history.reset(0)
     if bidirectional[pieces, False](forward, backward, best, False, Int.MAX, ceiling) == OVER:
         return -1
     var column = best.column
     var row = column - best.diagonal
     # A crossing at either end splits nothing: such a pair costs too little for its fronts not to fit.
     if (column == 0 and row == 0) or (column == columns and row == rows):
-        return solve[pieces](first, second, penalties, start, finish, Int.MAX, moves, True, Int.MAX, band, ties)
+        return solve[pieces](
+            forward_search,
+            backward_search,
+            first,
+            second,
+            penalties,
+            start,
+            finish,
+            Int.MAX,
+            moves,
+            True,
+            Int.MAX,
+            band,
+            ties,
+        )
     # A crossing inside a gap: the piece after begins in it, and the piece before must end opening it.
     var after_start = best.layer
     var before_finish = FREE_START if best.layer == ALIGNED else OPENING + best.layer
+    # The pieces take the same searches over, so what they need of these is read first.
+    var keep_after = backward.work // 2 <= limit
+    var keep_before = forward.work // 2 <= limit
     _ = solve[pieces](
+        forward_search,
+        backward_search,
         first[column:],
         second[row:],
         penalties,
@@ -1878,12 +1956,14 @@ def solve[
         finish,
         limit,
         moves,
-        backward.work // 2 <= limit,
+        keep_after,
         Int.MAX,
         band.shifted(column - row),
         ties,
     )
     _ = solve[pieces](
+        forward_search,
+        backward_search,
         first[:column],
         second[:row],
         penalties,
@@ -1891,7 +1971,7 @@ def solve[
         before_finish,
         limit,
         moves,
-        forward.work // 2 <= limit,
+        keep_before,
         Int.MAX,
         band,
         ties,
@@ -2010,23 +2090,61 @@ def cigar_within[
     """An optimal global alignment's cost and CIGAR, the one `ties` picks, or None when its cost, in
     `penalties`' units, would pass `ceiling`, or none fits `band`; split past `limit` kept diagonals
     (see `solve`)."""
+    var space = SearchSpace()
+    return cigar_within[pieces](first, second, penalties, eqx, ceiling, space, band, ties, limit)
+
+
+def cigar_within[
+    pieces: Int
+](
+    first: String,
+    second: String,
+    penalties: Penalties,
+    eqx: Bool,
+    ceiling: Int,
+    mut space: SearchSpace,
+    band: Band = Band(),
+    ties: Ties = Ties.LEFT,
+    limit: Int = HISTORY_LIMIT,
+) -> Optional[AffineCigar]:
+    """`cigar_within` through `space`'s searches, as `wavefront_distance` takes them."""
     var columns = first.byte_length()
     var rows = second.byte_length()
     # UTF-8 never holds the sentinels' bytes, so the text's own bytes serve as codes.
     var moves = List[UInt8](capacity=columns + rows)
-    var cost = solve[pieces](
-        first.as_bytes(),
-        second.as_bytes(),
-        penalties,
-        FREE_START,
-        FREE_START,
-        limit,
-        moves,
-        True,
-        ceiling,
-        band,
-        ties,
-    )
+    var cost: Int
+    comptime if pieces == 1:
+        cost = solve[1](
+            space.forward,
+            space.backward,
+            first.as_bytes(),
+            second.as_bytes(),
+            penalties,
+            FREE_START,
+            FREE_START,
+            limit,
+            moves,
+            True,
+            ceiling,
+            band,
+            ties,
+        )
+    else:
+        cost = solve[2](
+            space.forward2,
+            space.backward2,
+            first.as_bytes(),
+            second.as_bytes(),
+            penalties,
+            FREE_START,
+            FREE_START,
+            limit,
+            moves,
+            True,
+            ceiling,
+            band,
+            ties,
+        )
     if cost < 0:
         return None
     return AffineCigar(cost * penalties.scale, cigar_of(first, second, moves^, cost, penalties, eqx))
@@ -2063,6 +2181,7 @@ struct Spanned(Copyable, Movable, Writable):
 def first_reached[
     pieces: Int
 ](
+    mut searched: Optional[Wavefront[pieces]],
     first: Span[UInt8, _],
     second: Span[UInt8, _],
     penalties: Penalties,
@@ -2082,12 +2201,12 @@ def first_reached[
     One search, not two meeting halfway, because the stop must be the furthest any optimal path
     reaches, which only a front grown to the optimum shows: with wide starts, as a read placed in a
     reference has, the fronts are as wide at every cost and the one search does the two halves' work;
-    from one start it does twice theirs, on fronts that are narrow."""
+    from one start it does twice theirs, on fronts that are narrow. The search is `searched`'s, begun
+    afresh (see `begun`)."""
     var columns = len(first)
     var rows = len(second)
-    var search = Wavefront[pieces](
-        first, second, penalties, FREE_START, False, reverse, starts.first_begin, starts.second_begin, band
-    )
+    begun(searched, first, second, penalties, FREE_START, False, reverse, starts.first_begin, starts.second_begin, band)
+    ref search = searched.value()
     var window = penalties.window[pieces]()
     while True:
         var slot = search.fronts.current
@@ -2170,6 +2289,30 @@ def free_ends_alignment[
     from that end alone, narrow, finds the start, none when it is the origin; and a global search the
     CIGAR, which proves the cost when neither search ran. The bit-parallel searches pick the same span
     (see `edit_search`)."""
+    var forward: Optional[Wavefront[pieces]] = None
+    var backward: Optional[Wavefront[pieces]] = None
+    return free_ends_alignment[pieces](
+        forward, backward, first, second, penalties, eqx, ceiling, ends_free, band, ties, limit
+    )
+
+
+def free_ends_alignment[
+    pieces: Int
+](
+    mut forward: Optional[Wavefront[pieces]],
+    mut backward: Optional[Wavefront[pieces]],
+    first: String,
+    second: String,
+    penalties: Penalties,
+    eqx: Bool,
+    ceiling: Int,
+    ends_free: EndsFree,
+    band: Band,
+    ties: Ties,
+    limit: Int = HISTORY_LIMIT,
+) -> Optional[Spanned]:
+    """`free_ends_alignment` through the searches given, built the first time and begun afresh after,
+    as a batch's worker keeps them (see `SearchSpace`)."""
     var a = first.as_bytes()
     var b = second.as_bytes()
     var columns = len(a)
@@ -2207,7 +2350,7 @@ def free_ends_alignment[
             end_column = columns
             end_row = rows
         else:
-            var reached = first_reached[pieces](a, b, penalties, left, frame_ends, frame_band, ceiling, True)
+            var reached = first_reached[pieces](forward, a, b, penalties, left, frame_ends, frame_band, ceiling, True)
             if not reached:
                 return None
             cost = reached.value()[0]
@@ -2234,13 +2377,13 @@ def free_ends_alignment[
             var back_starts = EndsFree(0, frame_ends.first_begin, 0, frame_ends.second_begin)
             var back_band = frame_band.mirrored(end_column - end_row)
             var back_ceiling = cost if cost >= 0 else ceiling
-            var backward = first_reached[pieces](
-                head, lead, penalties, not left, back_starts, back_band, back_ceiling, False
+            var back = first_reached[pieces](
+                backward, head, lead, penalties, not left, back_starts, back_band, back_ceiling, False
             )
-            if not backward or (cost >= 0 and backward.value()[0] != cost):
+            if not back or (cost >= 0 and back.value()[0] != cost):
                 return None
-            start_column = end_column - backward.value()[1]
-            start_row = end_row - backward.value()[2]
+            start_column = end_column - back.value()[1]
+            start_row = end_row - back.value()[2]
         if left:
             var mirrored_start = (columns - end_column, rows - end_row)
             end_column = columns - start_column
@@ -2255,6 +2398,8 @@ def free_ends_alignment[
         start_row = mirrored_start[1]
     var moves = List[UInt8](capacity=(end_column - start_column) + (end_row - start_row))
     var cost = solve[pieces](
+        forward,
+        backward,
         a[start_column:end_column],
         b[start_row:end_row],
         penalties,
