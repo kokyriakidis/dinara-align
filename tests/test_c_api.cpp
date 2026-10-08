@@ -171,12 +171,12 @@ int main() {
     // A score alone, with no alignment, and SSW's second best: the later copy of the core is the best end.
     CHECK(dinara::score("GGGGACGTACGTGGGG", "CCCCACGTACGTCCCC", affine, Mode::local(2)) == 16);
     CHECK(dinara::score("ACGTACGTTTGCA", "ACGTCGTTTTGCA", affine) == -12);
-    dinara_local_scores twice = dinara::local_scores("ACGTACGTAC" + std::string(20, 'T') + "ACGTACGTAC", "ACGTACGTAC",
+    dinara_local_scores_result twice = dinara::local_scores("ACGTACGTAC" + std::string(20, 'T') + "ACGTACGTAC", "ACGTACGTAC",
                                                      affine, Mode::local(2), 5);
     CHECK(twice.score == 20 && twice.reference_end == 40 && twice.second_score == 20 && twice.second_reference_end == 10);
     // A search: the planted copy first, then the one with a substitution.
     std::vector<dinara::Hit> hits =
-        dinara::search("ACGTACGTACGT", {"TTTT", "ACGTACGTACGT", "ACGTTCGTACGT"}, affine, Mode::local(2), 2);
+        dinara::search({"TTTT", "ACGTACGTACGT", "ACGTTCGTACGT"}, "ACGTACGTACGT", affine, Mode::local(2), 2);
     CHECK(hits.size() == 2 && hits[0].index == 1 && hits[0].score == 24 && hits[1].index == 2);
     // An overlap of two reads, the first's suffix on the second's prefix.
     dinara::Alignment over = dinara::align("TTTTTACGTACGT", "ACGTACGTGGGGG", affine, Mode::overlap(2));

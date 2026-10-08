@@ -21,14 +21,12 @@ from dinara_align import (
     Anchor,
     Band,
     Costs,
-    DNA_ALPHABET,
     Mode,
     Placement,
     Scoring,
     Ties,
     align,
     alignments,
-    colorize,
     distance,
     distances,
     local_scores,
@@ -36,7 +34,8 @@ from dinara_align import (
     scores,
     search,
 )
-from dinara_align.alignment import AlignmentMode, GappedAlignment
+from dinara_align.alignment import AlignmentMode, GappedAlignment, colorize
+from dinara_align.scoring import DNA_ALPHABET
 from dinara_align.cigar import cigar_runs
 from dinara_align.edit_distance import edit_distance as bit_parallel_distance
 from dinara_align.scored import best_end, end_of
@@ -240,7 +239,7 @@ def gpu_available() raises -> Bool:
     """Whether an accelerator serves a real alignment here, which a successful import does not prove."""
     var scoring = Scoring.dna()
     try:
-        _ = score("AC", "CA", scoring, GLOBAL, Placement.on_gpu(0, 1))
+        _ = score("AC", "CA", scoring, GLOBAL, placement=Placement.on_gpu(0, 1))
         return True
     except:
         return False
@@ -303,7 +302,7 @@ def test_hand_computed_global() raises:
     assert_equal(deleted.gapped("ACGTTGCAGGGCATGACGT", "ACGTTGCACATGACGT")[1], "ACGTTGCA---CATGACGT")
     assert_equal(deleted.cigar, "8=3D8=")
     assert_equal(substituted.cigar, "4=1X3=")
-    assert_equal(align("ACGTACGT", "ACGTTCGT", dna, extended=False).cigar, "8M")
+    assert_equal(align("ACGTACGT", "ACGTTCGT", dna, eqx=False).cigar, "8M")
     assert_equal(deleted.score, 16 * 2 - 6 - 2 * 2)
     assert_equal(score("ACGTTGCAGGGCATGACGT", "ACGTTGCACATGACGT", dna), 22)
 
@@ -364,8 +363,8 @@ def check_against_enumeration(mode: Mode) raises:
             if first.byte_length() + second.byte_length() > 5:
                 continue
             var expected = brute_optimum(mode, first, second, scoring)
-            assert_equal(Int(score(first, second, scoring, mode, Placement.on_cpu(1))), expected)
-            var produced = align(first, second, scoring, mode, Placement.on_cpu(1))
+            assert_equal(Int(score(first, second, scoring, mode, placement=Placement.on_cpu(1))), expected)
+            var produced = align(first, second, scoring, mode, placement=Placement.on_cpu(1))
             assert_equal(Int(produced.score), expected)
 
 
@@ -412,8 +411,8 @@ def check_linear_matches_stored(mode: Mode) raises:
         for _ in range(3):
             var first = random_sequence(140, 260, DNA_ALPHABET)
             var second = random_sequence(140, 260, DNA_ALPHABET)
-            var stored = align(first, second, scoring, mode, Placement.default(), 10**12)
-            var linear = align(first, second, scoring, mode, Placement.default(), 0)
+            var stored = align(first, second, scoring, mode, max_memory=10**12)
+            var linear = align(first, second, scoring, mode, max_memory=0)
             assert_equal(stored.score, linear.score)
             assert_equal(stored.score, score(first, second, scoring, mode))
             assert_well_formed(mode, first, second, stored, scoring)
@@ -434,8 +433,8 @@ def test_linear_space_carries_a_long_pair() raises:
     var scoring = expensive_gap()
     var first = random_sequence(3000, 3000, DNA_ALPHABET)
     var second = random_sequence(3000, 3000, DNA_ALPHABET)
-    assert_well_formed(GLOBAL, first, second, align(first, second, scoring, GLOBAL, Placement.default(), 0), scoring)
-    assert_well_formed(LOCAL, first, second, align(first, second, scoring, LOCAL, Placement.default(), 0), scoring)
+    assert_well_formed(GLOBAL, first, second, align(first, second, scoring, GLOBAL, max_memory=0), scoring)
+    assert_well_formed(LOCAL, first, second, align(first, second, scoring, LOCAL, max_memory=0), scoring)
 
 
 def test_symmetry() raises:
@@ -902,7 +901,7 @@ def test_unit_cost_cigar_spells_the_alignment() raises:
         var gapped = spelled.gapped(pair[0], pair[1])
         assert_equal(rows[0], gapped[0])
         assert_equal(rows[1], gapped[1])
-        var plain = align(pair[0], pair[1], extended=False)
+        var plain = align(pair[0], pair[1], eqx=False)
         assert_equal(plain.cost, spelled.cost)
         var plain_rows = rows_from_cigar(pair[0], pair[1], plain.cigar)
         assert_equal(plain_rows[0], rows[0])
@@ -1090,10 +1089,10 @@ def test_wavefront_matches_the_full_sweep() raises:
             var expected = vector_score[AlignmentMode.GLOBAL](
                 dna_codes(first), dna_codes(second), Int(scoring.substitutions[0]), Int(scoring.substitutions[1]), gaps
             )
-            var produced = align(first, second, scoring, GLOBAL, host)
+            var produced = align(first, second, scoring, GLOBAL, placement=host)
             assert_equal(produced.score, Int(expected))
             assert_well_formed(GLOBAL, first, second, produced, scoring)
-            assert_equal(score(first, second, scoring, GLOBAL, host), Int(expected))
+            assert_equal(score(first, second, scoring, GLOBAL, placement=host), Int(expected))
 
 
 def test_wavefront_splits_a_pair_too_large_to_keep() raises:
@@ -2316,10 +2315,10 @@ def test_every_mode_matches_the_full_matrix() raises:
                 if expected > 0:
                     assert_false(Bool(align(reference, query, costs, mode, max_cost=expected - 1)))
             var best = extension_optimum(reference, query, 1, x, o, e, o2, e2, Band())
-            var extended = align(reference, query, costs, Mode.extension(1))
-            assert_equal(extended.score, best)
-            assert_equal(extension_price(extended.cigar, 1, x, o, e, o2, e2), best)
-            assert_equal(extended.cost, matches_in(extended.cigar) - best)
+            var eqx = align(reference, query, costs, Mode.extension(1))
+            assert_equal(eqx.score, best)
+            assert_equal(extension_price(eqx.cigar, 1, x, o, e, o2, e2), best)
+            assert_equal(eqx.cost, matches_in(eqx.cigar) - best)
             for ties in [Ties.LEFT, Ties.RIGHT]:
                 var local = align(reference, query, costs, Mode.local(2), ties=ties)
                 var top = local_optimum(reference, query, 2, x, o, e, o2, e2)
@@ -2484,7 +2483,7 @@ def test_sam_fields_describe_the_alignment() raises:
     assert_equal(core.edit_distance("GGGGACGTACGTGGGG", "CCCCACGTTCGTCC"), 1)
     assert_equal(core.mismatch_string("GGGGACGTACGTGGGG", "CCCCACGTTCGTCC"), "4A3")
     assert_equal(core.identity("GGGGACGTACGTGGGG", "CCCCACGTTCGTCC"), 7.0 / 8.0)
-    var gapped = align("ACGTTTGCAAC", "ACGTGCATAC", Costs.edit(), extended=False)
+    var gapped = align("ACGTTTGCAAC", "ACGTGCATAC", Costs.edit(), eqx=False)
     assert_equal(gapped.cigar, "3M2D4M1I2M")
     assert_equal(gapped.clipped_cigar(10), "3M2D4M1I2M")
     assert_equal(gapped.mismatch_string("ACGTTTGCAAC", "ACGTGCATAC"), "3^TT6")
@@ -2502,9 +2501,7 @@ def test_sam_fields_describe_the_alignment() raises:
     for trial in range(200):
         var reference = random_sequence(0, 80, DNA_ALPHABET)
         var query = mutated(reference, 0.2, 4) if trial % 2 == 0 else random_sequence(0, 80, DNA_ALPHABET)
-        var found = align(
-            reference, query, costs, Mode.INFIX if trial % 3 == 0 else Mode.GLOBAL, extended=trial % 5 != 0
-        )
+        var found = align(reference, query, costs, Mode.INFIX if trial % 3 == 0 else Mode.GLOBAL, eqx=trial % 5 != 0)
         var edits = found.edit_distance(reference, query)
         var part = String(
             StringSlice(unsafe_from_utf8=reference.as_bytes()[found.reference_start : found.reference_end])
@@ -2735,7 +2732,7 @@ def test_search_ranks_every_reference() raises:
             references.append(random_sequence(0, 20, DNA_ALPHABET))
     for costs in [Costs.affine(4, 6, 2), Costs.two_piece(4, 6, 2, 24, 1), Costs.affine(2, 3, 1).with_deletions(9, 2)]:
         for mode in [Mode.local(2), Mode.INFIX, Mode.GLOBAL, Mode.overlap(1)]:
-            var hits = search(query, references, costs, mode)
+            var hits = search(references, query, costs, mode)
             assert_equal(len(hits), len(references))
             for rank in range(len(hits)):
                 assert_equal(hits[rank].score, score(references[hits[rank].index], query, costs, mode))
@@ -2745,21 +2742,21 @@ def test_search_ranks_every_reference() raises:
                         before > hits[rank].score
                         or (before == hits[rank].score and hits[rank - 1].index < hits[rank].index)
                     )
-            var top = search(query, references, costs, mode, best=5, aligned=True, threads=3)
+            var top = search(references, query, costs, mode, best=5, aligned=True, threads=3)
             assert_equal(len(top), 5)
             for rank in range(5):
                 assert_equal(top[rank].index, hits[rank].index)
                 assert_equal(top[rank].alignment.value().score, top[rank].score)
-    var capped = search(query, references, Costs.affine(4, 6, 2), Mode.INFIX, max_cost=60)
+    var capped = search(references, query, Costs.affine(4, 6, 2), Mode.INFIX, max_cost=60)
     for hit in capped:
         assert_true(-hit.score <= 60)
-    var whole = search(query, references, Costs.affine(4, 6, 2), Mode.INFIX)
+    var whole = search(references, query, Costs.affine(4, 6, 2), Mode.INFIX)
     var within = 0
     for hit in whole:
         if -hit.score <= 60:
             within += 1
     assert_equal(len(capped), within)
-    assert_equal(len(search(query, List[String](), Costs.affine(4, 6, 2), Mode.local(2))), 0)
+    assert_equal(len(search(List[String](), query, Costs.affine(4, 6, 2), Mode.local(2))), 0)
 
 
 def rebuilt_reference(query: String, cigar: String, md: String) raises -> String:
@@ -2875,10 +2872,10 @@ def test_device_matches_host() raises:
             firsts.append(random_sequence(5, 60, DNA_ALPHABET))
             seconds.append(random_sequence(5, 60, DNA_ALPHABET))
         comptime for mode in [GLOBAL, LOCAL]:
-            var on_device = alignments(firsts, seconds, scoring, mode, device)
-            var device_scores = scores(firsts, seconds, scoring, mode, device)
+            var on_device = alignments(firsts, seconds, scoring, mode, placement=device)
+            var device_scores = scores(firsts, seconds, scoring, mode, placement=device)
             for index in range(len(firsts)):
-                var expected = align(firsts[index], seconds[index], scoring, mode, host)
+                var expected = align(firsts[index], seconds[index], scoring, mode, placement=host)
                 assert_equal(on_device[index].score, expected.score)
                 assert_well_formed(mode, firsts[index], seconds[index], on_device[index], scoring)
                 assert_well_formed(mode, firsts[index], seconds[index], expected, scoring)
@@ -2888,14 +2885,16 @@ def test_device_matches_host() raises:
     var tall = "A" * 70_000
     var short = "ACGT" * 4
     comptime for mode in [GLOBAL, LOCAL]:
-        assert_equal(score(tall, short, scoring, mode, device), score(tall, short, scoring, mode, host))
-        assert_equal(score(tall, "", scoring, mode, device), score(tall, "", scoring, mode, host))
-        assert_equal(score("", short, scoring, mode, device), score("", short, scoring, mode, host))
+        assert_equal(
+            score(tall, short, scoring, mode, placement=device), score(tall, short, scoring, mode, placement=host)
+        )
+        assert_equal(score(tall, "", scoring, mode, placement=device), score(tall, "", scoring, mode, placement=host))
+        assert_equal(score("", short, scoring, mode, placement=device), score("", short, scoring, mode, placement=host))
         var long_first = random_sequence(2000, 2000, DNA_ALPHABET)
         var long_second = random_sequence(2000, 2000, DNA_ALPHABET)
-        var linear = align(long_first, long_second, scoring, mode, device, 0)
+        var linear = align(long_first, long_second, scoring, mode, placement=device, max_memory=0)
         assert_well_formed(mode, long_first, long_second, linear, scoring)
-        assert_equal(linear.score, score(long_first, long_second, scoring, mode, host))
+        assert_equal(linear.score, score(long_first, long_second, scoring, mode, placement=host))
 
 
 # endregion Device

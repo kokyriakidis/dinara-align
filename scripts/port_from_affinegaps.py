@@ -45,9 +45,9 @@ def migrate(text: str) -> str:
 
 GAPPED_ROWS_END = '''    """The second sequence, gapped to the same columns."""\n'''
 GAPPED_ROWS_CIGAR = '''
-    def cigar(self, extended: Bool = True) -> String:
+    def cigar(self, eqx: Bool = True) -> String:
         """The rows as a CIGAR, the first sequence the reference, as `Alignment`'s reads: `=` a match and
-        `X` a substitution, or with `extended` false `M` for both, `D` a letter of the first alone and
+        `X` a substitution, or with `eqx` false `M` for both, `D` a letter of the first alone and
         `I` one of the second, each run its length then its letter."""
         comptime GAP = UInt8(ord("-"))
         var top = self.first_gapped.as_bytes()
@@ -75,7 +75,7 @@ GAPPED_ROWS_CIGAR = '''
                 letter = UInt8(ord("I"))
             elif bottom[column] == GAP:
                 letter = UInt8(ord("D"))
-            elif not extended:
+            elif not eqx:
                 letter = UInt8(ord("M"))
             else:
                 letter = UInt8(ord("=")) if top[column] == bottom[column] else UInt8(ord("X"))

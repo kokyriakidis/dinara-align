@@ -5,7 +5,7 @@ whichever kernel it suits so the caller never has to choose.
 
 Two choices are made here and nowhere else, and both are cost rather than correctness:
 
-- The traceback keeps a decision per cell while the matrix fits `stored_budget`, and recurses in
+- The traceback keeps a decision per cell while the matrix fits `stored_cells`, and recurses in
   linear space once it does not. Both return an optimal path for the same score.
 - On the device, a pair short enough for one block's shared-memory carry takes the banded strip
   sweep, and a taller one tiles over global memory. The bound comes from what the card reports.
@@ -49,6 +49,7 @@ from .common import (
 )
 from .errors import AlignmentError, ErrorKind
 from .gap_affine import (
+    DEFAULT_MAX_MEMORY,
     FREE_START,
     HISTORY_LIMIT,
     EndsFree,
@@ -65,12 +66,15 @@ from .vector_score import optimal_band, uniform_table, vector_align, vector_scor
 
 from max.algorithm import parallelize
 
-comptime STORED_MATRIX_BUDGET = 6_000_000
-"""
-Cells above which the host traceback switches to the linear-space recursion. Three `int32` layers at twelve bytes a
-cell keep a stored host alignment near 72 MB; the device packs a nibble per cell and is capped again by
-`DEVICE_STORED_CELLS`.
-"""
+comptime STORED_CELL_BYTES = 12
+"""Bytes the host traceback keeps a stored cell in: three `int32` layers. The device packs a nibble per cell
+and is capped again by `DEVICE_STORED_CELLS`."""
+
+
+def cells_within(max_memory: Int) -> Int:
+    """Cells a traceback may store within `max_memory` bytes, above which it recurses in linear space."""
+    return max(max_memory, 0) // STORED_CELL_BYTES
+
 
 # region Scoring
 
@@ -340,7 +344,7 @@ def align_on_host[
     first: ImmSpan[Scalar[SymbolDType], _],
     second: ImmSpan[Scalar[SymbolDType], _],
     scoring: Scoring,
-    stored_budget: Int,
+    stored_cells: Int,
 ) raises -> GappedAlignment:
     """One pair on the host, stored while its matrix fits the budget and linear once it does not.
 
@@ -372,7 +376,7 @@ def align_on_host[
             var best = Int(host_score[mode](first, second, scoring))
             var band = optimal_band(len(first), len(second), reward, mismatch, scoring.gaps, best)
             var width = min(band[1], len(second)) - max(band[0], -len(first)) + 1
-            if (len(first) + 1) * width <= stored_budget:
+            if (len(first) + 1) * width <= stored_cells:
                 return vector_align[mode](
                     codes_first,
                     codes_second,
@@ -386,7 +390,7 @@ def align_on_host[
                     band[1],
                 )
             return global_linear(first, second, scoring)
-    if len(first) * len(second) > stored_budget:
+    if len(first) * len(second) > stored_cells:
         comptime if mode == AlignmentMode.LOCAL:
             return local_linear(first, second, scoring)
         else:
@@ -416,7 +420,7 @@ def align_on_device[
     first: ImmSpan[Scalar[SymbolDType], _],
     second: ImmSpan[Scalar[SymbolDType], _],
     scoring: Scoring,
-    stored_budget: Int,
+    stored_cells: Int,
     placement: Placement,
 ) raises -> GappedAlignment:
     """One pair on the device, on the sweep its height and its matrix can afford.
@@ -424,7 +428,7 @@ def align_on_device[
     Both bounds are real and independent: the stored kernel indexes its carry by the first
     sequence, so a tall pair fails it even when the whole matrix would fit.
     """
-    var stored = len(first) * len(second) <= min(stored_budget, DEVICE_STORED_CELLS)
+    var stored = len(first) * len(second) <= min(stored_cells, DEVICE_STORED_CELLS)
     if not stored or serving_space(len(first), band_length(scope.specs)) == Space.TILED:
         return device_align[mode](
             scope,
@@ -575,12 +579,12 @@ def mode_span(
     return (forward[0], end_column - back[1], end_row - back[2], end_column, end_row)
 
 
-def as_alignment(gapped: GappedAlignment, first: String, second: String, whole: Bool, extended: Bool) -> Alignment:
+def as_alignment(gapped: GappedAlignment, first: String, second: String, whole: Bool, eqx: Bool) -> Alignment:
     """Gotoh's gapped rows as an `Alignment`: spanning both sequences when `whole`, else a local
     alignment's, placed where its letters lie in each, the last place: any place both lie aligns the
     same pairs of letters for the same score."""
     var score = Int(gapped.score)
-    var cigar = gapped.cigar(extended)
+    var cigar = gapped.cigar(eqx)
     if whole:
         return Alignment(-score, score, cigar, 0, first.byte_length(), 0, second.byte_length())
     var part = gapped.first_gapped.replace("-", "")
@@ -604,8 +608,8 @@ def scoring_alignment(
     scoring: Scoring,
     mode: Mode,
     placement: Optional[Placement],
-    stored_budget: Int,
-    extended: Bool,
+    stored_cells: Int,
+    eqx: Bool,
 ) raises -> Alignment:
     """An optimal alignment under `scoring` as `mode` asks, as an `Alignment`: its CIGAR, its spans and
     its score, its cost minus the score. Global and local alignments take Gotoh's sweeps on either
@@ -628,15 +632,15 @@ def scoring_alignment(
                 Span(codes_first), Span(codes_second), penalties.value(), FREE_START, FREE_START, HISTORY_LIMIT, moves
             )
             var score = penalties.value().score(cost, len(codes_first) + len(codes_second))
-            var cigar = cigar_of(first, second, moves^, cost, penalties.value(), extended)
+            var cigar = cigar_of(first, second, moves^, cost, penalties.value(), eqx)
             return Alignment(-score, score, cigar, 0, len(codes_first), 0, len(codes_second))
     if mode.kind == Mode.SMITH_WATERMAN or mode.is_global():
         var gapped: GappedAlignment
         if mode.kind == Mode.SMITH_WATERMAN:
-            gapped = align_with[AlignmentMode.LOCAL](first, second, scoring, placement, stored_budget)
+            gapped = align_with[AlignmentMode.LOCAL](first, second, scoring, placement, stored_cells)
         else:
-            gapped = align_with[AlignmentMode.GLOBAL](first, second, scoring, placement, stored_budget)
-        return as_alignment(gapped, first, second, mode.is_global(), extended)
+            gapped = align_with[AlignmentMode.GLOBAL](first, second, scoring, placement, stored_cells)
+        return as_alignment(gapped, first, second, mode.is_global(), eqx)
     if placement and placement.value().device == Device.GPU:
         raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "on the GPU a Scoring aligns globally or locally")
     var codes_first = translate(first, scoring.alphabet)
@@ -647,9 +651,9 @@ def scoring_alignment(
     var end_column = span[3]
     var end_row = span[4]
     var inner = align_on_host[AlignmentMode.GLOBAL](
-        Span(codes_first)[start_column:end_column], Span(codes_second)[start_row:end_row], scoring, stored_budget
+        Span(codes_first)[start_column:end_column], Span(codes_second)[start_row:end_row], scoring, stored_cells
     )
-    return Alignment(-span[0], span[0], inner.cigar(extended), start_column, end_column, start_row, end_row)
+    return Alignment(-span[0], span[0], inner.cigar(eqx), start_column, end_column, start_row, end_row)
 
 
 def scoring_score(
@@ -697,7 +701,7 @@ def align_with[
     second: String,
     scoring: Scoring,
     placement: Optional[Placement] = None,
-    stored_budget: Int = STORED_MATRIX_BUDGET,
+    stored_cells: Int = cells_within(DEFAULT_MAX_MEMORY),
 ) raises -> GappedAlignment:
     """The optimal score and the two gapped strings that realize it.
 
@@ -709,9 +713,9 @@ def align_with[
     var encoded_second = translate(second, scoring.alphabet)
     if resolved.device == Device.GPU:
         return align_on_device[mode](
-            DeviceScope(resolved.gpu_id), encoded_first, encoded_second, scoring, stored_budget, resolved
+            DeviceScope(resolved.gpu_id), encoded_first, encoded_second, scoring, stored_cells, resolved
         )
-    return align_on_host[mode](encoded_first, encoded_second, scoring, stored_budget)
+    return align_on_host[mode](encoded_first, encoded_second, scoring, stored_cells)
 
 
 comptime CHUNKS_PER_THREAD = 8
@@ -791,7 +795,7 @@ def alignments_with[
     seconds: List[String],
     scoring: Scoring,
     placement: Optional[Placement] = None,
-    stored_budget: Int = STORED_MATRIX_BUDGET,
+    stored_cells: Int = cells_within(DEFAULT_MAX_MEMORY),
 ) raises -> List[GappedAlignment]:
     """Aligns every pair; on the device, every pair both bounds admit goes out in one launch."""
     var resolved = placement.or_else(Placement.default())
@@ -815,7 +819,7 @@ def alignments_with[
             for index in range(pairs * slot // chunks, pairs * (slot + 1) // chunks):
                 try:
                     out[unsafe_offset=index] = align_with[mode](
-                        firsts[index], seconds[index], scoring, single, stored_budget
+                        firsts[index], seconds[index], scoring, single, stored_cells
                     )
                 except:
                     flags[unsafe_offset=index] = True
@@ -824,11 +828,11 @@ def alignments_with[
         # A pair that failed raises here, the same error a serial loop would have raised first.
         for index in range(pairs):
             if failed[index]:
-                results[index] = align_with[mode](firsts[index], seconds[index], scoring, single, stored_budget)
+                results[index] = align_with[mode](firsts[index], seconds[index], scoring, single, stored_cells)
         return results^
 
     # A batch of one is a single pair however it arrived, and gets the single pair's crossover.
-    var limit = stored_budget if pairs > 1 else min(stored_budget, DEVICE_STORED_CELLS)
+    var limit = stored_cells if pairs > 1 else min(stored_cells, DEVICE_STORED_CELLS)
     var scope = DeviceScope(resolved.gpu_id)
     var band = band_length(scope.specs)
     var batchable = List[Int]()
@@ -842,7 +846,7 @@ def alignments_with[
                 translate(firsts[index], scoring.alphabet),
                 translate(seconds[index], scoring.alphabet),
                 scoring,
-                stored_budget,
+                stored_cells,
                 resolved,
             )
     if len(batchable) > 0:

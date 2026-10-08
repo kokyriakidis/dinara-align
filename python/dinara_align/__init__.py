@@ -359,7 +359,7 @@ class LocalScores:
     second_reference_end: int
 
 
-def _options(band: Optional[Band], max_cost: Optional[int], extended: bool, ties: str, max_memory: Optional[int]) -> tuple:
+def _options(band: Optional[Band], max_cost: Optional[int], eqx: bool, ties: str, max_memory: Optional[int]) -> tuple:
     if ties not in ("left", "right"):
         raise ValueError("ties: 'left' or 'right'")
     band = band or Band()
@@ -367,7 +367,7 @@ def _options(band: Optional[Band], max_cost: Optional[int], extended: bool, ties
         band.low,
         band.high,
         -1 if max_cost is None else max_cost,
-        1 if extended else 0,
+        1 if eqx else 0,
         1 if ties == "right" else 0,
         max_memory or 0,
     )
@@ -396,7 +396,7 @@ def align(
     band: Optional[Band] = None,
     max_cost: Optional[int] = None,
     ties: str = "left",
-    extended: bool = True,
+    eqx: bool = True,
     max_memory: Optional[int] = None,
 ) -> Optional[Alignment]:
     """An optimal alignment as `mode` asks, or None past `max_cost`. Of equally good alignments the
@@ -404,9 +404,9 @@ def align(
     fronts kept for the traceback stay within `max_memory` bytes, about 80 MB by default. Under a
     `Scoring`, which takes no band, cap, tie rule or memory, Gotoh's walk picks among equals."""
     if isinstance(costs, Scoring):
-        found = _call(_dinara.scoring_align, _text(reference), _text(query), costs._fields(), mode._fields(), extended)
+        found = _call(_dinara.scoring_align, _text(reference), _text(query), costs._fields(), mode._fields(), eqx)
         return Alignment(*found)
-    options = _options(band, max_cost, extended, ties, max_memory)
+    options = _options(band, max_cost, eqx, ties, max_memory)
     found = _call(_dinara.align, _text(reference), _text(query), costs._fields(), mode._fields(), options)
     return None if found is None else Alignment(*found)
 
@@ -470,12 +470,12 @@ def alignments(
     band: Optional[Band] = None,
     max_cost: Optional[int] = None,
     ties: str = "left",
-    extended: bool = True,
+    eqx: bool = True,
     max_memory: Optional[int] = None,
     threads: int = 0,
 ) -> list:
     """Every pair's `align`, the pairs spread over `threads` threads, every thread for zero."""
-    options = _options(band, max_cost, extended, ties, max_memory)
+    options = _options(band, max_cost, eqx, ties, max_memory)
     found = _call(
         _dinara.alignments,
         [_text(item) for item in references],
@@ -499,8 +499,8 @@ class Hit:
 
 
 def search(
-    query: Text,
     references: Sequence[Text],
+    query: Text,
     costs: Costs = Costs(),
     mode: Mode = Mode.GLOBAL,
     *,
@@ -516,8 +516,8 @@ def search(
     options = _options(None, max_cost, True, ties, None)
     found = _call(
         _dinara.search,
-        _text(query),
         [_text(item) for item in references],
+        _text(query),
         costs._fields(),
         mode._fields(),
         options,

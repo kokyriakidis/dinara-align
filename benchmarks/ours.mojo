@@ -15,7 +15,8 @@ from std.os.path import getsize
 from std.sys.info import CompilationTarget
 from std.time import perf_counter_ns
 
-from dinara_align import Costs, Mode, distance, Placement, Scoring, align, alignments, hardware_threads, score, scores
+from dinara_align import Costs, Mode, distance, Placement, Scoring, align, alignments, score, scores
+from dinara_align.common import hardware_threads
 
 comptime GLOBAL = Mode.GLOBAL
 
@@ -73,18 +74,18 @@ def call[task: Int](data: Pairs, index: Int, scoring: Scoring, placement: Placem
     """Runs one task once and returns its answer as the checksum `run.py` compares."""
     comptime if task == BATCH_SCORE:
         var values = List[Int]()
-        for value in scores(data.firsts, data.seconds, scoring, GLOBAL, placement):
+        for value in scores(data.firsts, data.seconds, scoring, GLOBAL, placement=placement):
             values.append(Int(value))
         return checksum(values)
     elif task == BATCH_ALIGNMENT:
         var values = List[Int]()
-        for result in alignments(data.firsts, data.seconds, scoring, GLOBAL, placement):
+        for result in alignments(data.firsts, data.seconds, scoring, GLOBAL, placement=placement):
             values.append(Int(result.score))
         return checksum(values)
     elif task == PAIR_SCORE:
-        return checksum([Int(score(data.firsts[index], data.seconds[index], scoring, GLOBAL, placement))])
+        return checksum([Int(score(data.firsts[index], data.seconds[index], scoring, GLOBAL, placement=placement))])
     elif task == PAIR_ALIGNMENT:
-        return checksum([Int(align(data.firsts[index], data.seconds[index], scoring, GLOBAL, placement).score)])
+        return checksum([Int(align(data.firsts[index], data.seconds[index], scoring, GLOBAL, placement=placement).score)])
     elif task == EDIT_DISTANCE:
         return checksum([distance(data.firsts[index], data.seconds[index])])
     else:
@@ -122,7 +123,7 @@ def emit(tool: String, workload: String, task: String, device: String, timed: Tu
 def gpu_answers(scoring: Scoring) raises -> Bool:
     """Whether an accelerator serves a real alignment, which also warms the device before timing."""
     try:
-        _ = align("ACGT", "AGT", scoring, GLOBAL, Placement.on_gpu(0, hardware_threads()))
+        _ = align("ACGT", "AGT", scoring, GLOBAL, placement=Placement.on_gpu(0, hardware_threads()))
         return True
     except:
         return False

@@ -668,7 +668,7 @@ def equal_run(first: ImmPointer[UInt8, _], second: ImmPointer[UInt8, _], column:
     return length
 
 
-def cigar_string(first: String, second: String, path: EditPath, extended: Bool) -> String:
+def cigar_string(first: String, second: String, path: EditPath, eqx: Bool) -> String:
     """`path` as a CIGAR string (see `EditCigar`): its moves put left to right, the prefix reversed, and
     each run of one move written as one entry, a diagonal run split into its matches and substitutions
     by comparing the bases eight at a time unless `M` stands for both."""
@@ -706,7 +706,7 @@ def cigar_string(first: String, second: String, path: EditPath, extended: Bool) 
         if move == DIAGONAL:
             var run = diagonal_run(ordered, index, count)
             index += run
-            if not extended:
+            if not eqx:
                 writer.add(UInt8(ord("M")), run)
                 column += run
                 row += run
@@ -741,16 +741,16 @@ def cigar_string(first: String, second: String, path: EditPath, extended: Bool) 
     return writer^.finish()
 
 
-def diagonal_cigar(profile: Profile, fronts: DiagonalFronts, distance: Int, reversed: Bool, extended: Bool) -> String:
+def diagonal_cigar(profile: Profile, fronts: DiagonalFronts, distance: Int, reversed: Bool, eqx: Bool) -> String:
     """The CIGAR of the path `trace_diagonals` traces through `fronts`, written straight from them: each
     score undoes the matches its front slid over, `=`, and the edit that reached its start, a
     substitution `X`, as one after the furthest point is a mismatch, or a gap; `M` for both kinds of
-    pair without `extended`. The runs come right to left, unless the fronts are the reversed pair's,
+    pair without `eqx`. The runs come right to left, unless the fronts are the reversed pair's,
     `reversed`, whose right to left is the pair's left to right."""
     var columns = profile.columns
     var rows = profile.rows
-    var matched = UInt8(ord("=")) if extended else UInt8(ord("M"))
-    var substituted = UInt8(ord("X")) if extended else UInt8(ord("M"))
+    var matched = UInt8(ord("=")) if eqx else UInt8(ord("M"))
+    var substituted = UInt8(ord("X")) if eqx else UInt8(ord("M"))
     var letters = List[UInt8](capacity=2 * distance + 2)
     var lengths = List[Int](capacity=2 * distance + 2)
     var diagonal = columns - rows

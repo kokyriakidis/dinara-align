@@ -1700,7 +1700,7 @@ def cigar_within[
     first: String,
     second: String,
     penalties: Penalties,
-    extended: Bool,
+    eqx: Bool,
     ceiling: Int,
     band: Band = Band(),
     ties: Ties = Ties.LEFT,
@@ -1728,11 +1728,11 @@ def cigar_within[
     )
     if cost < 0:
         return None
-    return AffineCigar(cost * penalties.scale, cigar_of(first, second, moves^, cost, penalties, extended))
+    return AffineCigar(cost * penalties.scale, cigar_of(first, second, moves^, cost, penalties, eqx))
 
 
 def cigar_of(
-    first: String, second: String, var moves: List[UInt8], cost: Int, penalties: Penalties, extended: Bool
+    first: String, second: String, var moves: List[UInt8], cost: Int, penalties: Penalties, eqx: Bool
 ) -> String:
     """The CIGAR of the moves `solve` appended for two sequences, at that cost."""
     # The CIGAR's room is bounded by the edits: every gapped letter, and a substitution per mismatch cost.
@@ -1743,7 +1743,7 @@ def cigar_of(
     var path = EditPath(
         moves^, List[UInt8](), first.byte_length(), second.byte_length(), gapped + cost // penalties.mismatch
     )
-    return cigar_string(first, second, path, extended)
+    return cigar_string(first, second, path, eqx)
 
 
 @fieldwise_init
@@ -1850,7 +1850,7 @@ def free_ends_alignment[
     first: String,
     second: String,
     penalties: Penalties,
-    extended: Bool,
+    eqx: Bool,
     ceiling: Int,
     ends_free: EndsFree,
     band: Band,
@@ -1971,7 +1971,7 @@ def free_ends_alignment[
     var piece = String(StringSlice(unsafe_from_utf8=b[start_row:end_row]))
     return Spanned(
         cost * penalties.scale,
-        cigar_of(part, piece, moves^, cost, penalties, extended),
+        cigar_of(part, piece, moves^, cost, penalties, eqx),
         start_column,
         end_column,
         start_row,
@@ -2115,9 +2115,9 @@ def extend[
 
 def traced_extension[
     pieces: Int
-](
-    first: String, second: String, penalties: Penalties, extended: Bool, known: Int, limit: Int = HISTORY_LIMIT
-) -> Optional[AffineExtension]:
+](first: String, second: String, penalties: Penalties, eqx: Bool, known: Int, limit: Int = HISTORY_LIMIT) -> Optional[
+    AffineExtension
+]:
     """The best extension fixed at both sequences' ends, as `extend` finds it searching back from there
     with a `known` best score, its fronts kept as it grows and traced back from where it stops, so
     no second search aligns the letters it covers. None when the kept fronts would pass half of
@@ -2190,7 +2190,7 @@ def traced_extension[
         moves^,
         best_cost,
         penalties,
-        extended,
+        eqx,
     )
     return AffineExtension(penalties.score(best_cost, best_column + best_row), best_column, best_row, matches, cigar^)
 
@@ -2201,7 +2201,7 @@ def extension_of[
     first: String,
     second: String,
     penalties: Penalties,
-    extended: Bool,
+    eqx: Bool,
     anchor: Anchor,
     band: Band,
     ties: Ties,
@@ -2262,5 +2262,5 @@ def extension_of[
         columns,
         rows,
         matches,
-        cigar_of(piece_first, piece_second, moves^, cost, penalties, extended),
+        cigar_of(piece_first, piece_second, moves^, cost, penalties, eqx),
     )

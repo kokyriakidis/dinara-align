@@ -467,7 +467,7 @@ def end_of(reference: Span[UInt8, _], query: Span[UInt8, _], costs: Costs, match
 
 
 def latest_local(
-    reference: String, query: String, costs: Costs, match_score: Int, extended: Bool, limit: Int
+    reference: String, query: String, costs: Costs, match_score: Int, eqx: Bool, limit: Int
 ) raises AlignmentError -> Alignment:
     """The best local alignment ending as late as an equally good one allows (see `best_end`) and
     starting as late too, the shortest, its CIGAR by the left rule: the extension back from its end,
@@ -483,8 +483,8 @@ def latest_local(
     var lead = String(StringSlice(unsafe_from_utf8=query.as_bytes()[:end_row]))
     # The best alignment ending at that cell, and starting wherever pays: an extension back from it,
     # which stops on earning the sweep's score, the best any alignment ending there earns.
-    var traced = traced_extension[2](head, lead, penalties, extended, found[0], limit) if two else traced_extension[1](
-        head, lead, penalties, extended, found[0], limit
+    var traced = traced_extension[2](head, lead, penalties, eqx, found[0], limit) if two else traced_extension[1](
+        head, lead, penalties, eqx, found[0], limit
     )
     var back: AffineExtension
     if traced:
@@ -497,7 +497,7 @@ def latest_local(
             reversed_text(head),
             reversed_text(lead),
             penalties,
-            extended,
+            eqx,
             Anchor.START,
             Band(),
             Ties.RIGHT,
@@ -507,7 +507,7 @@ def latest_local(
             reversed_text(head),
             reversed_text(lead),
             penalties,
-            extended,
+            eqx,
             Anchor.START,
             Band(),
             Ties.RIGHT,
@@ -528,7 +528,7 @@ def latest_local(
 
 
 def local_alignment(
-    reference: String, query: String, costs: Costs, match_score: Int, ties: Ties, extended: Bool, limit: Int
+    reference: String, query: String, costs: Costs, match_score: Int, ties: Ties, eqx: Bool, limit: Int
 ) raises AlignmentError -> Alignment:
     """The best local alignment, a match earning `match_score` (see `Mode.local`).
 
@@ -537,10 +537,10 @@ def local_alignment(
     reversed, read backwards, as for every other mode: it starts and ends as early as it may, gaps
     right."""
     if ties == Ties.LEFT:
-        return latest_local(reference, query, costs, match_score, extended, limit)
+        return latest_local(reference, query, costs, match_score, eqx, limit)
     var columns = reference.byte_length()
     var rows = query.byte_length()
-    var mirrored = latest_local(reversed_text(reference), reversed_text(query), costs, match_score, extended, limit)
+    var mirrored = latest_local(reversed_text(reference), reversed_text(query), costs, match_score, eqx, limit)
     if mirrored.score == 0:
         return mirrored^
     return Alignment(
@@ -581,7 +581,7 @@ def rewarded_alignment(
     match_score: Int,
     ends: EndsFree,
     ties: Ties,
-    extended: Bool,
+    eqx: Bool,
     limit: Int,
 ) raises AlignmentError -> Alignment:
     """The best alignment with the letters `ends` allows free at either end, a match earning
@@ -616,7 +616,7 @@ def rewarded_alignment(
         return Alignment(0, span[0], String(), start_column, end_column, start_row, end_row)
     var part = String(StringSlice(unsafe_from_utf8=reference.as_bytes()[start_column:end_column]))
     var piece = String(StringSlice(unsafe_from_utf8=query.as_bytes()[start_row:end_row]))
-    var found = global_rewarded(part, piece, costs, match_score, Band(), ties, extended, limit)
+    var found = global_rewarded(part, piece, costs, match_score, Band(), ties, eqx, limit)
     return Alignment(found[0], span[0], found[1], start_column, end_column, start_row, end_row)
 
 
@@ -627,7 +627,7 @@ def global_rewarded(
     match_score: Int,
     band: Band,
     ties: Ties,
-    extended: Bool,
+    eqx: Bool,
     limit: Int,
 ) raises AlignmentError -> Tuple[Int, String]:
     """A global alignment with a reward, its letters fixed, so the reward folds into the costs and the
@@ -635,9 +635,9 @@ def global_rewarded(
     when none fits the band."""
     var two = costs.pieces() == 2
     var penalties = rewarded_penalties(match_score, costs)
-    var found = cigar_within[2](
-        reference, query, penalties, extended, Int.MAX, band, ties, limit
-    ) if two else cigar_within[1](reference, query, penalties, extended, Int.MAX, band, ties, limit)
+    var found = cigar_within[2](reference, query, penalties, eqx, Int.MAX, band, ties, limit) if two else cigar_within[
+        1
+    ](reference, query, penalties, eqx, Int.MAX, band, ties, limit)
     if not found:
         raise outside(band)
     var cigar = found.take().cigar

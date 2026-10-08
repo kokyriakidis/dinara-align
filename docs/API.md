@@ -88,21 +88,13 @@ the edit distance from A*PA by Ragnar Groot Koerkamp and Pesho Ivanov (see NOTIC
 
 ## Functions
 
-### `colorize`
-
-```mojo
-def colorize(first_gapped: String, second_gapped: String) -> Tuple[String, String]
-```
-
-Green for a match, red for a mismatch, dim for a gap, as ANSI escapes.
-
 ### `align`
 
 ```mojo
-def align(reference: String, query: String, costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, band: Band = Band(), ties: Ties = Ties.LEFT, extended: Bool = True, max_memory: Int = Int(83886080)) -> Alignment
+def align(reference: String, query: String, costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, band: Band = Band(), ties: Ties = Ties.LEFT, eqx: Bool = True, max_memory: Int = Int(83886080)) -> Alignment
 ```
 
-An optimal alignment of `query` to `reference` as `mode` asks, every move inside `band`, as a CIGAR with `=` and `X`, or with `extended` false `M` for both (see `Alignment`); raises when no alignment fits the band.
+An optimal alignment of `query` to `reference` as `mode` asks, every move inside `band`, as a CIGAR with `=` and `X`, or with `eqx` false `M` for both (see `Alignment`); raises when no alignment fits the band.
 
 Of several equally good alignments the CIGAR is always the one `ties` names (see `Ties`): by
 default every edit as far left as it goes, indels placed as minimap2 places them, or with
@@ -116,33 +108,33 @@ aligned alone (see `gap_affine.solve`), the cost still the least, the tie rule f
 piece. The sweeps and the bit-parallel search keep a few rows, or a band's edges, whatever the cap.
 
 ```mojo
-def align(reference: String, query: String, costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, max_cost: Int, band: Band = Band(), ties: Ties = Ties.LEFT, extended: Bool = True, max_memory: Int = Int(83886080)) -> Optional[Alignment]
+def align(reference: String, query: String, costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, max_cost: Int, band: Band = Band(), ties: Ties = Ties.LEFT, eqx: Bool = True, max_memory: Int = Int(83886080)) -> Optional[Alignment]
 ```
 
 `align`, or None when the cost would pass `max_cost` or no alignment fits `band`, found as `distance` finds that, with no fronts traced. A mode with a match score, which maximizes a score, takes no cap.
 
 ```mojo
-def align(reference: String, query: String, scoring: Scoring, mode: Mode = Mode.GLOBAL, placement: Optional[Placement] = None, stored_budget: Int = Int(6000000), *, extended: Bool = True) -> Alignment
+def align(reference: String, query: String, scoring: Scoring, mode: Mode = Mode.GLOBAL, *, placement: Optional[Placement] = None, max_memory: Int = Int(83886080), eqx: Bool = True) -> Alignment
 ```
 
-An optimal alignment under `scoring`, as `Costs` give one (see `Alignment`), its `cost` minus its score: both sequences whole for `Mode.GLOBAL`, Needleman-Wunsch, the best-scoring window of each for `Mode.LOCAL`, Smith-Waterman, on either device; free ends and extensions, with Z-drop as KSW2 gauges it, on the host, their span by sweep and the letters between aligned globally (see `scoring.scoring_alignment`). Its rows come back with `Alignment.gapped`. Of equally good alignments, Gotoh's walk picks the CIGAR (see `alignment.reconstruct`), not `Ties`.
+An optimal alignment under `scoring`, as `Costs` give one (see `Alignment`), its `cost` minus its score: both sequences whole for `Mode.GLOBAL`, Needleman-Wunsch, the best-scoring window of each for `Mode.LOCAL`, Smith-Waterman, on either device; free ends and extensions, with Z-drop as KSW2 gauges it, on the host, their span by sweep and the letters between aligned globally (see `scoring.scoring_alignment`). Its rows come back with `Alignment.gapped`. Of equally good alignments, Gotoh's walk picks the CIGAR (see `alignment.reconstruct`), not `Ties`. A traceback whose stored matrix would pass `max_memory` bytes recurses in linear space instead (see `scoring.cells_within`).
 
 ### `alignments`
 
 ```mojo
-def alignments(references: List[String], queries: List[String], scoring: Scoring, mode: Mode = Mode.GLOBAL, placement: Optional[Placement] = None, stored_budget: Int = Int(6000000), *, extended: Bool = True) -> List[Alignment]
+def alignments(references: List[String], queries: List[String], scoring: Scoring, mode: Mode = Mode.GLOBAL, *, placement: Optional[Placement] = None, max_memory: Int = Int(83886080), eqx: Bool = True) -> List[Alignment]
 ```
 
 `align` for every pair; on the device, every pair both bounds admit goes out in one launch.
 
 ```mojo
-def alignments(references: List[String], queries: List[String], costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, band: Band = Band(), ties: Ties = Ties.LEFT, extended: Bool = True, threads: Optional[Int] = None, max_memory: Int = Int(83886080)) -> List[Alignment]
+def alignments(references: List[String], queries: List[String], costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, band: Band = Band(), ties: Ties = Ties.LEFT, eqx: Bool = True, threads: Optional[Int] = None, max_memory: Int = Int(83886080)) -> List[Alignment]
 ```
 
 Every pair's `align`, the pairs spread over threads as `distances` spreads them, each thread's kept fronts within `max_memory` bytes.
 
 ```mojo
-def alignments(references: List[String], queries: List[String], costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, max_cost: Int, band: Band = Band(), ties: Ties = Ties.LEFT, extended: Bool = True, threads: Optional[Int] = None, max_memory: Int = Int(83886080)) -> List[Optional[Alignment]]
+def alignments(references: List[String], queries: List[String], costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, max_cost: Int, band: Band = Band(), ties: Ties = Ties.LEFT, eqx: Bool = True, threads: Optional[Int] = None, max_memory: Int = Int(83886080)) -> List[Optional[Alignment]]
 ```
 
 Every pair's `align` under `max_cost`, None for a pair past it or with no alignment inside `band`, the pairs spread over threads as `distances` spreads them.
@@ -204,7 +196,7 @@ def score(reference: String, query: String, costs: Costs, mode: Mode = Mode.GLOB
 The best score `align` would return, with no alignment traced: for a mode with a match score its matches' reward less its costs, else minus the least cost, `distance`'s. A local alignment or free ends with a reward take the sweep alone, an extension its search alone, and a global alignment with a reward the wavefront's cost with the reward folded in, so each skips the traceback.
 
 ```mojo
-def score(reference: String, query: String, scoring: Scoring, mode: Mode = Mode.GLOBAL, placement: Optional[Placement] = None) -> Int
+def score(reference: String, query: String, scoring: Scoring, mode: Mode = Mode.GLOBAL, *, placement: Optional[Placement] = None) -> Int
 ```
 
 The optimal score under `scoring`, with no alignment traced: `Mode.GLOBAL` and `Mode.LOCAL` in two rows of memory on either device (see `scoring.score_with`), free ends and extensions by sweep on the host. The table holds what a match earns, so a mode's own match score must be zero: `Mode.extension(0)` for an extension.
@@ -212,7 +204,7 @@ The optimal score under `scoring`, with no alignment traced: `Mode.GLOBAL` and `
 ### `scores`
 
 ```mojo
-def scores(references: List[String], queries: List[String], scoring: Scoring, mode: Mode = Mode.GLOBAL, placement: Optional[Placement] = None) -> List[Int]
+def scores(references: List[String], queries: List[String], scoring: Scoring, mode: Mode = Mode.GLOBAL, *, placement: Optional[Placement] = None) -> List[Int]
 ```
 
 `score` for every pair; on the device, every pair one block can carry goes out in one launch.
@@ -220,7 +212,7 @@ def scores(references: List[String], queries: List[String], scoring: Scoring, mo
 ### `search`
 
 ```mojo
-def search(query: String, references: List[String], costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, best: Optional[Int] = None, max_cost: Optional[Int] = None, aligned: Bool = False, ties: Ties = Ties.LEFT, threads: Optional[Int] = None) -> List[Hit]
+def search(references: List[String], query: String, costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, best: Optional[Int] = None, max_cost: Optional[Int] = None, aligned: Bool = False, ties: Ties = Ties.LEFT, threads: Optional[Int] = None) -> List[Hit]
 ```
 
 The query against every reference, a database search: each reference's `Hit`, its score, the best first, ties by the references' order; with `best` that many alone, with `max_cost` (a mode with no reward) those within it alone, and with `aligned` each kept hit's alignment too.
@@ -228,18 +220,6 @@ The query against every reference, a database search: each reference's `Hit`, it
 A local alignment scores a block of references at once, one to a SIMD lane, as SWIPE does (see
 `search`); a mode with no reward takes `distances`, under the cap when there is one; any other mode
 each pair's `score`. Every kept hit is then aligned on its own, when asked for, by `align`.
-
-### `hardware_threads`
-
-```mojo
-def hardware_threads() -> Int
-```
-
-Threads this process may actually run on, which an affinity mask or a cgroup quota narrows.
-
-The online CPU count is the wrong answer on a shared machine: it counts cores this process has
-been forbidden from touching. Only Linux exposes such a mask, and `sched_getaffinity` is a
-glibc symbol, so naming it anywhere else fails at link time rather than at run time.
 
 ## Types
 
@@ -257,43 +237,6 @@ Which hardware serves a call.
 
 - `Device.CPU` = `Device(UInt8(0))`: The serial reference sweep.
 - `Device.GPU` = `Device(UInt8(1))`: The parallel sweep, on one accelerator.
-
-### `DeviceScope`
-
-```mojo
-struct DeviceScope
-```
-
-One accelerator and the specs it reported, so no sweep asks the driver twice.
-
-| field | type | |
-| :-- | :-- | :-- |
-| `context` | `DeviceContext` | Where every sweep is enqueued. |
-| `specs` | `GpuSpecs` | What that device said about itself, asked when this scope was opened. |
-
-#### `__init__`
-
-```mojo
-def DeviceScope.__init__(out self, gpu_id: Int)
-```
-
-Opens the named accelerator and asks it, once, everything routing will need.
-
-### `GpuSpecs`
-
-```mojo
-struct GpuSpecs
-```
-
-What one accelerator reports about itself, asked once when a scope opens.
-
-| field | type | |
-| :-- | :-- | :-- |
-| `shared_memory_per_multiprocessor` | `Int` | Bytes of shared memory one multiprocessor holds, which is what bounds a strip's carry. |
-| `reserved_memory_per_block` | `Int` | The slice of that a block may not opt into, which the card reports rather than us guessing. |
-| `largest_allocation` | `Int` | The biggest single buffer this device hands out, which is `maxBufferLength` on Metal. |
-| `streaming_multiprocessors` | `Int` | How many multiprocessors a grid has to fill. |
-| `max_blocks_per_multiprocessor` | `Int` | How many blocks one multiprocessor holds at once, which is what a level aims to saturate. |
 
 ### `Placement`
 
@@ -880,9 +823,3 @@ Letters the table is indexed by, which is its stride.
 ## Constants
 
 - `DEFAULT_MAX_MEMORY` = `83886080`: The bytes of kept fronts an alignment may hold by default, about 80 MB (see `HISTORY_LIMIT`).
-- `DEFAULT_GAP_EXTENSION` = `-2`: Minimap2's gap extension, `-E2`.
-- `DEFAULT_GAP_OPENING` = `-4`: Minimap2's gap opening, `-O4`: a gap of `k` letters scores `-(4 + 2k)`.
-- `DEFAULT_MATCH` = `2`: Minimap2's match score, `-A2`.
-- `DEFAULT_MISMATCH` = `-4`: Minimap2's mismatch score, `-B4`.
-- `DNA_ALPHABET` = `"ACGT"`: The four bases. An `N` or a soft-masked lowercase base must be added to an alphabet explicitly.
-- `STORED_MATRIX_BUDGET` = `6000000`: Cells above which the host traceback switches to the linear-space recursion. Three `int32` layers at twelve bytes a cell keep a stored host alignment near 72 MB; the device packs a nibble per cell and is capped again by `DEVICE_STORED_CELLS`.

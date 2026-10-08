@@ -85,10 +85,10 @@ struct EditCigar(Copyable, Movable, Writable):
 
 
 def edit_cigar(
-    first: String, second: String, extended: Bool = True, ties: Ties = Ties.LEFT
+    first: String, second: String, eqx: Bool = True, ties: Ties = Ties.LEFT
 ) raises AlignmentError -> EditCigar:
     """The global edit distance between two sequences, and an optimal alignment as a CIGAR string, `=`
-    and `X` for matches and substitutions, or with `extended` false `M` for both (see `EditCigar`).
+    and `X` for matches and substitutions, or with `eqx` false `M` for both (see `EditCigar`).
 
     Of several optimal alignments the CIGAR is always the one `ties` names, as for the gap-affine
     alignment (see `Ties`): by default every edit as far left as it goes, indels placed as minimap2
@@ -99,9 +99,9 @@ def edit_cigar(
     var profile = Profile(first, second, reverse)
     var settled = settle(profile)
     if not settled.banded:
-        return EditCigar(settled.distance, diagonal_cigar(profile, settled.fronts, settled.distance, reverse, extended))
+        return EditCigar(settled.distance, diagonal_cigar(profile, settled.fronts, settled.distance, reverse, eqx))
     var path = oriented(settled^, profile.columns, profile.rows, reverse)
-    return EditCigar(path.distance, cigar_string(first, second, path, extended))
+    return EditCigar(path.distance, cigar_string(first, second, path, eqx))
 
 
 def oriented(var settled: Settled, columns: Int, rows: Int, reverse: Bool) -> EditPath:

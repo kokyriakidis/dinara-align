@@ -96,7 +96,7 @@ typedef struct {
  * aligned or skipped less the query's, from the alignment's origin: the exact optimum over the
  * alignments inside; INT64_MIN and INT64_MAX for no band, KSW2's band of width `w` `-w ..= w`. A
  * `max_cost` of zero or more caps the cost, which the search proves past after about half of it.
- * `extended` nonzero writes `=` and `X`, else `M`; of equally good alignments the CIGAR places indels
+ * `eqx` nonzero writes `=` and `X`, else `M`; of equally good alignments the CIGAR places indels
  * left, as minimap2 does, or with `right_ties` nonzero right, WFA2-lib's CIGAR byte for byte. A
  * `max_memory` above zero bounds the bytes of fronts an alignment keeps for its traceback, about 80 MB
  * by default; past it the pair is split, its cost still the least and the tie rule followed within
@@ -106,7 +106,7 @@ typedef struct {
     int64_t band_low;
     int64_t band_high;
     int64_t max_cost;
-    int64_t extended;
+    int64_t eqx;
     int64_t right_ties;
     int64_t max_memory;
 } dinara_options;
@@ -138,7 +138,7 @@ int64_t dinara_align(const char *reference, int64_t reference_length, const char
 
 /* The best score `dinara_align` would return, with no alignment traced, into `*score`: for a mode with
  * a match score its matches' reward less its costs, else minus the least cost. Zero, or a DINARA_ code.
- * The options' cap, `extended`, `right_ties` and memory change nothing. */
+ * The options' cap, `eqx`, `right_ties` and memory change nothing. */
 int64_t dinara_score(const char *reference, int64_t reference_length, const char *query, int64_t query_length,
                      const dinara_costs *costs, const dinara_mode *mode, const dinara_options *options, int64_t *score);
 
@@ -151,21 +151,21 @@ typedef struct {
     int64_t query_end;
     int64_t second_score;
     int64_t second_reference_end;
-} dinara_local_scores;
+} dinara_local_scores_result;
 
-/* `dinara_local_scores` for a DINARA_LOCAL mode, the window `window` letters, or for a negative one
+/* `dinara_local_scores_result` for a DINARA_LOCAL mode, the window `window` letters, or for a negative one
  * half the query and at least 15, as SSW suggests; one sweep, no alignment traced. Zero, or a code. */
-int64_t dinara_local_scores_of(const char *reference, int64_t reference_length, const char *query,
-                               int64_t query_length, const dinara_costs *costs, const dinara_mode *mode,
-                               int64_t window, dinara_local_scores *scores);
+int64_t dinara_local_scores(const char *reference, int64_t reference_length, const char *query,
+                            int64_t query_length, const dinara_costs *costs, const dinara_mode *mode,
+                            int64_t window, dinara_local_scores_result *scores);
 
 /* The query against `count` references, a database search: the hits, best first, ties by order, their
  * places into `indices` and their scores (minus their costs with no reward) into `scores`, each with
  * room for `count`; returns how many, or a DINARA_ code. `best` above zero keeps that many, and the
  * options' `max_cost` drops what passes it. A local search scores many references at once, one to a
  * SIMD lane. */
-int64_t dinara_search(const char *query, int64_t query_length, int64_t count, const char *const *references,
-                      const int64_t *reference_lengths, const dinara_costs *costs, const dinara_mode *mode,
+int64_t dinara_search(int64_t count, const char *const *references, const int64_t *reference_lengths,
+                      const char *query, int64_t query_length, const dinara_costs *costs, const dinara_mode *mode,
                       const dinara_options *options, int64_t best, int64_t threads, int64_t *indices,
                       int64_t *scores);
 
@@ -327,10 +327,10 @@ inline int64_t distance(std::string_view reference, std::string_view query, cons
 }
 
 inline std::optional<Alignment> align(std::string_view reference, std::string_view query, const Costs &costs,
-                                      const Mode &mode, Band band, int64_t max_cost, Ties ties, bool extended,
+                                      const Mode &mode, Band band, int64_t max_cost, Ties ties, bool eqx,
                                       int64_t max_memory) {
     dinara_costs c = c_costs(costs);
-    dinara_options options{band.low, band.high, max_cost, extended ? 1 : 0, ties == Ties::right ? 1 : 0, max_memory};
+    dinara_options options{band.low, band.high, max_cost, eqx ? 1 : 0, ties == Ties::right ? 1 : 0, max_memory};
     dinara_alignment found{};
     int64_t status = dinara_align(reference.data(), static_cast<int64_t>(reference.size()), query.data(),
                                   static_cast<int64_t>(query.size()), &c, &mode.fields, &options, &found);
@@ -371,10 +371,10 @@ inline std::vector<int64_t> distances(const Batch &batch, const Costs &costs, co
 }
 
 inline std::vector<std::optional<Alignment>> alignments(const Batch &batch, const Costs &costs, const Mode &mode,
-                                                        Band band, int64_t max_cost, Ties ties, bool extended,
+                                                        Band band, int64_t max_cost, Ties ties, bool eqx,
                                                         int threads, int64_t max_memory) {
     dinara_costs c = c_costs(costs);
-    dinara_options options{band.low, band.high, max_cost, extended ? 1 : 0, ties == Ties::right ? 1 : 0, max_memory};
+    dinara_options options{band.low, band.high, max_cost, eqx ? 1 : 0, ties == Ties::right ? 1 : 0, max_memory};
     std::vector<dinara_alignment> found(batch.references.size());
     std::vector<int64_t> statuses(batch.references.size());
     check(dinara_alignments(batch.size(), batch.references.data(), batch.reference_lengths.data(),
@@ -413,12 +413,12 @@ inline int64_t score(std::string_view reference, std::string_view query, const C
 
 /* A local alignment's best score and end, and SSW's second best, more than `window` reference letters
  * away; a negative window is half the query and at least 15. */
-inline dinara_local_scores local_scores(std::string_view reference, std::string_view query, const Costs &costs,
-                                        const Mode &mode, int64_t window = -1) {
+inline dinara_local_scores_result local_scores(std::string_view reference, std::string_view query, const Costs &costs,
+                                               const Mode &mode, int64_t window = -1) {
     dinara_costs c = detail::c_costs(costs);
-    dinara_local_scores found{};
-    detail::check(dinara_local_scores_of(reference.data(), static_cast<int64_t>(reference.size()), query.data(),
-                                         static_cast<int64_t>(query.size()), &c, &mode.fields, window, &found));
+    dinara_local_scores_result found{};
+    detail::check(dinara_local_scores(reference.data(), static_cast<int64_t>(reference.size()), query.data(),
+                                      static_cast<int64_t>(query.size()), &c, &mode.fields, window, &found));
     return found;
 }
 
@@ -429,7 +429,7 @@ struct Hit {
 };
 
 /* The query against every reference, the best first; `best` above zero keeps that many. */
-inline std::vector<Hit> search(std::string_view query, const std::vector<std::string_view> &references,
+inline std::vector<Hit> search(const std::vector<std::string_view> &references, std::string_view query,
                                const Costs &costs = Costs::edit(), const Mode &mode = Mode::global(),
                                int64_t best = 0, int threads = 0) {
     std::vector<const char *> texts;
@@ -437,9 +437,9 @@ inline std::vector<Hit> search(std::string_view query, const std::vector<std::st
     for (auto reference : references) texts.push_back(reference.data()), lengths.push_back(static_cast<int64_t>(reference.size()));
     std::vector<int64_t> indices(references.size()), scores(references.size());
     dinara_costs c = detail::c_costs(costs);
-    int64_t found = dinara_search(query.data(), static_cast<int64_t>(query.size()), static_cast<int64_t>(references.size()),
-                                  texts.data(), lengths.data(), &c, &mode.fields, nullptr, best, threads, indices.data(),
-                                  scores.data());
+    int64_t found = dinara_search(static_cast<int64_t>(references.size()), texts.data(), lengths.data(), query.data(),
+                                  static_cast<int64_t>(query.size()), &c, &mode.fields, nullptr, best, threads,
+                                  indices.data(), scores.data());
     detail::check(found);
     std::vector<Hit> hits;
     for (int64_t rank = 0; rank < found; ++rank) hits.push_back({indices[rank], scores[rank]});
@@ -465,17 +465,17 @@ inline std::optional<int64_t> distance_within(std::string_view reference, std::s
 /* An optimal alignment, its kept fronts within `max_memory` bytes when above zero. */
 inline Alignment align(std::string_view reference, std::string_view query, const Costs &costs = Costs::edit(),
                        const Mode &mode = Mode::global(), Band band = {}, Ties ties = Ties::left,
-                       bool extended = true, int64_t max_memory = 0) {
-    return *detail::align(reference, query, costs, mode, band, -1, ties, extended, max_memory);
+                       bool eqx = true, int64_t max_memory = 0) {
+    return *detail::align(reference, query, costs, mode, band, -1, ties, eqx, max_memory);
 }
 
 /* An optimal alignment, or nothing when its cost passes `max_cost`. */
 inline std::optional<Alignment> align_within(std::string_view reference, std::string_view query, int64_t max_cost,
                                              const Costs &costs = Costs::edit(), const Mode &mode = Mode::global(),
-                                             Band band = {}, Ties ties = Ties::left, bool extended = true,
+                                             Band band = {}, Ties ties = Ties::left, bool eqx = true,
                                              int64_t max_memory = 0) {
     if (max_cost < 0) return std::nullopt;
-    return detail::align(reference, query, costs, mode, band, max_cost, ties, extended, max_memory);
+    return detail::align(reference, query, costs, mode, band, max_cost, ties, eqx, max_memory);
 }
 
 /* Every pair's least cost, `firsts[i]` against `seconds[i]`, over `threads` threads (zero: every
@@ -509,10 +509,10 @@ inline std::vector<std::optional<int64_t>> distances_within(const std::vector<st
 inline std::vector<Alignment> alignments(const std::vector<std::string_view> &references,
                                          const std::vector<std::string_view> &queries,
                                          const Costs &costs = Costs::edit(), const Mode &mode = Mode::global(),
-                                         Band band = {}, Ties ties = Ties::left, bool extended = true,
+                                         Band band = {}, Ties ties = Ties::left, bool eqx = true,
                                          int threads = 0, int64_t max_memory = 0) {
     std::vector<Alignment> results;
-    for (auto &found : detail::alignments(detail::Batch(references, queries), costs, mode, band, -1, ties, extended,
+    for (auto &found : detail::alignments(detail::Batch(references, queries), costs, mode, band, -1, ties, eqx,
                                           threads, max_memory))
         results.push_back(std::move(*found));
     return results;
@@ -523,10 +523,10 @@ inline std::vector<std::optional<Alignment>> alignments_within(const std::vector
                                                                const std::vector<std::string_view> &queries,
                                                                int64_t max_cost, const Costs &costs = Costs::edit(),
                                                                const Mode &mode = Mode::global(), Band band = {},
-                                                               Ties ties = Ties::left, bool extended = true,
+                                                               Ties ties = Ties::left, bool eqx = true,
                                                                int threads = 0, int64_t max_memory = 0) {
     if (max_cost < 0) return std::vector<std::optional<Alignment>>(references.size());
-    return detail::alignments(detail::Batch(references, queries), costs, mode, band, max_cost, ties, extended,
+    return detail::alignments(detail::Batch(references, queries), costs, mode, band, max_cost, ties, eqx,
                               threads, max_memory);
 }
 

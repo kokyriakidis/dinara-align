@@ -199,7 +199,7 @@ struct Case(Copyable, Movable, Writable):
     var mode: Mode
     var band: Band
     var ties: Ties
-    var extended: Bool
+    var eqx: Bool
     var memory: Int
     """The kept fronts' budget in bytes: the default, or a few hundred, which splits every pair."""
 
@@ -217,7 +217,7 @@ def check(trial: Case) raises:
             trial.mode,
             band=trial.band,
             ties=trial.ties,
-            extended=trial.extended,
+            eqx=trial.eqx,
         )
     except error:
         if not best:
@@ -295,7 +295,7 @@ def check(trial: Case) raises:
             max_cost=cap,
             band=trial.band,
             ties=trial.ties,
-            extended=trial.extended,
+            eqx=trial.eqx,
             max_memory=trial.memory,
         )
         if Bool(aligned) != (found.cost <= cap):
@@ -342,7 +342,7 @@ def check(trial: Case) raises:
             trial.costs,
             trial.mode,
             ties=other,
-            extended=trial.extended,
+            eqx=trial.eqx,
         )
         var empty = found.score == 0 and mirrored.score == 0
         if not empty and (
@@ -359,7 +359,7 @@ def check(trial: Case) raises:
             trial.costs,
             trial.mode,
             ties=other,
-            extended=trial.extended,
+            eqx=trial.eqx,
         )
         if reversed_cigar(mirrored.cigar) != found.cigar:
             raise Error(String("mirrored ties spelled ", mirrored.cigar, " against ", found.cigar))
@@ -441,7 +441,7 @@ def scoring_mode(columns: Int, rows: Int) raises AlignmentError -> Mode:
     return Mode.extension(0, anchor)
 
 
-def check_scoring(reference: String, query: String, scoring: Scoring, mode: Mode, extended: Bool) raises:
+def check_scoring(reference: String, query: String, scoring: Scoring, mode: Mode, eqx: Bool) raises:
     """A `Scoring`'s alignment in any mode: one the mode allows, earning its own score, the optimum,
     and `score` agreeing."""
     var size = scoring.alphabet_size()
@@ -472,7 +472,7 @@ def check_scoring(reference: String, query: String, scoring: Scoring, mode: Mode
         1 << 60,
     )
     var best = optimum(model, reference, query).value()
-    var found = align(reference, query, scoring, mode, extended=extended)
+    var found = align(reference, query, scoring, mode, eqx=eqx)
     var earned = check_alignment(
         model,
         reference,

@@ -53,7 +53,7 @@ from .gap_affine import (
 )
 from .modes import Alignment, Anchor, Band, Costs, Mode, Ties
 from .scoring import (
-    STORED_MATRIX_BUDGET,
+    cells_within,
     Scoring,
     alignments_with,
     as_alignment,
@@ -106,11 +106,11 @@ def align(
     *,
     band: Band = Band(),
     ties: Ties = Ties.LEFT,
-    extended: Bool = True,
+    eqx: Bool = True,
     max_memory: Int = DEFAULT_MAX_MEMORY,
 ) raises AlignmentError -> Alignment:
     """An optimal alignment of `query` to `reference` as `mode` asks, every move inside `band`, as a
-    CIGAR with `=` and `X`, or with `extended` false `M` for both (see `Alignment`); raises when no
+    CIGAR with `=` and `X`, or with `eqx` false `M` for both (see `Alignment`); raises when no
     alignment fits the band.
 
     Of several equally good alignments the CIGAR is always the one `ties` names (see `Ties`): by
@@ -124,7 +124,7 @@ def align(
     aligned alone (see `gap_affine.solve`), the cost still the least, the tie rule followed within each
     piece. The sweeps and the bit-parallel search keep a few rows, or a band's edges, whatever the cap.
     """
-    var found = aligned_within(reference, query, costs, mode, band, Int.MAX, ties, extended, max_memory // KEPT_BYTES)
+    var found = aligned_within(reference, query, costs, mode, band, Int.MAX, ties, eqx, max_memory // KEPT_BYTES)
     if not found:
         raise outside(band)
     return found.take()
@@ -139,13 +139,13 @@ def align(
     max_cost: Int,
     band: Band = Band(),
     ties: Ties = Ties.LEFT,
-    extended: Bool = True,
+    eqx: Bool = True,
     max_memory: Int = DEFAULT_MAX_MEMORY,
 ) raises AlignmentError -> Optional[Alignment]:
     """`align`, or None when the cost would pass `max_cost` or no alignment fits `band`, found as
     `distance` finds that, with no fronts traced. A mode with a match score, which maximizes a score,
     takes no cap."""
-    return aligned_within(reference, query, costs, mode, band, max_cost, ties, extended, max_memory // KEPT_BYTES)
+    return aligned_within(reference, query, costs, mode, band, max_cost, ties, eqx, max_memory // KEPT_BYTES)
 
 
 def score(
@@ -271,18 +271,18 @@ def aligned_within(
     band: Band,
     max_cost: Int,
     ties: Ties,
-    extended: Bool,
+    eqx: Bool,
     limit: Int,
 ) raises AlignmentError -> Optional[Alignment]:
     """An optimal alignment, or None when its cost would pass `max_cost` (`Int.MAX` for no cap) or none
     fits `band`: the least costly one, or for a mode that maximizes a score the best-scoring one, its
     kept fronts within `limit` diagonals."""
     if not mode.is_scored():
-        return least_costly(reference, query, costs, mode, band, max_cost, ties, extended, limit)
+        return least_costly(reference, query, costs, mode, band, max_cost, ties, eqx, limit)
     if max_cost != Int.MAX:
         raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a mode with a match score takes no cost cap")
     _ = penalties_of(costs)
-    return best_scoring(reference, query, costs, mode, band, ties, extended, limit)
+    return best_scoring(reference, query, costs, mode, band, ties, eqx, limit)
 
 
 def swept_by_bits(costs: Costs, ends: EndsFree, band: Band, max_cost: Int, columns: Int, rows: Int) -> Bool:
@@ -305,7 +305,7 @@ def least_costly(
     band: Band,
     max_cost: Int,
     ties: Ties,
-    extended: Bool,
+    eqx: Bool,
     limit: Int,
 ) raises AlignmentError -> Optional[Alignment]:
     """The least costly alignment with `mode`'s free ends: by the bit-parallel sweep where it serves the
@@ -317,12 +317,12 @@ def least_costly(
         try:
             var scale = costs.unit_scale()
             if ends.first_begin == 0 and ends.first_end == 0:
-                var whole = edit_cigar(reference, query, extended, ties)
+                var whole = edit_cigar(reference, query, eqx, ties)
                 var cost = whole.distance * scale
                 return Alignment(cost, -cost, whole.cigar, 0, columns, 0, rows)
             var hit = edit_search(query, reference, ends.first_begin == 0, ties)
             var part = String(StringSlice(unsafe_from_utf8=reference.as_bytes()[hit.start : hit.end]))
-            var found = edit_cigar(part, query, extended, ties)
+            var found = edit_cigar(part, query, eqx, ties)
             var cost = found.distance * scale
             return Alignment(cost, -cost, found.cigar, hit.start, hit.end, 0, rows)
         except error:
@@ -335,18 +335,18 @@ def least_costly(
     if mode.is_global():
         var found: Optional[AffineCigar]
         if costs.pieces() == 2:
-            found = cigar_within[2](reference, query, penalties, extended, ceiling, band, ties, limit)
+            found = cigar_within[2](reference, query, penalties, eqx, ceiling, band, ties, limit)
         else:
-            found = cigar_within[1](reference, query, penalties, extended, ceiling, band, ties, limit)
+            found = cigar_within[1](reference, query, penalties, eqx, ceiling, band, ties, limit)
         if not found:
             return None
         var cost = found.value().cost
         return Alignment(cost, -cost, found.take().cigar, 0, columns, 0, rows)
     var spanned: Optional[Spanned]
     if costs.pieces() == 2:
-        spanned = free_ends_alignment[2](reference, query, penalties, extended, ceiling, ends, band, ties, limit)
+        spanned = free_ends_alignment[2](reference, query, penalties, eqx, ceiling, ends, band, ties, limit)
     else:
-        spanned = free_ends_alignment[1](reference, query, penalties, extended, ceiling, ends, band, ties, limit)
+        spanned = free_ends_alignment[1](reference, query, penalties, eqx, ceiling, ends, band, ties, limit)
     if not spanned:
         return None
     ref found = spanned.value()
@@ -362,7 +362,7 @@ def least_costly(
 
 
 def best_scoring(
-    reference: String, query: String, costs: Costs, mode: Mode, band: Band, ties: Ties, extended: Bool, limit: Int
+    reference: String, query: String, costs: Costs, mode: Mode, band: Band, ties: Ties, eqx: Bool, limit: Int
 ) raises AlignmentError -> Alignment:
     """The best-scoring alignment for a mode with a match score: an extension by the wavefront from its
     anchor; a global alignment, its letters fixed so the reward folds into the costs, by the wavefront
@@ -370,9 +370,9 @@ def best_scoring(
     var columns = reference.byte_length()
     var rows = query.byte_length()
     if mode.kind == Mode.EXTENSION:
-        return extended_alignment(reference, query, costs, mode, band, ties, extended, limit)
+        return extended_alignment(reference, query, costs, mode, band, ties, eqx, limit)
     if mode.kind == Mode.ENDS and mode.is_global():
-        var whole = global_rewarded(reference, query, costs, mode.match_score, band, ties, extended, limit)
+        var whole = global_rewarded(reference, query, costs, mode.match_score, band, ties, eqx, limit)
         var score = mode.match_score * cigar_matches(reference, query, whole[1]) - whole[0]
         return Alignment(whole[0], score, whole[1], 0, columns, 0, rows)
     if mode.match_score <= 0:
@@ -382,14 +382,14 @@ def best_scoring(
     if not band.covers(columns, rows):
         raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a sweep takes no band: a local alignment or free ends")
     if mode.kind == Mode.SMITH_WATERMAN:
-        return local_alignment(reference, query, costs, mode.match_score, ties, extended, limit)
+        return local_alignment(reference, query, costs, mode.match_score, ties, eqx, limit)
     return rewarded_alignment(
-        reference, query, costs, mode.match_score, free_ends(mode, columns, rows), ties, extended, limit
+        reference, query, costs, mode.match_score, free_ends(mode, columns, rows), ties, eqx, limit
     )
 
 
 def extended_alignment(
-    reference: String, query: String, costs: Costs, mode: Mode, band: Band, ties: Ties, extended: Bool, limit: Int
+    reference: String, query: String, costs: Costs, mode: Mode, band: Band, ties: Ties, eqx: Bool, limit: Int
 ) raises AlignmentError -> Alignment:
     """The best extension from `mode`'s anchor (see `Mode.extension`)."""
     var two = costs.pieces() == 2
@@ -397,9 +397,9 @@ def extended_alignment(
     # The Z-drop's slack a diagonal is the cheapest extension, as KSW2 charges a long gap.
     var drop_extension = cheapest_extension(costs)
     var found = extension_of[2](
-        reference, query, penalties, extended, mode.anchor, band, ties, -1, limit, mode.zdrop, drop_extension
+        reference, query, penalties, eqx, mode.anchor, band, ties, -1, limit, mode.zdrop, drop_extension
     ) if two else extension_of[1](
-        reference, query, penalties, extended, mode.anchor, band, ties, -1, limit, mode.zdrop, drop_extension
+        reference, query, penalties, eqx, mode.anchor, band, ties, -1, limit, mode.zdrop, drop_extension
     )
     var columns = reference.byte_length()
     var rows = query.byte_length()
@@ -423,7 +423,12 @@ def extended_alignment(
 
 
 def score(
-    reference: String, query: String, scoring: Scoring, mode: Mode = Mode.GLOBAL, placement: Optional[Placement] = None
+    reference: String,
+    query: String,
+    scoring: Scoring,
+    mode: Mode = Mode.GLOBAL,
+    *,
+    placement: Optional[Placement] = None,
 ) raises -> Int:
     """The optimal score under `scoring`, with no alignment traced: `Mode.GLOBAL` and `Mode.LOCAL` in two
     rows of memory on either device (see `scoring.score_with`), free ends and extensions by sweep on the
@@ -437,18 +442,20 @@ def align(
     query: String,
     scoring: Scoring,
     mode: Mode = Mode.GLOBAL,
-    placement: Optional[Placement] = None,
-    stored_budget: Int = STORED_MATRIX_BUDGET,
     *,
-    extended: Bool = True,
+    placement: Optional[Placement] = None,
+    max_memory: Int = DEFAULT_MAX_MEMORY,
+    eqx: Bool = True,
 ) raises -> Alignment:
     """An optimal alignment under `scoring`, as `Costs` give one (see `Alignment`), its `cost` minus its
     score: both sequences whole for `Mode.GLOBAL`, Needleman-Wunsch, the best-scoring window of each
     for `Mode.LOCAL`, Smith-Waterman, on either device; free ends and extensions, with Z-drop as KSW2
     gauges it, on the host, their span by sweep and the letters between aligned globally (see
     `scoring.scoring_alignment`). Its rows come back with `Alignment.gapped`. Of equally good
-    alignments, Gotoh's walk picks the CIGAR (see `alignment.reconstruct`), not `Ties`."""
-    return scoring_alignment(reference, query, scoring, mode, placement, stored_budget, extended)
+    alignments, Gotoh's walk picks the CIGAR (see `alignment.reconstruct`), not `Ties`. A traceback whose
+    stored matrix would pass `max_memory` bytes recurses in linear space instead (see
+    `scoring.cells_within`)."""
+    return scoring_alignment(reference, query, scoring, mode, placement, cells_within(max_memory), eqx)
 
 
 def scores(
@@ -456,6 +463,7 @@ def scores(
     queries: List[String],
     scoring: Scoring,
     mode: Mode = Mode.GLOBAL,
+    *,
     placement: Optional[Placement] = None,
 ) raises -> List[Int]:
     """`score` for every pair; on the device, every pair one block can carry goes out in one launch."""
@@ -469,7 +477,7 @@ def scores(
         var pairs = paired_length(references, queries)
         var results = List[Int](capacity=pairs)
         for index in range(pairs):
-            results.append(score(references[index], queries[index], scoring, mode, placement))
+            results.append(score(references[index], queries[index], scoring, mode, placement=placement))
         return results^
     var results = List[Int](capacity=len(found))
     for value in found:
@@ -482,13 +490,14 @@ def alignments(
     queries: List[String],
     scoring: Scoring,
     mode: Mode = Mode.GLOBAL,
-    placement: Optional[Placement] = None,
-    stored_budget: Int = STORED_MATRIX_BUDGET,
     *,
-    extended: Bool = True,
+    placement: Optional[Placement] = None,
+    max_memory: Int = DEFAULT_MAX_MEMORY,
+    eqx: Bool = True,
 ) raises -> List[Alignment]:
     """`align` for every pair; on the device, every pair both bounds admit goes out in one launch."""
     var pairs = paired_length(references, queries)
+    var stored_cells = cells_within(max_memory)
     var resolved = placement.or_else(Placement.default())
     if resolved.device != Device.GPU:
         # On the host each pair as `align` takes it, the pairs over the threads asked for.
@@ -510,8 +519,8 @@ def alignments(
             imm scoring,
             imm mode,
             imm single,
-            imm stored_budget,
-            imm extended,
+            imm stored_cells,
+            imm eqx,
             imm out,
             imm flags,
             imm pairs,
@@ -520,7 +529,7 @@ def alignments(
             for index in range(pairs * chunk // chunks, pairs * (chunk + 1) // chunks):
                 try:
                     out[unsafe_offset=index] = scoring_alignment(
-                        references[index], queries[index], scoring, mode, single, stored_budget, extended
+                        references[index], queries[index], scoring, mode, single, stored_cells, eqx
                     )
                 except:
                     flags[unsafe_offset=index] = True
@@ -530,19 +539,27 @@ def alignments(
         for index in range(pairs):
             if failed[index]:
                 results[index] = scoring_alignment(
-                    references[index], queries[index], scoring, mode, single, stored_budget, extended
+                    references[index], queries[index], scoring, mode, single, stored_cells, eqx
                 )
         return results^
     var gapped: List[GappedAlignment]
     if mode.kind == Mode.SMITH_WATERMAN and mode.match_score == 0:
-        gapped = alignments_with[AlignmentMode.LOCAL](references, queries, scoring, placement, stored_budget)
+        gapped = alignments_with[AlignmentMode.LOCAL](references, queries, scoring, placement, stored_cells)
     elif mode.is_global() and mode.match_score == 0:
-        gapped = alignments_with[AlignmentMode.GLOBAL](references, queries, scoring, placement, stored_budget)
+        gapped = alignments_with[AlignmentMode.GLOBAL](references, queries, scoring, placement, stored_cells)
     else:
         var results = List[Alignment](capacity=pairs)
         for index in range(pairs):
             results.append(
-                align(references[index], queries[index], scoring, mode, placement, stored_budget, extended=extended)
+                align(
+                    references[index],
+                    queries[index],
+                    scoring,
+                    mode,
+                    placement=placement,
+                    max_memory=max_memory,
+                    eqx=eqx,
+                )
             )
         return results^
     # Each pair's rows read as its CIGAR, on every thread, as the pairs were aligned.
@@ -556,9 +573,9 @@ def alignments(
 
     def convert(
         chunk: Int,
-    ) {imm gapped, imm references, imm queries, imm out, imm whole, imm extended, imm pairs, imm chunks}:
+    ) {imm gapped, imm references, imm queries, imm out, imm whole, imm eqx, imm pairs, imm chunks}:
         for index in range(pairs * chunk // chunks, pairs * (chunk + 1) // chunks):
-            out[unsafe_offset=index] = as_alignment(gapped[index], references[index], queries[index], whole, extended)
+            out[unsafe_offset=index] = as_alignment(gapped[index], references[index], queries[index], whole, eqx)
 
     parallelize(convert, chunks, workers)
     return results^
@@ -737,14 +754,14 @@ def alignments(
     *,
     band: Band = Band(),
     ties: Ties = Ties.LEFT,
-    extended: Bool = True,
+    eqx: Bool = True,
     threads: Optional[Int] = None,
     max_memory: Int = DEFAULT_MAX_MEMORY,
 ) raises AlignmentError -> List[Alignment]:
     """Every pair's `align`, the pairs spread over threads as `distances` spreads them, each thread's
     kept fronts within `max_memory` bytes."""
     var found = capped_alignments(
-        references, queries, costs, mode, band, Int.MAX, ties, extended, threads, max_memory // KEPT_BYTES
+        references, queries, costs, mode, band, Int.MAX, ties, eqx, threads, max_memory // KEPT_BYTES
     )
     var results = List[Alignment](capacity=len(found))
     for index in range(len(found)):
@@ -761,14 +778,14 @@ def alignments(
     max_cost: Int,
     band: Band = Band(),
     ties: Ties = Ties.LEFT,
-    extended: Bool = True,
+    eqx: Bool = True,
     threads: Optional[Int] = None,
     max_memory: Int = DEFAULT_MAX_MEMORY,
 ) raises AlignmentError -> List[Optional[Alignment]]:
     """Every pair's `align` under `max_cost`, None for a pair past it or with no alignment inside
     `band`, the pairs spread over threads as `distances` spreads them."""
     return capped_alignments(
-        references, queries, costs, mode, band, max_cost, ties, extended, threads, max_memory // KEPT_BYTES
+        references, queries, costs, mode, band, max_cost, ties, eqx, threads, max_memory // KEPT_BYTES
     )
 
 
@@ -780,7 +797,7 @@ def capped_alignments(
     band: Band,
     max_cost: Int,
     ties: Ties,
-    extended: Bool,
+    eqx: Bool,
     threads: Optional[Int],
     limit: Int,
 ) raises AlignmentError -> List[Optional[Alignment]]:
@@ -814,7 +831,7 @@ def capped_alignments(
         imm band,
         imm max_cost,
         imm ties,
-        imm extended,
+        imm eqx,
         imm limit,
     }:
         while True:
@@ -824,7 +841,7 @@ def capped_alignments(
             var index = order[dealt]
             try:
                 out[unsafe_offset=index] = aligned_within(
-                    references[index], queries[index], costs, mode, band, max_cost, ties, extended, limit
+                    references[index], queries[index], costs, mode, band, max_cost, ties, eqx, limit
                 )
             except:
                 flags[unsafe_offset=index] = True
@@ -833,7 +850,7 @@ def capped_alignments(
     for index in range(pairs):
         if failed[index]:
             results[index] = aligned_within(
-                references[index], queries[index], costs, mode, band, max_cost, ties, extended, limit
+                references[index], queries[index], costs, mode, band, max_cost, ties, eqx, limit
             )
         if not results[index] and max_cost == Int.MAX:
             raise outside(band)
@@ -841,8 +858,8 @@ def capped_alignments(
 
 
 def search(
-    query: String,
     references: List[String],
+    query: String,
     costs: Costs = Costs.edit(),
     mode: Mode = Mode.GLOBAL,
     *,

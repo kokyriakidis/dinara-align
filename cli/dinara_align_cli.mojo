@@ -209,7 +209,7 @@ def run() raises:
     var band = Band()
     var max_cost = -1
     var ties = Ties.LEFT
-    var extended = True
+    var eqx = True
     var both_strands = False
     var cost_only = False
     var format = String("tsv")
@@ -275,7 +275,7 @@ def run() raises:
         elif argument == "--max-memory":
             memory = Int(value)
         elif argument == "--cigar-m":
-            extended = False
+            eqx = False
         elif argument == "--both-strands":
             both_strands = True
         elif argument == "--distance":
@@ -356,10 +356,10 @@ def run() raises:
         max_cost=cap,
         band=band,
         ties=ties,
-        extended=extended,
+        eqx=eqx,
         threads=threads,
         max_memory=memory,
-    ) if not mode.is_scored() else _scored(references, queries, costs, mode, band, ties, extended, threads, memory)
+    ) if not mode.is_scored() else _scored(references, queries, costs, mode, band, ties, eqx, threads, memory)
     var reverse = List[Optional[Alignment]]()
     var flipped = List[String]()
     if both_strands:
@@ -373,10 +373,10 @@ def run() raises:
             max_cost=cap,
             band=band,
             ties=ties,
-            extended=extended,
+            eqx=eqx,
             threads=threads,
             max_memory=memory,
-        ) if not mode.is_scored() else _scored(references, flipped, costs, mode, band, ties, extended, threads, memory)
+        ) if not mode.is_scored() else _scored(references, flipped, costs, mode, band, ties, eqx, threads, memory)
 
     if format == "sam":
         print("@HD\tVN:1.6\tSO:unsorted")
@@ -474,14 +474,14 @@ def _scored(
     mode: Mode,
     band: Band,
     ties: Ties,
-    extended: Bool,
+    eqx: Bool,
     threads: Optional[Int],
     memory: Int,
 ) raises -> List[Optional[Alignment]]:
     """A mode with a match score takes no cap: every pair aligned."""
     var out = List[Optional[Alignment]]()
     for found in alignments(
-        references, queries, costs, mode, band=band, ties=ties, extended=extended, threads=threads, max_memory=memory
+        references, queries, costs, mode, band=band, ties=ties, eqx=eqx, threads=threads, max_memory=memory
     ):
         out.append(found.copy())
     return out^

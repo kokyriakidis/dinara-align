@@ -100,12 +100,12 @@ def mode_of(fields: PythonObject) raises -> Mode:
 
 @fieldwise_init
 struct Options(ImplicitlyCopyable):
-    """`(band_low, band_high, max_cost, extended, right_ties, max_memory)`: a negative cap for none, a
+    """`(band_low, band_high, max_cost, eqx, right_ties, max_memory)`: a negative cap for none, a
     memory of zero or less for the default."""
 
     var band: Band
     var max_cost: Int
-    var extended: Bool
+    var eqx: Bool
     var ties: Ties
     var max_memory: Int
 
@@ -162,7 +162,7 @@ def py_align(
                 mode_of(mode),
                 band=asked.band,
                 ties=asked.ties,
-                extended=asked.extended,
+                eqx=asked.eqx,
                 max_memory=asked.max_memory,
             )
         )
@@ -174,7 +174,7 @@ def py_align(
         max_cost=asked.max_cost,
         band=asked.band,
         ties=asked.ties,
-        extended=asked.extended,
+        eqx=asked.eqx,
         max_memory=asked.max_memory,
     )
     if not found:
@@ -276,7 +276,7 @@ def py_alignments(
             mode_of(mode),
             band=asked.band,
             ties=asked.ties,
-            extended=asked.extended,
+            eqx=asked.eqx,
             threads=threads_of(threads),
             max_memory=asked.max_memory,
         ):
@@ -290,7 +290,7 @@ def py_alignments(
         max_cost=asked.max_cost,
         band=asked.band,
         ties=asked.ties,
-        extended=asked.extended,
+        eqx=asked.eqx,
         threads=threads_of(threads),
         max_memory=asked.max_memory,
     ):
@@ -308,7 +308,7 @@ def scoring_of(table: PythonObject) raises -> Scoring:
 
 
 def py_scoring_align(
-    reference: PythonObject, query: PythonObject, table: PythonObject, mode: PythonObject, extended: PythonObject
+    reference: PythonObject, query: PythonObject, table: PythonObject, mode: PythonObject, eqx: PythonObject
 ) raises -> PythonObject:
     """An optimal alignment under a `Scoring` (see `scoring_of`), as a tuple."""
     return alignment_tuple(
@@ -317,7 +317,7 @@ def py_scoring_align(
             String(py=query),
             scoring_of(table),
             mode_of(mode),
-            extended=Bool(py=extended),
+            eqx=Bool(py=eqx),
         )
     )
 
@@ -330,8 +330,8 @@ def py_scoring_score(
 
 
 def py_search(
-    query: PythonObject,
     references: PythonObject,
+    query: PythonObject,
     costs: PythonObject,
     mode: PythonObject,
     options: PythonObject,
@@ -342,8 +342,8 @@ def py_search(
     var asked = options_of(options)
     var best = Int(py=settings[0])
     var hits = search(
-        String(py=query),
         strings(references),
+        String(py=query),
         costs_of(costs),
         mode_of(mode),
         best=Optional[Int](best) if best > 0 else None,

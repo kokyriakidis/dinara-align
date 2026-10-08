@@ -29,11 +29,11 @@ from dinara_align import (
     Ties,
     align,
     distance,
-    hardware_threads,
     local_scores,
     score,
     search,
 )
+from dinara_align.common import hardware_threads
 
 comptime UNSUPPORTED_SYMBOLS = -1
 """A 0xFE or 0xFF byte, which the wavefront's sentinels are and UTF-8 never holds."""
@@ -120,12 +120,12 @@ def mode_of(fields: OptionalPointer[Int, MutAnyOrigin]) raises AlignmentError ->
 
 @fieldwise_init
 struct Options(ImplicitlyCopyable):
-    """`dinara_options`: the band's two edges, the cost cap, `extended`, `right_ties` and the memory for
+    """`dinara_options`: the band's two edges, the cost cap, `eqx`, `right_ties` and the memory for
     kept fronts. Null is no band, no cap, `=` and `X`, indels placed left, and the default memory."""
 
     var band: Band
     var max_cost: Int
-    var extended: Bool
+    var eqx: Bool
     var ties: Ties
     var max_memory: Int
 
@@ -205,7 +205,7 @@ def align_into(
                 mode,
                 band=asked.band,
                 ties=asked.ties,
-                extended=asked.extended,
+                eqx=asked.eqx,
                 max_memory=asked.max_memory,
             )
         else:
@@ -217,7 +217,7 @@ def align_into(
                 max_cost=asked.max_cost,
                 band=asked.band,
                 ties=asked.ties,
-                extended=asked.extended,
+                eqx=asked.eqx,
                 max_memory=asked.max_memory,
             )
             if not found:
@@ -255,7 +255,7 @@ def dinara_distance(
 ) abi("C") -> Int:
     """The least cost of aligning the query to the reference (see `distance`), or a negative code:
     `ABOVE_MAX` when it passes a `max_cost` of zero or more, `OUTSIDE_BAND` when no alignment fits the
-    band, or under a cap `ABOVE_MAX` again. The options' `extended` and `right_ties` change nothing."""
+    band, or under a cap `ABOVE_MAX` again. The options' `eqx` and `right_ties` change nothing."""
     try:
         return distance_code(
             reference, reference_length, query, query_length, costs_of(costs), mode_of(mode), options_of(options)
@@ -323,8 +323,8 @@ def dinara_score(
         return failure(error)
 
 
-@export("dinara_local_scores_of")
-def dinara_local_scores_of(
+@export("dinara_local_scores")
+def dinara_local_scores(
     reference: ImmPointer[UInt8, MutAnyOrigin],
     reference_length: Int,
     query: ImmPointer[UInt8, MutAnyOrigin],
@@ -335,7 +335,7 @@ def dinara_local_scores_of(
     found: MutPointer[Int, MutAnyOrigin],
 ) abi("C") -> Int:
     """A local alignment's best score, its end and SSW's second best (see `local_scores`) into
-    `found`, a `dinara_local_scores`: zero, or a negative code."""
+    `found`, a `dinara_local_scores_result`: zero, or a negative code."""
     if not plain_bytes(reference, reference_length) or not plain_bytes(query, query_length):
         return UNSUPPORTED_SYMBOLS
     try:
@@ -494,11 +494,11 @@ def dinara_free(text: OptionalPointer[UInt8, MutAnyOrigin]) abi("C"):
 
 @export("dinara_search")
 def dinara_search(
-    query: ImmPointer[UInt8, MutAnyOrigin],
-    query_length: Int,
     count: Int,
     references: CSequences,
     reference_lengths: CInts,
+    query: ImmPointer[UInt8, MutAnyOrigin],
+    query_length: Int,
     costs: OptionalPointer[Int, MutAnyOrigin],
     mode: OptionalPointer[Int, MutAnyOrigin],
     options: OptionalPointer[Int, MutAnyOrigin],
@@ -520,8 +520,8 @@ def dinara_search(
                 return UNSUPPORTED_SYMBOLS
             texts.append(sequence(references[unsafe_offset=index], reference_lengths[unsafe_offset=index]))
         var hits = search(
-            sequence(query, query_length),
             texts,
+            sequence(query, query_length),
             costs_of(costs),
             mode_of(mode),
             best=Optional[Int](best) if best > 0 else None,

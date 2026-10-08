@@ -64,7 +64,7 @@ def main() -> None:
     assert da.distance("ACGTACGTTTGCA", "ACGTCGTTTTGCA") == 2
     found = da.align("ACGTACGTTTGCA", "ACGTCGTTTTGCA")
     assert (found.cost, found.cigar) == (2, "4=1D2=1I6=")
-    assert da.align("ACGTACGTTTGCA", "ACGTCGTTTTGCA", extended=False).cigar == "4M1D2M1I6M"
+    assert da.align("ACGTACGTTTGCA", "ACGTCGTTTTGCA", eqx=False).cigar == "4M1D2M1I6M"
     assert da.align("ACGTTTTACG", "ACGTTTACG", da.Costs.affine(4, 6, 2)).cigar == "3=1D6="
     assert da.align("ACGTTTTACG", "ACGTTTACG", da.Costs.affine(4, 6, 2), ties="right").cigar == "6=1D3="
     assert da.align(b"ACGT", b"ACGT").cigar == "4="
@@ -130,7 +130,7 @@ def main() -> None:
         ]
     capped = da.distances(references, queries, affine, max_cost=30)
     assert all((c is None) == (da.distance(r, q, affine) > 30) for c, r, q in zip(capped, references, queries))
-    hits = da.search("ACGTACGTACGT", ["TTTT", "ACGTACGTACGT", "ACGTTCGTACGT"], affine, da.Mode.local(2), best=2, aligned=True)
+    hits = da.search(["TTTT", "ACGTACGTACGT", "ACGTTCGTACGT"], "ACGTACGTACGT", affine, da.Mode.local(2), best=2, aligned=True)
     assert [hit.index for hit in hits] == [1, 2] and hits[0].score == 24 and hits[0].alignment.cigar == "12="
     print(f"Python package: every check passed, {tried} examples of its own among them")
 

@@ -217,7 +217,7 @@ def main() raises:
                     wrong += 1
             else:
                 var scoring = Scoring.uniform(mode.reward, -mode.mismatch, -mode.opening, -mode.extension)
-                var aligned = align(first, second, scoring, Mode.GLOBAL, Placement.on_cpu(1))
+                var aligned = align(first, second, scoring, Mode.GLOBAL, placement=Placement.on_cpu(1))
                 score = Int(aligned.score)
                 var rows = aligned.gapped(first, second)
                 cigar = rows_cigar(rows[0], rows[1])

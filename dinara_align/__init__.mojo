@@ -84,20 +84,11 @@ Ported from AffineGaps by Ash Vardanian, https://github.com/unum-science/AffineG
 the edit distance from A*PA by Ragnar Groot Koerkamp and Pesho Ivanov (see NOTICE).
 """
 
-from .alignment import colorize
 from .api import align, alignments, distance, distances, local_scores, score, scores, search
-from .common import Device, DeviceScope, GpuSpecs, Placement, hardware_threads
+from .common import Device, Placement
 from .errors import AlignmentError, ErrorKind
 from .gap_affine import DEFAULT_MAX_MEMORY
 from .modes import AlignedCounts, Alignment, Anchor, Band, Costs, Mode, Ties
 from .scored import LocalScores
 from .search import Hit
-from .scoring import (
-    DEFAULT_GAP_EXTENSION,
-    DEFAULT_GAP_OPENING,
-    DEFAULT_MATCH,
-    DEFAULT_MISMATCH,
-    DNA_ALPHABET,
-    STORED_MATRIX_BUDGET,
-    Scoring,
-)
+from .scoring import Scoring
