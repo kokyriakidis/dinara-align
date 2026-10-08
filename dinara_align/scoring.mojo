@@ -1,3 +1,8 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+# Derived from AffineGaps (https://github.com/unum-science/AffineGaps), Copyright Ash Vardanian, under the
+# Apache License, Version 2.0: see LICENSES/Apache-2.0.txt and NOTICE.
 """
 Alignment under a `Scoring`, an alphabet's substitution table and affine gap scores, which a score
 maximizes: Gotoh's Needleman-Wunsch and Smith-Waterman, on the host or the device, each pair served by

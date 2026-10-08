@@ -1,3 +1,5 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """
 dinara-align's side of `local_bench.py`: local alignment, `Mode.local(2)`, overlap alignment,
 `Mode.overlap(2)`, or a query placed whole in a reference, `Mode.INFIX.with_match_score(2)`, under

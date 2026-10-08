@@ -1,3 +1,5 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """
 Alignment under gap-affine costs by wavefront, as WFA computes it: every `Costs` in every `Mode` but a
 local one, and a `Scoring`'s global score when its table holds one match score and one mismatch score.

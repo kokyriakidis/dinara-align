@@ -2,7 +2,7 @@
 authors = ["Konstantinos Kyriakidis <kkyriaki@ucsc.edu>"]
 channels = ["conda-forge", "https://conda.modular.com/max"]
 description = "Exact pairwise sequence alignment in Mojo: edit distance after A*PA2, gap-affine and two-piece wavefront after BiWFA, local, semi-global and extension alignment, on CPU and GPU"
-license = "Apache-2.0"
+license = "MPL-2.0"
 license-file = "LICENSE"
 name = "dinara-align"
 platforms = ["linux-64", "linux-aarch64", "osx-arm64"]

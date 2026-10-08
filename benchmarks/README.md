@@ -23,7 +23,7 @@ Every rival is cloned at a pinned commit into `.cache/` and built there; nothing
 
 | Tool                                                                            | Commit    | License    | What it is run on                                                          |
 | :------------------------------------------------------------------------------ | :-------- | :--------- | :------------------------------------------------------------------------- |
-| dinara-align                                                                    | this tree | Apache-2.0 | the read batches and the affine pairs, on the CPU and on the GPU where one answers |
+| dinara-align                                                                    | this tree | MPL-2.0    | the read batches and the affine pairs, on the CPU and on the GPU where one answers |
 | dinara-align (bit-parallel, …)                                                  | this tree | MPL-2.0    | the edit-distance workloads: `distance` and `align` at unit costs, ported from A\*PA2-simple, on one thread and on all of them |
 | [hyalite](https://github.com/Psy-Fer/hyalite)                                   | `0189bcb` | MIT        | the read batches and the affine pairs, global mode (`Mode::Nw`), one CPU thread with its NEON or AVX2 kernels |
 | [A\*PA, A\*PA2](https://github.com/RagnarGrootKoerkamp/astar-pairwise-aligner) | `bf2e14e` | MPL-2.0    | the edit-distance workloads, because it computes edit distance and nothing else |

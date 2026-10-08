@@ -1,3 +1,8 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+# Derived from AffineGaps (https://github.com/unum-science/AffineGaps), Copyright Ash Vardanian, under the
+# Apache License, Version 2.0: see LICENSES/Apache-2.0.txt and NOTICE.
 """The one error type this package raises, so every fallible entry point declares the same one.
 
 Mojo allows at most one error type per function and never widens a typed `raises` into a plain

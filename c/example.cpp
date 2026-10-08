@@ -1,3 +1,5 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+ * MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 // dinara-align from C++: the edit distance and an optimal alignment's CIGAR for two sequences, and the
 // query placed inside the reference under gap-affine costs.
 //

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """Regenerates the ported kernels from an AffineGaps checkout, so a later upstream fix can be pulled in.
 
     git clone https://github.com/unum-science/AffineGaps /tmp/AffineGaps
@@ -23,6 +25,15 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 PACKAGE = ROOT / "dinara_align"
 
+
+HEADER = (
+    "# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the\n"
+    "# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.\n"
+    "#\n"
+    "# Derived from AffineGaps (https://github.com/unum-science/AffineGaps), Copyright Ash Vardanian, under the\n"
+    "# Apache License, Version 2.0: see LICENSES/Apache-2.0.txt and NOTICE.\n"
+)
+"""The license header every generated module starts with: MPL-2.0, over code derived from Apache-2.0."""
 
 def cut(text: str, start: str, end: str) -> str:
     """Removes everything from `start` up to, but not including, `end`."""
@@ -275,7 +286,7 @@ def main(upstream: pathlib.Path) -> None:
     """Ports the three modules from the affine-gaps checkout at `upstream` into the package, then formats them."""
     for name, port in (("alignment", port_alignment), ("common", port_common), ("errors", port_errors)):
         source = (upstream / f"{name}.mojo").read_text()
-        (PACKAGE / f"{name}.mojo").write_text(migrate(port(source)))
+        (PACKAGE / f"{name}.mojo").write_text(HEADER + migrate(port(source)))
     for name, starts in unused_literals().items():
         hoist(PACKAGE / pathlib.Path(name).name, starts)
     # Last, so a regenerated file differs from the committed one only where upstream changed.

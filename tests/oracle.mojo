@@ -1,3 +1,5 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """
 The full matrix as an oracle: Gotoh's recurrence over every cell, written for clarity and sharing no
 code with the library, under the most general model any entry point takes, and a check that an

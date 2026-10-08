@@ -1,3 +1,5 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """
 The dinara-align side of the comparison: every workload in the data directory, on the host and,
 where an accelerator answers, on the device.

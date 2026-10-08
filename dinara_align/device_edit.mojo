@@ -1,3 +1,5 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """
 The edit distance of a batch of pairs on the GPU: one thread a pair, each running Myers' bit-vector
 recurrence over its pair, as Hyyrö's blocks and Edlib's `calculateBlock` write it for patterns longer

@@ -1,3 +1,5 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """
 The Python extension under the `dinara_align` package (see `dinara_align/__init__.py`): each function
 takes the sequences as `str` and the costs, the mode and the options as tuples of integers, in the C

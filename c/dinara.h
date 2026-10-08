@@ -1,3 +1,6 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+ * MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
 /*
  * dinara-align from C and C++: the least cost of aligning a query to a reference, and an optimal
  * alignment as a CIGAR, under unit costs (the edit distance), gap-affine or two-piece gap-affine costs,

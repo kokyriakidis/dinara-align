@@ -1,3 +1,5 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """
 The C API of dinara-align: the least cost of aligning a query to a reference, and an optimal alignment
 as a CIGAR, under any `Costs` and `Mode`, for C, C++ and any language with a C foreign-function

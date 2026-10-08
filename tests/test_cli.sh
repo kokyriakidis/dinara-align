@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
 # The command-line aligner (see cli/dinara_align_cli.mojo) on a small reference and reads: each output
 # format, both strands, a cap, and a refusal.
 #

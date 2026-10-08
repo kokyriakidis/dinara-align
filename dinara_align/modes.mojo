@@ -1,3 +1,5 @@
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """
 What an alignment is asked for: `Costs`, the price of each edit, and `Mode`, which ends of the two
 sequences it must reach; `Band` and `Ties` narrow and choose among the alignments, and `Alignment` is

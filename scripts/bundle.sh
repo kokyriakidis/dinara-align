@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
 # Builds a Mojo program for a baseline CPU and puts beside it the runtime libraries it loads from the pixi
 # environment, so the folder runs on a machine with neither pixi nor Mojo:
 #
@@ -91,6 +94,10 @@ if [ -n "$left" ]; then
     echo "$left" >&2
     exit 1
 fi
+# The licenses travel with every bundle: MPL-2.0, and Apache-2.0 for the parts taken from AffineGaps (see NOTICE).
+cp "$root/LICENSE" "$root/NOTICE" "$out/"
+mkdir -p "$out/LICENSES"
+cp "$root/LICENSES/Apache-2.0.txt" "$out/LICENSES/"
 runtime=$(ls "$out" | grep -c "^lib" || true)
 $library && runtime=$((runtime - 1))
 echo "$out: $file for $cpu with $runtime runtime libraries, $(du -sh "$out" | cut -f1)"

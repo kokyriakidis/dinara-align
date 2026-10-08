@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """Packs build/python/dinara_align (see `pixi run build-python`) into a wheel in build/dist, for `pip
 install`: the package's Python, its extension and the Mojo runtime libraries beside it.
 
@@ -66,7 +68,8 @@ def main() -> None:
     records = []
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(PACKAGE.iterdir()):
-            if path.name == "__pycache__":
+            # The licenses go in the metadata below, where installers look for them.
+            if path.name in ("__pycache__", "LICENSE", "NOTICE", "LICENSES"):
                 continue
             data = path.read_bytes()
             name = f"dinara_align/{path.name}"
@@ -75,6 +78,12 @@ def main() -> None:
             info_entry.external_attr = (0o755 if path.suffix in (".so", ".dylib") else 0o644) << 16
             info_entry.compress_type = zipfile.ZIP_DEFLATED
             archive.writestr(info_entry, data)
+            records.append(f"{name},{digest(data)},{len(data)}")
+        # The licenses, where installers look for them: MPL-2.0, and Apache-2.0 for the parts from AffineGaps.
+        for source in ("LICENSE", "NOTICE", "LICENSES/Apache-2.0.txt"):
+            data = (ROOT / source).read_bytes()
+            name = f"{info}/licenses/{source}"
+            archive.writestr(name, data)
             records.append(f"{name},{digest(data)},{len(data)}")
         for name, text in ((f"{info}/METADATA", metadata), (f"{info}/WHEEL", wheel)):
             archive.writestr(name, text)

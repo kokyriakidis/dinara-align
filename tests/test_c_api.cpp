@@ -1,3 +1,5 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+ * MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 // The C API through its C++ wrapper (see c/dinara.h), and once through C's own structs: known distances
 // and CIGARs, empty sequences, symbols past ACGT, every mode, long pairs whose CIGAR spells the distance,
 // four threads at once, and batches.

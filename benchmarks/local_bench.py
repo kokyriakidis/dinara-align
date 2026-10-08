@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
+# MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """Times dinara-align's local, overlap and scored infix alignment against SSW, parasail, abPOA and hyalite.
 
     pixi run bench-local     # builds the rivals the first time, a few minutes; then about a minute
