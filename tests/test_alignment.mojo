@@ -2611,8 +2611,8 @@ def test_dear_gaps_cost_what_the_matrix_says() raises:
 
 def test_lane_batches_match_single_pairs() raises:
     """A batch whose pairs go many at once into the lanes of a register (see `lanes`) gives each the
-    cost a call of its own gives, under a band, under a cap, both and neither: unit, affine and linear
-    costs and deletions priced apart, pairs of every length up to a few hundred, close, divergent and
+    cost a call of its own gives, under a band, under a cap, both and neither: unit, affine, linear and
+    two-piece costs and deletions priced apart, pairs of every length up to a few hundred, close, divergent and
     unrelated, empty sides, and one too long for 16 bits among them, which goes the other way."""
     seed(29)
     var references = List[String]()
@@ -2631,6 +2631,7 @@ def test_lane_batches_match_single_pairs() raises:
         Costs.affine(4, 6, 2),
         Costs.affine(1, 2, 1).with_deletions(3, 2),
         Costs.linear(2, 3),
+        Costs.two_piece(4, 6, 2, 24, 1),
     ]
     var bands: List[Band] = [Band(), Band.around(6), Band(-3, 40)]
     for costs in all_costs:

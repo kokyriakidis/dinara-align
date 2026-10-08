@@ -96,45 +96,96 @@ it stays inside 16 bits."""
 
 @fieldwise_init
 struct LaneCosts(ImplicitlyCopyable, TrivialRegisterPassable):
-    """One gap piece's costs either way, and a mismatch's: a deletion is a run of reference letters
-    alone, down the rows; an insertion a run of query letters alone, across."""
+    """One or two gap pieces' costs either way, and a mismatch's: a deletion is a run of reference letters
+    alone, down the rows; an insertion a run of query letters alone, across. A gap costs the cheaper of
+    its direction's pieces; with one piece the second's fields are unused."""
 
     var mismatch: Int
     var deletion_opening: Int
     var deletion_extension: Int
     var insertion_opening: Int
     var insertion_extension: Int
+    var pieces: Int
+    var deletion_opening2: Int
+    var deletion_extension2: Int
+    var insertion_opening2: Int
+    var insertion_extension2: Int
+
+    @staticmethod
+    def one_piece(
+        mismatch: Int, deletion_opening: Int, deletion_extension: Int, insertion_opening: Int, insertion_extension: Int
+    ) -> Self:
+        """Costs of one gap piece."""
+        return Self(
+            mismatch, deletion_opening, deletion_extension, insertion_opening, insertion_extension, 1, 0, 0, 0, 0
+        )
 
     @staticmethod
     def of(costs: Costs, mode: Mode) -> Optional[Self]:
-        """The lanes' costs for `costs`, or None where they do not serve: free ends, a match's reward, or two
-        pieces."""
-        if not mode.is_global() or mode.is_scored() or costs.pieces() != 1:
+        """The lanes' costs for `costs`, or None where they do not serve: free ends or a match's reward."""
+        if not mode.is_global() or mode.is_scored():
             return None
-        return Self(costs.mismatch, costs.deletion_opening, costs.deletion_extension, costs.opening, costs.extension)
+        return Self(
+            costs.mismatch,
+            costs.deletion_opening,
+            costs.deletion_extension,
+            costs.opening,
+            costs.extension,
+            costs.pieces(),
+            costs.deletion_opening2,
+            costs.deletion_extension2,
+            costs.opening2,
+            costs.extension2,
+        )
 
     @always_inline
     def deleted(self, letters: Int) -> Int:
-        """A deletion of `letters` reference letters, nothing for none."""
-        return 0 if letters <= 0 else self.deletion_opening + letters * self.deletion_extension
+        """A deletion of `letters` reference letters at its cheaper piece, nothing for none."""
+        if letters <= 0:
+            return 0
+        var cost = self.deletion_opening + letters * self.deletion_extension
+        if self.pieces == 2:
+            cost = min(cost, self.deletion_opening2 + letters * self.deletion_extension2)
+        return cost
 
     @always_inline
     def inserted(self, letters: Int) -> Int:
-        """An insertion of `letters` query letters, nothing for none."""
-        return 0 if letters <= 0 else self.insertion_opening + letters * self.insertion_extension
+        """An insertion of `letters` query letters at its cheaper piece, nothing for none."""
+        if letters <= 0:
+            return 0
+        var cost = self.insertion_opening + letters * self.insertion_extension
+        if self.pieces == 2:
+            cost = min(cost, self.insertion_opening2 + letters * self.insertion_extension2)
+        return cost
+
+    def dearest_step(self) -> Int:
+        """The most any one step of the recurrence adds: a mismatch, or a gap's opening letter or a further one."""
+        var dearest = max(self.mismatch, self.deletion_opening + self.deletion_extension)
+        dearest = max(dearest, self.insertion_opening + self.insertion_extension)
+        if self.pieces == 2:
+            dearest = max(dearest, self.deletion_opening2 + self.deletion_extension2)
+            dearest = max(dearest, self.insertion_opening2 + self.insertion_extension2)
+        return dearest
 
     def fits_bytes(self) -> Bool:
         """Whether every step costs under a byte's 255, which a pair's lanes need to count anything."""
-        var dearest = max(
-            self.deletion_opening + self.deletion_extension, self.insertion_opening + self.insertion_extension
-        )
-        return max(dearest, self.mismatch) < 255
+        return self.dearest_step() < 255
 
     def fits(self, rows: Int, columns: Int) -> Bool:
-        """Whether a pair of `rows` reference letters and `columns` query letters stays inside 16 bits:
-        its dearest path, all gaps, plus an opening and a mismatch more, under `HELD`."""
-        var dearest = self.deleted(rows) + self.inserted(columns)
-        return dearest + max(self.deletion_opening, self.insertion_opening) + self.mismatch < HELD
+        """Whether a pair of `rows` reference letters and `columns` query letters stays inside 16 bits: a
+        run of every row and every column at each piece, and a step more, under `HELD`; a layer starting
+        from FAR grows no faster."""
+        var dearest = self.deletion_opening + rows * self.deletion_extension
+        dearest += self.insertion_opening + columns * self.insertion_extension
+        if self.pieces == 2:
+            dearest = max(
+                dearest,
+                self.deletion_opening2
+                + rows * self.deletion_extension2
+                + self.insertion_opening2
+                + columns * self.insertion_extension2,
+            )
+        return dearest + self.dearest_step() < HELD
 
     def off_band(self, diagonal: Int, end: Int) -> Int:
         """The least any path visiting `diagonal` costs, its end on diagonal `end`: a gap out to the
@@ -156,6 +207,8 @@ struct LaneSpace[value: DType](Movable):
     """Each lane's text whole, a lane after another, on its way to lying side by side."""
     var scores: List[SIMD[Self.value, lanes_of[Self.value]()]]
     var deletions: List[SIMD[Self.value, lanes_of[Self.value]()]]
+    var deletions2: List[SIMD[Self.value, lanes_of[Self.value]()]]
+    """The second gap piece's deletions, where the costs have one."""
     var members: List[Int]
     var retries: List[List[Int]]
     """The pairs its first bands did not prove, filed by the width of the band that will (see
@@ -167,6 +220,7 @@ struct LaneSpace[value: DType](Movable):
         self.staging = List[UInt8]()
         self.scores = List[SIMD[Self.value, lanes_of[Self.value]()]]()
         self.deletions = List[SIMD[Self.value, lanes_of[Self.value]()]]()
+        self.deletions2 = List[SIMD[Self.value, lanes_of[Self.value]()]]()
         self.members = List[Int]()
         self.retries = List[List[Int]]()
         for _ in range(BUCKETS):
@@ -237,6 +291,17 @@ def band_costs[
 ](references: T, queries: T, mut space: LaneSpace[value], low: Int, high: Int, costs: LaneCosts) -> SIMD[
     value, lanes_of[value]()
 ]:
+    """`band_costs` at the costs' own number of gap pieces."""
+    if costs.pieces == 2:
+        return pieced_band_costs[T, value, 2](references, queries, space, low, high, costs)
+    return pieced_band_costs[T, value, 1](references, queries, space, low, high, costs)
+
+
+def pieced_band_costs[
+    T: Texts, value: DType, pieces: Int
+](references: T, queries: T, mut space: LaneSpace[value], low: Int, high: Int, costs: LaneCosts) -> SIMD[
+    value, lanes_of[value]()
+]:
     """The least cost of each of `space.members`'s pairs over the paths on diagonals `low ..= high`,
     `far_of[value]()` or more for a pair none of whose paths stays on them, or, in a byte, whose cost
     reaches 255; a lane past the members holds nothing."""
@@ -276,6 +341,11 @@ def band_costs[
     for column in range(columns + 2):
         scores[unsafe_offset=column] = Lanes(FAR)
         deletions[unsafe_offset=column] = Lanes(FAR)
+    comptime if pieces == 2:
+        space.deletions2.resize(columns + 2, Lanes(FAR))
+        for column in range(columns + 2):
+            space.deletions2[column] = Lanes(FAR)
+    var deletions2 = space.deletions2.unsafe_ptr()
     # Row zero inside the band: an insertion of every column before.
     for column in range(max(low, 0), min(high, columns) + 1):
         scores[unsafe_offset=column] = Lanes(held(costs.inserted(column)))
@@ -290,6 +360,10 @@ def band_costs[
     var delete_extend = Lanes(held(costs.deletion_extension))
     var insert_open = Lanes(held(costs.insertion_opening + costs.insertion_extension))
     var insert_extend = Lanes(held(costs.insertion_extension))
+    var delete_open2 = Lanes(held(costs.deletion_opening2 + costs.deletion_extension2))
+    var delete_extend2 = Lanes(held(costs.deletion_extension2))
+    var insert_open2 = Lanes(held(costs.insertion_opening2 + costs.insertion_extension2))
+    var insert_extend2 = Lanes(held(costs.insertion_extension2))
     var row_source = space.row_letters.unsafe_ptr()
     var column_source = space.column_letters.unsafe_ptr()
     for row in range(1, rows + 1):
@@ -312,13 +386,21 @@ def band_costs[
             diagonal = scores[unsafe_offset=first - 1]
             scores[unsafe_offset=first - 1] = Lanes(FAR)
             deletions[unsafe_offset=first - 1] = Lanes(FAR)
+            comptime if pieces == 2:
+                deletions2[unsafe_offset=first - 1] = Lanes(FAR)
         var insertion = Lanes(FAR)
+        var insertion2 = Lanes(FAR)
         for column in range(first, last + 1):
             var other = column_source.unsafe_offset((column - 1) * WIDTH).unsafe_load[width=WIDTH]()
             var above = scores[unsafe_offset=column]
             var deletion = min(added(above, delete_open), added(deletions[unsafe_offset=column], delete_extend))
             insertion = min(added(left, insert_open), added(insertion, insert_extend))
             var score = min(min(added(diagonal, letter.eq(other).select(Lanes(0), mismatch)), deletion), insertion)
+            comptime if pieces == 2:
+                var deletion2 = min(added(above, delete_open2), added(deletions2[unsafe_offset=column], delete_extend2))
+                insertion2 = min(added(left, insert_open2), added(insertion2, insert_extend2))
+                score = min(score, min(deletion2, insertion2))
+                deletions2[unsafe_offset=column] = deletion2
             deletions[unsafe_offset=column] = deletion
             scores[unsafe_offset=column] = score
             diagonal = above

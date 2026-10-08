@@ -856,7 +856,7 @@ def scores_with[
             )
             if penalties:
                 var found = penalties.value()
-                var lane_costs = LaneCosts(
+                var lane_costs = LaneCosts.one_piece(
                     found.mismatch, found.opening, found.extension, found.opening, found.extension
                 )
                 settled = laned_scores(firsts, seconds, scoring.alphabet, lane_costs, found, resolved.threads, out)
