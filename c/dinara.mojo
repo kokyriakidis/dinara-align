@@ -35,7 +35,7 @@ from dinara_align import (
     score,
     search,
 )
-from dinara_align.common import hardware_threads
+from dinara_align.common import hardware_threads, next_share
 
 comptime UNSUPPORTED_SYMBOLS = -1
 """A 0xFE or 0xFF byte, which the wavefront's sentinels are and UTF-8 never holds."""
@@ -408,24 +408,25 @@ def dinara_distances(
     if pairs <= 0:
         return 0
     var taken = Atomic[Int64](0)
+    var workers = workers_for(pairs, threads)
 
     def work(slot: Int) {mut taken, imm}:
-        """Takes the next pair not yet taken and writes its least cost or code, until none is left."""
+        """Takes the next pairs not yet taken and writes each one's least cost or code, until none is left."""
         while True:
-            var index = Int(taken.fetch_add(1))
-            if index >= pairs:
+            var share = next_share(taken, pairs, workers)
+            if share[0] >= pairs:
                 return
-            results[unsafe_offset=index] = distance_code(
-                references[unsafe_offset=index],
-                reference_lengths[unsafe_offset=index],
-                queries[unsafe_offset=index],
-                query_lengths[unsafe_offset=index],
-                wanted_costs,
-                wanted_mode,
-                asked,
-            )
+            for index in range(share[0], share[1]):
+                results[unsafe_offset=index] = distance_code(
+                    references[unsafe_offset=index],
+                    reference_lengths[unsafe_offset=index],
+                    queries[unsafe_offset=index],
+                    query_lengths[unsafe_offset=index],
+                    wanted_costs,
+                    wanted_mode,
+                    asked,
+                )
 
-    var workers = workers_for(pairs, threads)
     parallelize(work, workers, workers)
     return 0
 
@@ -459,25 +460,26 @@ def dinara_alignments(
     if pairs <= 0:
         return 0
     var taken = Atomic[Int64](0)
+    var workers = workers_for(pairs, threads)
 
     def work(slot: Int) {mut taken, imm}:
-        """Takes the next pair not yet taken and writes its alignment and status, until none is left."""
+        """Takes the next pairs not yet taken and writes each one's alignment and status, until none is left."""
         while True:
-            var index = Int(taken.fetch_add(1))
-            if index >= pairs:
+            var share = next_share(taken, pairs, workers)
+            if share[0] >= pairs:
                 return
-            statuses[unsafe_offset=index] = align_into(
-                references[unsafe_offset=index],
-                reference_lengths[unsafe_offset=index],
-                queries[unsafe_offset=index],
-                query_lengths[unsafe_offset=index],
-                wanted_costs,
-                wanted_mode,
-                asked,
-                alignments.unsafe_offset(index * ALIGNMENT_FIELDS),
-            )
+            for index in range(share[0], share[1]):
+                statuses[unsafe_offset=index] = align_into(
+                    references[unsafe_offset=index],
+                    reference_lengths[unsafe_offset=index],
+                    queries[unsafe_offset=index],
+                    query_lengths[unsafe_offset=index],
+                    wanted_costs,
+                    wanted_mode,
+                    asked,
+                    alignments.unsafe_offset(index * ALIGNMENT_FIELDS),
+                )
 
-    var workers = workers_for(pairs, threads)
     parallelize(work, workers, workers)
     return 0
 

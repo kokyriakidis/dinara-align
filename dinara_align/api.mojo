@@ -21,7 +21,7 @@ from std.atomic import Atomic
 from max.algorithm import parallelize
 
 from .alignment import AlignmentMode, GappedAlignment
-from .common import Device, DeviceScope, Placement, hardware_threads
+from .common import Device, DeviceScope, Placement, hardware_threads, next_share
 from .device_edit import MAX_PATTERN_WORDS, device_edit_distances
 from .edit_distance import edit_cigar, edit_distance
 from .edit_search import edit_search
@@ -41,6 +41,7 @@ from .scored import (
 from .gap_affine import (
     AffineCigar,
     DEFAULT_MAX_MEMORY,
+    DistanceSpace,
     EndsFree,
     KEPT_BYTES,
     Spanned,
@@ -266,6 +267,15 @@ def cost_within(
     reference: String, query: String, costs: Costs, mode: Mode, band: Band, max_cost: Int
 ) raises AlignmentError -> Optional[Int]:
     """The least cost, or None when it would pass `max_cost` (`Int.MAX` for no cap) or none fits `band`."""
+    var space = DistanceSpace()
+    return cost_within(reference, query, costs, mode, band, max_cost, space)
+
+
+def cost_within(
+    reference: String, query: String, costs: Costs, mode: Mode, band: Band, max_cost: Int, mut space: DistanceSpace
+) raises AlignmentError -> Optional[Int]:
+    """`cost_within` through `space`'s searches, which a batch's worker keeps from pair to pair (see
+    `gap_affine.DistanceSpace`)."""
     if mode.is_scored():
         raise AlignmentError(
             ErrorKind.INVALID_ARGUMENT, "a mode with a match score maximizes a score, which `align` finds"
@@ -289,9 +299,9 @@ def cost_within(
     var ceiling = max_cost // penalties.scale
     var cost: Int
     if costs.pieces() == 2:
-        cost = wavefront_distance[2](reference.as_bytes(), query.as_bytes(), penalties, ceiling, ends, band)
+        cost = wavefront_distance[2](reference.as_bytes(), query.as_bytes(), penalties, ceiling, space, ends, band)
     else:
-        cost = wavefront_distance[1](reference.as_bytes(), query.as_bytes(), penalties, ceiling, ends, band)
+        cost = wavefront_distance[1](reference.as_bytes(), query.as_bytes(), penalties, ceiling, space, ends, band)
     if cost < 0:
         return None
     return cost * penalties.scale
@@ -771,17 +781,23 @@ def capped_distances(
         imm mode,
         imm band,
         imm max_cost,
+        imm workers,
     }:
-        """Takes the next pair in `order` until none is left, storing its capped cost or flagging that it raised."""
+        """Takes the next pairs in `order` until none is left, storing each one's capped cost or flagging that
+        it raised, its searches kept from pair to pair."""
+        var space = DistanceSpace()
         while True:
-            var dealt = Int(taken.fetch_add(1))
-            if dealt >= pairs:
+            var share = next_share(taken, pairs, workers)
+            if share[0] >= pairs:
                 return
-            var index = order[dealt]
-            try:
-                out[unsafe_offset=index] = cost_within(references[index], queries[index], costs, mode, band, max_cost)
-            except:
-                flags[unsafe_offset=index] = True
+            for dealt in range(share[0], share[1]):
+                var index = order[dealt]
+                try:
+                    out[unsafe_offset=index] = cost_within(
+                        references[index], queries[index], costs, mode, band, max_cost, space
+                    )
+                except:
+                    flags[unsafe_offset=index] = True
 
     parallelize(distance_worker, min(workers, pairs), min(workers, pairs))
     for index in range(pairs):
@@ -879,20 +895,22 @@ def capped_alignments(
         imm ties,
         imm eqx,
         imm limit,
+        imm workers,
     }:
-        """Takes the next pair in `order` until none is left, storing its capped alignment or flagging that it
-        raised."""
+        """Takes the next pairs in `order` until none is left, storing each one's capped alignment or flagging
+        that it raised."""
         while True:
-            var dealt = Int(taken.fetch_add(1))
-            if dealt >= pairs:
+            var share = next_share(taken, pairs, workers)
+            if share[0] >= pairs:
                 return
-            var index = order[dealt]
-            try:
-                out[unsafe_offset=index] = aligned_within(
-                    references[index], queries[index], costs, mode, band, max_cost, ties, eqx, limit
-                )
-            except:
-                flags[unsafe_offset=index] = True
+            for dealt in range(share[0], share[1]):
+                var index = order[dealt]
+                try:
+                    out[unsafe_offset=index] = aligned_within(
+                        references[index], queries[index], costs, mode, band, max_cost, ties, eqx, limit
+                    )
+                except:
+                    flags[unsafe_offset=index] = True
 
     parallelize(alignment_worker, min(workers, pairs), min(workers, pairs))
     for index in range(pairs):
@@ -948,15 +966,17 @@ def search(
         var taken = Atomic[Int64](0)
 
         def work(slot: Int) {mut taken, imm}:
-            """Scores the next unclaimed reference against the query until none is left, flagging any that raised."""
+            """Scores the next unclaimed references against the query until none is left, flagging any that
+            raised."""
             while True:
-                var index = Int(taken.fetch_add(1))
-                if index >= count:
+                var share = next_share(taken, count, workers)
+                if share[0] >= count:
                     return
-                try:
-                    out[unsafe_offset=index] = score(references[index], query, costs, mode)
-                except:
-                    flags[unsafe_offset=index] = True
+                for index in range(share[0], share[1]):
+                    try:
+                        out[unsafe_offset=index] = score(references[index], query, costs, mode)
+                    except:
+                        flags[unsafe_offset=index] = True
 
         parallelize(work, min(workers, max(count, 1)), min(workers, max(count, 1)))
         for index in range(count):

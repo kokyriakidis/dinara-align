@@ -116,8 +116,9 @@ def generate() -> None:
     write("extension-bonus", bonus)
 
 
-def build_rivals() -> Path:
-    """The C++ driver over Edlib, WFA2-lib, parasail and SSW, and on x86 KSW2."""
+def build_rivals(driver: Path = HERE / "modes" / "rivals.cpp", name: str = "rivals", extra: list = []) -> Path:
+    """A C++ driver, `driver`, over Edlib, WFA2-lib, parasail and SSW, and on x86 KSW2, built as `name` for the
+    chosen CPU with `extra` flags besides: by default this benchmark's own."""
     edlib = fetch("edlib")
     wfa = fetch("WFA2-lib")
     parasail = fetch("parasail")
@@ -139,8 +140,8 @@ def build_rivals() -> Path:
         subprocess.run(["make", "setup", "lib_wfa", f"CC_FLAGS=-Wall -fPIE -O3 {c_cpu_flag()}"], cwd=wfa, check=True, capture_output=True)
         (wfa / "lib" / "libwfa.a").rename(wfa_library)
     BUILD.mkdir(parents=True, exist_ok=True)
-    binary = BUILD / f"rivals-{run.CPU}"
-    flags = ["-O3", c_cpu_flag()]
+    binary = BUILD / f"{name}-{run.CPU}"
+    flags = ["-O3", c_cpu_flag(), *extra]
     sources = [str(ssw / "src" / "ssw.c")]
     defines = []
     if not run.arm():
@@ -155,7 +156,7 @@ def build_rivals() -> Path:
     subprocess.run(
         [
             "c++", "-std=c++17", *flags, *defines,
-            str(HERE / "modes" / "rivals.cpp"), str(edlib / "edlib" / "src" / "edlib.cpp"), *objects,
+            str(driver), str(edlib / "edlib" / "src" / "edlib.cpp"), *objects,
             f"-I{edlib / 'edlib' / 'include'}", f"-I{wfa}", f"-I{ssw / 'src'}", f"-I{parasail}", f"-I{parasail_build}",
             str(wfa_library), str(parasail_build / "libparasail.a"),
             "-lz", "-lm", "-lpthread", "-o", str(binary),

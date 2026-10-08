@@ -2560,6 +2560,35 @@ def test_sam_fields_describe_the_alignment() raises:
         assert_equal(rebuilt_reference(piece, found.cigar, found.mismatch_string(reference, query)), part)
 
 
+def test_batches_reuse_their_searches_cleanly() raises:
+    """A batch's worker keeps its searches from pair to pair (see `gap_affine.DistanceSpace`), so a pair
+    must never see the last one's state: long pairs after short and short after long, identical and
+    unrelated, an empty side, under one and two gap pieces and deletions priced apart, globally and with
+    free ends, each pair's batch cost the one a call of its own gives."""
+    seed(91)
+    var references = List[String]()
+    var queries = List[String]()
+    for trial in range(90):
+        var length = [0, 3, 40, 600, 12, 250][trial % 6]
+        var reference = random_sequence(length, length, DNA_ALPHABET)
+        references.append(reference)
+        if trial % 7 == 0:
+            queries.append(random_sequence(0, 300, DNA_ALPHABET))
+        else:
+            queries.append(mutated(reference, [0.0, 0.01, 0.1, 0.4][trial % 4], 9))
+    var all_costs: List[Costs] = [
+        Costs.affine(4, 6, 2),
+        Costs.two_piece(4, 6, 2, 24, 1),
+        Costs.affine(1, 2, 1).with_deletions(3, 2),
+    ]
+    for costs in all_costs:
+        for mode in [Mode.GLOBAL, Mode.INFIX]:
+            for threads in [1, 4]:
+                var found = distances(references, queries, costs, mode, threads=threads)
+                for index in range(len(references)):
+                    assert_equal(found[index], distance(references[index], queries[index], costs, mode))
+
+
 def test_capped_batches_match_single_pairs() raises:
     """A batch under a cost cap is each pair's capped `distance` and `align`, None past the cap, on any
     number of threads; with no cap a pair outside the band raises."""

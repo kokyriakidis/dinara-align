@@ -360,13 +360,22 @@ def wavefront_penalties(
 
 def padded(codes: Span[UInt8, _], sentinel: UInt8, reverse: Bool) -> List[UInt8]:
     """The codes, back to front with `reverse`, and `PADDING` sentinels after them."""
+    var out = List[UInt8]()
+    padded_into(out, codes, sentinel, reverse)
+    return out^
+
+
+def padded_into(mut out: List[UInt8], codes: Span[UInt8, _], sentinel: UInt8, reverse: Bool):
+    """`padded` written over `out`, whose memory is kept: the next pair of a batch allocates nothing."""
     var count = len(codes)
-    var out = List[UInt8](length=count + PADDING, fill=sentinel)
+    out.resize(unsafe_uninit_length=count + PADDING)
     var source = codes.unsafe_ptr()
     var destination = out.unsafe_ptr()
+    for index in range(count, count + PADDING):
+        destination[unsafe_offset=index] = sentinel
     if not reverse:
         Span(unsafe_ptr=destination, length=count).copy_from(codes)
-        return out^
+        return
     comptime CHUNK = 16
     var index = 0
     while index + CHUNK <= count:
@@ -376,7 +385,6 @@ def padded(codes: Span[UInt8, _], sentinel: UInt8, reverse: Bool) -> List[UInt8]
     while index < count:
         destination[unsafe_offset=index] = source[unsafe_offset=count - 1 - index]
         index += 1
-    return out^
 
 
 comptime ENTRY_MASK = UInt8(7)
@@ -541,6 +549,28 @@ struct Fronts[layers: Int](Movable):
         self.lows = List[Int](length=slots, fill=1)
         self.highs = List[Int](length=slots, fill=0)
         self.reach = List[Int](length=slots, fill=Int.MIN // 2)
+
+    def reset(mut self, slots: Int, columns: Int, rows: Int):
+        """As new for `slots` costs over a `columns` by `rows` matrix, the memory the rings held kept."""
+        self.slots = slots
+        self.current = 0
+        self.least = -rows - 2
+        self.most = columns + LANES + 2
+        self.width = 4 * LANES
+        self.stride = self.width + ROW_PADDING
+        self.base = self.width // 2
+        var size = Self.layers * slots * self.stride
+        self.buffer.resize(unsafe_uninit_length=size)
+        var cells = self.buffer.unsafe_ptr()
+        for index in range(size):
+            cells[unsafe_offset=index] = UNREACHED
+        self.lows.resize(unsafe_uninit_length=slots)
+        self.highs.resize(unsafe_uninit_length=slots)
+        self.reach.resize(unsafe_uninit_length=slots)
+        for slot in range(slots):
+            self.lows[slot] = 1
+            self.highs[slot] = 0
+            self.reach[slot] = Int.MIN // 2
 
     @inline(.always)
     def back(self, lag: Int) -> Int:
@@ -791,17 +821,47 @@ struct Wavefront[pieces: Int](Movable):
         unaligned at the origin's end for nothing, cost zero holds every diagonal such a start lies
         on, each from its cell on the first row or column, as WFA2-lib's ends-free alignment starts.
         Every front stays inside `band`, in this search's own diagonals."""
+        self.columns = 0
+        self.rows = 0
+        self.first = List[UInt8]()
+        self.second = List[UInt8]()
+        self.penalties = penalties
+        self.origin = origin
+        self.band_low = 0
+        self.band_high = 0
+        self.last_reached = 0
+        self.fronts = Fronts[layers_of[Self.pieces]()](penalties.window[Self.pieces]() + 1, len(first), len(second))
+        self.history = History(0)
+        self.cost = 0
+        self.work = 0
+        self.furthest = Int.MIN // 2
+        self.start(first, second, penalties, origin, record, reverse, free_first, free_second, band)
+
+    def start(
+        mut self,
+        first: Span[UInt8, _],
+        second: Span[UInt8, _],
+        penalties: Penalties,
+        origin: Int,
+        record: Bool,
+        reverse: Bool,
+        free_first: Int = 0,
+        free_second: Int = 0,
+        band: Band = Band(),
+    ):
+        """This search begun afresh over a new pair, as `__init__` begins one, the memory its sequences
+        and rings held kept for the next pair of a batch (see `DistanceSpace`)."""
         self.columns = len(first)
         self.rows = len(second)
-        self.first = padded(first, FIRST_SENTINEL, reverse)
-        self.second = padded(second, SECOND_SENTINEL, reverse)
+        padded_into(self.first, first, FIRST_SENTINEL, reverse)
+        padded_into(self.second, second, SECOND_SENTINEL, reverse)
         self.penalties = penalties
         self.origin = origin
         self.band_low = max(band.low, -self.rows)
         self.band_high = min(band.high, self.columns)
         self.last_reached = 0
         # Every source a cost reads lies at most this far back, and a slot is reused after as many.
-        self.fronts = Fronts[layers_of[Self.pieces]()](penalties.window[Self.pieces]() + 1, self.columns, self.rows)
+        self.fronts.reset(penalties.window[Self.pieces]() + 1, self.columns, self.rows)
         # A search keeps a few diagonals a letter on close pairs, so its lists rarely grow on them.
         self.history = History(
             min(HISTORY_KEPT_PER_LETTER * (self.columns + self.rows), HISTORY_LIMIT // 2) if record else 0
@@ -1297,30 +1357,84 @@ def wavefront_distance[
     """The least cost of a global alignment of two encoded sequences, the letters `ends_free` allows
     left unaligned for nothing, inside `band`, or -1 when every one costs more than `ceiling` or none
     stays inside: the two searches keeping only their rings, no fronts for a traceback."""
+    var space = DistanceSpace()
+    return wavefront_distance[pieces](first, second, penalties, ceiling, space, ends_free, band)
+
+
+def wavefront_distance[
+    pieces: Int
+](
+    first: Span[UInt8, _],
+    second: Span[UInt8, _],
+    penalties: Penalties,
+    ceiling: Int,
+    mut space: DistanceSpace,
+    ends_free: EndsFree = EndsFree(),
+    band: Band = Band(),
+) -> Int:
+    """`wavefront_distance` through `space`'s searches, begun afresh over this pair: a batch's worker
+    keeps one space for all its pairs, which then allocate nothing."""
     var columns = len(first)
     var rows = len(second)
     if columns == 0 or rows == 0:
         var letters = unpaid_letters(columns, rows, ends_free, band)
         var cost = gapped_cost[pieces](penalties, letters, rows == 0)
         return cost if letters >= 0 and cost <= ceiling else -1
-    var forward = Wavefront[pieces](
-        first, second, penalties, FREE_START, False, False, ends_free.first_begin, ends_free.second_begin, band
-    )
-    var backward = Wavefront[pieces](
-        first,
-        second,
-        penalties,
-        FREE_START,
-        False,
-        True,
-        ends_free.first_end,
-        ends_free.second_end,
-        band.mirrored(columns - rows),
-    )
+    comptime if pieces == 1:
+        return searched_distance[1](space.forward, space.backward, first, second, penalties, ceiling, ends_free, band)
+    else:
+        return searched_distance[2](space.forward2, space.backward2, first, second, penalties, ceiling, ends_free, band)
+
+
+def searched_distance[
+    pieces: Int
+](
+    mut forward: Optional[Wavefront[pieces]],
+    mut backward: Optional[Wavefront[pieces]],
+    first: Span[UInt8, _],
+    second: Span[UInt8, _],
+    penalties: Penalties,
+    ceiling: Int,
+    ends_free: EndsFree,
+    band: Band,
+) -> Int:
+    """The two searches of `wavefront_distance`, built the first time and begun afresh after."""
+    var mirrored = band.mirrored(len(first) - len(second))
+    if forward.__bool__() and backward.__bool__():
+        forward.value().start(
+            first, second, penalties, FREE_START, False, False, ends_free.first_begin, ends_free.second_begin, band
+        )
+        backward.value().start(
+            first, second, penalties, FREE_START, False, True, ends_free.first_end, ends_free.second_end, mirrored
+        )
+    else:
+        forward = Wavefront[pieces](
+            first, second, penalties, FREE_START, False, False, ends_free.first_begin, ends_free.second_begin, band
+        )
+        backward = Wavefront[pieces](
+            first, second, penalties, FREE_START, False, True, ends_free.first_end, ends_free.second_end, mirrored
+        )
     var best = Meeting.none()
-    if bidirectional[pieces, False](forward, backward, best, False, Int.MAX, ceiling) != MET:
+    if bidirectional[pieces, False](forward.value(), backward.value(), best, False, Int.MAX, ceiling) != MET:
         return -1
     return best.cost
+
+
+struct DistanceSpace(Movable):
+    """A batch worker's two searches of each gap shape, kept from pair to pair so a pair reuses the
+    memory the last one's sequences and rings took (see `Wavefront.start`)."""
+
+    var forward: Optional[Wavefront[1]]
+    var backward: Optional[Wavefront[1]]
+    var forward2: Optional[Wavefront[2]]
+    var backward2: Optional[Wavefront[2]]
+
+    def __init__(out self):
+        """No searches yet: the first pair builds them."""
+        self.forward = None
+        self.backward = None
+        self.forward2 = None
+        self.backward2 = None
 
 
 def unpaid_letters(columns: Int, rows: Int, ends_free: EndsFree, band: Band) -> Int:

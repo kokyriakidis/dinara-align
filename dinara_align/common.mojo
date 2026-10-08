@@ -10,6 +10,7 @@ Symbol codes, the device staging helpers, and the scoring records every entry po
 that presumes a rotating band or an affine gap belongs to `alignment.mojo`.
 """
 
+from std.atomic import Atomic
 from std.ffi import c_int, c_size_t, external_call
 from std.memory import stack_allocation
 from std.sys.info import CompilationTarget, has_apple_gpu_accelerator, num_logical_cores, size_of
@@ -65,6 +66,19 @@ struct Device(Equatable, ImplicitlyCopyable, TrivialRegisterPassable):
     """The serial reference sweep."""
     comptime GPU = Self(1)
     """The parallel sweep, on one accelerator."""
+
+
+@always_inline
+def next_share(mut taken: Atomic[Int64], count: Int, workers: Int) -> Tuple[Int, Int]:
+    """The next items a worker of `workers` takes from `count`, `taken` of them already handed out: a
+    share of what is left, half of it divided among the workers, and never less than one, so the shares
+    shrink as the work runs out and the last ones balance the workers, as OpenMP's guided schedule
+    deals them. One item at a time would send the counter's cache line from core to core for every
+    one, which on short pairs costs as much as aligning them."""
+    var left = count - Int(taken.load())
+    var share = max(left // (2 * max(workers, 1)), 1)
+    var first = Int(taken.fetch_add(Int64(share)))
+    return (first, min(first + share, count))
 
 
 def hardware_threads() -> Int:
