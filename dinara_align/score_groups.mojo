@@ -439,11 +439,11 @@ def grouped_scores[
             # The pair's own translation raises the error a serial packing would have raised.
             _ = translate(firsts[indices[slot]], alphabet)
             _ = translate(seconds[indices[slot]], alphabet)
-    var results = List[Int32](capacity=pairs)
-    with results_buffer.map_to_host() as host:
-        for index in range(pairs):
-            results.append(host[index])
-    return results^
+    # Back in one copy to page-locked memory, and from there in one more.
+    var landed = scope.context.enqueue_create_host_buffer[ScoreDType](pairs)
+    scope.context.enqueue_copy(landed, results_buffer)
+    scope.context.synchronize()
+    return List[Int32](Span(unsafe_ptr=landed.unsafe_ptr(), length=pairs))
 
 
 comptime PAIR_SHIFTS = SIMD[DType.uint32, 16](0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30)

@@ -805,6 +805,24 @@ def scores_with[
         return results^
 
     var scope = DeviceScope(resolved.gpu_id)
+    # Several pairs a warp, whatever their rows, wherever every second sequence fits a shape; otherwise a
+    # warp a pair where one block's carry can index the pair, and a tiled sweep where it cannot.
+    var everything = List[Int](capacity=pairs)
+    for index in range(pairs):
+        everything.append(index)
+    var grouped = grouped_scores[mode](
+        scope,
+        firsts,
+        seconds,
+        everything,
+        scoring.alphabet,
+        scoring.substitutions,
+        scoring.gaps,
+        resolved.threads,
+        resolved.gpu_id,
+    )
+    if grouped:
+        return grouped.take()
     var band = band_length(scope.specs)
     var banded = List[Int]()
     for index in range(pairs):
@@ -820,26 +838,10 @@ def scores_with[
                 scoring.gaps,
             )
     if len(banded) > 0:
-        # Several pairs a warp where the batch is narrow enough, a warp a pair otherwise.
-        var grouped = grouped_scores[mode](
-            scope,
-            firsts,
-            seconds,
-            banded,
-            scoring.alphabet,
-            scoring.substitutions,
-            scoring.gaps,
-            resolved.threads,
-            resolved.gpu_id,
+        var tape = pack_batch(firsts, seconds, banded, scoring.alphabet, resolved.threads)
+        var scored = device_scores[mode](
+            scope, tape.sequences, tape.offsets, scoring.substitutions, scoring.alphabet_size(), scoring.gaps
         )
-        var scored: List[Int32]
-        if grouped:
-            scored = grouped.take()
-        else:
-            var tape = pack_batch(firsts, seconds, banded, scoring.alphabet, resolved.threads)
-            scored = device_scores[mode](
-                scope, tape.sequences, tape.offsets, scoring.substitutions, scoring.alphabet_size(), scoring.gaps
-            )
         for slot in range(len(banded)):
             results[banded[slot]] = scored[slot]
     return results^
