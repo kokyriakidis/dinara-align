@@ -130,12 +130,6 @@ def gap_layer(piece: Int, along_first: Bool) -> Int:
 
 
 @always_inline
-def piece_of(layer: Int) -> Int:
-    """The gap piece gap layer `layer` belongs to, the inverse of `gap_layer`."""
-    return (layer - 1) // 2
-
-
-@always_inline
 def along_first(layer: Int) -> Bool:
     """Whether a gap layer's letters are the first sequence's, its moves `FIRST_GAP`."""
     return (layer - 1) % 2 == 0

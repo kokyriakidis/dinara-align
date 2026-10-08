@@ -1328,69 +1328,6 @@ def expand_path(
     return (String(unsafe_from_utf8=left), String(unsafe_from_utf8=right))
 
 
-def serial_local_extremum[
-    half: SweepHalf
-](
-    first: ImmSpan[Scalar[SymbolDType], _],
-    second: ImmSpan[Scalar[SymbolDType], _],
-    first_to: Int,
-    second_to: Int,
-    substitutions: ImmSpan[Scalar[SubstitutionDType], _],
-    alphabet_size: Int,
-    scoring: AffineGapCosts,
-) -> Tuple[Int, Int, Int32]:
-    """Linear-space local sweep returning the first row-major maximum and its value.
-
-    Strict `>` keeps the earliest maximum in row-major order, which is the cell the reference's scan
-    settles on. Run backwards over the same prefixes, it instead reports how far the best local
-    alignment reaches back, which is where the alignment starts.
-    """
-    var scores_above = List[Int32](unsafe_uninit_length=second_to + 1)
-    var deletes_above = List[Int32](unsafe_uninit_length=second_to + 1)
-    var scores_row = List[Int32](unsafe_uninit_length=second_to + 1)
-    var deletes_row = List[Int32](unsafe_uninit_length=second_to + 1)
-    # Each row writes every entry it reads, and the top row below is the only border.
-    var inserts_row = List[Int32](unsafe_uninit_length=second_to + 1)
-
-    scores_above[0] = 0
-    for column in range(1, second_to + 1):
-        scores_above[column] = 0
-        deletes_above[column] = scoring.open + scoring.extend
-
-    var best = Int32(0)
-    var best_row = 0
-    var best_column = 0
-
-    for row in range(1, first_to + 1):
-        scores_row[0] = 0
-        inserts_row[0] = scoring.open + scoring.extend
-        comptime reversed_order = half == SweepHalf.REVERSE
-        var first_index = first_to - row if reversed_order else row - 1
-        for column in range(1, second_to + 1):
-            var second_index = second_to - column if reversed_order else column - 1
-            var substitution = Int32(substitutions[Int(first[first_index]) * alphabet_size + Int(second[second_index])])
-            var cell = gotoh_cell[AlignmentMode.LOCAL](
-                scores_above[column - 1],
-                scores_above[column],
-                deletes_above[column],
-                scores_row[column - 1],
-                inserts_row[column - 1],
-                substitution,
-                scoring,
-            )
-            scores_row[column] = cell.score
-            deletes_row[column] = cell.deletion
-            inserts_row[column] = cell.insertion
-            if cell.score > best:
-                best = cell.score
-                best_row = row
-                best_column = column
-        swap(scores_above, scores_row)
-        swap(deletes_above, deletes_row)
-
-    return (best_row, best_column, best)
-
-
 # endregion Serial Reference
 
 
