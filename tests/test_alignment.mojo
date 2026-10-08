@@ -2647,6 +2647,39 @@ def test_lane_batches_match_single_pairs() raises:
                     assert_equal(found[index].or_else(-1), expected.or_else(-1))
 
 
+def test_lane_scores_match_single_pairs() raises:
+    """A batch of global scores under a table of one match and one mismatch score, which goes many pairs
+    at once into the lanes (see `lanes`), gives each pair the score a call of its own gives: minimap2's
+    scores, a dear gap and a cheap one, unit costs, pairs of every length up to a few hundred, close and
+    unrelated, empty sides among them; and a letter outside the alphabet raises as it does alone."""
+    seed(37)
+    var firsts = List[String]()
+    var seconds = List[String]()
+    for trial in range(120):
+        var first = random_sequence(0, 300, DNA_ALPHABET)
+        firsts.append(first)
+        seconds.append(random_sequence(0, 300, DNA_ALPHABET) if trial % 6 == 0 else mutated(first, 0.05, 8))
+    var all_scoring: List[Scoring] = [
+        Scoring.dna(),
+        Scoring.uniform(1, -3, -12, -1),
+        Scoring.uniform(2, -2, -2, -1),
+        Scoring.edit_distance(),
+    ]
+    for scoring in all_scoring:
+        var found = scores(firsts, seconds, scoring, GLOBAL, placement=Placement.on_cpu(3))
+        for index in range(len(firsts)):
+            assert_equal(found[index], score(firsts[index], seconds[index], scoring, GLOBAL))
+    var odd_firsts: List[String] = ["ACGT", "ACXT"]
+    var odd_seconds: List[String] = ["ACGT", "ACGT"]
+    var dna = Scoring.dna()
+    var raised = False
+    try:
+        _ = scores(odd_firsts, odd_seconds, dna, GLOBAL, placement=Placement.on_cpu(2))
+    except:
+        raised = True
+    assert_true(raised)
+
+
 def test_batches_reuse_their_searches_cleanly() raises:
     """A batch's worker keeps its searches from pair to pair (see `gap_affine.DistanceSpace`), so a pair
     must never see the last one's state: long pairs after short and short after long, identical and

@@ -57,13 +57,15 @@ from .gap_affine import (
     FREE_START,
     HISTORY_LIMIT,
     EndsFree,
+    Penalties,
     cigar_of,
     solve,
     wavefront_align,
     wavefront_penalties,
     wavefront_score,
 )
-from .modes import Alignment, Anchor, Costs, Mode
+from .lanes import LaneCosts, StringTexts, lane_distances
+from .modes import Alignment, Anchor, Band, Costs, Mode
 from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, swept_cells
 from .score_groups import grouped_scores
 from .substitutions import SubstitutionLookup
@@ -773,6 +775,60 @@ def chunk_count(pairs: Int, threads: Int) -> Int:
     return min(pairs, max(threads, 1) * CHUNKS_PER_THREAD)
 
 
+def laned_scores(
+    firsts: List[String],
+    seconds: List[String],
+    alphabet: String,
+    costs: LaneCosts,
+    penalties: Penalties,
+    threads: Int,
+    scores_out: MutPointer[Int32, _],
+) -> List[Bool]:
+    """The global scores of every pair the lanes take into `scores_out`, and which they were: those whose letters
+    `alphabet` holds, a pair holding another left for its own call to raise as it does."""
+    var pairs = len(firsts)
+    var workers = max(threads, 1)
+    var held = Array[Bool, 256](fill=False)
+    for letter in alphabet.as_bytes():
+        held[Int(letter)] = True
+    # A pair holding a letter outside the alphabet is marked settled beforehand, so the lanes leave it.
+    var refused = List[Bool](length=pairs, fill=False)
+    var refused_ptr = refused.unsafe_ptr()
+
+    def refuse(stretch: Int) {imm firsts, imm seconds, imm held, imm pairs, imm workers, imm refused_ptr}:
+        """Marks stretch `stretch`'s pairs holding a letter outside the alphabet."""
+        for index in range(pairs * stretch // workers, pairs * (stretch + 1) // workers):
+            var known = True
+            for letter in firsts[index].as_bytes():
+                known = known and held[Int(letter)]
+            for letter in seconds[index].as_bytes():
+                known = known and held[Int(letter)]
+            if not known:
+                refused_ptr[unsafe_offset=index] = True
+
+    parallelize(refuse, workers, workers)
+    var settled = refused.copy()
+    var found = List[Optional[Int]](length=pairs, fill=None)
+    _ = lane_distances(
+        pairs,
+        StringTexts(firsts.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
+        StringTexts(seconds.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
+        costs,
+        Band(),
+        Int.MAX,
+        workers,
+        found.unsafe_ptr(),
+        settled.unsafe_ptr(),
+    )
+    for index in range(pairs):
+        if refused[index]:
+            settled[index] = False
+        elif settled[index]:
+            var letters = firsts[index].byte_length() + seconds[index].byte_length()
+            scores_out[unsafe_offset=index] = Int32(penalties.score(found[index].value(), letters))
+    return settled^
+
+
 def scores_with[
     mode: AlignmentMode
 ](firsts: List[String], seconds: List[String], scoring: Scoring, placement: Optional[Placement] = None) raises -> List[
@@ -789,6 +845,22 @@ def scores_with[
         var failed = List[Bool](length=pairs, fill=False)
         var flags = failed.unsafe_ptr()
         var single = Placement.on_cpu(1)
+        # A global score under a table of one match and one mismatch score is a cost the wavefront's
+        # penalties count, the reward folded in (see `wavefront_penalties`): many pairs at once in the
+        # lanes of a register (see `lanes`), every pair whose letters the alphabet holds and 16 bits its
+        # cost. The rest, and every other table and mode, one at a time.
+        var settled = List[Bool](length=pairs, fill=False)
+        comptime if mode == AlignmentMode.GLOBAL:
+            var penalties = wavefront_penalties(
+                scoring.substitutions, scoring.alphabet_size(), Int(scoring.gaps.open), Int(scoring.gaps.extend)
+            )
+            if penalties:
+                var found = penalties.value()
+                var lane_costs = LaneCosts(
+                    found.mismatch, found.opening, found.extension, found.opening, found.extension
+                )
+                settled = laned_scores(firsts, seconds, scoring.alphabet, lane_costs, found, resolved.threads, out)
+        var settled_ptr = settled.unsafe_ptr()
 
         # The pairs are independent, so each is aligned on one thread start to finish, in
         # contiguous chunks, several a thread so one that draws long pairs does not hold up the rest.
@@ -797,6 +869,8 @@ def scores_with[
         def score_range(slot: Int) {imm}:
             """Scores chunk `slot` of the pairs, flagging any pair that raised for the serial retry below."""
             for index in range(pairs * slot // chunks, pairs * (slot + 1) // chunks):
+                if settled_ptr[unsafe_offset=index]:
+                    continue
                 try:
                     out[unsafe_offset=index] = score_with[mode](firsts[index], seconds[index], scoring, single)
                 except:
