@@ -17,6 +17,7 @@ Under a `Scoring`, an alphabet's substitution table and gap scores, which an ali
 """
 
 from std.atomic import Atomic
+from std.bit import count_leading_zeros
 
 from max.algorithm import parallelize
 
@@ -644,21 +645,30 @@ def alignments(
 def longest_first(references: List[String], queries: List[String]) -> List[Int]:
     """The pairs' indices, the longest pair first: taken in that order by whichever thread is free, the
     long pairs start first and the short ones fill in around them, so none is left alone at the end
-    holding up the rest."""
-    comptime INDEX_BITS = 25
+    holding up the rest.
+
+    Balancing a batch needs no finer order than lengths within an eighth of each other, so the pairs
+    are dealt into such classes, two passes and no sort: the order costs the batch's one thread next to
+    nothing, as a sort's would not beside many threads' work on short pairs. Within a class, the batch's
+    own order."""
+    comptime CLASSES = 8 * 62
     var pairs = len(references)
-    var order = List[Int](capacity=pairs)
-    if pairs >= 1 << INDEX_BITS:
-        for index in range(pairs):
-            order.append(index)
-        return order^
-    var keys = List[Int](capacity=pairs)
+    var classes = List[Int](length=pairs, fill=0)
+    var starts = List[Int](length=CLASSES + 1, fill=0)
     for index in range(pairs):
         var length = references[index].byte_length() + queries[index].byte_length()
-        keys.append((length << INDEX_BITS) | index)
-    sort(keys)
-    for slot in range(pairs - 1, -1, -1):
-        order.append(keys[slot] & ((1 << INDEX_BITS) - 1))
+        # Lengths below 16 are classes of their own; past that, a power of two and its top three bits
+        # under the leading one, longest the lowest class.
+        var shift = max(60 - Int(count_leading_zeros(UInt64(length))), 0)
+        var found = CLASSES - 1 - (8 * shift + (length >> shift))
+        classes[index] = found
+        starts[found + 1] += 1
+    for slot in range(CLASSES):
+        starts[slot + 1] += starts[slot]
+    var order = List[Int](length=pairs, fill=0)
+    for index in range(pairs):
+        order[starts[classes[index]]] = index
+        starts[classes[index]] += 1
     return order^
 
 
