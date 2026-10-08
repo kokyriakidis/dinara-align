@@ -26,6 +26,7 @@ the rest are left to the caller.
 
 from std.bit import count_leading_zeros
 from std.math import ceildiv
+from std.utils import IndexList
 from std.sys import simd_width_of
 from std.atomic import Atomic
 from max.algorithm import parallelize
@@ -94,6 +95,8 @@ struct LaneSpace(Movable):
 
     var row_letters: List[UInt8]
     var column_letters: List[UInt8]
+    var staging: List[UInt8]
+    """Each lane's text whole, a lane after another, on its way to lying side by side."""
     var scores: List[Lanes]
     var deletions: List[Lanes]
     var members: List[Int]
@@ -104,12 +107,49 @@ struct LaneSpace(Movable):
     def __init__(out self):
         self.row_letters = List[UInt8]()
         self.column_letters = List[UInt8]()
+        self.staging = List[UInt8]()
         self.scores = List[Lanes]()
         self.deletions = List[Lanes]()
         self.members = List[Int]()
         self.retries = List[List[Int]]()
         for _ in range(BUCKETS):
             self.retries.append(List[Int]())
+
+
+comptime BLOCK = 8
+"""Positions laid side by side at once: a lane's eight letters are one 64-bit load."""
+
+
+def transposed_order() -> IndexList[WIDTH * BLOCK]:
+    """Where each byte of a block laid position by position comes from in one laid lane by lane."""
+    var mask = IndexList[WIDTH * BLOCK]()
+    for position in range(BLOCK):
+        for lane in range(WIDTH):
+            mask[position * WIDTH + lane] = lane * BLOCK + position
+    return mask
+
+
+def side_by_side(
+    texts: List[String], members: List[Int], length: Int, mut staging: List[UInt8], target: MutPointer[UInt8, _]
+):
+    """The members' texts, position `p` of every lane at `target[p WIDTH:(p + 1) WIDTH]`: each text copied
+    whole into `staging`, a lane's stretch padded to whole blocks, then a block of `BLOCK` positions at
+    a time, every lane's letters of the block one load, the block turned in registers."""
+    comptime order = transposed_order()
+    var stride = ceildiv(max(length, 1), BLOCK) * BLOCK
+    staging.resize(unsafe_uninit_length=WIDTH * stride)
+    var lanes = staging.unsafe_ptr()
+    for lane in range(len(members)):
+        var text = texts[members[lane]].as_bytes()
+        Span(unsafe_ptr=lanes.unsafe_offset(lane * stride), length=len(text)).copy_from(text)
+    var block = Array[UInt8, WIDTH * BLOCK](fill=0)
+    var block_ptr = block.unsafe_ptr()
+    for start in range(0, stride, BLOCK):
+        comptime for lane in range(WIDTH):
+            block_ptr.unsafe_offset(lane * BLOCK).unsafe_bitcast[UInt64]().unsafe_store(
+                lanes.unsafe_offset(lane * stride + start).unsafe_bitcast[UInt64]().unsafe_load()
+            )
+        target.unsafe_offset(start * WIDTH).unsafe_store(block_ptr.unsafe_load[width=WIDTH * BLOCK]().shuffle[order]())
 
 
 def band_costs(
@@ -137,18 +177,10 @@ def band_costs(
         column_ends[lane] = Int16(query)
     # Each position's letters side by side. Past a lane's own letters the rows and columns hold whatever
     # was there before: no cell past a pair's sequences feeds its corner.
-    space.row_letters.resize(unsafe_uninit_length=max(rows, 1) * WIDTH)
-    space.column_letters.resize(unsafe_uninit_length=max(columns, 1) * WIDTH)
-    var row_target = space.row_letters.unsafe_ptr()
-    var column_target = space.column_letters.unsafe_ptr()
-    for lane in range(count):
-        var index = space.members[lane]
-        var reference = references[index].unsafe_ptr()
-        for row in range(references[index].byte_length()):
-            row_target[unsafe_offset=row * WIDTH + lane] = reference[unsafe_offset=row]
-        var query = queries[index].unsafe_ptr()
-        for column in range(queries[index].byte_length()):
-            column_target[unsafe_offset=column * WIDTH + lane] = query[unsafe_offset=column]
+    space.row_letters.resize(unsafe_uninit_length=ceildiv(max(rows, 1), BLOCK) * BLOCK * WIDTH)
+    space.column_letters.resize(unsafe_uninit_length=ceildiv(max(columns, 1), BLOCK) * BLOCK * WIDTH)
+    side_by_side(references, space.members, rows, space.staging, space.row_letters.unsafe_ptr())
+    side_by_side(queries, space.members, columns, space.staging, space.column_letters.unsafe_ptr())
 
     space.scores.resize(columns + 2, Lanes(FAR))
     space.deletions.resize(columns + 2, Lanes(FAR))
