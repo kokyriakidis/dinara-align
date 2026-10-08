@@ -237,7 +237,7 @@ Free ends, seed extension, two-piece gaps and substitution tables of more than o
 pixi run bench-modes   # builds and times Edlib, WFA2-lib, KSW2, parasail and SSW the first time; then seconds
 ```
 
-Every tool aligns every pair with its CIGAR on one thread of the Skylake-X, pinned, every tool built for its own instruction set, AVX-512 included, dinara-align at `6fe5e43`; a tool's time is the faster of two passes over a workload, its mean per pair, and every tool's costs or scores must agree on every pair, or the run fails; none disagreed.
+Every tool aligns every pair with its CIGAR on one thread of the Skylake-X, pinned, every tool built for its own instruction set, AVX-512 included, dinara-align at `c6c6a92`; a tool's time is the faster of two passes over a workload, its mean per pair, and every tool's costs or scores must agree on every pair, or the run fails; none disagreed.
 WFA2-lib runs exact, keeping every front, its WF-adaptive heuristic off.
 KSW2 extends with no Z-drop: it gauges one by anti-diagonal and dinara-align as WFA2-lib does, a cost at a time, so the two would stop at different places and their times compare different work.
 Deletions priced apart from insertions are left out: no rival offers them.
@@ -247,15 +247,16 @@ Deletions priced apart from insertions are left out: no rival offers them.
 | infix at unit costs, 1 kbp read at 10% placed whole in a 3 kbp window | **145 µs** | 270 µs | 986 µs | — | — | — |
 | infix at unit costs, 10 kbp read at 5% in a 30 kbp window | **3.32 ms** | 13.4 ms | 53.7 ms | — | — | — |
 | prefix at unit costs, 1 kbp read at 10% against 2 kbp of reference | **46 µs** | 114 µs | 47 µs | — | — | — |
-| infix at WFA's (4, 6, 2), the 1 kbp reads above | **3.11 ms** | — | 4.10 ms | — | — | — |
-| extension, a match 2 at (4, 6, 2), 300 to 1,400 bases at 5% then noise | **782 µs** | — | — | 2.07 ms | — | — |
-| the same with an end bonus of 50, 0 to 80 bases of noise at the end | **1.02 ms** | — | — | 1.23 ms | — | — |
-| two-piece gaps (4, 6, 2, 24, 1), 5 kbp at 5% with three indels of 100 to 400 bp | **9.27 ms** | — | 15.9 ms | 46.7 ms | — | — |
-| a table, match 2, transition -2, transversion -4, global, 1 kbp at 10% | **547 µs** | — | — | — | 2.94 ms | — |
-| the same table, local, 1 kbp read at 10% in a 10 kbp window | **2.50 ms** | — | — | — | 5.16 ms | 3.27 ms |
+| infix at WFA's (4, 6, 2), the 1 kbp reads above | **3.75 ms** | — | 4.10 ms | — | — | — |
+| extension, a match 2 at (4, 6, 2), 300 to 1,400 bases at 5% then noise | **785 µs** | — | — | 2.07 ms | — | — |
+| the same with an end bonus of 50, 0 to 80 bases of noise at the end | **186 µs** | — | — | 1.23 ms | — | — |
+| two-piece gaps (4, 6, 2, 24, 1), 5 kbp at 5% with three indels of 100 to 400 bp | **9.25 ms** | — | 15.9 ms | 46.7 ms | — | — |
+| a table, match 2, transition -2, transversion -4, global, 1 kbp at 10% | **546 µs** | — | — | — | 2.94 ms | — |
+| the same table, local, 1 kbp read at 10% in a 10 kbp window | **2.53 ms** | — | — | — | 5.16 ms | 3.27 ms |
 
-- **dinara-align is the fastest on every workload**: 1.9 and 4 times Edlib on infixes, 2.6 times KSW2 on extension, 1.7 times WFA2-lib on two-piece gaps and 5.4 times parasail on a table globally. The prefix search ties WFA2-lib's diagonal transition, 46 against 47 µs.
-- **An end bonus aligns a read to its end when that scores within the bonus of the best stop**, as KSW2's `end_bonus` and BWA-MEM's clipping penalty decide, and both tools choose the same alignment on every read. dinara-align finds the alignment reaching the end by a second, exact search beside the extension, which narrows its lead to 1.2 times.
+- **dinara-align is the fastest on every workload**: 1.9 and 4 times Edlib on infixes, 2.6 times KSW2 on extension and 6.6 times with an end bonus, 1.7 times WFA2-lib on two-piece gaps and 5.4 times parasail on a table globally. The prefix search ties WFA2-lib's diagonal transition, 46 against 47 µs.
+- **An end bonus aligns a read to its end when that scores within the bonus of the best stop**, as KSW2's `end_bonus` and BWA-MEM's clipping penalty decide, and both tools choose the same alignment on every read. The extension's own search weighs it, keeping the best of its points on the read's last row as it grows and going on only while one could still win, so a read ending in a short stretch of noise costs less than a plain extension of a long one.
+- **Some rows move by up to a fifth between commits that do not touch them.** The infix at WFA's costs has measured 3.1 and 3.75 ms on the same code path: the same instructions and branches, 6.3 billion of them, in 2.1 or 2.9 billion cycles depending on where unrelated code places its loop. The Skylake-X penalises a jump that crosses a 32-byte boundary (Intel's JCC erratum fix), and Mojo offers no option to keep branches off such boundaries; later x86 cores are not affected. Read a difference of that size between commits as noise.
 - **The prefix search sweeps only the band its bound allows**, which Edlib's prefix mode does not: the band's top moves down with the diagonal, no column past the read's length plus the best end so far is swept, and a try whose band has already emptied stops. The part of the reference it finds is then aligned globally by the edit-distance traceback.
 - **A table of more than one mismatch score sweeps sixteen cells at a time**, by anti-diagonal, each pair's score read by byte shuffle from a register when the table has at most sixteen entries, as DNA's four letters do, and gathered from memory otherwise. A local alignment is found as SSW finds one: a 16-bit sweep for its end, one anchored there for the first cell that earns its score, its start, and the span between aligned globally. A global one stores only the band of diagonals its score bounds. Both used to sweep a cell at a time: 13.3 ms globally and 133 ms locally.
 
