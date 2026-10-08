@@ -2609,6 +2609,44 @@ def test_dear_gaps_cost_what_the_matrix_says() raises:
             assert_equal(score(first, second, scoring, GLOBAL), -expected)
 
 
+def test_lane_batches_match_single_pairs() raises:
+    """A batch whose pairs go many at once into the lanes of a register (see `lanes`) gives each the
+    cost a call of its own gives, under a band, under a cap, both and neither: unit, affine and linear
+    costs and deletions priced apart, pairs of every length up to a few hundred, close, divergent and
+    unrelated, empty sides, and one too long for 16 bits among them, which goes the other way."""
+    seed(29)
+    var references = List[String]()
+    var queries = List[String]()
+    for trial in range(150):
+        var reference = random_sequence(0, 300, DNA_ALPHABET)
+        references.append(reference)
+        if trial % 5 == 0:
+            queries.append(random_sequence(0, 300, DNA_ALPHABET))
+        else:
+            queries.append(mutated(reference, [0.0, 0.01, 0.05, 0.2][trial % 4], 12))
+    references.append(random_sequence(9000, 9000, DNA_ALPHABET))
+    queries.append(mutated(references[len(references) - 1], 0.02, 6))
+    var all_costs: List[Costs] = [
+        Costs.edit(),
+        Costs.affine(4, 6, 2),
+        Costs.affine(1, 2, 1).with_deletions(3, 2),
+        Costs.linear(2, 3),
+    ]
+    var bands: List[Band] = [Band(), Band.around(6), Band(-3, 40)]
+    for costs in all_costs:
+        var uncapped = distances(references, queries, costs, threads=3)
+        for index in range(len(references)):
+            assert_equal(uncapped[index], distance(references[index], queries[index], costs))
+        # A cap past every cost here leaves a pair no alignment inside its band fits as None, where no
+        # cap would raise.
+        for band in bands:
+            for cap in [1 << 40, 8, 60]:
+                var found = distances(references, queries, costs, max_cost=cap, band=band, threads=3)
+                for index in range(len(references)):
+                    var expected = distance(references[index], queries[index], costs, max_cost=cap, band=band)
+                    assert_equal(found[index].or_else(-1), expected.or_else(-1))
+
+
 def test_batches_reuse_their_searches_cleanly() raises:
     """A batch's worker keeps its searches from pair to pair (see `gap_affine.DistanceSpace`), so a pair
     must never see the last one's state: long pairs after short and short after long, identical and

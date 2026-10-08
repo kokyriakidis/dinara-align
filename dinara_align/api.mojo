@@ -39,6 +39,7 @@ from .scored import (
     rewarded_alignment,
     swept,
 )
+from .lanes import LaneCosts, lane_distances
 from .gap_affine import (
     AffineCigar,
     DEFAULT_MAX_MEMORY,
@@ -800,6 +801,22 @@ def capped_distances(
     var out = results.unsafe_ptr()
     var failed = List[Bool](length=pairs, fill=False)
     var flags = failed.unsafe_ptr()
+    # Global costs of one gap piece: as many pairs at once as a register holds lanes (see `lanes`); the
+    # pairs too long for its 16 bits, and every pair of other costs and modes, one at a time.
+    var settled = List[Bool](length=pairs, fill=False)
+    var settled_ptr = settled.unsafe_ptr()
+    var lane_costs = LaneCosts.of(costs, mode)
+    if lane_costs:
+        # Costs the searches would refuse raise here, as a pair's search would raise them.
+        _ = penalties_of(costs)
+    if (
+        lane_costs
+        and lane_distances(references, queries, lane_costs.value(), band, max_cost, workers, out, settled_ptr) == pairs
+    ):
+        for index in range(pairs):
+            if not results[index] and max_cost == Int.MAX:
+                raise outside(band)
+        return results^
     var order = longest_first(references, queries, workers)
     var taken = Atomic[Int64](0)
 
@@ -812,6 +829,7 @@ def capped_distances(
         imm queries,
         imm out,
         imm flags,
+        imm settled_ptr,
         imm pairs,
         imm costs,
         imm mode,
@@ -820,7 +838,7 @@ def capped_distances(
         imm workers,
     }:
         """Takes the next pairs in `order` until none is left, storing each one's capped cost or flagging that
-        it raised, its searches kept from pair to pair."""
+        it raised, its searches kept from pair to pair; a pair the lanes settled it leaves."""
         var space = DistanceSpace()
         var last = 0
         while True:
@@ -829,6 +847,8 @@ def capped_distances(
                 return
             for dealt in range(share[0], share[1]):
                 var index = order[dealt]
+                if settled_ptr[unsafe_offset=index]:
+                    continue
                 try:
                     out[unsafe_offset=index] = cost_within(
                         references[index], queries[index], costs, mode, band, max_cost, space

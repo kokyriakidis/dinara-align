@@ -238,8 +238,13 @@ def pack_batch(
         outside the alphabet."""
         for slot in range(pairs * stretch // stretches, pairs * (stretch + 1) // stretches):
             var index = indices[slot]
-            var known = encoded_into(firsts[index], codes_by_byte, tape.unsafe_offset(Int(places[2 * slot])))
-            known = encoded_into(seconds[index], codes_by_byte, tape.unsafe_offset(Int(places[2 * slot + 1]))) and known
+            var known = encoded_into(
+                firsts[index], codes_by_byte, tape.unsafe_offset(Int(places[unsafe_offset=2 * slot]))
+            )
+            known = (
+                encoded_into(seconds[index], codes_by_byte, tape.unsafe_offset(Int(places[unsafe_offset=2 * slot + 1])))
+                and known
+            )
             if not known:
                 flags[unsafe_offset=slot] = True
 
