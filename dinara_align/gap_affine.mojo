@@ -2043,11 +2043,20 @@ def extend[
     known: Int = -1,
     zdrop: Int = -1,
     drop_extension: Int = 0,
-) -> Tuple[Int, Int, Int, Bool]:
+    end_bonus: Int = -1,
+    latest_end: Bool = True,
+) -> Tuple[Int, Int, Int, Bool, Int, Int]:
     """Where the best-scoring alignment fixed at the origin ends, the end of both sequences with
-    `reverse`: its cost, the letters of each sequence up to it, and whether the Z-drop gave the search
-    up. A `known` best score, when the caller has one, ends the search at the first alignment earning
-    it, the one it would keep.
+    `reverse`: its cost, the letters of each sequence up to it, whether the Z-drop gave the search up,
+    and with an `end_bonus` the best alignment that runs through the whole second sequence, its cost
+    and the first sequence's letters it covers, -1 for none. A `known` best score, when the caller has
+    one, ends the search at the first alignment earning it, the one it would keep.
+
+    The alignment running through the second sequence is the best of the front points on its last row,
+    of equally good ones the one covering the most of the first sequence, or with `latest_end` false
+    the least: the end the rule for ties names for those free ends (see `scored.rewarded_alignment`).
+    The search goes on while such an alignment could still both improve and come within `end_bonus` of
+    the best stop, so one search serves the bonus.
 
     A `zdrop` of zero or more gives up as WFA2-lib's Z-drop does: once the best score of a cost's front
     lies more than `zdrop` plus `drop_extension` a diagonal between it and the best so far below that
@@ -2062,7 +2071,7 @@ def extend[
     var columns = len(first)
     var rows = len(second)
     if columns == 0 or rows == 0 or penalties.reward == 0:
-        return (0, 0, 0, False)
+        return (0, 0, 0, False, -1, -1)
     var search = Wavefront[pieces](first, second, penalties, FREE_START, False, reverse, 0, 0, band)
     var reward = penalties.reward
     var scale = penalties.scale
@@ -2075,6 +2084,23 @@ def extend[
     var best_column = 0
     var best_row = 0
     var dropped = False
+    # Twice the best score of an alignment through the whole second sequence, and where it ends.
+    var tracking = end_bonus > 0
+    var best_end = Int.MIN
+    var best_end_cost = -1
+    var best_end_column = -1
+
+    @always_inline
+    def beyond(
+        threshold: Int, next: Int
+    ) {imm reward, imm scale, imm columns, imm rows, imm shortest, imm cheapest} -> Bool:
+        """Whether no point a cost of `next` or more reaches scores past `threshold`, twice over: none
+        covers more than every letter, and `i + j` is at most twice the shorter sequence plus `|i - j|`,
+        which a path pays at least the cheapest extension a letter to reach."""
+        return reward * (columns + rows) - scale * next <= threshold or (
+            2 * reward * shortest - threshold
+        ) * cheapest <= next * (scale * cheapest - reward)
+
     while True:
         var slot = search.fronts.current
         var cost = search.cost
@@ -2114,17 +2140,36 @@ def extend[
                     best_cost = cost
                     best_column = column
                     best_row = column - diagonal
+        # The front's points on the second sequence's last row, the alignments that run through it.
+        if tracking and reach >= rows and reward * reach - scale * cost >= best_end:
+            var front = search.fronts.row(slot, ALIGNED)
+            for diagonal in range(max(search.fronts.lows[slot], -rows), search.fronts.highs[slot] + 1):
+                var column = Int(front[unsafe_offset=diagonal])
+                if column < 0 or column - diagonal != rows:
+                    continue
+                var value = reward * (2 * column - diagonal) - scale * cost
+                if (
+                    value > best_end
+                    or value == best_end
+                    and (column > best_end_column if latest_end else column < best_end_column)
+                ):
+                    best_end = value
+                    best_end_cost = cost
+                    best_end_column = column
         var next = cost + 1
         if known >= 0 and best >= 2 * known:
             break
-        if reward * (columns + rows) - scale * next <= best:
-            break
-        if (2 * reward * shortest - best) * cheapest <= next * (scale * cheapest - reward):
-            break
         if cost - search.last_reached > window:
             break
+        # Done once no later point beats the best stop, nor, with a bonus, an alignment through the
+        # second sequence could both come within the bonus of that stop and match the best through it
+        # so far: an equal one may be the end the rule for ties names, found at a higher cost, as one
+        # covering more letters for the same score is.
+        var through = best - 2 * end_bonus if best_end == Int.MIN else max(best_end - 1, best - 2 * end_bonus)
+        if beyond(best, next) and (not tracking or beyond(through, next)):
+            break
         search.advance[False]()
-    return (best_cost, best_column, best_row, dropped)
+    return (best_cost, best_column, best_row, dropped, best_end_cost, best_end_column)
 
 
 def traced_extension[
@@ -2225,19 +2270,36 @@ def extension_of[
     limit: Int = HISTORY_LIMIT,
     zdrop: Int = -1,
     drop_extension: Int = 0,
+    end_bonus: Int = -1,
 ) raises AlignmentError -> AffineExtension:
     """The best extension from `anchor` inside `band`, found by `extend` and aligned by `solve` over the
     letters it covers, as a global alignment of those, split past `limit` kept diagonals, so its memory
     stays bounded however long. A `known` best score ends the search once it is reached, and a `zdrop`
-    of zero or more gives it up once it falls that far (see `extend`)."""
+    of zero or more gives it up once it falls that far (see `extend`).
+
+    With an `end_bonus`, the same search finds the best alignment running through the whole second
+    sequence, the end `ties` names of equally good ones, and when it scores within the bonus of the
+    best stop, and the Z-drop did not give up, the letters it covers are aligned instead (see
+    `Mode.extension`)."""
     if not band.holds(0):
         raise outside(band)
     var a = first.as_bytes()
     var b = second.as_bytes()
     var at_end = anchor == Anchor.END
-    var found = extend[pieces](a, b, penalties, band, at_end, known, zdrop, drop_extension)
+    # From the start the rule's end is the latest of equally good ones; searched from the end, the
+    # earliest, which mirrored is the latest start.
+    var latest_end = (ties == Ties.LEFT) != at_end
+    var found = extend[pieces](a, b, penalties, band, at_end, known, zdrop, drop_extension, end_bonus, latest_end)
     var columns = found[1]
     var rows = found[2]
+    if (
+        end_bonus > 0
+        and not found[3]
+        and found[5] >= 0
+        and penalties.score(found[4], found[5] + len(b)) + end_bonus > penalties.score(found[0], columns + rows)
+    ):
+        columns = found[5]
+        rows = len(b)
     var covered_first = a[len(a) - columns :] if at_end else a[:columns]
     var covered_second = b[len(b) - rows :] if at_end else b[:rows]
     # From the end the band counts diagonals back from the corner, which the covered letters' own

@@ -169,17 +169,41 @@ def score(
             raise outside(band)
         var drop_extension = cheapest_extension(costs)
         var at_end = mode.anchor == Anchor.END
-        var found = extend[2](
-            reference.as_bytes(), query.as_bytes(), penalties, band, at_end, -1, mode.zdrop, drop_extension
-        ) if two else extend[1](
-            reference.as_bytes(), query.as_bytes(), penalties, band, at_end, -1, mode.zdrop, drop_extension
-        )
-        var best = penalties.score(found[0], found[1] + found[2])
         if mode.end_bonus > 0 and not band.covers(columns, rows):
             raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "an end bonus takes no band")
+        var found = extend[2](
+            reference.as_bytes(),
+            query.as_bytes(),
+            penalties,
+            band,
+            at_end,
+            -1,
+            mode.zdrop,
+            drop_extension,
+            mode.end_bonus,
+        ) if two else extend[1](
+            reference.as_bytes(),
+            query.as_bytes(),
+            penalties,
+            band,
+            at_end,
+            -1,
+            mode.zdrop,
+            drop_extension,
+            mode.end_bonus,
+        )
+        var best = penalties.score(found[0], found[1] + found[2])
         # The end bonus prefers the best extension reaching the query's far end, unless the Z-drop gave up.
         if mode.end_bonus > 0 and not found[3]:
-            var reaching = score(reference, query, costs, mode.reaching_end(), band=band)
+            var reaching: Int
+            if found[5] >= 0:
+                reaching = penalties.score(found[4], found[5] + rows)
+            elif columns > 0 and rows > 0 and penalties.reward > 0:
+                # No front point reached the query's end before the search could stop: none comes close.
+                return best
+            else:
+                # An empty side or no reward, where the search does not run: the free ends' own.
+                reaching = score(reference, query, costs, mode.reaching_end(), band=band)
             if reaching + mode.end_bonus > best:
                 return reaching
         return best
@@ -409,12 +433,14 @@ def extended_alignment(
     # The Z-drop's slack a diagonal is the cheapest extension, as KSW2 charges a long gap.
     var drop_extension = cheapest_extension(costs)
     var found = extension_of[2](
-        reference, query, penalties, eqx, mode.anchor, band, ties, -1, limit, mode.zdrop, drop_extension
+        reference, query, penalties, eqx, mode.anchor, band, ties, -1, limit, mode.zdrop, drop_extension, mode.end_bonus
     ) if two else extension_of[1](
-        reference, query, penalties, eqx, mode.anchor, band, ties, -1, limit, mode.zdrop, drop_extension
+        reference, query, penalties, eqx, mode.anchor, band, ties, -1, limit, mode.zdrop, drop_extension, mode.end_bonus
     )
-    # The end bonus prefers the best extension reaching the query's far end, unless the Z-drop gave up.
-    if mode.end_bonus > 0 and not found.dropped:
+    # The search weighs the end bonus itself (see `extension_of`), but for an empty side or no reward,
+    # where it does not run: there the free ends' own alignment through the query is weighed against it.
+    var searched = reference.byte_length() > 0 and query.byte_length() > 0 and penalties.reward > 0
+    if mode.end_bonus > 0 and not found.dropped and not searched:
         var reaching = aligned_within(reference, query, costs, mode.reaching_end(), band, Int.MAX, ties, eqx, limit)
         if reaching and reaching.value().score + mode.end_bonus > found.score:
             return reaching.take()
