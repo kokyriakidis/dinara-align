@@ -65,6 +65,7 @@ from .gap_affine import (
 )
 from .modes import Alignment, Anchor, Costs, Mode
 from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, swept_cells
+from .score_groups import grouped_scores
 from .substitutions import SubstitutionLookup
 from .vector_score import optimal_band, reach_back, vector_align, vector_score
 
@@ -820,9 +821,17 @@ def scores_with[
             )
     if len(banded) > 0:
         var tape = pack_batch(firsts, seconds, banded, scoring.alphabet, resolved.threads)
-        var scored = device_scores[mode](
+        # Several pairs a warp where the batch is narrow enough, a warp a pair otherwise.
+        var grouped = grouped_scores[mode](
             scope, tape.sequences, tape.offsets, scoring.substitutions, scoring.alphabet_size(), scoring.gaps
         )
+        var scored: List[Int32]
+        if grouped:
+            scored = grouped.take()
+        else:
+            scored = device_scores[mode](
+                scope, tape.sequences, tape.offsets, scoring.substitutions, scoring.alphabet_size(), scoring.gaps
+            )
         for slot in range(len(banded)):
             results[banded[slot]] = scored[slot]
     return results^

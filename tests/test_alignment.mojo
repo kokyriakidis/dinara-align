@@ -2929,6 +2929,35 @@ def test_device_edit_distances() raises:
         _ = distances(references, queries, affine, placement=device)
 
 
+def test_device_grouped_scores_match_host() raises:
+    """A batch scored several pairs a warp gives every pair the host's score, whichever shape the batch's
+    widest second sequence picks (see `score_groups.SHAPES`), the widest past every shape scored a warp
+    a pair: pairs of every length up to the width, empty sides among them, the rows longer or shorter
+    than the columns, close pairs and unrelated ones. Skipped where no accelerator answers."""
+    if not gpu_available():
+        print("    skipped: no accelerator serves a real alignment here")
+        return
+    seed(23)
+    var device = Placement.on_gpu(0, 4)
+    var host = Placement.on_cpu(4)
+    for scoring in scoring_regimes():
+        for widest in [1, 31, 48, 64, 95, 150, 200, 256, 380, 512, 700]:
+            var firsts = List[String]()
+            var seconds = List[String]()
+            for trial in range(70):
+                var second = random_sequence(0 if trial % 9 == 0 else 1, widest, DNA_ALPHABET)
+                if trial == 0:
+                    second = random_sequence(widest, widest, DNA_ALPHABET)
+                seconds.append(second)
+                firsts.append(
+                    random_sequence(0, widest + 40, DNA_ALPHABET) if trial % 4 == 0 else mutated(second, 0.08, 5)
+                )
+            comptime for mode in [GLOBAL, LOCAL]:
+                var found = scores(firsts, seconds, scoring, mode, placement=device)
+                for index in range(len(firsts)):
+                    assert_equal(found[index], score(firsts[index], seconds[index], scoring, mode, placement=host))
+
+
 def test_device_matches_host() raises:
     """Every device path returns the host's score, with an alignment that earns it.
 
