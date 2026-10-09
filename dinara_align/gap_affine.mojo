@@ -261,6 +261,13 @@ struct Penalties(ImplicitlyCopyable, TrivialRegisterPassable):
         return cheapest
 
 
+comptime MAX_WINDOW = 1 << 16
+"""The dearest single move a wavefront takes, in its costs' common factor (see `Penalties.window`): its
+rings hold a front for each of the last that many costs, a kilobyte or two each, so past this even a
+pair of a few letters would take hundreds of megabytes, and the layers' costs could pass their 32 bits.
+Dear gaps far past any aligner's, an opening of 100,000 among them, stay within it."""
+
+
 def scaled_penalties(costs: Costs, reward: Int, folded: Bool) raises AlignmentError -> Penalties:
     """The wavefront's costs for `costs`, deletions and insertions each their own, with `folded` a match
     earning `reward` folded in as for a global alignment or an extension (see the module's notes), all
@@ -306,6 +313,15 @@ def scaled_penalties(costs: Costs, reward: Int, folded: Bool) raises AlignmentEr
     out.set_deletions(
         values[3] // scale, values[4] // scale, values[7] // scale if two else 0, values[8] // scale if two else 0
     )
+    # From the costs themselves, not the layers' 32 bits they may not fit.
+    var dearest = values[0] // scale
+    for index in range(1, len(values), 2):
+        dearest = max(dearest, (values[index] + values[index + 1]) // scale)
+    if dearest > MAX_WINDOW:
+        raise AlignmentError(
+            ErrorKind.INVALID_SCORING,
+            String("costs ", costs, ": a move dearer than ", MAX_WINDOW, " in their common factor"),
+        )
     return out
 
 
@@ -363,6 +379,9 @@ def wavefront_penalties(
     if x <= 0 or e <= 0 or o < 0:
         return None
     var scale = gcd(gcd(x, e), o)
+    # Past the wavefront's rings, the table's own sweeps, whose memory the scores do not set.
+    if max(x, o + e) // scale > MAX_WINDOW:
+        return None
     return Penalties(x // scale, o // scale, e // scale, scale, reward, 0, 0)
 
 

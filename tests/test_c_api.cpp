@@ -344,6 +344,38 @@ int main() {
                            odd.query_lengths.data(), &c_free, nullptr, nullptr, 0, codes.data()) ==
           DINARA_INVALID_COSTS);
 
+    // A negative length is that pair's own failure, never another's.
+    std::vector<int64_t> negative_lengths{4, -4, 4};
+    CHECK(dinara_distances(3, odd.references.data(), odd.reference_lengths.data(), odd.queries.data(),
+                           negative_lengths.data(), nullptr, nullptr, nullptr, 3, codes.data()) == 0);
+    CHECK(codes[0] == 0 && codes[2] == 1);
+    CHECK(dinara_distance("ACGT", -1, "ACG", 3, nullptr, nullptr, nullptr) == DINARA_INVALID_LENGTH);
+    int64_t no_index = 0, no_score = 0;
+    CHECK(dinara_search(-1, nullptr, nullptr, "ACGT", 4, nullptr, nullptr, nullptr, 0, 0, &no_index, &no_score) == 0);
+
+    // Several of the caller's threads, each asking a batch for threads of its own, all at once: each batch
+    // returns, as it would alone.
+    std::vector<int64_t> alone(firsts.size());
+    dinara::detail::Batch shared(firsts, seconds);
+    CHECK(dinara_distances(firsts.size(), shared.references.data(), shared.reference_lengths.data(),
+                           shared.queries.data(), shared.query_lengths.data(), nullptr, nullptr, nullptr, 0,
+                           alone.data()) == 0);
+    std::vector<int> agreed(6, 1);
+    std::vector<std::thread> callers;
+    for (int caller = 0; caller < 6; caller++) {
+        callers.emplace_back([&, caller] {
+            for (int round = 0; round < 10; round++) {
+                std::vector<int64_t> found(firsts.size());
+                dinara_distances(firsts.size(), shared.references.data(), shared.reference_lengths.data(),
+                                 shared.queries.data(), shared.query_lengths.data(), nullptr, nullptr, nullptr,
+                                 2 + caller % 3, found.data());
+                if (found != alone) agreed[caller] = 0;
+            }
+        });
+    }
+    for (auto &caller : callers) caller.join();
+    for (int caller = 0; caller < 6; caller++) CHECK(agreed[caller]);
+
     if (failures) {
         std::fprintf(stderr, "%d checks failed\n", failures);
         return 1;

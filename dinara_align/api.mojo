@@ -25,7 +25,7 @@ from std.bit import count_leading_zeros
 
 
 from .alignment import AlignmentMode, GappedAlignment
-from .common import Device, DeviceScope, Placement, next_share, spread
+from .common import Device, DeviceScope, Placement, next_share, spread, thread_count
 from .device_edit import MAX_PATTERN_WORDS, device_edit_distances
 from .edit_distance import edit_cigar, edit_distance
 from .edit_search import EditHit, edit_search
@@ -660,7 +660,7 @@ def scores(
         var out = results.unsafe_ptr()
         var flags = failed.unsafe_ptr()
         var resolved = placement.or_else(Placement.default())
-        var workers = max(resolved.threads, 1)
+        var workers = thread_count(resolved.threads, pairs)
         var single = Placement(resolved.device, resolved.gpu_id, 1)
         var chunks = max(min(pairs, workers * 8), 1)
 
@@ -709,7 +709,7 @@ def alignments(
         var failed = List[Bool](length=pairs, fill=False)
         var flags = failed.unsafe_ptr()
         var single = Placement.on_cpu(1)
-        var workers = max(resolved.threads, 1)
+        var workers = thread_count(resolved.threads, pairs)
         var chunks = max(min(pairs, workers * 8), 1)
         # Global alignments under a table of one match and one mismatch score: many pairs at once in the
         # lanes (see `scoring.laned_alignments`); the rest one at a time.
@@ -780,7 +780,7 @@ def alignments(
         results.append(Alignment(0, 0, String(), 0, 0, 0, 0))
     var out = results.unsafe_ptr()
     var whole = mode.is_global()
-    var workers = max(resolved.threads, 1)
+    var workers = thread_count(resolved.threads, pairs)
     var chunks = max(min(pairs, workers * 8), 1)
 
     def convert(
@@ -1119,7 +1119,7 @@ def capped_distances(
     var results = List[Optional[Int]](length=pairs, fill=None)
     if pairs == 0:
         return results^
-    var workers = max(threads.or_else(1), 1)
+    var workers = thread_count(threads.or_else(1), pairs)
     var out = results.unsafe_ptr()
     var failed = List[Bool](length=pairs, fill=False)
     var flags = failed.unsafe_ptr()
@@ -1224,7 +1224,7 @@ def capped_alignments(
         results.append(None)
     if pairs == 0:
         return results^
-    var workers = max(threads.or_else(1), 1)
+    var workers = thread_count(threads.or_else(1), pairs)
     var out = results.unsafe_ptr()
     var failed = List[Bool](length=pairs, fill=False)
     var flags = failed.unsafe_ptr()
@@ -1339,7 +1339,7 @@ def search(
     any other mode each pair's `score`. Every kept hit is then aligned on its own, when asked for, by
     `align`."""
     var count = len(references)
-    var workers = max(threads.or_else(1), 1)
+    var workers = thread_count(threads.or_else(1), count)
     var scores = List[Int](length=count, fill=Int.MIN)
     if mode.kind == Mode.SMITH_WATERMAN and mode.match_score > 0:
         _ = penalties_of(costs)

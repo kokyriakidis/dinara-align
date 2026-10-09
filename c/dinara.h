@@ -44,6 +44,8 @@ extern "C" {
 /* A mode that cannot serve what was asked: the least cost of an extension, a local alignment or an
  * overlap, which maximize a score, a cap on any of them, or a band on the last two. */
 #define DINARA_INVALID_MODE (-6)
+/* A sequence's length below zero. */
+#define DINARA_INVALID_LENGTH (-7)
 
 /*
  * What each edit costs: a substitution `mismatch`, a gap of `k` letters `opening + k * extension`, or

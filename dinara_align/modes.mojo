@@ -16,6 +16,18 @@ from .errors import AlignmentError, ErrorKind
 comptime UNBOUNDED = 1 << 60
 """Past any diagonal or length, and far enough from overflow to shift by any sequence's length."""
 
+comptime MAX_COST = 1 << 32
+"""The most a cost or a match's reward may be: millions of times any aligner's, and far enough below 64
+bits' range that no pair a machine can hold scores past it."""
+
+
+def checked_cost(value: Int, what: StaticString) raises AlignmentError -> Int:
+    """`value`, refused past `MAX_COST`, the cost or reward `what` names."""
+    if value > MAX_COST:
+        raise AlignmentError(ErrorKind.INVALID_SCORING, String(what, " ", value, " past ", MAX_COST))
+    return value
+
+
 comptime ANY_LENGTH = 1 << 40
 """Longer than any sequence a batch holds: free letters or a band this far reach every one."""
 
@@ -78,6 +90,9 @@ struct Costs(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
                 ErrorKind.INVALID_SCORING,
                 String("costs ", mismatch, ", ", opening, ", ", extension, ": a mismatch and an extension must cost"),
             )
+        _ = checked_cost(mismatch, "a mismatch")
+        _ = checked_cost(opening, "an opening")
+        _ = checked_cost(extension, "an extension")
         return Self(mismatch, opening, extension, -1, 0)
 
     @staticmethod
@@ -93,6 +108,8 @@ struct Costs(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
                 ErrorKind.INVALID_SCORING,
                 String("second piece ", opening2, ", ", extension2, ": its extension must cost"),
             )
+        _ = checked_cost(opening2, "an opening")
+        _ = checked_cost(extension2, "an extension")
         return Self(first.mismatch, first.opening, first.extension, opening2, extension2)
 
     def with_deletions(
@@ -107,6 +124,10 @@ struct Costs(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
                 ErrorKind.INVALID_SCORING,
                 String("deletions ", opening, ", ", extension, ": an extension must cost"),
             )
+        _ = checked_cost(opening, "an opening")
+        _ = checked_cost(extension, "an extension")
+        _ = checked_cost(opening2, "an opening")
+        _ = checked_cost(extension2, "an extension")
         var out = self
         out.deletion_opening = opening
         out.deletion_extension = extension
@@ -260,8 +281,18 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
             raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a free end of fewer than no letters")
         if match_score < 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "a match that costs")
+        _ = checked_cost(match_score, "a match's reward")
+        # Past every pair's letters, so no count of them overflows what it enters.
         return Self(
-            Self.ENDS, reference_start, reference_end, query_start, query_end, match_score, Anchor.START, -1, -1
+            Self.ENDS,
+            min(reference_start, UNBOUNDED),
+            min(reference_end, UNBOUNDED),
+            min(query_start, UNBOUNDED),
+            min(query_end, UNBOUNDED),
+            match_score,
+            Anchor.START,
+            -1,
+            -1,
         )
 
     def with_match_score(self, match_score: Int) raises AlignmentError -> Self:
@@ -276,6 +307,7 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
             raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a match score for free ends alone")
         if match_score < 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "a match that costs")
+        _ = checked_cost(match_score, "a match's reward")
         return Self(
             Self.ENDS,
             self.reference_start,
@@ -312,6 +344,7 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         than the best stop."""
         if match_score < 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "a match that costs")
+        _ = checked_cost(match_score, "a match's reward")
         var drop = zdrop.or_else(-1)
         if zdrop and drop < 0:
             raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a Z-drop below zero")
@@ -345,6 +378,7 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         grows with the matrix, as every local aligner's does (see `scored`)."""
         if match_score <= 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "a local alignment needs a match that earns")
+        _ = checked_cost(match_score, "a match's reward")
         return Self(Self.SMITH_WATERMAN, 0, 0, 0, 0, match_score, Anchor.START, -1, -1)
 
     @staticmethod
@@ -356,6 +390,7 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         matrix, as `local`'s does."""
         if match_score <= 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "an overlap needs a match that earns")
+        _ = checked_cost(match_score, "a match's reward")
         return Self(Self.ENDS, UNBOUNDED, UNBOUNDED, UNBOUNDED, UNBOUNDED, match_score, Anchor.START, -1, -1)
 
     def is_global(self) -> Bool:

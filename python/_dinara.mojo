@@ -388,7 +388,10 @@ def scoring_of(table: PythonObject) raises -> Scoring:
     by row, a gap of `k` letters scoring `opening + k extension`."""
     var cells = List[Int8]()
     for cell in table[1]:
-        cells.append(Int8(Int(py=cell)))
+        var value = Int(py=cell)
+        if value < Int(Int8.MIN) or value > Int(Int8.MAX):
+            raise Error("a table's cells lie within -128 and 127")
+        cells.append(Int8(value))
     return Scoring.tabulated(String(py=table[0]), cells^, Int(py=table[2]), Int(py=table[3]))
 
 

@@ -110,6 +110,12 @@ def spread[F: def(Int) -> None](work: F, items: Int, workers: Int):
     parallelize(work, items, workers)
 
 
+def thread_count(asked: Int, items: Int) -> Int:
+    """Threads for `items` items when `asked` for so many: at least one, and no more than there are items nor
+    than the machine runs at once, past which they would only take turns, each holding its own memory."""
+    return max(min(asked, items, hardware_threads()), 1)
+
+
 def hardware_threads() -> Int:
     """Threads this process may actually run on, which an affinity mask or a cgroup quota narrows.
 
@@ -149,7 +155,7 @@ struct Placement(ImplicitlyCopyable, TrivialRegisterPassable):
         """Normalizes rather than trusts, so a host run cannot carry an accelerator index."""
         self.device = device
         self.gpu_id = max(gpu_id, 0) if device == Device.GPU else 0
-        self.threads = max(threads, 1)
+        self.threads = thread_count(threads, Int.MAX)
 
     @staticmethod
     def on_cpu(threads: Int) -> Self:

@@ -44,8 +44,11 @@ Apache-2.0 as well (see NOTICE).
 
 ### Interfaces
 
-- A C API with a C++ wrapper (`c/dinara.h`, `pixi run build-c`), batches included.
-- A Python package (`pixi run build-python`, `pixi run build-wheel`), any CPython 3.
+- A C API with a C++ wrapper (`c/dinara.h`, `pixi run build-c`), batches included: a batch or a
+  search asked for threads starts its own, so the caller's threads may each ask at once; a length
+  below zero is `DINARA_INVALID_LENGTH`.
+- A Python package (`pixi run build-python`, `pixi run build-wheel`), any CPython 3: sequences
+  ASCII `str` or `bytes`, anything else refused.
 - A command-line aligner, `dinara-align` (`pixi run build-cli`): FASTA, FASTQ or pairs in, a table,
   SAM or PAF out.
 

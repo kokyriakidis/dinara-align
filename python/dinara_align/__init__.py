@@ -60,10 +60,28 @@ _ENDS, _EXTENSION, _LOCAL, _OVERLAP = 0, 1, 2, 3
 
 
 def _text(sequence: Text) -> str:
-    """`sequence` as the `str` the extension takes, `bytes` decoded as ASCII."""
+    """`sequence` as the `str` the extension takes, `bytes` decoded as ASCII: refused unless a `str` or
+    `bytes`, with `TypeError`, and unless ASCII, with `ValueError`, as positions count letters as bytes."""
     if isinstance(sequence, bytes):
         return sequence.decode("ascii")
+    if not isinstance(sequence, str):
+        raise TypeError(f"a sequence is a str or bytes, not {type(sequence).__name__}")
+    if not sequence.isascii():
+        raise ValueError("a sequence holds ASCII letters alone")
     return sequence
+
+
+def _ints(*values) -> tuple:
+    """`values`, refused with `TypeError` unless each is an `int`."""
+    for value in values:
+        if not isinstance(value, int):
+            raise TypeError(f"an integer, not {type(value).__name__}")
+    return values
+
+
+def _nothing_fits(max_cost: Optional[int]) -> bool:
+    """Whether a cap below zero leaves no alignment within it, as the library counts one."""
+    return max_cost is not None and _ints(max_cost)[0] < 0
 
 
 def _call(function, *args):
@@ -124,7 +142,7 @@ class Costs:
 
     def _fields(self) -> tuple:
         """The costs as the extension takes them, in `dinara_costs`'s order."""
-        return (
+        return _ints(
             self.mismatch,
             self.opening,
             self.extension,
@@ -190,6 +208,10 @@ class Mode:
         """The best-scoring alignment fixed at one end of both, free to stop anywhere: a seed's
         extension, with KSW2's Z-drop when `zdrop` is given, and with `end_bonus` aligned to the query's
         far end when that scores within the bonus of the best stop, as KSW2's end bonus chooses."""
+        if zdrop is not None and _ints(zdrop)[0] < 0:
+            raise ValueError("a Z-drop below zero")
+        if end_bonus is not None and _ints(end_bonus)[0] < 0:
+            raise ValueError("an end bonus below zero")
         return Mode(
             _EXTENSION,
             match_score=match_score,
@@ -210,6 +232,8 @@ class Mode:
 
     def _fields(self) -> tuple:
         """The mode as the extension takes it, in `dinara_mode`'s order, free letters capped at `UNBOUNDED`."""
+        _ints(self.kind, self.reference_start, self.reference_end, self.query_start, self.query_end)
+        _ints(self.match_score, self.anchor, self.zdrop, self.end_bonus)
         return (
             self.kind,
             min(self.reference_start, UNBOUNDED),
@@ -274,8 +298,15 @@ class Scoring:
         return Scoring(alphabet, tuple(table), opening, extension)
 
     def _fields(self) -> tuple:
-        """`(alphabet, cells, opening, extension)`, as the extension takes a `Scoring`."""
-        return (self.alphabet, list(self.table), self.opening, self.extension)
+        """`(alphabet, cells, opening, extension)`, as the extension takes a `Scoring`: each cell an `int`
+        of -128 to 127, which the table holds."""
+        if not isinstance(self.alphabet, str) or not self.alphabet.isascii():
+            raise ValueError("an alphabet is a str of ASCII letters")
+        cells = list(_ints(*self.table))
+        if any(cell < -128 or cell > 127 for cell in cells):
+            raise ValueError("a table's cells lie within -128 and 127")
+        _ints(self.opening, self.extension)
+        return (self.alphabet, cells, self.opening, self.extension)
 
 
 @dataclass(frozen=True)
@@ -387,6 +418,9 @@ def _options(band: Optional[Band], max_cost: Optional[int], eqx: bool, ties: str
     if ties not in ("left", "right"):
         raise ValueError("ties: 'left' or 'right'")
     band = band or Band()
+    _ints(band.low, band.high)
+    if max_memory is not None:
+        _ints(max_memory)
     return (
         band.low,
         band.high,
@@ -408,7 +442,10 @@ def distance(
 ) -> Optional[int]:
     """The least cost of aligning `query` to `reference` as `mode` asks, or None past `max_cost`."""
     options = _options(band, max_cost, True, "left", None)
-    return _call(_dinara.distance, _text(reference), _text(query), costs._fields(), mode._fields(), options)
+    arguments = (_text(reference), _text(query), costs._fields(), mode._fields(), options)
+    if _nothing_fits(max_cost):
+        return None
+    return _call(_dinara.distance, *arguments)
 
 
 def align(
@@ -431,7 +468,10 @@ def align(
         found = _call(_dinara.scoring_align, _text(reference), _text(query), costs._fields(), mode._fields(), eqx)
         return Alignment(*found)
     options = _options(band, max_cost, eqx, ties, max_memory)
-    found = _call(_dinara.align, _text(reference), _text(query), costs._fields(), mode._fields(), options)
+    arguments = (_text(reference), _text(query), costs._fields(), mode._fields(), options)
+    if _nothing_fits(max_cost):
+        return None
+    found = _call(_dinara.align, *arguments)
     return None if found is None else Alignment(*found)
 
 
@@ -455,7 +495,10 @@ class Aligner:
     ) -> Optional[int]:
         """`distance`, through this aligner's memory."""
         options = _options(band, max_cost, True, "left", None)
-        return _call(self._aligner.distance, _text(reference), _text(query), costs._fields(), mode._fields(), options)
+        arguments = (_text(reference), _text(query), costs._fields(), mode._fields(), options)
+        if _nothing_fits(max_cost):
+            return None
+        return _call(self._aligner.distance, *arguments)
 
     def align(
         self,
@@ -472,7 +515,10 @@ class Aligner:
     ) -> Optional[Alignment]:
         """`align`, through this aligner's memory: the same alignment, the CIGAR its `ties` picks."""
         options = _options(band, max_cost, eqx, ties, max_memory)
-        found = _call(self._aligner.align, _text(reference), _text(query), costs._fields(), mode._fields(), options)
+        arguments = (_text(reference), _text(query), costs._fields(), mode._fields(), options)
+        if _nothing_fits(max_cost):
+            return None
+        found = _call(self._aligner.align, *arguments)
         return None if found is None else Alignment(*found)
 
 
@@ -515,15 +561,15 @@ def distances(
 ) -> list:
     """Every pair's `distance`, the pairs spread over `threads` threads, the caller's own alone for zero."""
     options = _options(band, max_cost, True, "left", None)
-    return _call(
-        _dinara.distances,
+    arguments = (
         [_text(item) for item in references],
         [_text(item) for item in queries],
         costs._fields(),
         mode._fields(),
-        options,
-        threads,
     )
+    if _nothing_fits(max_cost) and len(arguments[0]) == len(arguments[1]):
+        return [None] * len(arguments[0])
+    return _call(_dinara.distances, *arguments, options, _ints(threads)[0])
 
 
 def alignments(
@@ -541,15 +587,15 @@ def alignments(
 ) -> list:
     """Every pair's `align`, the pairs spread over `threads` threads, the caller's own alone for zero."""
     options = _options(band, max_cost, eqx, ties, max_memory)
-    found = _call(
-        _dinara.alignments,
+    arguments = (
         [_text(item) for item in references],
         [_text(item) for item in queries],
         costs._fields(),
         mode._fields(),
-        options,
-        threads,
     )
+    if _nothing_fits(max_cost) and len(arguments[0]) == len(arguments[1]):
+        return [None] * len(arguments[0])
+    found = _call(_dinara.alignments, *arguments, options, _ints(threads)[0])
     return [None if item is None else Alignment(*item) for item in found]
 
 
@@ -579,13 +625,8 @@ def search(
     many alone, with `max_cost` those within it, with `aligned` their alignments. A local search scores
     a block of references at once, one to a SIMD lane."""
     options = _options(None, max_cost, True, ties, None)
-    found = _call(
-        _dinara.search,
-        [_text(item) for item in references],
-        _text(query),
-        costs._fields(),
-        mode._fields(),
-        options,
-        (best or 0, aligned, threads),
-    )
+    arguments = ([_text(item) for item in references], _text(query), costs._fields(), mode._fields())
+    if _nothing_fits(max_cost):
+        return []
+    found = _call(_dinara.search, *arguments, options, (_ints(best or 0)[0], aligned, _ints(threads)[0]))
     return [Hit(index, score, None if alignment is None else Alignment(*alignment)) for index, score, alignment in found]

@@ -100,23 +100,35 @@ def read_records(path: String) raises -> List[Record]:
         if line.byte_length() == 0:
             continue
         if line.startswith(">"):
-            var name = String(line.removeprefix(">").split(" ")[0])
+            var name = record_name(line.removeprefix(">"), path)
             var sequence = String()
             while index < len(lines) and not String(lines[index]).startswith(">"):
                 sequence += String(lines[index].strip())
                 index += 1
             records.append(Record(name, sequence.upper()))
         elif line.startswith("@"):
-            var name = String(line.removeprefix("@").split(" ")[0])
-            if index >= len(lines):
-                raise Error(String("a FASTQ record without its sequence in ", path))
-            var sequence = String(lines[index].strip()).upper()
-            # The sequence line, its `+` line and the qualities.
+            var name = record_name(line.removeprefix("@"), path)
+            # The sequence line, its `+` line and as many qualities, each a line of its own.
+            if index + 2 >= len(lines):
+                raise Error(String(path, ": the FASTQ record `", name, "` is cut short"))
+            var sequence = String(lines[index].strip())
+            var plus = String(lines[index + 1].strip())
+            var qualities = String(lines[index + 2].strip())
+            if not plus.startswith("+") or qualities.byte_length() != sequence.byte_length():
+                raise Error(String(path, ": the FASTQ record `", name, "` lacks its `+` line or its qualities"))
             index += 3
-            records.append(Record(name, sequence))
+            records.append(Record(name, sequence.upper()))
         else:
             raise Error(String(path, ": neither FASTA nor FASTQ at `", line, "`"))
     return records^
+
+
+def record_name(header: StringSlice, path: String) raises -> String:
+    """A record's name: its header up to the first space or tab, which SAM and PAF take as a field."""
+    var words = String(header).split()
+    if len(words) == 0:
+        raise Error(String(path, ": a record without a name"))
+    return String(words[0])
 
 
 def numbers(text: String) raises -> List[Int]:
@@ -167,7 +179,13 @@ def mode_of(text: String, match_score: Int, zdrop: Int, end_bonus: Int) raises -
     elif kind == "overlap" and len(values) == 1:
         return Mode.overlap(values[0])
     elif kind == "extension":
-        var reward = Int(String(String(text.split(":")[1]).split(",")[0]))
+        var parts = List[String]()
+        if ":" in text:
+            for part in String(text.split(":")[1]).split(","):
+                parts.append(String(part))
+        if len(parts) == 0 or len(parts) > 2 or (len(parts) == 2 and parts[1] != "end"):
+            raise Error(String("--mode ", text, ": extension:R or extension:R,end"))
+        var reward = Int(String(parts[0]))
         var anchor = Anchor.END if text.endswith(",end") else Anchor.START
         var drop = Optional[Int](zdrop) if zdrop >= 0 else None
         var bonus = Optional[Int](end_bonus) if end_bonus >= 0 else None
@@ -229,6 +247,7 @@ def run() raises:
     var both_strands = False
     var cost_only = False
     var format = String("tsv")
+    var format_given = False
     var threads = Optional[Int]()
     var memory = DEFAULT_MAX_MEMORY
     var index = 1
@@ -274,13 +293,21 @@ def run() raises:
             match_score = Int(value)
         elif argument == "--zdrop":
             zdrop = Int(value)
+            if zdrop < 0:
+                fail("--zdrop: zero or more")
         elif argument == "--end-bonus":
             end_bonus = Int(value)
+            if end_bonus < 0:
+                fail("--end-bonus: zero or more")
         elif argument == "--band":
             var edges = numbers(value)
+            if len(edges) != 1 and len(edges) != 2:
+                fail("--band: W, or LOW,HIGH")
             band = Band.around(edges[0]) if len(edges) == 1 else Band(edges[0], edges[1])
         elif argument == "--max-cost":
             max_cost = Int(value)
+            if max_cost < 0:
+                fail("--max-cost: zero or more")
         elif argument == "--ties":
             if value != "left" and value != "right":
                 fail("--ties: left or right")
@@ -289,6 +316,7 @@ def run() raises:
             if value != "tsv" and value != "sam" and value != "paf":
                 fail("--format: tsv, sam or paf")
             format = value
+            format_given = True
         elif argument == "--threads":
             threads = Int(value)
         elif argument == "--max-memory":
@@ -308,10 +336,18 @@ def run() raises:
     var costs = costs_of(costs_text)
     if deletions:
         var values = numbers(deletions.value())
-        costs = costs.with_deletions(values[0], values[1], values[2], values[3]) if len(
-            values
-        ) == 4 else costs.with_deletions(values[0], values[1])
+        if len(values) == 2:
+            costs = costs.with_deletions(values[0], values[1])
+        elif len(values) == 4:
+            costs = costs.with_deletions(values[0], values[1], values[2], values[3])
+        else:
+            fail("--deletions: O,E or O,E,O2,E2")
     var mode = mode_of(mode_text, match_score, zdrop, end_bonus)
+    # Options that would otherwise be dropped without a word.
+    if mode.is_scored() and max_cost >= 0:
+        fail("--max-cost: a mode with a match score takes no cap")
+    if cost_only and (both_strands or format_given):
+        fail("--distance prints costs alone, on the forward strand, as tsv")
 
     # The pairs: names, references and queries.
     var names = List[String]()
@@ -326,7 +362,8 @@ def run() raises:
         references.append(literal_reference.value())
         queries.append(literal_query.value())
     elif pairs_file:
-        for line in open(pairs_file.value(), "r").read().split("\n"):
+        for raw in open(pairs_file.value(), "r").read().split("\n"):
+            var line = String(raw).removesuffix("\r")
             if line.byte_length() == 0:
                 continue
             var fields = line.split("\t")
@@ -403,10 +440,25 @@ def run() raises:
     if format == "sam":
         print("@HD\tVN:1.6\tSO:unsorted")
         var seen = List[String]()
+        var lengths = List[Int]()
         for pair in range(len(references)):
-            if reference_names[pair] not in seen:
+            var length = references[pair].byte_length()
+            var known = -1
+            for slot in range(len(seen)):
+                if seen[slot] == reference_names[pair]:
+                    known = slot
+            if known < 0:
                 seen.append(reference_names[pair])
-                print(String("@SQ\tSN:", reference_names[pair], "\tLN:", references[pair].byte_length()))
+                lengths.append(length)
+                print(String("@SQ\tSN:", reference_names[pair], "\tLN:", length))
+            elif lengths[known] != length:
+                fail(
+                    String(
+                        "two references named ",
+                        reference_names[pair],
+                        " of different lengths, which SAM cannot tell apart",
+                    )
+                )
         print("@PG\tID:dinara-align\tPN:dinara-align")
     elif format == "tsv":
         print("query\treference\tstrand\tcost\tscore\treference_start\treference_end\tquery_start\tquery_end\tcigar")
@@ -423,10 +475,14 @@ def run() raises:
             strand = "-"
             query = flipped[pair]
         var length = query.byte_length()
+        # SAM writes an empty sequence as `*`, and an alignment of no letters is no mapping.
+        var sequence = query if length > 0 else String("*")
+        if format == "sam" and found and found.value().cigar.byte_length() == 0:
+            found = None
         if not found:
             if format == "sam":
                 # Flag 4: the read is unmapped.
-                print(names[pair], 4, "*", 0, 0, "*", "*", 0, 0, query, "*", sep="\t")
+                print(names[pair], 4, "*", 0, 0, "*", "*", 0, 0, sequence, "*", sep="\t")
             elif format == "tsv":
                 print(names[pair], reference_names[pair], "*", "*", "*", "*", "*", "*", "*", "*", sep="\t")
             continue
@@ -454,11 +510,11 @@ def run() raises:
                 reference_names[pair],
                 hit.reference_start + 1,
                 255,
-                hit.clipped_cigar(length) if hit.cigar.byte_length() > 0 else "*",
+                hit.clipped_cigar(length),
                 "*",
                 0,
                 0,
-                query,
+                sequence,
                 "*",
                 String("NM:i:", hit.edit_distance(references[pair], query)),
                 String("MD:Z:", hit.mismatch_string(references[pair], query)),

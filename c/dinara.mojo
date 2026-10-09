@@ -14,7 +14,7 @@ header).
 """
 
 from std.atomic import Atomic
-from std.ffi import external_call
+from std.ffi import c_int, c_size_t, external_call
 from std.sys import size_of
 
 
@@ -26,6 +26,7 @@ from dinara_align import (
     Band,
     Costs,
     ErrorKind,
+    Hit,
     LocalScores,
     Mode,
     Ties,
@@ -61,6 +62,8 @@ comptime OUTSIDE_BAND = -5
 comptime INVALID_MODE = -6
 """A mode that cannot serve what was asked: the least cost of an extension, a local alignment or an
 overlap, which maximize a score, a cap on any of them, or a band on the last two."""
+comptime INVALID_LENGTH = -7
+"""A sequence of fewer than no letters."""
 
 comptime C_ENDS_FREE = 0
 """`DINARA_ENDS_FREE`: a `dinara_mode`'s kind for free ends, global among them."""
@@ -88,6 +91,21 @@ def plain_bytes(bytes: ImmPointer[UInt8, MutAnyOrigin], length: Int) -> Bool:
         if bytes[unsafe_offset=index] >= FIRST_SENTINEL:
             return False
     return True
+
+
+def pair_code(
+    reference: ImmPointer[UInt8, MutAnyOrigin],
+    reference_length: Int,
+    query: ImmPointer[UInt8, MutAnyOrigin],
+    query_length: Int,
+) -> Int:
+    """Zero for a pair the library takes, else why not: a negative length, or a byte it refuses (see
+    `plain_bytes`)."""
+    if reference_length < 0 or query_length < 0:
+        return INVALID_LENGTH
+    if not plain_bytes(reference, reference_length) or not plain_bytes(query, query_length):
+        return UNSUPPORTED_SYMBOLS
+    return 0
 
 
 def costs_of(fields: OptionalPointer[Int, MutAnyOrigin]) raises AlignmentError -> Costs:
@@ -182,8 +200,9 @@ def distance_code(
     mut space: SearchSpace,
 ) -> Int:
     """One pair's least cost, or its code (see `dinara_distance`), through `space`'s searches."""
-    if not plain_bytes(reference, reference_length) or not plain_bytes(query, query_length):
-        return UNSUPPORTED_SYMBOLS
+    var refused = pair_code(reference, reference_length, query, query_length)
+    if refused != 0:
+        return refused
     try:
         var first = sequence(reference, reference_length)
         var second = sequence(query, query_length)
@@ -210,8 +229,9 @@ def align_into(
 ) -> Int:
     """One pair's optimal alignment into `alignment`, zero, or its code (see `dinara_align`), through
     `space`'s searches, which a batch's worker keeps from pair to pair."""
-    if not plain_bytes(reference, reference_length) or not plain_bytes(query, query_length):
-        return UNSUPPORTED_SYMBOLS
+    var refused = pair_code(reference, reference_length, query, query_length)
+    if refused != 0:
+        return refused
     var capped = asked.max_cost >= 0
     if capped and mode.kind != Mode.ENDS:
         return INVALID_MODE
@@ -407,8 +427,9 @@ def dinara_score(
 ) abi("C") -> Int:
     """The best score `dinara_align` would return, with no alignment traced (see `score`), into
     `found`: zero, or a negative code."""
-    if not plain_bytes(reference, reference_length) or not plain_bytes(query, query_length):
-        return UNSUPPORTED_SYMBOLS
+    var refused = pair_code(reference, reference_length, query, query_length)
+    if refused != 0:
+        return refused
     try:
         var asked = options_of(options)
         found[] = score(
@@ -436,8 +457,9 @@ def dinara_local_scores(
 ) abi("C") -> Int:
     """A local alignment's best score, its end and SSW's second best (see `local_scores`) into
     `found`, a `dinara_local_scores_result`: zero, or a negative code."""
-    if not plain_bytes(reference, reference_length) or not plain_bytes(query, query_length):
-        return UNSUPPORTED_SYMBOLS
+    var refused = pair_code(reference, reference_length, query, query_length)
+    if refused != 0:
+        return refused
     try:
         var scores: LocalScores
         if window >= 0:
@@ -483,7 +505,8 @@ struct ByteTexts(Texts, TrivialRegisterPassable):
 
     @always_inline
     def length(self, index: Int) -> Int:
-        return self.lengths[unsafe_offset=index]
+        """Pair `index`'s length, none for a negative one, which `refused_pairs` keeps from the lanes."""
+        return max(self.lengths[unsafe_offset=index], 0)
 
     @always_inline
     def letters(self, index: Int) -> ImmPointer[UInt8, ImmUntrackedOrigin]:
@@ -505,16 +528,22 @@ def refused_pairs(
     query_lengths: CInts,
     workers: Int,
 ) -> List[Bool]:
-    """Which pairs hold a byte the library refuses (see `plain_bytes`), on `workers` threads: the lanes leave
-    them, and each is answered with its own code."""
+    """Which pairs the library refuses (see `pair_code`), on `workers` threads: the lanes leave them, and
+    each is answered with its own code."""
     var refused = List[Bool](length=max(pairs, 1), fill=False)
     var refused_ptr = refused.unsafe_ptr()
 
     def refuse(stretch: Int) {imm}:
         """Marks stretch `stretch`'s pairs holding such a byte."""
         for index in range(pairs * stretch // workers, pairs * (stretch + 1) // workers):
-            if not plain_bytes(references[unsafe_offset=index], reference_lengths[unsafe_offset=index]) or not (
-                plain_bytes(queries[unsafe_offset=index], query_lengths[unsafe_offset=index])
+            if (
+                pair_code(
+                    references[unsafe_offset=index],
+                    reference_lengths[unsafe_offset=index],
+                    queries[unsafe_offset=index],
+                    query_lengths[unsafe_offset=index],
+                )
+                != 0
             ):
                 refused_ptr[unsafe_offset=index] = True
 
@@ -549,7 +578,41 @@ def dinara_distances(
     if pairs <= 0:
         return 0
     var workers = workers_for(pairs, threads)
+    if workers == 1:
+        distances_part(
+            pairs, references, reference_lengths, queries, query_lengths, wanted_costs, wanted_mode, asked, results
+        )
+        return 0
+    var job = SharedBatch(
+        DISTANCES,
+        dealt_chunks(pair_weights(pairs, reference_lengths, query_lengths), workers),
+        references,
+        reference_lengths,
+        queries,
+        query_lengths,
+        wanted_costs,
+        wanted_mode,
+        asked,
+        results,
+        results,
+    )
+    shared_out(job, workers)
+    return 0
 
+
+def distances_part(
+    pairs: Int,
+    references: CSequences,
+    reference_lengths: CInts,
+    queries: CSequences,
+    query_lengths: CInts,
+    wanted_costs: Costs,
+    wanted_mode: Mode,
+    asked: Options,
+    results: MutPointer[Int, MutAnyOrigin],
+):
+    """`dinara_distances` of `pairs` pairs on the caller's thread alone."""
+    var workers = 1
     # As `distances` sends them (see `api.distances_in_lanes`): the lanes first, every pair whose bytes the library
     # takes; a pair it refuses, and every pair of costs it refuses, one at a time for its own code, the longest
     # first.
@@ -596,7 +659,6 @@ def dinara_distances(
         )
 
     each_pair(one, longest_first(pairs, reference_texts, query_texts, workers), workers)
-    return 0
 
 
 @export("dinara_alignments")
@@ -628,7 +690,51 @@ def dinara_alignments(
     if pairs <= 0:
         return 0
     var workers = workers_for(pairs, threads)
+    if workers == 1:
+        alignments_part(
+            pairs,
+            references,
+            reference_lengths,
+            queries,
+            query_lengths,
+            wanted_costs,
+            wanted_mode,
+            asked,
+            alignments,
+            statuses,
+        )
+        return 0
+    var job = SharedBatch(
+        ALIGNMENTS,
+        dealt_chunks(pair_weights(pairs, reference_lengths, query_lengths), workers),
+        references,
+        reference_lengths,
+        queries,
+        query_lengths,
+        wanted_costs,
+        wanted_mode,
+        asked,
+        alignments,
+        statuses,
+    )
+    shared_out(job, workers)
+    return 0
 
+
+def alignments_part(
+    pairs: Int,
+    references: CSequences,
+    reference_lengths: CInts,
+    queries: CSequences,
+    query_lengths: CInts,
+    wanted_costs: Costs,
+    wanted_mode: Mode,
+    asked: Options,
+    alignments: MutPointer[Int, MutAnyOrigin],
+    statuses: MutPointer[Int, MutAnyOrigin],
+):
+    """`dinara_alignments` of `pairs` pairs on the caller's thread alone."""
+    var workers = 1
     # As `alignments` sends them (see `api.alignments_in_lanes`): the lanes first, every pair whose bytes the
     # library takes, each one's CIGAR spelled from their path; a pair the library refuses, every pair of costs it
     # refuses or of a mode that scores, and a pair the searches might split, one at a time for its own code, the
@@ -704,7 +810,189 @@ def dinara_alignments(
         )
 
     each_pair(one, longest_first(pairs, reference_texts, query_texts, workers), workers)
-    return 0
+
+
+comptime DISTANCES = 0
+"""A `SharedBatch` of `dinara_distances`."""
+comptime ALIGNMENTS = 1
+"""A `SharedBatch` of `dinara_alignments`."""
+
+comptime THREAD_STACK = 8 << 20
+"""The stack a thread the library starts gets: a process's main thread's, where a platform's default for
+other threads, 512 KiB on macOS, is far less."""
+
+
+def pair_weights(pairs: Int, reference_lengths: CInts, query_lengths: CInts) -> List[Int]:
+    """Each pair's letters, by which `dealt_chunks` orders the work."""
+    var weights = List[Int](capacity=pairs)
+    for index in range(pairs):
+        weights.append(max(reference_lengths[unsafe_offset=index], 0) + max(query_lengths[unsafe_offset=index], 0))
+    return weights^
+
+
+def dealt_chunks(weights: List[Int], workers: Int) -> List[Int]:
+    """The items in eight chunks a worker, or one an item when there are fewer, as `api.scores` deals a
+    batch: each chunk's first item and the one past its last, the heaviest chunk first, so the longest
+    work starts first and the rest fills in around it."""
+    var items = len(weights)
+    var count = max(min(items, workers * 8), 1)
+    var totals = List[Int](length=count, fill=0)
+    for chunk in range(count):
+        for index in range(items * chunk // count, items * (chunk + 1) // count):
+            totals[chunk] += weights[index]
+    var order = List[Int](capacity=count)
+    for chunk in range(count):
+        order.append(chunk)
+
+    def heavier(left: Int, right: Int) {imm totals} -> Bool:
+        """Whether chunk `left` goes before `right`: the heavier, then the earlier."""
+        if totals[left] != totals[right]:
+            return totals[left] > totals[right]
+        return left < right
+
+    sort(order, heavier)
+    var bounds = List[Int](capacity=2 * count)
+    for chunk in order:
+        bounds.append(items * chunk // count)
+        bounds.append(items * (chunk + 1) // count)
+    return bounds^
+
+
+struct SharedBatch(Movable):
+    """A C batch dealt out over threads the library starts itself (see `shared_out`), each chunk of it a
+    batch of its own on one thread.
+
+    Not Mojo's own threads: two of a caller's threads each asking a batch for several at once could leave
+    one waiting on the runtime for good, and a C caller's threads are its own to run as it likes."""
+
+    var kind: Int
+    """`DISTANCES` or `ALIGNMENTS`."""
+    var bounds: List[Int]
+    """The chunks, in the order they are taken (see `dealt_chunks`)."""
+    var next: Atomic[Int64]
+    """The next chunk to take."""
+    var references: Int
+    """The caller's arrays, as addresses: what a C caller hands over outlives its call."""
+    var reference_lengths: Int
+    var queries: Int
+    var query_lengths: Int
+    var costs: Costs
+    var mode: Mode
+    var asked: Options
+    var results: Int
+    """Distances' results, or alignments' records."""
+    var statuses: Int
+    """Alignments' statuses."""
+
+    def __init__(
+        out self,
+        kind: Int,
+        var bounds: List[Int],
+        references: CSequences,
+        reference_lengths: CInts,
+        queries: CSequences,
+        query_lengths: CInts,
+        costs: Costs,
+        mode: Mode,
+        asked: Options,
+        results: MutPointer[Int, MutAnyOrigin],
+        statuses: MutPointer[Int, MutAnyOrigin],
+    ):
+        self.kind = kind
+        self.bounds = bounds^
+        self.next = Atomic[Int64](0)
+        self.references = Int(references)
+        self.reference_lengths = Int(reference_lengths)
+        self.queries = Int(queries)
+        self.query_lengths = Int(query_lengths)
+        self.costs = costs
+        self.mode = mode
+        self.asked = asked
+        self.results = Int(results)
+        self.statuses = Int(statuses)
+
+    def run(self, chunk: Int):
+        """Chunk `chunk`'s pairs, its own batch."""
+        var first = self.bounds[2 * chunk]
+        var pairs = self.bounds[2 * chunk + 1] - first
+        if pairs <= 0:
+            return
+        var references = CSequences(unsafe_from_address=self.references).unsafe_offset(first)
+        var reference_lengths = CInts(unsafe_from_address=self.reference_lengths).unsafe_offset(first)
+        var queries = CSequences(unsafe_from_address=self.queries).unsafe_offset(first)
+        var query_lengths = CInts(unsafe_from_address=self.query_lengths).unsafe_offset(first)
+        var results = MutPointer[Int, MutAnyOrigin](unsafe_from_address=self.results)
+        if self.kind == DISTANCES:
+            distances_part(
+                pairs,
+                references,
+                reference_lengths,
+                queries,
+                query_lengths,
+                self.costs,
+                self.mode,
+                self.asked,
+                results.unsafe_offset(first),
+            )
+        else:
+            alignments_part(
+                pairs,
+                references,
+                reference_lengths,
+                queries,
+                query_lengths,
+                self.costs,
+                self.mode,
+                self.asked,
+                results.unsafe_offset(first * ALIGNMENT_FIELDS),
+                MutPointer[Int, MutAnyOrigin](unsafe_from_address=self.statuses).unsafe_offset(first),
+            )
+
+
+comptime Raw = MutPointer[NoneType, MutAnyOrigin]
+
+
+def batch_worker(argument: Raw) abi("C") -> Raw:
+    """A thread's share of a `SharedBatch`: the next chunk until none is left."""
+    ref job = argument.unsafe_bitcast[SharedBatch]()[]
+    var chunks = len(job.bounds) // 2
+    while True:
+        var chunk = Int(job.next.fetch_add(1))
+        if chunk >= chunks:
+            return argument
+        job.run(chunk)
+
+
+def shared_out(mut job: SharedBatch, workers: Int):
+    """`job` on `workers` threads (see `start_threads`)."""
+    start_threads(batch_worker, Pointer(to=job).unsafe_origin_cast[MutAnyOrigin]().unsafe_bitcast[NoneType](), workers)
+
+
+def start_threads(entry: def(Raw) abi("C") thin -> Raw, argument: Raw, workers: Int):
+    """`entry(argument)` on `workers` threads: the caller's own and as many more as the library can start,
+    each taking the next chunk until none is left, so a thread that fails to start leaves its share to
+    the rest."""
+    if workers <= 1:
+        _ = entry(argument)
+        return
+    # Room for any platform's `pthread_attr_t`.
+    var attributes = List[UInt64](length=16, fill=0)
+    var attribute = attributes.unsafe_ptr().unsafe_bitcast[NoneType]().unsafe_origin_cast[MutAnyOrigin]()
+    var handles = List[UInt64](length=workers, fill=0)
+    var started = List[Bool](length=workers, fill=False)
+    if Int(external_call["pthread_attr_init", c_int](attribute)) == 0:
+        _ = external_call["pthread_attr_setstacksize", c_int](attribute, c_size_t(THREAD_STACK))
+        for index in range(workers - 1):
+            var created = external_call["pthread_create", c_int](
+                handles.unsafe_ptr().unsafe_offset(index), attribute, entry, argument
+            )
+            started[index] = Int(created) == 0
+        _ = external_call["pthread_attr_destroy", c_int](attribute)
+    _ = entry(argument)
+    for index in range(workers - 1):
+        if started[index]:
+            _ = external_call["pthread_join", c_int](handles[index], OptionalPointer[NoneType, MutAnyOrigin]())
+    _ = attributes^
 
 
 def copied(text: String) -> OptionalPointer[UInt8, MutAnyOrigin]:
@@ -744,28 +1032,142 @@ def dinara_search(
 ) abi("C") -> Int:
     """The query against `count` references (see `search`): the hits, best first, their places into
     `indices` and their scores into `scores`, each with room for `count`, and their number back, or a
-    negative code. `best` above zero keeps that many; the options' cap drops what passes it."""
-    if not plain_bytes(query, query_length):
-        return UNSUPPORTED_SYMBOLS
-    try:
-        var asked = options_of(options)
-        var texts = List[String](capacity=count)
-        for index in range(count):
-            if not plain_bytes(references[unsafe_offset=index], reference_lengths[unsafe_offset=index]):
-                return UNSUPPORTED_SYMBOLS
-            texts.append(sequence(references[unsafe_offset=index], reference_lengths[unsafe_offset=index]))
-        var hits = search(
-            texts,
-            sequence(query, query_length),
-            costs_of(costs),
-            mode_of(mode),
-            best=Optional[Int](best) if best > 0 else None,
-            max_cost=Optional[Int](asked.max_cost) if asked.max_cost >= 0 else None,
-            threads=Optional[Int](threads) if threads > 0 else None,
+    negative code. `best` above zero keeps that many; the options' cap drops what passes it. The
+    references spread over `threads` threads the library starts itself (see `SharedSearch`)."""
+    if count <= 0:
+        return 0
+    for index in range(count):
+        var refused = pair_code(
+            references[unsafe_offset=index], reference_lengths[unsafe_offset=index], query, query_length
         )
-        for rank in range(len(hits)):
-            indices[unsafe_offset=rank] = hits[rank].index
-            scores[unsafe_offset=rank] = hits[rank].score
-        return len(hits)
+        if refused != 0:
+            return refused
+    var wanted_costs: Costs
+    var wanted_mode: Mode
+    try:
+        wanted_costs = costs_of(costs)
+        wanted_mode = mode_of(mode)
     except error:
         return failure(error)
+    var asked = options_of(options)
+    var texts = List[String](capacity=count)
+    for index in range(count):
+        texts.append(sequence(references[unsafe_offset=index], reference_lengths[unsafe_offset=index]))
+    var workers = workers_for(count, threads)
+    var weights = List[Int](capacity=count)
+    for index in range(count):
+        weights.append(reference_lengths[unsafe_offset=index])
+    var job = SharedSearch(
+        dealt_chunks(weights, workers),
+        texts^,
+        sequence(query, query_length),
+        wanted_costs,
+        wanted_mode,
+        asked.max_cost,
+        best,
+    )
+    start_threads(search_worker, Pointer(to=job).unsafe_origin_cast[MutAnyOrigin]().unsafe_bitcast[NoneType](), workers)
+    # The code a serial search raises: the first chunk's, in the references' order, holding one.
+    var chunks = len(job.codes)
+    var first_code = 0
+    var first_at = Int.MAX
+    for chunk in range(chunks):
+        if job.codes[chunk] != 0 and job.bounds[2 * chunk] < first_at:
+            first_code = job.codes[chunk]
+            first_at = job.bounds[2 * chunk]
+    if first_code != 0:
+        return first_code
+    # The best first, ties by the references' order, as `search` ranks them.
+    var places = List[Int]()
+    var values = List[Int]()
+    for chunk in range(chunks):
+        for hit in job.hits[chunk]:
+            places.append(hit.index + job.bounds[2 * chunk])
+            values.append(hit.score)
+    var order = List[Int](capacity=len(places))
+    for rank in range(len(places)):
+        order.append(rank)
+
+    def ahead(left: Int, right: Int) {imm places, imm values} -> Bool:
+        """Whether hit `left` ranks before `right`: the higher score, then the earlier reference."""
+        if values[left] != values[right]:
+            return values[left] > values[right]
+        return places[left] < places[right]
+
+    sort(order, ahead)
+    var kept = min(len(order), best) if best > 0 else len(order)
+    for rank in range(kept):
+        indices[unsafe_offset=rank] = places[order[rank]]
+        scores[unsafe_offset=rank] = values[order[rank]]
+    return kept
+
+
+struct SharedSearch(Movable):
+    """`dinara_search` dealt out as `SharedBatch` deals a batch: each chunk of the references searched on
+    its own, its hits kept for the merge, which ranks them as one search does; a chunk's best `best` hold
+    every hit of the search's best."""
+
+    var bounds: List[Int]
+    var next: Atomic[Int64]
+    var texts: List[String]
+    var query: String
+    var costs: Costs
+    var mode: Mode
+    var max_cost: Int
+    var best: Int
+    var hits: List[List[Hit]]
+    """Each chunk's hits, its own references numbered from zero."""
+    var codes: List[Int]
+    """Each chunk's code, zero when it searched."""
+
+    def __init__(
+        out self,
+        var bounds: List[Int],
+        var texts: List[String],
+        var query: String,
+        costs: Costs,
+        mode: Mode,
+        max_cost: Int,
+        best: Int,
+    ):
+        var chunks = len(bounds) // 2
+        self.bounds = bounds^
+        self.next = Atomic[Int64](0)
+        self.texts = texts^
+        self.query = query^
+        self.costs = costs
+        self.mode = mode
+        self.max_cost = max_cost
+        self.best = best
+        self.hits = List[List[Hit]](capacity=chunks)
+        for _ in range(chunks):
+            self.hits.append(List[Hit]())
+        self.codes = List[Int](length=chunks, fill=0)
+
+    def run(mut self, chunk: Int):
+        """Chunk `chunk`'s references searched, its hits or its code kept."""
+        var part = List[String](capacity=self.bounds[2 * chunk + 1] - self.bounds[2 * chunk])
+        for index in range(self.bounds[2 * chunk], self.bounds[2 * chunk + 1]):
+            part.append(self.texts[index])
+        try:
+            self.hits[chunk] = search(
+                part,
+                self.query,
+                self.costs,
+                self.mode,
+                best=Optional[Int](self.best) if self.best > 0 else None,
+                max_cost=Optional[Int](self.max_cost) if self.max_cost >= 0 else None,
+            )
+        except error:
+            self.codes[chunk] = failure(error)
+
+
+def search_worker(argument: Raw) abi("C") -> Raw:
+    """A thread's share of a `SharedSearch`: the next chunk until none is left."""
+    ref job = argument.unsafe_bitcast[SharedSearch]()[]
+    var chunks = len(job.bounds) // 2
+    while True:
+        var chunk = Int(job.next.fetch_add(1))
+        if chunk >= chunks:
+            return argument
+        job.run(chunk)

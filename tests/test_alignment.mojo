@@ -2590,33 +2590,38 @@ def test_extreme_arguments_are_held_or_refused() raises:
 
 
 def test_scores_scale_past_32_bits() raises:
-    """Every cost and reward a billion times over scores a billion times over, in every mode, the sweeps
-    taking lanes as wide as the scores need: no score wraps."""
+    """Every cost and reward a hundred million times over scores as many times over, in every mode, the
+    sweeps taking lanes as wide as the scores need, past 32 bits: no score wraps. A cost past `MAX_COST`
+    is refused."""
     seed(41)
-    comptime BILLION = 1_000_000_000
+    comptime SCALE = 100_000_000
     for trial in range(12):
         var reference = random_sequence(20, 90, DNA_ALPHABET)
         var query = mutated(reference, 0.1, 3) if trial % 3 != 2 else random_sequence(20, 90, DNA_ALPHABET)
         for two in [False, True]:
             var small = Costs.two_piece(4, 6, 2, 24, 1) if two else Costs.affine(4, 6, 2)
-            var large = Costs.two_piece(4 * BILLION, 6 * BILLION, 2 * BILLION, 24 * BILLION, BILLION) if two else (
-                Costs.affine(4 * BILLION, 6 * BILLION, 2 * BILLION)
+            var large = Costs.two_piece(4 * SCALE, 6 * SCALE, 2 * SCALE, 24 * SCALE, SCALE) if two else (
+                Costs.affine(4 * SCALE, 6 * SCALE, 2 * SCALE)
             )
             var smalls: List[Mode] = [Mode.local(2), Mode.overlap(2), Mode.INFIX.with_match_score(2), Mode.extension(2)]
             var larges: List[Mode] = [
-                Mode.local(2 * BILLION),
-                Mode.overlap(2 * BILLION),
-                Mode.INFIX.with_match_score(2 * BILLION),
-                Mode.extension(2 * BILLION),
+                Mode.local(2 * SCALE),
+                Mode.overlap(2 * SCALE),
+                Mode.INFIX.with_match_score(2 * SCALE),
+                Mode.extension(2 * SCALE),
             ]
             for index in range(len(smalls)):
-                var expected = score(reference, query, small, smalls[index]) * BILLION
+                var expected = score(reference, query, small, smalls[index]) * SCALE
                 assert_equal(score(reference, query, large, larges[index]), expected)
                 assert_equal(align(reference, query, large, larges[index]).score, expected)
             assert_equal(
-                local_scores(reference, query, large, Mode.local(2 * BILLION)).score,
-                local_scores(reference, query, small, Mode.local(2)).score * BILLION,
+                local_scores(reference, query, large, Mode.local(2 * SCALE)).score,
+                local_scores(reference, query, small, Mode.local(2)).score * SCALE,
             )
+    with assert_raises():
+        _ = Costs.affine(4, 6, (1 << 32) + 1)
+    with assert_raises():
+        _ = Mode.local((1 << 32) + 1)
 
 
 def test_lanes_leave_what_they_cannot_hold() raises:
