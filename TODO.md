@@ -1,5 +1,7 @@
 # To do
 
+`[x]` done, `[~]` partly done, `[-]` tried or weighed and left, with why; `[ ]` open.
+
 Where the time still goes in a single-threaded alignment, profiled on the Skylake-X (3.3 GHz,
 pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
 
@@ -14,12 +16,12 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
   noise (measured best of five beside the owner's jobs). One sixteen-lane group did about as well on
   the long reads but cost up to 2% on short divergent pairs; on the M2 both were slower, so NEON and
   AVX2 keep one group.
-- [ ] **Three eight-lane groups at a time on AVX-512.** llvm-mca puts the paired sweep's steady loop at
+- [-] **Three eight-lane groups at a time on AVX-512.** llvm-mca puts the paired sweep's steady loop at
   24 cycles a column against a throughput bound of 11, latency-bound on each column's lane rotation,
   and a third group, which still fits AVX-512's 32 registers unspilled, at 30 cycles for three: 15%
   less a group. Measured on the Skylake-X it changed nothing within 1.5% on the long reads and pairs
   (2026-10-06): the bands it needs, 24 words and more, are rare once pruning narrows them. Left.
-- [ ] **Mispredicted branches in the inexact seed scan.** perf on the Skylake-X (2026-10-06): branch
+- [-] **Mispredicted branches in the inexact seed scan.** perf on the Skylake-X (2026-10-06): branch
   misses cost about 7% of a 1 Mbp pair's cycles at 15% and half are `inexact_matches`, the rest in
   `worth_keeping`, `score` and `exact_matches`; the bit-parallel sweep has 2 to 3%. They are short
   loops' exits, not the one-edit test, which is branch-free: about one seed a bucket, so each row's
@@ -154,7 +156,7 @@ stands on each.
   100 kbp in 1 Mbp in 0.75 s, against 21 ms and 2 s for the whole matrix; the other modes, a band or a
   cap take the wavefront at the same costs. Still open: a first bound from an estimate instead of 64,
   and a seed heuristic for the search.
-- [ ] **Traceback while sweeping, to save memory** (as TALCO does). Feasible, and left (2026-10-06):
+- [-] **Traceback while sweeping, to save memory** (as TALCO does). Feasible, and left (2026-10-06):
   every few tiles the traces from the band's top and bottom kept rows, deterministic and unable to
   cross without meeting, would settle the alignment behind where they meet and free the tile edges
   there. But the edges are the smaller part of an alignment's memory: 0.6 to 13 MB a pair against 10 to
@@ -167,7 +169,7 @@ stands on each.
   after the edges are freed, so writing them in place left the peak where it was.
 - [ ] **A\* on the diagonal transition** at low divergence. dinara-align runs a plain diagonal
   transition first and falls back to the band; it is fast below 2% but uses no heuristic there.
-- [ ] **An upper bound on the distance** to keep bounds from overshooting. Tried and left
+- [-] **An upper bound on the distance** to keep bounds from overshooting. Tried and left
   (2026-10-06): a beam, a band of 128 to 1024 rows kept around the lowest score down each tile's edge,
   whose corner is a real alignment's cost. It found the distance itself on most pairs, and one round
   at exactly the distance would save 16 to 34% of the time on long and mid-length reads on the M2,

@@ -20,7 +20,7 @@ prepare = "mkdir -p build"
 # A precompiled package is tied to the compiler that wrote it, so it is a build artifact, not a release.
 build = {cmd = "mojo precompile dinara_align -o build/dinara_align.mojoc", depends-on = ["prepare"]}
 # `$MOJO_ACCELERATOR` is empty by default, so the kernels target the host's own GPU. Set it to
-# `--target-accelerator <arch>` to target another; see the README for macOS without Xcode.
+# `--target-accelerator <arch>` to target another.
 build-tests = {cmd = "mojo build -I . tests/test_alignment.mojo -o build/test_alignment $MOJO_ACCELERATOR", depends-on = ["prepare"]}
 test = {cmd = "./build/test_alignment", depends-on = ["build-tests"]}
 # Random pairs, costs, modes, bands and caps, each answer held to the full matrix: `pixi run fuzz [cases] [seed]`.
