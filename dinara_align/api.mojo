@@ -43,7 +43,7 @@ from .scored import (
     swept,
 )
 from .lanes import LaneCosts, StringTexts, Texts, lane_alignments, lane_distances, lane_free_alignments
-from .gap_affine import kept_bytes, rings_within
+from .gap_affine import kept_bytes, rings_fit, rings_within
 from .gap_affine import (
     AffineCigar,
     DEFAULT_MAX_MEMORY,
@@ -254,10 +254,10 @@ def score(
     var two = costs.pieces() == 2
     _ = penalties_of(costs)
     var penalties = rewarded_penalties(mode.match_score, costs)
-    rings_within(penalties, columns, rows, DEFAULT_MAX_MEMORY)
     if mode.kind == Mode.EXTENSION:
         if not band.holds(0):
             raise outside(band)
+        rings_within(penalties, columns, rows, DEFAULT_MAX_MEMORY)
         var drop_extension = costs.cheapest_extension()
         var at_end = mode.anchor == Anchor.END
         if mode.end_bonus > 0 and not band.covers(columns, rows):
@@ -299,6 +299,7 @@ def score(
                 return reaching
         return best
     if mode.kind == Mode.ENDS and mode.is_global():
+        rings_within(penalties, columns, rows, DEFAULT_MAX_MEMORY)
         var cost = wavefront_distance[2](
             reference.as_bytes(), query.as_bytes(), penalties, Int.MAX, EndsFree(), band
         ) if two else wavefront_distance[1](
@@ -332,6 +333,95 @@ def local_scores(
     _ = penalties_of(costs)
     var span = window.or_else(max(query.byte_length() // 2, 15))
     return local_scores_of(reference.as_bytes(), query.as_bytes(), costs, mode.match_score, span)
+
+
+def distance_in_lanes(
+    reference: String, query: String, costs: Costs, mode: Mode, band: Band, max_cost: Int
+) -> Optional[Optional[Int]]:
+    """The pair's capped cost as a batch of it alone settles it in the lanes (see `distances_in_lanes`), or
+    None when they leave it: a call whose searches' rings could pass the memory allowed takes it, so it
+    answers as its batch does, and is refused only where the batch's own search is."""
+    var references: List[String] = [reference]
+    var queries: List[String] = [query]
+    var found = List[Optional[Int]](length=1, fill=None)
+    var settled = List[Bool](length=1, fill=False)
+    _ = distances_in_lanes(
+        1,
+        StringTexts.of(references),
+        StringTexts.of(queries),
+        costs,
+        mode,
+        band,
+        max_cost,
+        1,
+        found.unsafe_ptr(),
+        settled.unsafe_ptr(),
+    )
+    # The texts read both lists through pointers, so both must outlive the lanes.
+    _ = references^
+    _ = queries^
+    if not settled[0]:
+        return None
+    return Optional[Optional[Int]](found[0])
+
+
+def alignment_in_lanes(
+    reference: String,
+    query: String,
+    costs: Costs,
+    mode: Mode,
+    band: Band,
+    max_cost: Int,
+    ties: Ties,
+    eqx: Bool,
+    limit: Int,
+) -> Optional[Optional[Alignment]]:
+    """The pair's capped alignment as a batch of it alone settles it in the lanes (see `alignments_in_lanes`),
+    or None when they leave it (see `distance_in_lanes`)."""
+    var references: List[String] = [reference]
+    var queries: List[String] = [query]
+    var laned = List[Optional[Int]](length=1, fill=None)
+    var paths = List[List[UInt8]](capacity=1)
+    paths.append(List[UInt8]())
+    var spans = List[Int](length=4, fill=0)
+    var settled = List[Bool](length=1, fill=False)
+    var penalties = alignments_in_lanes(
+        1,
+        StringTexts.of(references),
+        StringTexts.of(queries),
+        costs,
+        mode,
+        band,
+        max_cost,
+        ties,
+        1,
+        limit,
+        laned.unsafe_ptr(),
+        paths.unsafe_ptr(),
+        spans.unsafe_ptr(),
+        settled.unsafe_ptr(),
+    )
+    _ = references^
+    _ = queries^
+    if not settled[0]:
+        return None
+    if not laned[0]:
+        return Optional[Optional[Alignment]](Optional[Alignment]())
+    var moves = List[UInt8]()
+    swap(moves, paths[0])
+    var spelled = alignment_from_lanes(
+        reference.as_bytes(),
+        query.as_bytes(),
+        laned[0].value(),
+        moves^,
+        spans.unsafe_ptr(),
+        penalties.value(),
+        eqx,
+        limit,
+    )
+    if not spelled:
+        return None
+    return Optional[Optional[Alignment]](spelled^)
 
 
 def cost_within(
@@ -371,9 +461,14 @@ def cost_within(
             if error.kind != ErrorKind.UNKNOWN_SYMBOL:
                 raise error
     var penalties = space.penalties_for(costs)
-    rings_within(penalties, reference.byte_length(), query.byte_length(), DEFAULT_MAX_MEMORY)
     if max_cost < 0:
         return None
+    if not rings_fit(penalties, reference.byte_length(), query.byte_length(), DEFAULT_MAX_MEMORY):
+        # The lanes first, as a batch of this pair alone takes it; else refused.
+        var laned = distance_in_lanes(reference, query, costs, mode, band, max_cost)
+        if laned:
+            return laned.value()
+        rings_within(penalties, reference.byte_length(), query.byte_length(), DEFAULT_MAX_MEMORY)
     # No cap is the usual case, and a 64-bit division per pair counts when short reads take a microsecond.
     var ceiling = Int.MAX if max_cost == Int.MAX else max_cost // penalties.scale
     var cost: Int
@@ -498,9 +593,14 @@ def least_costly(
             if error.kind != ErrorKind.UNKNOWN_SYMBOL:
                 raise error
     var penalties = space.penalties_for(costs)
-    rings_within(penalties, reference.byte_length(), query.byte_length(), kept_bytes(limit))
     if max_cost < 0:
         return None
+    if not rings_fit(penalties, reference.byte_length(), query.byte_length(), kept_bytes(limit)):
+        # The lanes first, as a batch of this pair alone takes it; else refused.
+        var laned = alignment_in_lanes(reference, query, costs, mode, band, max_cost, ties, eqx, limit)
+        if laned:
+            return laned.take()
+        rings_within(penalties, reference.byte_length(), query.byte_length(), kept_bytes(limit))
     var ceiling = Int.MAX if max_cost == Int.MAX else max_cost // penalties.scale
     if mode.is_global():
         var found: Optional[AffineCigar]

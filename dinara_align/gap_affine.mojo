@@ -284,7 +284,8 @@ def rings_fit(penalties: Penalties, columns: Int, rows: Int, budget: Int) -> Boo
     Dear gaps took a pair of a thousand letters gigabytes of rings."""
     var two = penalties.extension2 > 0 or penalties.deletion_extension2 > 0
     var window = penalties.window[2]() if two else penalties.window[1]()
-    if window <= ORDINARY_WINDOW:
+    # An empty side is a gap, which no search grows.
+    if window <= ORDINARY_WINDOW or columns == 0 or rows == 0:
         return True
     var layers = layers_of[2]() if two else layers_of[1]()
     var cheapest = max(penalties.cheapest_extension[2]() if two else penalties.cheapest_extension[1](), 1)
