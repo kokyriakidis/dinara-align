@@ -56,7 +56,7 @@ from std.atomic import Atomic
 from .cigar import reverse_bytes, reversed_text
 from .substitutions import SHUFFLED_ENTRIES, looked_up
 from .common import next_share, spread
-from .gap_affine import ALIGNED, ENTRY_MASK, EndsFree, FIRST_GAP, SECOND_GAP, gap_layer, layer_bit
+from .gap_affine import ALIGNED, ENTRY_MASK, EndsFree, Penalties, FIRST_GAP, SECOND_GAP, gap_layer, layer_bit
 from .modes import Band, Costs, Mode
 
 
@@ -95,9 +95,11 @@ struct StringTexts(Texts, TrivialRegisterPassable):
 
 @always_inline
 def lanes_of[value: DType]() -> Int:
-    """Pairs a group: the lanes of one native register of `value`s, 64 bytes or 32 16-bit integers
-    under AVX-512."""
-    return simd_width_of[value]()
+    """Pairs a group: 64 bytes' worth of `value`s, one native register under AVX-512 and several where the
+    CPU's are narrower, each step four registers' work with none waiting on another (see `local_width`): on
+    the M2's 128 bits, 1 kbp pairs at 10% took 73 us a pair under affine costs where one register's 16 took
+    132, and 32 at unit costs where they took 60."""
+    return max(simd_width_of[value](), 64 // size_of[value]())
 
 
 @always_inline
@@ -253,6 +255,13 @@ struct LaneCosts(ImplicitlyCopyable, TrivialRegisterPassable):
             costs.extension2,
             0,
             SIMD[DType.uint8, TABLE_ENTRIES](0),
+        )
+
+    @staticmethod
+    def of_penalties(penalties: Penalties) -> Self:
+        """The lanes' costs for a wavefront's one-piece costs, in its units."""
+        return Self.one_piece(
+            penalties.mismatch, penalties.opening, penalties.extension, penalties.opening, penalties.extension
         )
 
     @always_inline

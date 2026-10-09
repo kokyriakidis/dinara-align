@@ -19,6 +19,7 @@ from .common import FIRST_SENTINEL, SECOND_SENTINEL
 from .common import UNREACHED
 from .alignment import (
     AffineGapCosts,
+    gotoh_lanes,
     AlignmentMode,
     GappedAlignment,
     AntiDiagonalMajor,
@@ -104,9 +105,12 @@ def reach_back(
             var above_left = two_back.unsafe_ptr().unsafe_offset(row - 1).unsafe_load[width=WIDTH]()
             var mine = letters.unsafe_ptr().unsafe_offset(row).unsafe_load[width=WIDTH]()
             var theirs = reversed.unsafe_ptr().unsafe_offset(lag + row).unsafe_load[width=WIDTH]()
-            var deletion = max(above + opening, above_delete + extension)
-            var insertion = max(left + opening, left_insert + extension)
-            var score = max(above_left + substitute(mine, theirs), max(deletion, insertion))
+            var cell = gotoh_lanes[AlignmentMode.GLOBAL, WIDTH](
+                above_left, above, above_delete, left, left_insert, substitute(mine, theirs), opening, extension
+            )
+            var score = cell[0]
+            var deletion = cell[1]
+            var insertion = cell[2]
             var reached = score.ge(wanted) & (lane_rows + Int32(row)).le(Lanes(Int32(high)))
             if reached.reduce_or():
                 # The lanes run by row, so the first that reached it is the diagonal's earliest.
@@ -231,12 +235,12 @@ def vector_align(
             var above_left = score_cells.unsafe_offset(two_back + row - 1).unsafe_load[width=WIDTH]()
             var mine = letters.unsafe_ptr().unsafe_offset(row).unsafe_load[width=WIDTH]()
             var theirs = reversed.unsafe_ptr().unsafe_offset(lag + row).unsafe_load[width=WIDTH]()
-            var deletion = max(above + opening, above_delete + extension)
-            var insertion = max(left + opening, left_insert + extension)
-            var score = max(above_left + substitute(mine, theirs), max(deletion, insertion))
-            score_cells.unsafe_offset(here + row).unsafe_store(score)
-            delete_cells.unsafe_offset(here + row).unsafe_store(deletion)
-            insert_cells.unsafe_offset(here + row).unsafe_store(insertion)
+            var cell = gotoh_lanes[AlignmentMode.GLOBAL, WIDTH](
+                above_left, above, above_delete, left, left_insert, substitute(mine, theirs), opening, extension
+            )
+            score_cells.unsafe_offset(here + row).unsafe_store(cell[0])
+            delete_cells.unsafe_offset(here + row).unsafe_store(cell[1])
+            insert_cells.unsafe_offset(here + row).unsafe_store(cell[2])
             row += WIDTH
         # The border cells inside the band, then the padding after it, which the lanes may have run over.
         if first_row == 0:

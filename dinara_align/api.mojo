@@ -255,7 +255,7 @@ def score(
     if mode.kind == Mode.EXTENSION:
         if not band.holds(0):
             raise outside(band)
-        var drop_extension = cheapest_extension(costs)
+        var drop_extension = costs.cheapest_extension()
         var at_end = mode.anchor == Anchor.END
         if mode.end_bonus > 0 and not band.covers(columns, rows):
             raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "an end bonus takes no band")
@@ -329,15 +329,6 @@ def local_scores(
     _ = penalties_of(costs)
     var span = window.or_else(max(query.byte_length() // 2, 15))
     return local_scores_of(reference.as_bytes(), query.as_bytes(), costs, mode.match_score, span)
-
-
-def cheapest_extension(costs: Costs) -> Int:
-    """The cheapest a gap grows a letter, either way, at either piece: a Z-drop's slack a diagonal, as
-    KSW2 charges a long gap."""
-    var cheapest = min(costs.extension, costs.deletion_extension)
-    if costs.pieces() == 2:
-        cheapest = min(cheapest, min(costs.extension2, costs.deletion_extension2))
-    return cheapest
 
 
 def cost_within(
@@ -575,7 +566,7 @@ def extended_alignment(
     var two = costs.pieces() == 2
     var penalties = rewarded_penalties(mode.match_score, costs)
     # The Z-drop's slack a diagonal is the cheapest extension, as KSW2 charges a long gap.
-    var drop_extension = cheapest_extension(costs)
+    var drop_extension = costs.cheapest_extension()
     var found = extension_of[2](
         reference, query, penalties, eqx, mode.anchor, band, ties, -1, limit, mode.zdrop, drop_extension, mode.end_bonus
     ) if two else extension_of[1](

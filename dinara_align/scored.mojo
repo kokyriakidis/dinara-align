@@ -18,8 +18,8 @@ alignment whose reward folds into the costs (see `rewarded_alignment`).
 
 from std.memory import bitcast
 
-from .common import FIRST_SENTINEL, SECOND_SENTINEL
-from .cigar import cigar_counts, cigar_matches, cigar_runs, reversed_cigar, reversed_text, text_of
+from .common import FIRST_SENTINEL, SECOND_SENTINEL, SubstitutionDType
+from .cigar import reversed_list, cigar_counts, cigar_matches, cigar_runs, reversed_cigar, reversed_text, text_of
 from .errors import AlignmentError
 from .gap_affine import (
     AffineExtension,
@@ -159,6 +159,8 @@ def swept_cells[
     var matched = Lanes(Value(match_score))
     var mismatched = Lanes(-Value(costs.mismatch))
     var zero = Lanes(0)
+    # A Z-drop's slack a diagonal between two bests: the cheapest a gap grows a letter.
+    var slack = costs.cheapest_extension()
     # What a lane past the diagonal's last row counts as: nothing a best could be.
     var nothing = zero if local else Lanes(LOW)
     var codes_a_row = SIMD[DType.int32, width](Int32(alphabet))
@@ -332,7 +334,7 @@ def swept_cells[
                     # A Z-drop: how far the diagonal's best has fallen, a gap's slack between them.
                     var lean = (diagonal - 2 * furthest) if transposed else (2 * furthest - diagonal)
                     var best_lean = (best_diagonal - 2 * best_row) if transposed else (2 * best_row - best_diagonal)
-                    if best - most > zdrop + costs.extension * abs(lean - best_lean):
+                    if best - most > zdrop + slack * abs(lean - best_lean):
                         dropped = True
                         break
         # The border cells of this diagonal, written after the lanes that may have run over them: free
@@ -368,19 +370,18 @@ def swept_cells[
 
 
 def narrow_enough[kind: Int](costs: Costs, match_score: Int, rows: Int, columns: Int) -> Bool:
-    """Whether every score of the sweep fits 16 bits. None passes the reward of the shorter sequence
-    matched throughout. A local alignment's none falls further below zero than the dearest single
-    move, as each cell takes the best of its moves from cells of zero or more; an overlap's none falls
-    below every letter of both paying the dearest move. Nor does a gap's sentinel, a quarter of the
-    way down, fall further than one extension below it."""
-    var dearest = max(
-        costs.mismatch, max(costs.opening + costs.extension, costs.deletion_opening + costs.deletion_extension)
-    )
-    if costs.pieces() == 2:
-        dearest = max(
-            dearest, max(costs.opening2 + costs.extension2, costs.deletion_opening2 + costs.deletion_extension2)
-        )
-    var fits = match_score * (min(rows, columns) + 1) < 32000 and dearest < 4000
+    """Whether every score of the sweep under `costs` fits 16 bits (see `fits_16_bits`)."""
+    return fits_16_bits[kind](match_score, costs.dearest_step(), rows, columns)
+
+
+def fits_16_bits[kind: Int](reward: Int, dearest: Int, rows: Int, columns: Int) -> Bool:
+    """Whether every score of a sweep fits 16 bits, a pair earning at most `reward` and a move costing at
+    most `dearest`. None passes the reward of the shorter sequence matched throughout. A local
+    alignment's none falls further below zero than the dearest single move, as each cell takes the best of
+    its moves from cells of zero or more; an overlap's none falls below every letter of both paying the
+    dearest move. Nor does a gap's sentinel, a quarter of the way down, fall further than one extension
+    below it."""
+    var fits = reward * (min(rows, columns) + 1) < 32000 and dearest < 4000
     comptime if kind != ANYWHERE:
         fits = fits and dearest * (rows + columns + 1) < 8000
     return fits
@@ -396,24 +397,95 @@ def swept[
     ends: EndsFree = EndsFree(),
     highest: Bool = True,
 ) -> Tuple[Int, Int, Int, Bool]:
-    """`best_end` with its lanes along the shorter sequence, 16 bits to a lane, thirty-two to an AVX-512
-    register, while the scores fit, else 32."""
+    """`best_end` with its lanes along the shorter sequence, 16 bits to a lane while the scores fit, else 32
+    (see `sweep`)."""
+    var unused = List[Int32]()
+    var no_table = List[Scalar[SubstitutionDType]]()
+    return sweep[kind](
+        reference,
+        query,
+        costs,
+        match_score,
+        ends,
+        highest,
+        narrow_enough[kind](costs, match_score, len(reference), len(query)),
+        no_table,
+        0,
+        -1,
+        unused,
+    )
+
+
+def sweep[
+    kind: Int, columns_kept: Bool = False
+](
+    reference: Span[UInt8, _],
+    query: Span[UInt8, _],
+    costs: Costs,
+    match_score: Int,
+    ends: EndsFree,
+    highest: Bool,
+    narrow: Bool,
+    substitutions: ImmSpan[Scalar[SubstitutionDType], _],
+    alphabet: Int,
+    zdrop: Int,
+    mut kept: List[Int32],
+) -> Tuple[Int, Int, Int, Bool]:
+    """`swept_cells` with its lanes along the shorter sequence, 16 bits to a lane with `narrow`, 32 lanes an
+    AVX-512 register, else 32 bits, each pair's score read from `substitutions` over an alphabet of `alphabet`
+    codes where it is one, else a match earning `match_score`: the one choice of type, pieces, orientation and
+    table every sweep's caller makes."""
+    if narrow:
+        return sweep_in[DType.int16, 32, kind, columns_kept](
+            reference, query, costs, match_score, ends, highest, substitutions, alphabet, zdrop, kept
+        )
+    return sweep_in[DType.int32, 16, kind, columns_kept](
+        reference, query, costs, match_score, ends, highest, substitutions, alphabet, zdrop, kept
+    )
+
+
+def sweep_in[
+    dtype: DType, width: Int, kind: Int, columns_kept: Bool
+](
+    reference: Span[UInt8, _],
+    query: Span[UInt8, _],
+    costs: Costs,
+    match_score: Int,
+    ends: EndsFree,
+    highest: Bool,
+    substitutions: ImmSpan[Scalar[SubstitutionDType], _],
+    alphabet: Int,
+    zdrop: Int,
+    mut kept: List[Int32],
+) -> Tuple[Int, Int, Int, Bool]:
+    """`sweep` in lanes of `dtype`, `width` of them."""
     var transposed = len(query) < len(reference)
-    if narrow_enough[kind](costs, match_score, len(reference), len(query)):
-        if costs.pieces() == 2:
-            if transposed:
-                return best_end[2, DType.int16, 32, True, kind](reference, query, costs, match_score, ends, highest)
-            return best_end[2, DType.int16, 32, False, kind](reference, query, costs, match_score, ends, highest)
+    var table = List[Scalar[dtype]](capacity=len(substitutions))
+    for value in substitutions:
+        table.append(Scalar[dtype](value))
+    if alphabet > 0:
         if transposed:
-            return best_end[1, DType.int16, 32, True, kind](reference, query, costs, match_score, ends, highest)
-        return best_end[1, DType.int16, 32, False, kind](reference, query, costs, match_score, ends, highest)
+            return swept_cells[1, dtype, width, True, kind, columns_kept, True](
+                reference, query, costs, match_score, ends, highest, table, alphabet, zdrop, kept
+            )
+        return swept_cells[1, dtype, width, False, kind, columns_kept, True](
+            reference, query, costs, match_score, ends, highest, table, alphabet, zdrop, kept
+        )
     if costs.pieces() == 2:
         if transposed:
-            return best_end[2, DType.int32, 16, True, kind](reference, query, costs, match_score, ends, highest)
-        return best_end[2, DType.int32, 16, False, kind](reference, query, costs, match_score, ends, highest)
+            return swept_cells[2, dtype, width, True, kind, columns_kept](
+                reference, query, costs, match_score, ends, highest, table, 0, zdrop, kept
+            )
+        return swept_cells[2, dtype, width, False, kind, columns_kept](
+            reference, query, costs, match_score, ends, highest, table, 0, zdrop, kept
+        )
     if transposed:
-        return best_end[1, DType.int32, 16, True, kind](reference, query, costs, match_score, ends, highest)
-    return best_end[1, DType.int32, 16, False, kind](reference, query, costs, match_score, ends, highest)
+        return swept_cells[1, dtype, width, True, kind, columns_kept](
+            reference, query, costs, match_score, ends, highest, table, 0, zdrop, kept
+        )
+    return swept_cells[1, dtype, width, False, kind, columns_kept](
+        reference, query, costs, match_score, ends, highest, table, 0, zdrop, kept
+    )
 
 
 @fieldwise_init
@@ -437,38 +509,20 @@ def local_scores(
     column more than `window` reference letters from that end (see `LocalScores`), from each column's
     best the same sweep keeps."""
     var kept = List[Int32]()
-    var found: Tuple[Int, Int, Int, Bool]
-    var flipped = len(query) < len(reference)
-    var two = costs.pieces() == 2
-    var none = EndsFree()
-    var no_int16 = List[Int16]()
-    var no_int32 = List[Int32]()
-    # As `swept` dispatches: lanes along the shorter sequence, 16 bits while the scores fit.
-    if narrow_enough[ANYWHERE](costs, match_score, len(reference), len(query)):
-        if two:
-            found = swept_cells[2, DType.int16, 32, True, ANYWHERE, True](
-                reference, query, costs, match_score, none, True, no_int16, 0, -1, kept
-            ) if flipped else swept_cells[2, DType.int16, 32, False, ANYWHERE, True](
-                reference, query, costs, match_score, none, True, no_int16, 0, -1, kept
-            )
-        else:
-            found = swept_cells[1, DType.int16, 32, True, ANYWHERE, True](
-                reference, query, costs, match_score, none, True, no_int16, 0, -1, kept
-            ) if flipped else swept_cells[1, DType.int16, 32, False, ANYWHERE, True](
-                reference, query, costs, match_score, none, True, no_int16, 0, -1, kept
-            )
-    elif two:
-        found = swept_cells[2, DType.int32, 16, True, ANYWHERE, True](
-            reference, query, costs, match_score, none, True, no_int32, 0, -1, kept
-        ) if flipped else swept_cells[2, DType.int32, 16, False, ANYWHERE, True](
-            reference, query, costs, match_score, none, True, no_int32, 0, -1, kept
-        )
-    else:
-        found = swept_cells[1, DType.int32, 16, True, ANYWHERE, True](
-            reference, query, costs, match_score, none, True, no_int32, 0, -1, kept
-        ) if flipped else swept_cells[1, DType.int32, 16, False, ANYWHERE, True](
-            reference, query, costs, match_score, none, True, no_int32, 0, -1, kept
-        )
+    var no_table = List[Scalar[SubstitutionDType]]()
+    var found = sweep[ANYWHERE, True](
+        reference,
+        query,
+        costs,
+        match_score,
+        EndsFree(),
+        True,
+        narrow_enough[ANYWHERE](costs, match_score, len(reference), len(query)),
+        no_table,
+        0,
+        -1,
+        kept,
+    )
     var second = 0
     var second_end = 0
     for letters in range(len(kept)):
@@ -569,6 +623,26 @@ def local_alignment(
     return mirrored.mirrored(columns, rows)
 
 
+def started_span[
+    B: def(List[UInt8], List[UInt8], EndsFree) -> Tuple[Int, Int, Int, Bool]
+](
+    first: ImmSpan[UInt8, _], second: ImmSpan[UInt8, _], ends: EndsFree, forward: Tuple[Int, Int, Int, Bool], back: B
+) -> Tuple[Int, Int, Int, Int, Int]:
+    """The span the rule of `Ties.LEFT` names (see `gap_affine.free_ends_alignment`) from a sweep from the edges,
+    `forward`, which found the best score and the end on the highest diagonal an optimum reaches: the start on
+    the highest of those ending there, by `back`, a sweep over both sequences reversed from that end to the
+    letters free at the start, whose lowest diagonal it takes. The score, then the start's and the end's
+    columns and rows."""
+    var end_column = forward[1]
+    var end_row = forward[2]
+    var found = back(
+        reversed_list(first[:end_column]),
+        reversed_list(second[:end_row]),
+        EndsFree(0, ends.first_begin, 0, ends.second_begin),
+    )
+    return (forward[0], end_column - found[1], end_row - found[2], end_column, end_row)
+
+
 def rewarded_span(
     reference: String, query: String, costs: Costs, match_score: Int, ends: EndsFree
 ) -> Tuple[Int, Int, Int, Int, Int]:
@@ -578,15 +652,14 @@ def rewarded_span(
     a sweep back from that end over both sequences reversed, to the letters free at the start. The
     score, then the start's and the end's columns and rows."""
     var forward = swept[FROM_EDGE](reference.as_bytes(), query.as_bytes(), costs, match_score, ends)
-    var end_column = forward[1]
-    var end_row = forward[2]
-    var head = reversed_text(reference.as_bytes()[:end_column])
-    var lead = reversed_text(query.as_bytes()[:end_row])
-    # From the end, the highest diagonal is the lowest of the reversed sequences'.
-    var back = swept[FROM_EDGE](
-        head.as_bytes(), lead.as_bytes(), costs, match_score, EndsFree(0, ends.first_begin, 0, ends.second_begin), False
-    )
-    return (forward[0], end_column - back[1], end_row - back[2], end_column, end_row)
+
+    def back(
+        head: List[UInt8], lead: List[UInt8], starts: EndsFree
+    ) {imm costs, imm match_score} -> Tuple[Int, Int, Int, Bool]:
+        """The sweep back, the lowest diagonal of the reversed sequences."""
+        return swept[FROM_EDGE](Span(head), Span(lead), costs, match_score, starts, False)
+
+    return started_span(reference.as_bytes(), query.as_bytes(), ends, forward, back)
 
 
 def rewarded_alignment(

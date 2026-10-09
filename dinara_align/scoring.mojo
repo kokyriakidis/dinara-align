@@ -80,10 +80,10 @@ from .lanes import (
     lane_local_scores,
 )
 from .modes import Alignment, Anchor, Band, Costs, Mode
-from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, swept_cells
+from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, fits_16_bits, started_span, sweep
 from .band_groups import banded_scores
 from .score_groups import grouped_scores
-from .substitutions import SubstitutionLookup, shuffled_table
+from .substitutions import SubstitutionLookup, shuffled_table, table_extremes, uniform_pair
 from .vector_score import optimal_band, reach_back, vector_align
 
 
@@ -186,6 +186,11 @@ struct Scoring(Copyable, Movable):
         if len(substitutions) != size * size:
             raise AlignmentError(ErrorKind.INVALID_SCORING, String(len(substitutions), " cells for ", size, " letters"))
         return Self(alphabet, substitutions^, gap_scores(opening, extension))
+
+    def penalties(self) -> Optional[Penalties]:
+        """The wavefront's costs for this table, if it holds one match and one mismatch score whose folded
+        costs a wavefront can grow by (see `gap_affine.wavefront_penalties`)."""
+        return wavefront_penalties(self.substitutions, self.alphabet_size(), Int(self.gaps.open), Int(self.gaps.extend))
 
     def alphabet_size(self) -> Int:
         """Letters the table is indexed by, which is its stride."""
@@ -354,9 +359,7 @@ def host_score[
     comptime if mode == AlignmentMode.GLOBAL:
         # A table of one match and one mismatch score has a wavefront, whose work grows with the
         # score rather than the matrix; it hands back a pair a full sweep would serve sooner.
-        var penalties = wavefront_penalties(
-            scoring.substitutions, scoring.alphabet_size(), Int(scoring.gaps.open), Int(scoring.gaps.extend)
-        )
+        var penalties = scoring.penalties()
         if penalties:
             var found = wavefront_score(codes_first, codes_second, penalties.value())
             if found:
@@ -416,9 +419,7 @@ def global_on_host(
     var codes_first = List[UInt8](first)
     var codes_second = List[UInt8](second)
     # The wavefront's work grows with the score rather than the matrix, and it never hands a pair back.
-    var penalties = wavefront_penalties(
-        scoring.substitutions, scoring.alphabet_size(), Int(scoring.gaps.open), Int(scoring.gaps.extend)
-    )
+    var penalties = scoring.penalties()
     if penalties:
         var traced = wavefront_align(
             codes_first, codes_second, penalties.value(), scoring.alphabet, fronts_within(stored_cells)
@@ -539,18 +540,12 @@ def gap_costs(scoring: Scoring) -> Costs:
 
 
 def table_fits[kind: Int](scoring: Scoring, rows: Int, columns: Int) -> Bool:
-    """Whether every score of a sweep under the table fits 16 bits, as `narrow_enough` asks of costs:
-    the best pair over the shorter sequence, and the dearest move over both for a sweep from the edges."""
-    var most = 0
-    var least = 0
-    for value in scoring.substitutions:
-        most = max(most, Int(value))
-        least = min(least, Int(value))
-    var dearest = max(-least, Int(-scoring.gaps.open))
-    var fits = most * (min(rows, columns) + 1) < 32000 and dearest < 4000
-    comptime if kind != ANYWHERE:
-        fits = fits and dearest * (rows + columns + 1) < 8000
-    return fits
+    """Whether every score of a sweep under the table fits 16 bits (see `scored.fits_16_bits`): its best
+    pair, and its dearest move, a mismatch or a gap's first letter."""
+    var extremes = table_extremes(scoring.substitutions, scoring.alphabet_size())
+    var most = max(extremes[0], 0)
+    var least = min(extremes[1], 0)
+    return fits_16_bits[kind](most, max(-least, Int(-scoring.gaps.open)), rows, columns)
 
 
 def tabulated_end[
@@ -562,30 +557,19 @@ def tabulated_end[
     gave the sweep up, by the sweep
     `scored.swept_cells` runs, each pair's score read from the table: `first` and `second` are codes
     into the alphabet. Lanes along the shorter sequence, 16 bits while the scores fit."""
-    var gaps = gap_costs(scoring)
-    var size = scoring.alphabet_size()
-    var transposed = len(second) < len(first)
     var unused = List[Int32]()
-    if table_fits[kind](scoring, len(first), len(second)):
-        var table = List[Int16](capacity=len(scoring.substitutions))
-        for value in scoring.substitutions:
-            table.append(Int16(value))
-        if transposed:
-            return swept_cells[1, DType.int16, 32, True, kind, False, True](
-                first, second, gaps, 0, ends, highest, table, size, zdrop, unused
-            )
-        return swept_cells[1, DType.int16, 32, False, kind, False, True](
-            first, second, gaps, 0, ends, highest, table, size, zdrop, unused
-        )
-    var table = List[Int32](capacity=len(scoring.substitutions))
-    for value in scoring.substitutions:
-        table.append(Int32(value))
-    if transposed:
-        return swept_cells[1, DType.int32, 16, True, kind, False, True](
-            first, second, gaps, 0, ends, highest, table, size, zdrop, unused
-        )
-    return swept_cells[1, DType.int32, 16, False, kind, False, True](
-        first, second, gaps, 0, ends, highest, table, size, zdrop, unused
+    return sweep[kind](
+        first,
+        second,
+        gap_costs(scoring),
+        0,
+        ends,
+        highest,
+        table_fits[kind](scoring, len(first), len(second)),
+        scoring.substitutions,
+        scoring.alphabet_size(),
+        zdrop,
+        unused,
     )
 
 
@@ -631,14 +615,14 @@ def mode_span(
         return (stop[0], stop[1], stop[2], stop[3], stop[4])
     var ends = EndsFree.of(mode, columns, rows)
     var forward = tabulated_end[FROM_EDGE](first, second, scoring, ends, True)
-    var end_column = forward[1]
-    var end_row = forward[2]
     if not started:
-        return (forward[0], 0, 0, end_column, end_row)
-    var head = reversed_list(Span(first)[:end_column])
-    var lead = reversed_list(Span(second)[:end_row])
-    var back = tabulated_end[FROM_EDGE](head, lead, scoring, EndsFree(0, ends.first_begin, 0, ends.second_begin), False)
-    return (forward[0], end_column - back[1], end_row - back[2], end_column, end_row)
+        return (forward[0], 0, 0, forward[1], forward[2])
+
+    def back(head: List[UInt8], lead: List[UInt8], starts: EndsFree) {imm scoring} -> Tuple[Int, Int, Int, Bool]:
+        """The sweep back, the lowest diagonal of the reversed sequences."""
+        return tabulated_end[FROM_EDGE](Span(head), Span(lead), scoring, starts, False)
+
+    return started_span(Span(first), Span(second), ends, forward, back)
 
 
 def as_alignment(gapped: GappedAlignment, first: String, second: String, whole: Bool, eqx: Bool) -> Alignment:
@@ -698,9 +682,7 @@ def scoring_alignment(
     if on_host and mode.is_global() and first.byte_length() > 0 and second.byte_length() > 0:
         # A table of one match and one mismatch score: the wavefront's own moves spell the CIGAR, with
         # no rows between, the same alignment `align_on_host` would give (see `wavefront_align`).
-        var penalties = wavefront_penalties(
-            scoring.substitutions, scoring.alphabet_size(), Int(scoring.gaps.open), Int(scoring.gaps.extend)
-        )
+        var penalties = scoring.penalties()
         if penalties:
             var codes_first = translate(first, scoring.alphabet)
             var codes_second = translate(second, scoring.alphabet)
@@ -891,13 +873,11 @@ def laned_alignments(
     call."""
     var pairs = len(firsts)
     var workers = max(threads, 1)
-    var penalties = wavefront_penalties(
-        scoring.substitutions, scoring.alphabet_size(), Int(scoring.gaps.open), Int(scoring.gaps.extend)
-    )
+    var penalties = scoring.penalties()
     if not penalties:
         return List[Bool](length=pairs, fill=False)
     var found = penalties.value()
-    var costs = LaneCosts.one_piece(found.mismatch, found.opening, found.extension, found.opening, found.extension)
+    var costs = LaneCosts.of_penalties(found)
     var refused = unknown_letters(firsts, seconds, scoring.alphabet, workers)
     var settled = refused.copy()
     var laned = List[Optional[Int]](length=pairs, fill=None)
@@ -962,17 +942,8 @@ def laned_alignments(
 
 
 def uniform_scores(scoring: Scoring) -> Optional[Tuple[Int, Int]]:
-    """The match and the mismatch score of a table of one each, if it is one."""
-    var size = scoring.alphabet_size()
-    if size < 2:
-        return None
-    var hit = Int(scoring.substitutions[0])
-    var mismatch = Int(scoring.substitutions[1])
-    for row in range(size):
-        for column in range(size):
-            if Int(scoring.substitutions[row * size + column]) != (hit if row == column else mismatch):
-                return None
-    return (hit, mismatch)
+    """The match and the mismatch score of a table of one each, if it is one (see `uniform_pair`)."""
+    return uniform_pair(scoring.substitutions, scoring.alphabet_size())
 
 
 def laned_local_scores(
@@ -1101,11 +1072,9 @@ def tabled_scores[
     var none = List[Bool](length=pairs, fill=False)
     if size < 2 or size * size > TABLE_ENTRIES:
         return none^
-    var best = Int.MIN
-    var least = Int.MAX
-    for cell in range(size * size):
-        best = max(best, Int(scoring.substitutions[cell]))
-        least = min(least, Int(scoring.substitutions[cell]))
+    var extremes = table_extremes(scoring.substitutions, size)
+    var best = extremes[0]
+    var least = extremes[1]
     var open = Int(scoring.gaps.open)
     var extend = Int(scoring.gaps.extend)
     var batch = coded_batch(firsts, seconds, scoring.alphabet, workers)
@@ -1188,14 +1157,10 @@ def scores_with[
         # cost. The rest, and every other table and mode, one at a time.
         var settled = List[Bool](length=pairs, fill=False)
         comptime if mode == AlignmentMode.GLOBAL:
-            var penalties = wavefront_penalties(
-                scoring.substitutions, scoring.alphabet_size(), Int(scoring.gaps.open), Int(scoring.gaps.extend)
-            )
+            var penalties = scoring.penalties()
             if penalties:
                 var found = penalties.value()
-                var lane_costs = LaneCosts.one_piece(
-                    found.mismatch, found.opening, found.extension, found.opening, found.extension
-                )
+                var lane_costs = LaneCosts.of_penalties(found)
                 settled = laned_scores(firsts, seconds, scoring.alphabet, lane_costs, found, resolved.threads, out)
         comptime if mode == AlignmentMode.LOCAL:
             settled = laned_local_scores(firsts, seconds, scoring, resolved.threads, out)

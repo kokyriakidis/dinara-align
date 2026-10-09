@@ -253,17 +253,40 @@ def gotoh_cell[
     substitution: Int32,
     scoring: AffineGapCosts,
 ) -> Cell:
-    """One interior cell of the Gotoh recurrence, with the local clamp folded in at comptime.
+    """One interior cell of the Gotoh recurrence (see `gotoh_lanes`)."""
+    var found = gotoh_lanes[mode, 1](
+        above_left, above, above_delete, left, left_insert, substitution, scoring.open, scoring.extend
+    )
+    return Cell(found[0], found[1], found[2])
+
+
+@always_inline
+def gotoh_lanes[
+    mode: AlignmentMode, width: Int
+](
+    above_left: SIMD[DType.int32, width],
+    above: SIMD[DType.int32, width],
+    above_delete: SIMD[DType.int32, width],
+    left: SIMD[DType.int32, width],
+    left_insert: SIMD[DType.int32, width],
+    substitution: SIMD[DType.int32, width],
+    opening: SIMD[DType.int32, width],
+    extension: SIMD[DType.int32, width],
+) -> Tuple[SIMD[DType.int32, width], SIMD[DType.int32, width], SIMD[DType.int32, width]]:
+    """`width` interior cells of the Gotoh recurrence, a gap's first letter scoring `opening` and each
+    further `extension`, with the local clamp folded in at comptime: the score, the deletion layer and the
+    insertion layer.
 
     This is the single transcription of the recurrence that AffineGaps' NumPy reference holds as the oracle;
-    every sweep on the host and on the device goes through it.
-    """
-    var deletion = max(above + scoring.open, above_delete + scoring.extend)
-    var insertion = max(left + scoring.open, left_insert + scoring.extend)
+    every sweep of it on the host and on the device goes through it, a cell or an anti-diagonal's lanes at
+    a time. The device's kernels holding cells shifted by their anti-diagonal (see `score_groups`) take
+    the same recurrence in three additions instead."""
+    var deletion = max(above + opening, above_delete + extension)
+    var insertion = max(left + opening, left_insert + extension)
     var score = max(max(above_left + substitution, deletion), insertion)
     comptime if mode == AlignmentMode.LOCAL:
-        score = max(score, Int32(0))
-    return Cell(score, deletion, insertion)
+        score = max(score, SIMD[DType.int32, width](0))
+    return (score, deletion, insertion)
 
 
 @inline(.always)
@@ -839,12 +862,12 @@ def vector_sweep_bands[
             var above_left = two_back.unsafe_ptr().unsafe_offset(row - 1).unsafe_load[width=SWEEP_LANES]()
             var mine = letters.unsafe_ptr().unsafe_offset(row).unsafe_load[width=SWEEP_LANES]()
             var theirs = others.unsafe_ptr().unsafe_offset(lag + row).unsafe_load[width=SWEEP_LANES]()
-            var deletion = max(above + opening, above_delete + extension)
-            var insertion = max(left + opening, left_insert + extension)
-            var score = max(above_left + substitute(mine, theirs), max(deletion, insertion))
-            current.unsafe_ptr().unsafe_offset(row).unsafe_store(score)
-            deletes.unsafe_ptr().unsafe_offset(row).unsafe_store(deletion)
-            inserts.unsafe_ptr().unsafe_offset(row).unsafe_store(insertion)
+            var cell = gotoh_lanes[AlignmentMode.GLOBAL, SWEEP_LANES](
+                above_left, above, above_delete, left, left_insert, substitute(mine, theirs), opening, extension
+            )
+            current.unsafe_ptr().unsafe_offset(row).unsafe_store(cell[0])
+            deletes.unsafe_ptr().unsafe_offset(row).unsafe_store(cell[1])
+            inserts.unsafe_ptr().unsafe_offset(row).unsafe_store(cell[2])
             row += SWEEP_LANES
         # The border cells of this diagonal, written after the lanes that may have run over them.
         if diagonal <= columns:

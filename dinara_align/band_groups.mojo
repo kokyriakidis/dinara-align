@@ -58,6 +58,7 @@ from .common import (
     upload,
     zeroed,
 )
+from .substitutions import table_extremes
 from .score_groups import (
     SHAPES,
     SHAPE_COLUMNS,
@@ -373,9 +374,7 @@ def banded_scores(
     batch crosses in chunks, as `score_groups` sends its own. A letter outside the alphabet raises as
     `translate` does, for the first pair in order holding one."""
     var size = alphabet.byte_length()
-    var best = Int(Int32.MIN)
-    for cell in range(size * size):
-        best = max(best, Int(substitutions[cell]))
+    var best = table_extremes(substitutions, size)[0]
     if scoring.extend < scoring.open or best - 2 * Int(scoring.extend) <= 0:
         return None
     var pairs = len(firsts)

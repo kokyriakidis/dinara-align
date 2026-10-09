@@ -84,21 +84,26 @@ answers held to the copies it replaces by the tests, and a hot path benchmarked 
 
 ### Phase 3: one cost model
 
-- [ ] `Costs` canonical with one `validate()`; `Scoring`'s gaps as its gap part, `AffineGapCosts` the
-  kernels' two numbers alone.
-- [ ] One match-reward fold for `scaled_penalties`, `wavefront_penalties`, `extension_penalties`,
-  `tabled_scores`, `band_groups` and `optimal_band`; `LaneCosts.of_penalties`; `Scoring.penalties()`.
-- [ ] One 16-bit fit rule (`narrow_enough`, `table_fits`, `LaneCosts.fits`, `local_stage`), one table
-  summary (uniform, best, least, shuffled).
+- [x] `affine_penalties`, `affine2p_penalties`, `extension_penalties` through the `Costs` factories and
+  `penalties_of`/`rewarded_penalties`; one uniform-table check (`substitutions.uniform_pair`); `Scoring.penalties`
+  for five calls; `LaneCosts.of_penalties` for three; `table_extremes` for the table scans.
+- [x] One 16-bit fit rule, `scored.fits_16_bits`, behind `narrow_enough` and `table_fits`; `Costs.dearest_step`
+  and `Costs.cheapest_extension`, which the sweep's Z-drop now takes as the wavefront's does.
+- Kept: `Scoring.gaps` an `AffineGapCosts`, a public field; `scaled_penalties`' raw positivity and
+  `wavefront_penalties`' folded one, two rules on purpose: a table may score a mismatch above zero.
 
 ### Phase 4: engines
 
-- [ ] One span finder (`rewarded_span`, `mode_span`, `framed_spans`); `extend` and `traced_extension`
-  sharing their search; one sweep dispatcher.
-- [ ] The cost lanes several registers wide where the CPU's are narrow, as the local lanes are.
-- [ ] One anti-diagonal sweep (`swept_cells`, `reach_back`, `vector_align`, `vector_sweep_bands`) with
-  borders and observers; one row fill and walk in `alignment.mojo`; `step_front` in `grow_to` and
-  `forward_segment`; `edit_search` on `band.Band`.
+- [x] One span rule, `scored.started_span`, for `Costs`' and `Scoring`'s free ends; one sweep dispatcher,
+  `scored.sweep`, for `swept`, `local_scores` and `tabulated_end`; one front scan, `gap_affine.front_best`,
+  for the extension's three.
+- [x] The cost lanes 64 bytes a group, several registers where the CPU's are narrower: on the M2 1 kbp
+  distances 1.8 times as fast.
+- [x] One Gotoh recurrence, `alignment.gotoh_lanes`, for `gotoh_cell` and the three vector sweeps.
+- [ ] One anti-diagonal sweep driver for `swept_cells`, `reach_back`, `vector_align` and `vector_sweep_bands`,
+  borders and observers its parameters, which would give the last three 16-bit lanes.
+- [ ] One row fill and walk in `alignment.mojo`; `step_front` in `grow_to` and `forward_segment`;
+  `edit_search` on `band.Band`.
 
 ## From A*PA2's discussion
 

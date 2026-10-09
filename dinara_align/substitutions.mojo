@@ -44,6 +44,30 @@ def looked_up[
     return out
 
 
+def table_extremes(substitutions: ImmSpan[Scalar[SubstitutionDType], _], alphabet_size: Int) -> Tuple[Int, Int]:
+    """A square table's largest score and its least."""
+    var best = Int.MIN
+    var least = Int.MAX
+    for cell in range(alphabet_size * alphabet_size):
+        best = max(best, Int(substitutions[cell]))
+        least = min(least, Int(substitutions[cell]))
+    return (best, least)
+
+
+def uniform_pair(substitutions: ImmSpan[Scalar[SubstitutionDType], _], alphabet_size: Int) -> Optional[Tuple[Int, Int]]:
+    """The match and the mismatch score of a table of one each, if it is one; a one-letter alphabet's
+    table never is, having no mismatch to read."""
+    if alphabet_size < 2:
+        return None
+    var hit = Int(substitutions[0])
+    var mismatch = Int(substitutions[1])
+    for row in range(alphabet_size):
+        for column in range(alphabet_size):
+            if Int(substitutions[row * alphabet_size + column]) != (hit if row == column else mismatch):
+                return None
+    return (hit, mismatch)
+
+
 def shuffled_table(substitutions: ImmSpan[Scalar[SubstitutionDType], _], alphabet_size: Int) -> SIMD[DType.uint8, 16]:
     """A table of at most `SHUFFLED_ENTRIES` entries as the bytes `looked_up` reads, row by row; the
     rest zero."""

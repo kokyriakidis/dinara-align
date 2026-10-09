@@ -66,6 +66,7 @@ from std.sys import size_of
 from .common import FIRST_SENTINEL, SECOND_SENTINEL, UNREACHED
 from .cigar import append_reversed, reversed_into, reversed_list, text_of
 from .bit_parallel import DIAGONAL, LEFT, UP
+from .substitutions import uniform_pair
 from .edit_distance import EditSpace
 from .errors import AlignmentError, ErrorKind
 from .modes import Anchor, Band, Costs, Ties, Mode
@@ -348,15 +349,11 @@ def wavefront_penalties(
     None when the table is not uniform, or when the costs would not all be positive: a free
     mismatch or extension would let a front grow without its cost growing.
     """
-    if alphabet_size < 2:
+    var uniform = uniform_pair(substitutions, alphabet_size)
+    if not uniform:
         return None
-    var reward = Int(substitutions[0])
-    var mismatch = Int(substitutions[1])
-    for row in range(alphabet_size):
-        for column in range(alphabet_size):
-            var expected = reward if row == column else mismatch
-            if Int(substitutions[row * alphabet_size + column]) != expected:
-                return None
+    var reward = uniform.value()[0]
+    var mismatch = uniform.value()[1]
     # A run of `k` scores `open + (k - 1) extend`, so it costs `(extend - open) - k extend`.
     var gap_opening = extend - open
     var gap_extension = -extend
@@ -2020,14 +2017,8 @@ struct AffineCigar(Copyable, Movable, Writable):
 
 
 def affine_penalties(mismatch: Int, opening: Int, extension: Int) raises AlignmentError -> Penalties:
-    """The wavefront's costs for gap-affine costs as WFA counts them, divided by their common factor."""
-    if mismatch <= 0 or extension <= 0 or opening < 0:
-        raise AlignmentError(
-            ErrorKind.INVALID_SCORING,
-            String("costs ", mismatch, ", ", opening, ", ", extension, ": a mismatch and an extension must cost"),
-        )
-    var scale = gcd(gcd(mismatch, extension), opening)
-    return Penalties(mismatch // scale, opening // scale, extension // scale, scale, 0, 0, 0)
+    """The wavefront's costs for gap-affine costs as WFA counts them (see `penalties_of`)."""
+    return penalties_of(Costs.affine(mismatch, opening, extension))
 
 
 def penalties_of(costs: Costs) raises AlignmentError -> Penalties:
@@ -2044,29 +2035,8 @@ def rewarded_penalties(match_score: Int, costs: Costs) raises AlignmentError -> 
 def affine2p_penalties(
     mismatch: Int, opening1: Int, extension1: Int, opening2: Int, extension2: Int
 ) raises AlignmentError -> Penalties:
-    """The wavefront's costs for two-piece gap-affine costs as WFA counts them, divided by their common
-    factor."""
-    if mismatch <= 0 or extension1 <= 0 or extension2 <= 0 or opening1 < 0 or opening2 < 0:
-        raise AlignmentError(
-            ErrorKind.INVALID_SCORING,
-            String(
-                "costs ",
-                mismatch,
-                ", ",
-                opening1,
-                ", ",
-                extension1,
-                ", ",
-                opening2,
-                ", ",
-                extension2,
-                ": a mismatch and an extension must cost",
-            ),
-        )
-    var scale = gcd(gcd(gcd(mismatch, extension1), gcd(opening1, extension2)), opening2)
-    return Penalties(
-        mismatch // scale, opening1 // scale, extension1 // scale, scale, 0, opening2 // scale, extension2 // scale
-    )
+    """The wavefront's costs for two-piece gap-affine costs as WFA counts them (see `penalties_of`)."""
+    return penalties_of(Costs.two_piece(mismatch, opening1, extension1, opening2, extension2))
 
 
 def outside(band: Band) -> AlignmentError:
@@ -2468,29 +2438,33 @@ def extension_penalties(
     match_score: Int, mismatch: Int, opening: Int, extension: Int, opening2: Int, extension2: Int
 ) raises AlignmentError -> Penalties:
     """The wavefront's costs for an extension's scores, a reward `match_score` and gap-affine costs as WFA
-    counts them, with an optional second gap piece, folded together as the module describes."""
-    if match_score < 0 or mismatch <= 0 or extension <= 0 or opening < 0 or opening2 < 0 or extension2 < 0:
-        raise AlignmentError(
-            ErrorKind.INVALID_SCORING,
-            String(
-                "scores ",
-                match_score,
-                ", ",
-                mismatch,
-                ", ",
-                opening,
-                ", ",
-                extension,
-                ": a match earns at least nothing, and a mismatch and an extension must cost",
-            ),
-        )
-    var x = 2 * (match_score + mismatch)
-    var o = 2 * opening
-    var e = 2 * extension + match_score
-    var o2 = 2 * opening2
-    var e2 = 2 * extension2 + match_score
-    var scale = gcd(gcd(gcd(x, o), gcd(e, o2)), e2)
-    return Penalties(x // scale, o // scale, e // scale, scale, match_score, o2 // scale, e2 // scale)
+    counts them, a second gap piece where `extension2` costs (see `rewarded_penalties`)."""
+    var costs = Costs.two_piece(mismatch, opening, extension, opening2, extension2) if extension2 > 0 else Costs.affine(
+        mismatch, opening, extension
+    )
+    return rewarded_penalties(match_score, costs)
+
+
+def front_best[pieces: Int](mut search: Wavefront[pieces], reward: Int, scale: Int) -> Tuple[Int, Int, Int]:
+    """The best score an extension's current front reaches, a match earning `reward` and its cost in units of
+    `scale`, on its first diagonal to reach it, and that diagonal's column; `Int.MIN` for a front reaching
+    nothing."""
+    var slot = search.fronts.current
+    var cost = search.cost
+    var front = search.fronts.row(slot, ALIGNED)
+    var top = Int.MIN
+    var top_diagonal = 0
+    var top_column = 0
+    for diagonal in range(search.fronts.lows[slot], search.fronts.highs[slot] + 1):
+        var column = Int(front[unsafe_offset=diagonal])
+        if column < 0:
+            continue
+        var value = reward * (2 * column - diagonal) - scale * cost
+        if value > top:
+            top = value
+            top_diagonal = diagonal
+            top_column = column
+    return (top, top_diagonal, top_column)
 
 
 def extend[
@@ -2568,21 +2542,13 @@ def extend[
         var reach = search.fronts.reach[slot]
         if zdrop >= 0 and reach > Int.MIN // 4:
             # The front's own best, and how far below the best so far it lies.
-            var front = search.fronts.row(slot, ALIGNED)
-            var top = Int.MIN
-            var top_diagonal = 0
-            for diagonal in range(search.fronts.lows[slot], search.fronts.highs[slot] + 1):
-                var column = Int(front[unsafe_offset=diagonal])
-                if column < 0:
-                    continue
-                var value = reward * (2 * column - diagonal) - scale * cost
-                if value > top:
-                    top = value
-                    top_diagonal = diagonal
+            var found = front_best(search, reward, scale)
+            var top = found[0]
+            var top_diagonal = found[1]
             if top > best:
                 best = top
                 best_cost = cost
-                best_column = Int(front[unsafe_offset=top_diagonal])
+                best_column = found[2]
                 best_row = best_column - top_diagonal
             elif top > Int.MIN and best - top > 2 * (
                 zdrop + drop_extension * abs(top_diagonal - (best_column - best_row))
@@ -2590,17 +2556,12 @@ def extend[
                 dropped = True
                 break
         elif reach > Int.MIN // 4 and reward * reach - scale * cost > best:
-            var front = search.fronts.row(slot, ALIGNED)
-            for diagonal in range(search.fronts.lows[slot], search.fronts.highs[slot] + 1):
-                var column = Int(front[unsafe_offset=diagonal])
-                if column < 0:
-                    continue
-                var value = reward * (2 * column - diagonal) - scale * cost
-                if value > best:
-                    best = value
-                    best_cost = cost
-                    best_column = column
-                    best_row = column - diagonal
+            var found = front_best(search, reward, scale)
+            if found[0] > best:
+                best = found[0]
+                best_cost = cost
+                best_column = found[2]
+                best_row = found[2] - found[1]
         # The front's points on the second sequence's last row, the alignments that run through it.
         if tracking and reach >= rows and reward * reach - scale * cost >= best_end:
             var front = search.fronts.row(slot, ALIGNED)
@@ -2683,17 +2644,12 @@ def traced_extension[
         var cost = search.cost
         var reach = search.fronts.reach[slot]
         if reach > Int.MIN // 4 and reward * reach - scale * cost > best:
-            var front = search.fronts.row(slot, ALIGNED)
-            for diagonal in range(search.fronts.lows[slot], search.fronts.highs[slot] + 1):
-                var column = Int(front[unsafe_offset=diagonal])
-                if column < 0:
-                    continue
-                var value = reward * (2 * column - diagonal) - scale * cost
-                if value > best:
-                    best = value
-                    best_cost = cost
-                    best_column = column
-                    best_row = column - diagonal
+            var found = front_best(search, reward, scale)
+            if found[0] > best:
+                best = found[0]
+                best_cost = cost
+                best_column = found[2]
+                best_row = found[2] - found[1]
         if best >= 2 * known or cost - search.last_reached > window:
             break
         if search.history.kept > limit // 2:

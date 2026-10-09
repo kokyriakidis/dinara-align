@@ -139,6 +139,25 @@ struct Costs(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
             return 0
         return self.mismatch
 
+    def cheapest_extension(self) -> Int:
+        """The cheapest a gap grows a letter, either way, at either piece: a Z-drop's slack a diagonal, as
+        KSW2 charges a long gap."""
+        var cheapest = min(self.extension, self.deletion_extension)
+        if self.opening2 >= 0:
+            cheapest = min(cheapest, min(self.extension2, self.deletion_extension2))
+        return cheapest
+
+    def dearest_step(self) -> Int:
+        """The dearest single move: a substitution, or a gap's first letter at either piece either way."""
+        var dearest = max(
+            self.mismatch, max(self.opening + self.extension, self.deletion_opening + self.deletion_extension)
+        )
+        if self.opening2 >= 0:
+            dearest = max(
+                dearest, max(self.opening2 + self.extension2, self.deletion_opening2 + self.deletion_extension2)
+            )
+        return dearest
+
     def gap(self, letters: Int, deleted: Bool) -> Int:
         """What a gap of `letters` letters costs, a deletion or an insertion, at its cheaper piece."""
         if letters == 0:
