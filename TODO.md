@@ -117,7 +117,7 @@ answers held to the copies it replaces by the tests, and a hot path benchmarked 
   for the extension's three.
 - [x] The cost lanes 64 bytes a group, several registers where the CPU's are narrower: on the M2 1 kbp
   distances 1.8 times as fast.
-- [x] One Gotoh recurrence, `alignment.gotoh_lanes`, for `gotoh_cell` and the three vector sweeps.
+- [x] One Gotoh recurrence, `anti_diagonals.gotoh_lanes`, for `gotoh_cell` and the three vector sweeps.
 - [x] One anti-diagonal sweep, `anti_diagonals`: its letters, its rolling diagonals in registers
   (`DiagonalCells`), its step and its 16-bit rule, for `swept_cells`, `reach_back` and `vector_sweep_bands`,
   each keeping its borders and what it watches for; `vector_align`, which keeps its band whole, shares the
@@ -125,7 +125,7 @@ answers held to the copies it replaces by the tests, and a hot path benchmarked 
   `Scoring`'s 1 kbp local alignment 1.2 times as fast, its linear-space global one 1.4 times. The score
   sweeps came out 2 to 5% slower on the M2 at 1 kbp, in 32-bit lanes, their inner loops instruction for
   instruction the old ones.
-- [x] One row fill and one walk in `alignment.mojo`, `fill_rows` and `walk`, for `serial_align`,
+- [x] One row fill and one walk, now in `gotoh.mojo`, `fill_rows` and `walk`, for `serial_align`,
   `solve_rectangle`, `sweep_bands` (over two rolling rows) and `reconstruct`; read unchecked, the
   linear-space global alignment 1.2 to 1.4 times as fast.
 - [x] One source rule, `diagonal.furthest_source`, for `best_source` and `grow_to`; one checkpoint rule,

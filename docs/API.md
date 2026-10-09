@@ -121,7 +121,7 @@ def align(reference: String, query: String, costs: Costs = Costs.edit(), mode: M
 def align(reference: String, query: String, scoring: Scoring, mode: Mode = Mode.GLOBAL, *, placement: Optional[Placement] = None, max_memory: Int = Int(83886080), eqx: Bool = True) -> Alignment
 ```
 
-An optimal alignment under `scoring`, as `Costs` give one (see `Alignment`), its `cost` minus its score: both sequences whole for `Mode.GLOBAL`, Needleman-Wunsch, the best-scoring window of each for `Mode.local()`, Smith-Waterman, on either device; free ends and extensions, with Z-drop as KSW2 gauges it, on the host, their span by sweep and the letters between aligned globally (see `scoring.scoring_alignment`). Its rows come back with `Alignment.gapped`. Of equally good alignments, Gotoh's walk picks the CIGAR (see `alignment.reconstruct`), not `Ties`. A traceback whose stored matrix would pass `max_memory` bytes recurses in linear space instead (see `scoring.cells_within`).
+An optimal alignment under `scoring`, as `Costs` give one (see `Alignment`), its `cost` minus its score: both sequences whole for `Mode.GLOBAL`, Needleman-Wunsch, the best-scoring window of each for `Mode.local()`, Smith-Waterman, on either device; free ends and extensions, with Z-drop as KSW2 gauges it, on the host, their span by sweep and the letters between aligned globally (see `scoring.scoring_alignment`). Its rows come back with `Alignment.gapped`. Of equally good alignments, Gotoh's walk picks the CIGAR (see `gotoh.reconstruct`), not `Ties`. A traceback whose stored matrix would pass `max_memory` bytes recurses in linear space instead (see `scoring.cells_within`).
 
 ### `alignments`
 

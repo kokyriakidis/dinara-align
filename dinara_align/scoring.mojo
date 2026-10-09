@@ -20,7 +20,7 @@ one by one, so a single oversized pair never sinks the batch it arrived in.
 """
 
 from .cigar import reversed_list
-from .alignment import (
+from .device_align import (
     DEFAULT_LEAF_CELLS,
     DEVICE_STORED_CELLS,
     Space,

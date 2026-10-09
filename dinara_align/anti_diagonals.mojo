@@ -10,7 +10,7 @@ the columns' backward, so the columns' is stored back to front and both load con
 scores its pairs at once (see `substitutions`), in lanes of 16 bits while the scores fit (see
 `lane_bits`). The sweeps differ in their borders, in what they watch each step for and in what they
 keep, which stay theirs: `scored.swept_cells` a best end, from local or free starts; `vector_score.reach_back`
-where a local alignment starts; `alignment.vector_sweep_bands` a half's last row. `vector_score.vector_align`
+where a local alignment starts; `gotoh.vector_sweep_bands` a half's last row. `vector_score.vector_align`
 keeps every diagonal of its band rather than the last two, so it shares the letters and the recurrence.
 """
 

@@ -3,7 +3,7 @@
 """
 The host's affine-gap sweeps under any substitution table that find more than a score.
 
-The same Gotoh recurrence and borders as `alignment.serial_align`, so the same scores, swept by anti-diagonal
+The same Gotoh recurrence and borders as `gotoh.serial_align`, so the same scores, swept by anti-diagonal
 a vector of cells a step (see `anti_diagonals`): the cell, swept back from a local alignment's end, where
 it earns its score, which is where it starts (`reach_back`); and a global alignment's three layers, stored
 in the band of diagonals its score bounds, to be traced (`vector_align`). A score alone is the tabled

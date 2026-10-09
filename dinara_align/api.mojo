@@ -737,7 +737,7 @@ def align(
     for `Mode.local()`, Smith-Waterman, on either device; free ends and extensions, with Z-drop as KSW2
     gauges it, on the host, their span by sweep and the letters between aligned globally (see
     `scoring.scoring_alignment`). Its rows come back with `Alignment.gapped`. Of equally good
-    alignments, Gotoh's walk picks the CIGAR (see `alignment.reconstruct`), not `Ties`. A traceback whose
+    alignments, Gotoh's walk picks the CIGAR (see `gotoh.reconstruct`), not `Ties`. A traceback whose
     stored matrix would pass `max_memory` bytes recurses in linear space instead (see
     `scoring.cells_within`)."""
     return scoring_alignment(reference, query, scoring, mode, placement, cells_within(max_memory), eqx)

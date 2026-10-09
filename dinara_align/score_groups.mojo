@@ -11,7 +11,7 @@ A pair takes `lanes` lanes, each `columns_per_lane` columns, so a warp scores `W
 pairs at once. The shape is the batch's: of the shapes compiled (see `SHAPES`), the one whose lanes
 cover the batch's longest second sequence and update the fewest cells to do it, each pair's rows
 plus the steps that fill the group's pipeline, times its columns. One warp of one pair, as
-`alignment.strip_pair_kernel` scores, sweeps 256 columns and fills 32 lanes for every pair: a read
+`device_align.batch_kernel` scores, sweeps 256 columns and fills 32 lanes for every pair: a read
 of 148 bases used half its updates. A pair wider than the widest shape goes to that kernel.
 
 The groups of a warp step together, as far as the warp's longest pair needs, so every shuffle has
