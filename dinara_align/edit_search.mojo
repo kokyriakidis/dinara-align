@@ -10,7 +10,7 @@ distance from the pattern to any substring of the text, and an alignment there.
 
 from std.math import ceildiv
 
-from .band import CHECK_MARGIN, CHECKPOINTS
+from .band import check_margin, checkpoints_passed
 from .cigar import reversed_text, text_of
 from .bit_parallel import ALL_ONES, BAND_COLUMNS, Frontier, Profile, WORD_BITS, word_value
 from .diagonal import PROBE_MARGIN
@@ -127,8 +127,7 @@ def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int, latest: 
             # a real path, as the global band's does: every score stays at least the true one, and one
             # within the bound, whose optimal path stays inside the band, exact.
             var new_top = min(max(top, (first_column - bound) // WORD_BITS), end_word - 1, last)
-            for word in range(top, new_top):
-                anchor += word_value(frontier.vertical_plus[word], frontier.vertical_minus[word])
+            anchor += frontier.climb(top, new_top, rows)
             top = new_top
         if end_word == words:
             # The last row's score at the left edge, read down it before the tile is swept, so it
@@ -136,10 +135,7 @@ def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int, latest: 
             # or the anchor at the band's top, every word between, and the last word to the pattern's
             # last row.
             score = (anchor if top > 0 else first_column) if not free_start else 0
-            for word in range(top, last):
-                score += word_value(frontier.vertical_plus[word], frontier.vertical_minus[word])
-            var through = ALL_ONES if bit == UInt64(WORD_BITS - 1) else (UInt64(1) << (bit + 1)) - 1
-            score += word_value(frontier.vertical_plus[last] & through, frontier.vertical_minus[last] & through)
+            score += frontier.climb(top, words, rows)
         var fast_end = min(end_word, last)
         if fast_end > top:
             sweep.words(profile.symbols(first_column, end_column), top, fast_end, first_column, end_column)
@@ -192,14 +188,11 @@ def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int, latest: 
             # is within the bound either, and the try has failed. A free start begins anew anywhere.
             if reach == 0:
                 break
-            var passed = checkpoint
-            while passed < CHECKPOINTS and end_column >= rows >> (CHECKPOINTS - passed):
-                passed += 1
+            var passed = checkpoints_passed(checkpoint, end_column, rows)
             if passed != checkpoint and end_column < rows:
                 checkpoint = passed
                 var estimate = least * rows // end_column
-                var margin = estimate * (CHECKPOINTS + 1 - passed) * CHECK_MARGIN // 10
-                if estimate - margin // 2 > bound:
+                if estimate - check_margin(estimate, passed) // 2 > bound:
                     return (bound + 1, 0, estimate)
         first_column = end_column
     return (best, best_column, -1)

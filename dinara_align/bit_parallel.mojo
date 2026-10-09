@@ -1066,22 +1066,24 @@ struct Frontier(Movable):
             self.vertical_minus,
         )
 
-    def down_right_edge(self, rows: Int) -> Int:
-        """How much the score grows from the top row to the bottom row, down the right edge.
-
-        Rows past the end of the last word only padded it and are masked out.
-        """
-        var words = len(self.vertical_plus)
+    def climb(self, from_word: Int, to_word: Int, rows: Int) -> Int:
+        """How much the score grows down words `from_word ..< to_word` of the edge the vertical differences
+        hold, the rows from `rows` on, which only pad the last word, masked out."""
         var total = 0
-        for index in range(words):
+        for index in range(from_word, to_word):
             var plus = self.vertical_plus[index]
             var minus = self.vertical_minus[index]
-            if index == words - 1 and rows % WORD_BITS != 0:
-                var kept = (UInt64(1) << UInt64(rows % WORD_BITS)) - 1
+            var inside = rows - index * WORD_BITS
+            if inside < WORD_BITS:
+                var kept = (UInt64(1) << UInt64(max(inside, 0))) - 1
                 plus &= kept
                 minus &= kept
             total += word_value(plus, minus)
         return total
+
+    def down_right_edge(self, rows: Int) -> Int:
+        """How much the score grows from the top row to the bottom row, down the right edge."""
+        return self.climb(0, len(self.vertical_plus), rows)
 
 
 def full_distance(mut profile: Profile) -> Int:

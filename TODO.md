@@ -107,8 +107,15 @@ answers held to the copies it replaces by the tests, and a hot path benchmarked 
   `Scoring`'s 1 kbp local alignment 1.2 times as fast, its linear-space global one 1.4 times. The score
   sweeps came out 2 to 5% slower on the M2 at 1 kbp, in 32-bit lanes, their inner loops instruction for
   instruction the old ones.
-- [ ] One row fill and walk in `alignment.mojo`; `step_front` in `grow_to` and `forward_segment`;
-  `edit_search` on `band.Band`.
+- [x] One row fill and one walk in `alignment.mojo`, `fill_rows` and `walk`, for `serial_align`,
+  `solve_rectangle`, `sweep_bands` (over two rolling rows) and `reconstruct`; read unchecked, the
+  linear-space global alignment 1.2 to 1.4 times as fast.
+- [x] One source rule, `diagonal.furthest_source`, for `best_source` and `grow_to`; one checkpoint rule,
+  `band.checkpoints_passed` and `check_margin`, and one score down a run of words, `Frontier.climb`, for
+  `Band` and `edit_search`.
+- Kept apart: `step_front` from `grow_to`, which grows only the diagonals the backward fronts keep and
+  slides only those, and from `forward_segment`, whose substitutions stop at the tile's end; `edit_search`
+  from `Band`, a free start, the last row read every column and a bound by words rather than rows.
 
 ## From A*PA2's discussion
 

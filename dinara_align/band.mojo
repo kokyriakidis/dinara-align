@@ -23,7 +23,6 @@ from .bit_parallel import (
     tile_bounds,
     Trail,
     WORD_BITS,
-    word_value,
 )
 from .diagonal import (
     diagonal_transition,
@@ -231,8 +230,7 @@ struct Band(Movable):
         # Move the top down to the word whose top row is at or above the first kept row, carrying the
         # anchor past the words it leaves.
         var new_top = first_kept // WORD_BITS
-        for word in range(self.top, new_top):
-            self.anchor += word_value(self.frontier.vertical_plus[word], self.frontier.vertical_minus[word])
+        self.anchor += self.frontier.climb(self.top, new_top, self.rows)
         self.top = new_top
         # The bottom-most kept cell bounds every path below it: from there each row past the diagonal
         # costs one more, so its exact score is the floor the next tile's reach is measured from.
@@ -256,9 +254,7 @@ struct Band(Movable):
         optimal path a cell's score plus its gap to the end is at most the distance, so a distance
         within the final bound passed every column unpruned.
         """
-        var passed = self.checkpoint
-        while passed < CHECKPOINTS and end_column >= self.columns >> (CHECKPOINTS - passed):
-            passed += 1
+        var passed = checkpoints_passed(self.checkpoint, end_column, self.columns)
         if passed == self.checkpoint or end_column >= self.columns:
             return True
         self.checkpoint = passed
@@ -273,7 +269,7 @@ struct Band(Movable):
         var gap = abs(self.difference)
         var origin = heuristic.bound[seeded](0, 0)
         var estimate = origin + max(least - origin, 0) * self.columns // end_column
-        var margin = estimate * (CHECKPOINTS + 1 - passed) * CHECK_MARGIN // 10
+        var margin = check_margin(estimate, passed)
         if estimate - margin // 2 > self.threshold:
             self.outcome = Round(-1, end_column, self.threshold, estimate)
             return False
@@ -360,6 +356,22 @@ projection strayed by up to about an eighth at the first, a twentieth at the las
 
 comptime CHECK_ROWS = 8
 """Rows between the scores a checkpoint samples down the band."""
+
+
+def checkpoints_passed(passed: Int, end_column: Int, length: Int) -> Int:
+    """The checkpoints a sweep has passed once it reaches `end_column` of `length` columns, `passed` of them
+    before (see `CHECKPOINTS`)."""
+    var reached = passed
+    while reached < CHECKPOINTS and end_column >= length >> (CHECKPOINTS - reached):
+        reached += 1
+    return reached
+
+
+def check_margin(estimate: Int, passed: Int) -> Int:
+    """The slack a projected distance of `estimate` is given at the checkpoint that makes `passed`:
+    `CHECK_MARGIN` tenths of it for that one and each still to come. A sweep whose projection less half
+    the slack passes its bound gives up."""
+    return estimate * (CHECKPOINTS + 1 - passed) * CHECK_MARGIN // 10
 
 
 comptime DOUBLING_START = 256

@@ -247,28 +247,38 @@ def extend(
 
 
 @inline(.always)
-def best_source(fronts: DiagonalFronts, score: Int, diagonal: Int, columns: Int, rows: Int) -> Tuple[Int, UInt8]:
-    """The furthest column a path of `score` reaches on `diagonal` before sliding over matches, and its last move.
-
-    One more edit after the furthest point of score `score - 1` on this diagonal or a neighbour,
-    each only where that edit stays inside the matrix; -1 when none does.
-    """
+@always_inline
+def furthest_source(same: Int, left: Int, up: Int, diagonal: Int, columns: Int, rows: Int) -> Tuple[Int, UInt8]:
+    """The furthest column a path reaches on `diagonal` before sliding over matches, and its last move: one
+    more edit after the furthest points of one score less, `same` on this diagonal, `left` on the one below
+    and `up` on the one above, each only where that edit stays inside the matrix; -1 when none does. A
+    substitution before a base of the first sequence alone before one of the second on a tie."""
     var best = -1
     var move = DIAGONAL
-    var same = fronts.at(score - 1, diagonal)
     if same >= 0 and same < columns and same - diagonal < rows:
         best = same + 1
     # A base of the first sequence against a gap, from the diagonal below.
-    var left = fronts.at(score - 1, diagonal - 1)
     if left >= 0 and left < columns and left + 1 > best:
         best = left + 1
         move = LEFT
     # A base of the second sequence against a gap, from the diagonal above.
-    var up = fronts.at(score - 1, diagonal + 1)
     if up >= 0 and up - diagonal - 1 < rows and up > best:
         best = up
         move = UP
     return (best, move)
+
+
+def best_source(fronts: DiagonalFronts, score: Int, diagonal: Int, columns: Int, rows: Int) -> Tuple[Int, UInt8]:
+    """The furthest column a path of `score` reaches on `diagonal` before sliding over matches, and its last
+    move, from the fronts of `score - 1` (see `furthest_source`)."""
+    return furthest_source(
+        fronts.at(score - 1, diagonal),
+        fronts.at(score - 1, diagonal - 1),
+        fronts.at(score - 1, diagonal + 1),
+        diagonal,
+        columns,
+        rows,
+    )
 
 
 @inline(.always)
@@ -955,18 +965,15 @@ def grow_to(profile: Profile, mut ahead: DiagonalFronts, behind: DiagonalFronts,
             if mirrored < back_low or mirrored > back_high or back[unsafe_offset=mirrored] < 0:
                 current[unsafe_offset=diagonal] = UNREACHED
                 continue
-            # One more edit after the previous front, as `best_source` takes it; the previous row's
-            # padding reads unreached either side.
-            var best = -1
-            var same = Int(previous[unsafe_offset=diagonal])
-            if same >= 0 and same < columns and same - diagonal < rows:
-                best = same + 1
-            var left = Int(previous[unsafe_offset=diagonal - 1])
-            if left >= 0 and left < columns and left + 1 > best:
-                best = left + 1
-            var up = Int(previous[unsafe_offset=diagonal + 1])
-            if up >= 0 and up - diagonal - 1 < rows and up > best:
-                best = up
+            # One more edit after the previous front; the previous row's padding reads unreached either side.
+            var best = furthest_source(
+                Int(previous[unsafe_offset=diagonal]),
+                Int(previous[unsafe_offset=diagonal - 1]),
+                Int(previous[unsafe_offset=diagonal + 1]),
+                diagonal,
+                columns,
+                rows,
+            )[0]
             var column = slide_forward(first, second, best, best - diagonal) if best >= 0 else -1
             if column >= 0 and column + Int(back[unsafe_offset=mirrored]) >= columns:
                 current[unsafe_offset=diagonal] = Int32(column)
