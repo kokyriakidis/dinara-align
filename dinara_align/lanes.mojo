@@ -868,7 +868,7 @@ def swept[
             var equal = letter.eq(other)
             var substituted: Lanes
             comptime if tabled:
-                substituted = added(diagonal, looked_up[value, WIDTH](costs.table, row_entries + other))
+                substituted = added(diagonal, looked_up[value, WIDTH, False](costs.table, row_entries + other))
             else:
                 substituted = added(diagonal, equal.select(Lanes(0), mismatch))
             var opened_deletion = added(above, delete_open)
@@ -1205,6 +1205,9 @@ def lane_stage[
                     high = max(high, max(ends.start_high(), ends.end_high(end)) + 1)
                 low = max(low, band.low)
                 high = min(high, band.high)
+                # A band holding none of the group's diagonals leaves its pairs to their own searches.
+                if low > high:
+                    continue
                 var found = band_costs(references, queries, space, low, high, costs, False, 0, mode)
                 for lane in range(len(space.members)):
                     var index = space.members[lane]
@@ -1642,6 +1645,10 @@ def lane_alignment_stage[
                     rows = max(rows, references.length(index))
                 low = max(low, band.low)
                 high = min(high, band.high)
+                # A band holding none of the group's diagonals leaves its pairs to their own searches, which
+                # find no alignment inside it.
+                if low > high:
+                    continue
                 var every = stretch_rows[value](rows, costs.pieces)
                 if traced_bytes[value](rows, high - low + 1, every, costs.pieces) > budget:
                     continue

@@ -23,21 +23,21 @@ alphabet's, DNA's."""
 @inline(.always)
 @always_inline
 def looked_up[
-    value: DType, width: Int
+    value: DType, width: Int, signed: Bool = value.is_signed()
 ](table: SIMD[DType.uint8, SHUFFLED_ENTRIES], index: SIMD[DType.uint8, width]) -> SIMD[value, width]:
-    """Each lane's entry of `table`, `pshufb` or `tbl` a sixteen lanes, widened to `value`, signed for a
-    signed `value`."""
+    """Each lane's entry of `table`, `pshufb` or `tbl` a sixteen lanes, widened to `value`: a score signed,
+    as for a signed `value`, or with `signed` false a cost of up to 255, whatever `value` is."""
     var out = SIMD[value, width]()
     comptime if width < SHUFFLED_ENTRIES:
         # Fewer lanes than a shuffle takes, as NEON's eight 16-bit ones: one shuffle, its first lanes kept.
         var part = table._dynamic_shuffle(SIMD[DType.uint8, SHUFFLED_ENTRIES](0).insert[offset=0](index)).slice[width]()
-        comptime if value.is_signed():
+        comptime if signed:
             return bitcast[DType.int8, width](part).cast[value]()
         else:
             return part.cast[value]()
     comptime for chunk in range(width // SHUFFLED_ENTRIES):
         var part = table._dynamic_shuffle(index.slice[SHUFFLED_ENTRIES, offset=chunk * SHUFFLED_ENTRIES]())
-        comptime if value.is_signed():
+        comptime if signed:
             out = out.insert[offset=chunk * SHUFFLED_ENTRIES](bitcast[DType.int8, SHUFFLED_ENTRIES](part).cast[value]())
         else:
             out = out.insert[offset=chunk * SHUFFLED_ENTRIES](part.cast[value]())

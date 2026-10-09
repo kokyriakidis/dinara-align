@@ -2624,6 +2624,28 @@ def test_scores_scale_past_32_bits() raises:
         _ = Mode.local((1 << 32) + 1)
 
 
+def test_fuzzed_edges_hold() raises:
+    """What the whole-API fuzzer found: a cap a step short of `Int.MAX` caps nothing; a batch under a band at
+    an integer's limits raises as one pair does; a table's pair costs past 127 stay costs in 16-bit lanes;
+    and a long run of one letter against a shorter one is quick, its seeds' layers kept to staircases."""
+    var costs = Costs.affine(3, 10, 3)
+    assert_equal(align("ACGT", "AGT", costs, max_cost=Int.MAX - 1).value().cost, 13)
+    assert_equal(distance("ACGT", "AGT", costs, Mode.INFIX, max_cost=Int.MAX - 1).value(), 3)
+    var repeat: List[String] = [String("ACGT") * 25]
+    with assert_raises():
+        _ = alignments(repeat, repeat, Costs.affine(8, 1, 12), band=Band(Int.MAX, Int.MAX), ties=Ties.RIGHT)
+    var cells: List[Int8] = [-40, 100, 99, -40]
+    var table = Scoring.tabulated("AC", cells^, -100, -1)
+    var firsts: List[String] = ["AC", "AAAA", "CACA"]
+    var found = scores(firsts, firsts, table)
+    for index in range(len(firsts)):
+        assert_equal(found[index], score(firsts[index], firsts[index], table))
+    var longer = String("A") * 24000
+    var shorter = String("A") * 12000
+    assert_equal(distance(longer, shorter), 12000)
+    assert_equal(align(longer, shorter).cost, 12000)
+
+
 def test_lanes_leave_what_they_cannot_hold() raises:
     """A pair longer than the lanes' 16-bit coordinates, and a banded pair whose cost reaches 16 bits' far
     value, are left to their own searches, which the batch then agrees with."""

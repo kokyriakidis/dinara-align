@@ -126,7 +126,7 @@ comptime LOOKAHEAD_SEEDS = 14
 
 
 comptime LAYER_SLOTS = 8
-"""Starts a layer holds in place before the rest spill into a chain of its own."""
+"""Starts a layer holds in place before the rest spill into a staircase of its own."""
 
 
 @inline(.always)
@@ -214,6 +214,21 @@ def within_one_edit(
     return (substituted & level_open) | (((deleted & shorter_open) | (inserted & longer_open)) & (whole != 0))
 
 
+@always_inline
+def first_at_least(values: List[Int32], wanted: Int) -> Int:
+    """The first place in the rising `values` holding `wanted` or more, `len(values)` past them all."""
+    var low = 0
+    var high = len(values)
+    var at = values.unsafe_ptr()
+    while low < high:
+        var middle = (low + high) // 2
+        if Int(at[unsafe_offset=middle]) < wanted:
+            low = middle + 1
+        else:
+            high = middle
+    return low
+
+
 struct SeedHeuristic(Movable):
     """A*PA2-full's gap-chaining seed heuristic, without match pruning.
 
@@ -258,12 +273,12 @@ struct SeedHeuristic(Movable):
     var slot_y: List[Int32]
     var counts: List[Int32]
     """Per layer, how many of its slots hold a start; only a layer whose slots are full can have spilled."""
-    var spill_head: List[Int32]
-    """Per layer, the last of its spilled starts, -1 for none; each spilled start links to the one
-    spilled before it in `spill_next`."""
-    var spill_next: List[Int32]
-    var spill_x: List[Int32]
-    var spill_y: List[Int32]
+    var spill_x: List[List[Int32]]
+    """Per layer, the starts past its slots as a staircase: none at or above and right of another, so by
+    `x` rising `y` falls, and whether one lies at or above and right of a point is one binary search. In
+    a repeat a layer holds thousands; a chain walked a start at a time took poly-A of 32,000 bases
+    against 16,000 seventeen seconds."""
+    var spill_y: List[List[Int32]]
     var hint: Int
     """The layer the last query ended on: neighbouring queries land near it."""
 
@@ -279,10 +294,8 @@ struct SeedHeuristic(Movable):
         self.slot_x = List[Int32]()
         self.slot_y = List[Int32]()
         self.counts = List[Int32]()
-        self.spill_head = List[Int32]()
-        self.spill_next = List[Int32]()
-        self.spill_x = List[Int32]()
-        self.spill_y = List[Int32]()
+        self.spill_x = List[List[Int32]]()
+        self.spill_y = List[List[Int32]]()
         self.hint = 0
 
     def __init__(
@@ -342,14 +355,11 @@ struct SeedHeuristic(Movable):
         self.slot_x.clear()
         self.slot_y.clear()
         self.counts.clear()
-        self.spill_head.clear()
-        self.spill_next.clear()
         self.spill_x.clear()
         self.spill_y.clear()
         self.slot_x.reserve(LAYER_SLOTS * (self.seeds + 1))
         self.slot_y.reserve(LAYER_SLOTS * (self.seeds + 1))
         self.counts.reserve(self.seeds + 1)
-        self.spill_head.reserve(self.seeds + 1)
         self.hint = 0
         self.add_sentinel()
         if self.seeds == 0 or self.rows < self.length + 1:
@@ -412,7 +422,12 @@ struct SeedHeuristic(Movable):
                 while layer >= len(self.counts):
                     self.add_layer()
                 for below in range(score):
-                    self.add_point(layer - below, x, y)
+                    # A start some start of the layer already dominates answers no query differently. In a
+                    # repeat, the next seed's match a few rows on dominates nearly every match, and kept,
+                    # they made each layer a long chain every query walked: poly-A of 16,384 bases
+                    # against 8,192 took two seconds, 32,000 against 16,000 seventeen.
+                    if not self.contains(layer - below, x, y):
+                        self.add_point(layer - below, x, y)
 
     def count_seeds(mut self, symbols: List[UInt8]):
         """`remaining` and `counted`, a seed uncounted when it holds a code past `ACGT`."""
@@ -823,7 +838,10 @@ struct SeedHeuristic(Movable):
         var low = reach
         var high = reach + 1
         var front = fronts.unsafe_ptr()
-        var reached = extend(first, second, start_column + self.length, end_row, self.columns, self.rows)
+        # A run past the last seed answers as one reaching it: in a repeat a run to its end took each match
+        # thousands of bases.
+        var horizon = min(end_column, self.columns)
+        var reached = extend(first, second, start_column + self.length, end_row, horizon, self.rows)
         front[unsafe_offset=reach] = reached
         if reached >= end_column:
             return True
@@ -860,7 +878,7 @@ struct SeedHeuristic(Movable):
                 var row = before - diagonal
                 if row < 0 or row > self.rows:
                     continue
-                var after = extend(first, second, before, row, self.columns, self.rows)
+                var after = extend(first, second, before, row, horizon, self.rows)
                 front[unsafe_offset=d] = after
                 if after >= end_column:
                     return True
@@ -876,21 +894,43 @@ struct SeedHeuristic(Movable):
             self.slot_x.append(0)
             self.slot_y.append(0)
         self.counts.append(0)
-        self.spill_head.append(-1)
+        self.spill_x.append(List[Int32]())
+        self.spill_y.append(List[Int32]())
 
     def add_point(mut self, layer: Int, x: Int, y: Int):
         """Adds the transformed start `(x, y)` to `layer`: into a slot while one is free, else onto the
-        layer's spill chain."""
+        layer's staircase, unless a start there lies at or above and right of it, and in place of those it
+        does."""
         var count = Int(self.counts[layer])
         if count < LAYER_SLOTS:
             self.slot_x[layer * LAYER_SLOTS + count] = Int32(x)
             self.slot_y[layer * LAYER_SLOTS + count] = Int32(y)
             self.counts[layer] = Int32(count + 1)
-        else:
-            self.spill_next.append(self.spill_head[layer])
-            self.spill_head[layer] = Int32(len(self.spill_x))
-            self.spill_x.append(Int32(x))
-            self.spill_y.append(Int32(y))
+            return
+        ref xs = self.spill_x[layer]
+        ref ys = self.spill_y[layer]
+        var place = first_at_least(xs, x)
+        if place < len(xs) and Int(ys[place]) >= y:
+            return
+        # The starts this one covers: those left of it and no higher, a run just before its place as `y`
+        # falls along the staircase, and one at its own `x` below it.
+        var end = place + 1 if place < len(xs) and Int(xs[place]) == x else place
+        var begin = place
+        while begin > 0 and Int(ys[begin - 1]) <= y:
+            begin -= 1
+        if begin == end:
+            xs.insert(begin, Int32(x))
+            ys.insert(begin, Int32(y))
+            return
+        xs[begin] = Int32(x)
+        ys[begin] = Int32(y)
+        var gone = end - begin - 1
+        if gone > 0:
+            for index in range(end, len(xs)):
+                xs[index - gone] = xs[index]
+                ys[index - gone] = ys[index]
+            xs.resize(len(xs) - gone, 0)
+            ys.resize(len(ys) - gone, 0)
 
     def add_sentinel(mut self):
         """Layer zero: a point dominating everything, as no match is chained."""
@@ -907,14 +947,12 @@ struct SeedHeuristic(Movable):
             if x <= Int(xs[unsafe_offset=index]) and y <= Int(ys[unsafe_offset=index]):
                 return True
         if count == LAYER_SLOTS:
-            var spill_x = self.spill_x.unsafe_ptr()
-            var spill_y = self.spill_y.unsafe_ptr()
-            var spill_next = self.spill_next.unsafe_ptr()
-            var index = Int(self.spill_head.unsafe_ptr()[unsafe_offset=layer])
-            while index >= 0:
-                if x <= Int(spill_x[unsafe_offset=index]) and y <= Int(spill_y[unsafe_offset=index]):
-                    return True
-                index = Int(spill_next[unsafe_offset=index])
+            ref step_x = self.spill_x.unsafe_ptr()[unsafe_offset=layer]
+            ref step_y = self.spill_y.unsafe_ptr()[unsafe_offset=layer]
+            # Of the starts right of `x`, the leftmost lies highest.
+            var place = first_at_least(step_x, x)
+            if place < len(step_x) and y <= Int(step_y.unsafe_ptr()[unsafe_offset=place]):
+                return True
         return False
 
     def score(mut self, x: Int, y: Int) -> Int:

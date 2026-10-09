@@ -1443,7 +1443,8 @@ def bidirectional[
     while True:
         var reached = 2 * min(forward.cost, backward.cost)
         # The cap first: an optimum just past it proves itself at the same reach.
-        if best.cost > ceiling and reached >= ceiling + o + window:
+        # Subtracted, not added: a ceiling near `Int.MAX` would wrap past it.
+        if best.cost > ceiling and reached - o - window >= ceiling:
             return OVER
         if best.cost != Int.MAX and reached >= best.cost - 1 + o + window:
             return MET
