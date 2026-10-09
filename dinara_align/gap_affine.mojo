@@ -273,15 +273,16 @@ comptime ORDINARY_WINDOW = 64
 costs span fewer, and their rings grow with the pair as every wavefront's fronts do."""
 
 
-def rings_fit(penalties: Penalties, columns: Int, rows: Int, budget: Int) -> Bool:
-    """Whether the two searches' rings for a `columns` by `rows` pair stay within `budget` bytes, or span an
-    ordinary window (see `ORDINARY_WINDOW`).
+def rings_fit(penalties: Penalties, columns: Int, rows: Int, budget: Int, ends: EndsFree = EndsFree()) -> Bool:
+    """Whether the two searches' rings for a `columns` by `rows` pair, `ends` its free letters, stay within
+    `budget` bytes, or span an ordinary window (see `ORDINARY_WINDOW`).
 
     A ring holds a front for each of the last `window` costs, the dearest move's, every layer as wide as
     the diagonals a search reaches. A search climbs past the optimum by the dearest opening and the
     window, and the optimum costs no more than the letters along the diagonal and a gap for the rest; a
     front at a cost reaches no further off its diagonal than that cost pays in its cheapest extension.
-    Dear gaps took a pair of a thousand letters gigabytes of rings."""
+    Free letters start a search on every diagonal they reach at no cost, so its fronts are that much wider
+    from the first. Dear gaps took a pair of a thousand letters gigabytes of rings."""
     var two = penalties.extension2 > 0 or penalties.deletion_extension2 > 0
     var window = penalties.window[2]() if two else penalties.window[1]()
     # An empty side is a gap, which no search grows.
@@ -296,7 +297,13 @@ def rings_fit(penalties: Penalties, columns: Int, rows: Int, budget: Int) -> Boo
     var bound = shorter * penalties.mismatch + (opening + rest * dearest_gap if rest > 0 else 0)
     var climb = (bound + opening + 2 * window) // cheapest
     # The rows double as they outgrow their diagonals, so they may hold twice those they need.
-    var width = max(4 * LANES, 2 * (min(columns, climb) + min(rows, climb) + 1)) + ROW_PADDING
+    var free = (
+        min(ends.first_begin, columns)
+        + min(ends.second_begin, rows)
+        + min(ends.first_end, columns)
+        + min(ends.second_end, rows)
+    )
+    var width = max(4 * LANES, 2 * (min(columns, climb) + min(rows, climb) + free + 1)) + ROW_PADDING
     var per_diagonal = 2 * (window + 1) * layers * 4
     return width <= budget // per_diagonal
 
@@ -306,9 +313,11 @@ def kept_bytes(limit: Int) -> Int:
     return Int.MAX if limit >= Int.MAX // KEPT_BYTES else limit * KEPT_BYTES
 
 
-def rings_within(penalties: Penalties, columns: Int, rows: Int, budget: Int) raises AlignmentError:
+def rings_within(
+    penalties: Penalties, columns: Int, rows: Int, budget: Int, ends: EndsFree = EndsFree()
+) raises AlignmentError:
     """Refuses a pair whose searches' rings could pass `budget` bytes (see `rings_fit`)."""
-    if not rings_fit(penalties, columns, rows, budget):
+    if not rings_fit(penalties, columns, rows, budget, ends):
         raise AlignmentError(
             ErrorKind.SEQUENCE_TOO_LONG,
             String(
@@ -1863,13 +1872,22 @@ def trace(
 
 def canonical[
     pieces: Int
-](mut ahead: Wavefront[pieces], guide: Wavefront[pieces], total: Int, mirrored: Bool, mut moves: List[UInt8],):
+](
+    mut ahead: Wavefront[pieces],
+    guide: Wavefront[pieces],
+    total: Int,
+    mirrored: Bool,
+    limit: Int,
+    mut moves: List[UInt8],
+) -> Bool:
     """Appends, right to left, the optimal path `Ties` picks, by growing `ahead` on to the cost `total`
     the two searches proved, pruned to the diagonals an optimal path passes (see `Wavefront.prune`),
     and tracing back from its far end, the corner. With `mirrored`, `ahead` is the backward search,
-    whose path runs over both sequences reversed."""
+    whose path runs over both sequences reversed. False, appending nothing, when the fronts grown would
+    take the two searches' kept entries past `limit`."""
     # The costs still in the ring first, so the costs grown next read narrow fronts.
-    grown_end[pieces](ahead, guide, total)
+    if not grown_end[pieces](ahead, guide, total, limit):
+        return False
     var columns = ahead.columns
     var rows = ahead.rows
     var path = List[UInt8](capacity=columns + rows)
@@ -1878,6 +1896,7 @@ def canonical[
         append_reversed(moves, path)
     else:
         moves.extend(path^)
+    return True
 
 
 def solve[
@@ -1963,11 +1982,29 @@ def solve[
         if status == OVER:
             return -1
         if status == MET and start == FREE_START and finish == FREE_START:
+            var traced: Bool
             if ties == Ties.RIGHT:
-                canonical[pieces](forward, backward, best.cost, False, moves)
+                traced = canonical[pieces](forward, backward, best.cost, False, limit, moves)
             else:
-                canonical[pieces](backward, forward, best.cost, True, moves)
-            return best.cost
+                traced = canonical[pieces](backward, forward, best.cost, True, limit, moves)
+            if traced:
+                return best.cost
+            # Growing the far end on would keep more than `limit`: split from scratch, as a pair too large is.
+            return solve[pieces](
+                forward_search,
+                backward_search,
+                first,
+                second,
+                penalties,
+                start,
+                finish,
+                limit,
+                moves,
+                False,
+                ceiling,
+                band,
+                ties,
+            )
         if status == MET:
             # The backward walk runs from the meeting to the corner, left to right as the forward path goes.
             var behind = List[UInt8](capacity=columns + rows)
@@ -2299,14 +2336,19 @@ def reached_from[
         search.advance[False]()
 
 
-def grown_end[pieces: Int](mut ahead: Wavefront[pieces], guide: Wavefront[pieces], total: Int):
+def grown_end[
+    pieces: Int
+](mut ahead: Wavefront[pieces], guide: Wavefront[pieces], total: Int, limit: Int = Int.MAX) -> Bool:
     """Grows `ahead` on to `total`, pruned to the diagonals a path of that cost passes, as the other
-    side's kept fronts tell (see `Wavefront.prune`)."""
+    side's kept fronts tell (see `Wavefront.prune`); false once the two keep more than `limit` entries."""
     for lag in range(min(ahead.fronts.slots - 1, ahead.cost) + 1):
         ahead.prune(ahead.fronts.back(lag), ahead.cost - lag, guide.history, total)
     while ahead.cost < total:
         ahead.advance[True]()
         ahead.prune(ahead.fronts.current, ahead.cost, guide.history, total)
+        if ahead.history.kept + guide.history.kept > limit:
+            return False
+    return True
 
 
 def edge_span(length: Int, along_first: Bool, ends_free: EndsFree, band: Band) -> Optional[Tuple[Int, Int]]:

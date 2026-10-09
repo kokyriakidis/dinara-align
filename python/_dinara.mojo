@@ -87,7 +87,8 @@ def costs_of(fields: PythonObject) raises -> Costs:
         costs = Costs.affine(at[0], at[1], at[2])
     else:
         costs = Costs.two_piece(at[0], at[1], at[2], at[3], at[4])
-    if at[6] > 0:
+    if at[6] != 0:
+        # Zero is none; any other the library takes or refuses, never dropped without a word.
         costs = costs.with_deletions(at[5], at[6], at[7], at[8])
     return costs
 
@@ -115,11 +116,13 @@ def mode_of(fields: PythonObject) raises -> Mode:
 
 @fieldwise_init
 struct Options(ImplicitlyCopyable):
-    """`(band_low, band_high, max_cost, eqx, right_ties, max_memory)`: a negative cap for none, a
-    memory of zero or less for the default."""
+    """`(band_low, band_high, max_cost, eqx, right_ties, max_memory, capped)`: the cap only when `capped`,
+    any value, a negative one leaving nothing within it as the library counts one; a memory of zero or
+    less for the default."""
 
     var band: Band
     var max_cost: Int
+    var capped: Bool
     var eqx: Bool
     var ties: Ties
     var max_memory: Int
@@ -131,7 +134,7 @@ def options_of(fields: PythonObject) raises -> Options:
     # A band past any diagonal is no band.
     var band = Band(at[0], at[1])
     var memory = at[5] if at[5] > 0 else DEFAULT_MAX_MEMORY
-    return Options(band, at[2], at[3] != 0, Ties.RIGHT if at[4] != 0 else Ties.LEFT, memory)
+    return Options(band, at[2], at[6] != 0, at[3] != 0, Ties.RIGHT if at[4] != 0 else Ties.LEFT, memory)
 
 
 def alignment_tuple(found: Alignment) raises -> PythonObject:
@@ -167,7 +170,7 @@ def distance_through(
     var asked = options_of(options)
     var first = String(py=reference)
     var second = String(py=query)
-    if asked.max_cost < 0:
+    if not asked.capped:
         return PythonObject(aligner.distance(first, second, costs_of(costs), mode_of(mode), band=asked.band))
     var found = aligner.distance(
         first, second, costs_of(costs), mode_of(mode), max_cost=asked.max_cost, band=asked.band
@@ -197,7 +200,7 @@ def align_through(
     var asked = options_of(options)
     var first = String(py=reference)
     var second = String(py=query)
-    if asked.max_cost < 0:
+    if not asked.capped:
         return alignment_tuple(
             aligner.align(
                 first,
@@ -318,7 +321,7 @@ def py_distances(
     """Every pair's least cost, None past a cap, over `threads` threads, the caller's own alone for zero."""
     var asked = options_of(options)
     var out = Python.list()
-    if asked.max_cost < 0:
+    if not asked.capped:
         for value in distances(
             strings(references),
             strings(queries),
@@ -353,7 +356,7 @@ def py_alignments(
     """Every pair's alignment as a tuple, None past a cap, over `threads` threads."""
     var asked = options_of(options)
     var out = Python.list()
-    if asked.max_cost < 0:
+    if not asked.capped:
         for found in alignments(
             strings(references),
             strings(queries),
@@ -426,7 +429,7 @@ def py_search(
     settings: PythonObject,
 ) raises -> PythonObject:
     """`(index, score, alignment or None)` for each hit, the best first; `settings` is `(best, aligned,
-    threads)`, a best of zero or less for every hit."""
+    threads)`, a negative best for every hit."""
     var asked = options_of(options)
     var best = Int(py=settings[0])
     var hits = search(
@@ -434,8 +437,8 @@ def py_search(
         String(py=query),
         costs_of(costs),
         mode_of(mode),
-        best=Optional[Int](best) if best > 0 else None,
-        max_cost=Optional[Int](asked.max_cost) if asked.max_cost >= 0 else None,
+        best=Optional[Int](best) if best >= 0 else None,
+        max_cost=Optional[Int](asked.max_cost) if asked.capped else None,
         aligned=Bool(py=settings[1]),
         ties=asked.ties,
         threads=threads_of(settings[2]),

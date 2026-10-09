@@ -15,7 +15,7 @@ header).
 
 from std.atomic import Atomic
 from std.ffi import c_int, c_size_t, external_call
-from std.sys import size_of
+from std.sys import align_of, size_of
 
 
 from dinara_align import (
@@ -111,7 +111,7 @@ def pair_code(
 
 def costs_of(fields: OptionalPointer[Int, MutAnyOrigin]) raises AlignmentError -> Costs:
     """`dinara_costs`: mismatch, opening, extension, opening2, extension2, a negative opening2 for one
-    piece, then a deletion's four, which count only with its extension above zero. Null is unit costs."""
+    piece, then a deletion's four, none with its extension zero. Null is unit costs."""
     if not fields:
         return Costs.edit()
     var at = fields.value()
@@ -122,7 +122,8 @@ def costs_of(fields: OptionalPointer[Int, MutAnyOrigin]) raises AlignmentError -
         costs = Costs.two_piece(
             at[unsafe_offset=0], at[unsafe_offset=1], at[unsafe_offset=2], at[unsafe_offset=3], at[unsafe_offset=4]
         )
-    if at[unsafe_offset=6] > 0:
+    # Zero is none; a negative extension the library refuses rather than this dropping it without a word.
+    if at[unsafe_offset=6] != 0:
         costs = costs.with_deletions(at[unsafe_offset=5], at[unsafe_offset=6], at[unsafe_offset=7], at[unsafe_offset=8])
     return costs
 
@@ -212,8 +213,8 @@ def distance_code(
         var cap = asked.max_cost if asked.max_cost >= 0 else Int.MAX
         var found = cost_within(first, second, costs, mode, asked.band, cap, space)
         if not found:
-            # Under a cap, a band no alignment fits also leaves nothing within it.
-            return OUTSIDE_BAND if cap == Int.MAX else ABOVE_MAX
+            # Under a cap, even `INT64_MAX`, a band no alignment fits also leaves nothing within it.
+            return ABOVE_MAX if asked.max_cost >= 0 else OUTSIDE_BAND
         return found.value()
     except error:
         return failure(error)
@@ -236,7 +237,8 @@ def align_into(
     if refused != 0:
         return refused
     var capped = asked.max_cost >= 0
-    if capped and mode.kind != Mode.ENDS:
+    # A cap on a mode that scores, even `INT64_MAX`, which the library would read as none.
+    if capped and mode.is_scored():
         return INVALID_MODE
     try:
         var first = sequence(reference, reference_length)
@@ -344,13 +346,17 @@ def dinara_align(
 
 @export("dinara_aligner_new")
 def dinara_aligner_new() abi("C") -> OptionalPointer[SearchSpace, MutAnyOrigin]:
-    """One thread's aligner, its searches' memory kept from call to call, in memory from C's `malloc`, for
-    `dinara_aligner_free`; null when there is none to be had. It keeps nothing a call depends on, so it
+    """One thread's aligner, its searches' memory kept from call to call, in memory from C's `posix_memalign`,
+    for `dinara_aligner_free`; null when there is none to be had. It keeps nothing a call depends on, so it
     gives the same answers as the functions without one, and it is never shared between threads."""
-    var aligner = external_call["malloc", OptionalPointer[SearchSpace, MutAnyOrigin]](size_of[SearchSpace]())
-    if aligner:
-        aligner.value().unsafe_write(SearchSpace())
-    return aligner
+    # Aligned as the type asks, 32 bytes for its SIMD fields, where `malloc` promises 16.
+    var place = OptionalPointer[SearchSpace, MutAnyOrigin]()
+    var alignment = max(align_of[SearchSpace](), 8)
+    if external_call["posix_memalign", Int32](Pointer(to=place), alignment, size_of[SearchSpace]()) != 0:
+        return None
+    if place:
+        place.value().unsafe_write(SearchSpace())
+    return place
 
 
 @export("dinara_aligner_free")
@@ -648,7 +654,9 @@ def distances_part(
         if laned_ptr[unsafe_offset=index]:
             var cost = found_ptr[unsafe_offset=index]
             # Under a cap, a band no alignment fits also leaves nothing within it.
-            results[unsafe_offset=index] = cost.value() if cost else (OUTSIDE_BAND if cap == Int.MAX else ABOVE_MAX)
+            results[unsafe_offset=index] = cost.value() if cost else (
+                ABOVE_MAX if asked.max_cost >= 0 else OUTSIDE_BAND
+            )
             return
         results[unsafe_offset=index] = distance_code(
             references[unsafe_offset=index],
@@ -1036,7 +1044,8 @@ def dinara_search(
     """The query against `count` references (see `search`): the hits, best first, their places into
     `indices` and their scores into `scores`, each with room for `count`, and their number back, or a
     negative code. `best` above zero keeps that many; the options' cap drops what passes it. The
-    references spread over `threads` threads the library starts itself (see `SharedSearch`)."""
+    references spread over `threads` threads the library starts itself (see `SharedSearch`). A band in the
+    options is refused, `DINARA_INVALID_MODE`."""
     if count <= 0:
         return 0
     for index in range(count):
@@ -1053,6 +1062,9 @@ def dinara_search(
     except error:
         return failure(error)
     var asked = options_of(options)
+    if not asked.band.covers_any():
+        # A search takes no band: its hits would come from outside it without a word.
+        return INVALID_MODE
     var texts = List[String](capacity=count)
     for index in range(count):
         texts.append(sequence(references[unsafe_offset=index], reference_lengths[unsafe_offset=index]))

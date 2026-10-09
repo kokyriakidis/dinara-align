@@ -505,7 +505,7 @@ def packed_into(
     target: MutPointer[UInt32, _],
 ) -> Bool:
     """Writes `text`'s letters `bits` bits each, `per_word` to a word, from `target` on, and whether
-    every letter is in the alphabet. Over `ACGT` itself, sixteen letters a word at once: their codes
+    every letter is in the alphabet, a letter outside it written as code zero. Over `ACGT` itself, sixteen letters a word at once: their codes
     are those `bit_parallel.base_codes` reads off their ASCII bits, in the alphabet's own order."""
     var bytes = text.unsafe_ptr()
     var length = text.byte_length()
@@ -526,8 +526,11 @@ def packed_into(
         var stop = min(position + per_word, length)
         for at in range(position, stop):
             var code = codes_by_byte[Int(bytes[unsafe_offset=at])]
-            unknown = unknown or code == UNKNOWN_SYMBOL
-            word |= UInt32(code) << UInt32((at - position) * bits)
+            # A letter outside the alphabet only flags the pair, its code zero: the kernels still run over
+            # a flagged pair, and its code past the table's read up to 33 KB past the shared table.
+            var outside = code == UNKNOWN_SYMBOL
+            unknown = unknown or outside
+            word |= UInt32(0 if outside else code) << UInt32((at - position) * bits)
         target[unsafe_offset=word_index] = word
         word_index += 1
         position = stop

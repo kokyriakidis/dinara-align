@@ -131,6 +131,15 @@ def record_name(header: StringSlice, path: String) raises -> String:
     return String(words[0])
 
 
+def literal(option: String, value: String) -> String:
+    """A sequence given on the command line, upper-cased: ASCII alone. Its bytes come as they are, unchecked
+    as UTF-8, and upper-casing a malformed one wrote the bytes the library ends its sequences with."""
+    for byte in value.as_bytes():
+        if byte >= 0x80:
+            fail(String(option, ": ASCII letters alone"))
+    return value.upper()
+
+
 def numbers(text: String) raises -> List[Int]:
     """The integers of a comma-separated list, as `--band` and `--costs` take them."""
     var out = List[Int]()
@@ -141,9 +150,11 @@ def numbers(text: String) raises -> List[Int]:
 
 def costs_of(text: String) raises -> Costs:
     """The `Costs` a `--costs` value names: `edit`, `linear:X,G`, `affine:X,O,E` or `two-piece:X,O,E,O2,E2`."""
+    if len(text.split(":")) > 2:
+        raise Error(String("--costs ", text, ": one value list"))
     var kind = String(text.split(":")[0])
     var values = numbers(String(text.split(":")[1])) if ":" in text else List[Int]()
-    if kind == "edit":
+    if kind == "edit" and ":" not in text:
         return Costs.edit()
     if kind == "linear" and len(values) == 2:
         return Costs.linear(values[0], values[1])
@@ -157,9 +168,13 @@ def costs_of(text: String) raises -> Costs:
 def mode_of(text: String, match_score: Int, zdrop: Int, end_bonus: Int) raises -> Mode:
     """The `Mode` a `--mode` value names; free ends take `--match-score` when above zero, an extension
     `--zdrop` and `--end-bonus` when zero or more, and the other modes their reward from the value itself."""
+    if len(text.split(":")) > 2:
+        raise Error(String("--mode ", text, ": one value list"))
     var kind = String(text.split(":")[0])
     var values = numbers(String(text.split(":")[1])) if ":" in text and not text.endswith(",end") else List[Int]()
     var mode: Mode
+    if kind in ["global", "infix", "prefix", "suffix", "reference-in-query"] and ":" in text:
+        raise Error(String("--mode ", text, ": ", kind, " takes no values"))
     if kind == "global":
         mode = Mode.GLOBAL
     elif kind == "infix":
@@ -278,9 +293,9 @@ def run() raises:
         if takes_value and not has_value:
             fail(String(argument, " needs a value"))
         if argument == "-r":
-            literal_reference = value.upper()
+            literal_reference = literal(argument, value)
         elif argument == "-q":
-            literal_query = value.upper()
+            literal_query = literal(argument, value)
         elif argument == "--pairs":
             pairs_file = value
         elif argument == "--costs":
@@ -291,6 +306,8 @@ def run() raises:
             mode_text = value
         elif argument == "--match-score":
             match_score = Int(value)
+            if match_score <= 0:
+                fail("--match-score: above zero")
         elif argument == "--zdrop":
             zdrop = Int(value)
             if zdrop < 0:
@@ -344,6 +361,10 @@ def run() raises:
             fail("--deletions: O,E or O,E,O2,E2")
     var mode = mode_of(mode_text, match_score, zdrop, end_bonus)
     # Options that would otherwise be dropped without a word.
+    if match_score > 0 and mode.kind != Mode.ENDS:
+        fail("--match-score: free ends alone; local, overlap and extension take their reward in --mode")
+    if (zdrop >= 0 or end_bonus >= 0) and mode.kind != Mode.EXTENSION:
+        fail("--zdrop and --end-bonus: an extension alone")
     if mode.is_scored() and max_cost >= 0:
         fail("--max-cost: a mode with a match score takes no cap")
     if cost_only and (both_strands or format_given):

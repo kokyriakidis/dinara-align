@@ -148,6 +148,23 @@ def main() -> None:
     assert all((c is None) == (da.distance(r, q, affine) > 30) for c, r, q in zip(capped, references, queries))
     hits = da.search(["TTTT", "ACGTACGTACGT", "ACGTTCGTACGT"], "ACGTACGTACGT", affine, da.Mode.local(2), best=2, aligned=True)
     assert [hit.index for hit in hits] == [1, 2] and hits[0].score == 24 and hits[0].alignment.cigar == "12="
+    # What the swarm found: costs the library refuses are refused, not dropped; a negative cap still checks
+    # the call first; a best of zero keeps no hit.
+    for bad in (lambda: da.Costs.two_piece(4, 6, 2, -5, 1), lambda: da.Costs.affine(4, 6, 2).with_deletions(6, 0)):
+        try:
+            bad()
+            raise AssertionError("invalid costs accepted")
+        except ValueError:
+            pass
+    assert da.distance("ACGTACGTTTGCA", "ACGTCGTTTTGCA", max_cost=-1) is None
+    try:
+        da.align("ACGTACGTTTGCA", "ACGTCGTTTTGCA", da.Costs.affine(4, 6, 2), da.Mode.local(2), max_cost=-1)
+        raise AssertionError("a cap on a local alignment accepted")
+    except ValueError:
+        pass
+    assert da.search(["TTTT", "ACGTACGTACGT"], "ACGTACGTACGT", best=0) == []
+    assert len(da.search(["TTTT", "ACGTACGTACGT"], "ACGTACGTACGT")) == 2
+
     print(f"Python package: every check passed, {tried} examples of its own among them")
 
 

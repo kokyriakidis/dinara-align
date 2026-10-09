@@ -197,8 +197,8 @@ int64_t dinara_local_scores(const char *reference, int64_t reference_length, con
 /* The query against `count` references, a database search: the hits, best first, ties by order, their
  * places into `indices` and their scores (minus their costs with no reward) into `scores`, each with
  * room for `count`; returns how many, or a DINARA_ code. `best` above zero keeps that many, and the
- * options' `max_cost` drops what passes it. A local search scores many references at once, one to a
- * SIMD lane. */
+ * options' `max_cost` drops what passes it; a band is refused, DINARA_INVALID_MODE. A local search
+ * scores many references at once, one to a SIMD lane. */
 int64_t dinara_search(int64_t count, const char *const *references, const int64_t *reference_lengths,
                       const char *query, int64_t query_length, const dinara_costs *costs, const dinara_mode *mode,
                       const dinara_options *options, int64_t best, int64_t threads, int64_t *indices,

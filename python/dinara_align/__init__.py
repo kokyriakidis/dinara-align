@@ -79,11 +79,6 @@ def _ints(*values) -> tuple:
     return values
 
 
-def _nothing_fits(max_cost: Optional[int]) -> bool:
-    """Whether a cap below zero leaves no alignment within it, as the library counts one."""
-    return max_cost is not None and _ints(max_cost)[0] < 0
-
-
 def _call(function, *args):
     """Calls the extension, raising its refusals as `ValueError`."""
     try:
@@ -128,10 +123,16 @@ class Costs:
     @staticmethod
     def two_piece(mismatch: int, opening: int, extension: int, opening2: int, extension2: int) -> "Costs":
         """A gap the less of two affine costs, minimap2's `-O4,24 -E2,1` as `two_piece(4, 4, 2, 24, 1)`."""
+        # A negative `opening2` is one piece to the extension, so it is refused here, as the library does.
+        if _ints(extension2)[0] <= 0 or _ints(opening2)[0] < 0:
+            raise ValueError(f"second piece {opening2}, {extension2}: its extension must cost")
         return Costs(mismatch, opening, extension, opening2, extension2)
 
     def with_deletions(self, opening: int, extension: int, opening2: int = -1, extension2: int = 0) -> "Costs":
         """These costs with deletions of their own, the others an insertion's, as bwa's `-O del,ins`."""
+        # An extension of zero is no deletions of their own to the extension, so it is refused here.
+        if _ints(extension)[0] <= 0 or _ints(opening)[0] < 0 or (_ints(opening2)[0] >= 0 and _ints(extension2)[0] <= 0):
+            raise ValueError(f"deletions {opening}, {extension}: an extension must cost")
         return replace(
             self,
             deletion_opening=opening,
@@ -413,8 +414,8 @@ class LocalScores:
 
 
 def _options(band: Optional[Band], max_cost: Optional[int], eqx: bool, ties: str, max_memory: Optional[int]) -> tuple:
-    """The options as the extension takes them, in `dinara_options`'s order: -1 for no cap, 0 for the
-    default memory. Raises `ValueError` for a `ties` other than `"left"` or `"right"`."""
+    """The options as the extension takes them, in `dinara_options`'s order and then whether there is a cap,
+    0 for the default memory. Raises `ValueError` for a `ties` other than `"left"` or `"right"`."""
     if ties not in ("left", "right"):
         raise ValueError("ties: 'left' or 'right'")
     band = band or Band()
@@ -424,10 +425,11 @@ def _options(band: Optional[Band], max_cost: Optional[int], eqx: bool, ties: str
     return (
         band.low,
         band.high,
-        -1 if max_cost is None else max_cost,
+        0 if max_cost is None else _ints(max_cost)[0],
         1 if eqx else 0,
         1 if ties == "right" else 0,
         max_memory or 0,
+        0 if max_cost is None else 1,
     )
 
 
@@ -443,8 +445,6 @@ def distance(
     """The least cost of aligning `query` to `reference` as `mode` asks, or None past `max_cost`."""
     options = _options(band, max_cost, True, "left", None)
     arguments = (_text(reference), _text(query), costs._fields(), mode._fields(), options)
-    if _nothing_fits(max_cost):
-        return None
     return _call(_dinara.distance, *arguments)
 
 
@@ -469,8 +469,6 @@ def align(
         return Alignment(*found)
     options = _options(band, max_cost, eqx, ties, max_memory)
     arguments = (_text(reference), _text(query), costs._fields(), mode._fields(), options)
-    if _nothing_fits(max_cost):
-        return None
     found = _call(_dinara.align, *arguments)
     return None if found is None else Alignment(*found)
 
@@ -496,8 +494,6 @@ class Aligner:
         """`distance`, through this aligner's memory."""
         options = _options(band, max_cost, True, "left", None)
         arguments = (_text(reference), _text(query), costs._fields(), mode._fields(), options)
-        if _nothing_fits(max_cost):
-            return None
         return _call(self._aligner.distance, *arguments)
 
     def align(
@@ -516,8 +512,6 @@ class Aligner:
         """`align`, through this aligner's memory: the same alignment, the CIGAR its `ties` picks."""
         options = _options(band, max_cost, eqx, ties, max_memory)
         arguments = (_text(reference), _text(query), costs._fields(), mode._fields(), options)
-        if _nothing_fits(max_cost):
-            return None
         found = _call(self._aligner.align, *arguments)
         return None if found is None else Alignment(*found)
 
@@ -567,8 +561,6 @@ def distances(
         costs._fields(),
         mode._fields(),
     )
-    if _nothing_fits(max_cost) and len(arguments[0]) == len(arguments[1]):
-        return [None] * len(arguments[0])
     return _call(_dinara.distances, *arguments, options, _ints(threads)[0])
 
 
@@ -593,8 +585,6 @@ def alignments(
         costs._fields(),
         mode._fields(),
     )
-    if _nothing_fits(max_cost) and len(arguments[0]) == len(arguments[1]):
-        return [None] * len(arguments[0])
     found = _call(_dinara.alignments, *arguments, options, _ints(threads)[0])
     return [None if item is None else Alignment(*item) for item in found]
 
@@ -625,8 +615,8 @@ def search(
     many alone, with `max_cost` those within it, with `aligned` their alignments. A local search scores
     a block of references at once, one to a SIMD lane."""
     options = _options(None, max_cost, True, ties, None)
+    if best is not None and _ints(best)[0] < 0:
+        raise ValueError(f"a best of {best} hits")
     arguments = ([_text(item) for item in references], _text(query), costs._fields(), mode._fields())
-    if _nothing_fits(max_cost):
-        return []
-    found = _call(_dinara.search, *arguments, options, (_ints(best or 0)[0], aligned, _ints(threads)[0]))
+    found = _call(_dinara.search, *arguments, options, (-1 if best is None else _ints(best)[0], aligned, _ints(threads)[0]))
     return [Hit(index, score, None if alignment is None else Alignment(*alignment)) for index, score, alignment in found]

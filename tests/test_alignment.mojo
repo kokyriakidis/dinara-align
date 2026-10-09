@@ -54,7 +54,10 @@ from dinara_align.cigar import cigar_runs
 from dinara_align.cigar import reversed_text as reversed_bytes
 from dinara_align.edit_distance import edit_distance as bit_parallel_distance
 from dinara_align.scored import ANYWHERE, best_end, end_of
-from dinara_align.seeds import SEED_COLUMNS
+from dinara_align.seeds import SEED_COLUMNS, SeedHeuristic
+from dinara_align.diagonal import PROJECTION_ONLY, step_budget
+from dinara_align.edit_search import edit_search
+from dinara_align.cigar import text_of
 from dinara_align.bit_parallel import Profile
 from dinara_align.diagonal import DiagonalFronts, diagonal_transition, trace_diagonals
 from dinara_align.traceback import EditPath, cigar_string
@@ -3713,6 +3716,145 @@ def test_device_matches_host() raises:
 
 
 # endregion Device
+
+
+def test_inexact_seeds_never_overestimate() raises:
+    """With inexact seeds the heuristic is a lower bound on the cost to the end at every cell: an exact
+    match's windows a base shorter and longer are kept, a path along one, a diagonal off, chaining on
+    where the exact match cannot. Without them it read 2 where one insertion was enough."""
+    var text = String("TGTCGAGAAGCTCCTGAGCGCCTGTTCCGTGGTCGCCGAGTAGCCGCCTCAGGGGAATCGCGGCTGGC")
+    var size = text.byte_length()
+    var heuristic = SeedHeuristic(Profile(text, text), inexact=True)
+    assert_equal(heuristic.h(48, 47), 1)
+    # Every cell's true cost to the end, the suffixes' edit distance, a row at a time from the last.
+    var letters = text.as_bytes()
+    var below = List[Int](length=size + 1, fill=0)
+    for column in range(size + 1):
+        below[column] = size - column
+    for row in range(size - 1, -1, -1):
+        var here = List[Int](length=size + 1, fill=0)
+        here[size] = size - row
+        for column in range(size - 1, -1, -1):
+            var diagonal = below[column + 1] + (0 if letters[column] == letters[row] else 1)
+            here[column] = min(diagonal, min(below[column], here[column + 1]) + 1)
+        for column in range(size + 1):
+            assert_true(heuristic.h(column, row) <= here[column])
+        below = here^
+
+
+def test_tandem_repeats_set_up_quickly() raises:
+    """A long tandem repeat, every seed sharing one of four codes with every row the repeat covers: its
+    seeds are given up past `MATCHES_A_SEED` matches a seed, for the gap heuristic, where they took 73
+    seconds and 760 MB at 200 kbp. Distance and alignment still agree."""
+    var first = String("ACGT") * 50000
+    var kept = List[UInt8]()
+    var bytes = first.as_bytes()
+    for index in range(len(bytes)):
+        # A letter dropped every 997 and one changed every 1,009.
+        if index % 997 == 500:
+            continue
+        kept.append(bytes[index] if index % 1009 != 3 else UInt8(ord("T")))
+    var second = text_of(Span(kept))
+    var found = distance(first, second)
+    assert_equal(align(first, second).cost, found)
+    assert_true(found <= 2 * (200000 // 997 + 200000 // 1009 + 2))
+
+
+def test_batch_bands_hold_on_their_retry() raises:
+    """A free-ends batch whose band leaves out diagonal zero keeps its retry inside the band: the batch
+    found the unbanded 16 for a pair whose best inside the band costs 54."""
+    var reference = String("GATTACAGCTTGACCATGCA")
+    var query = reference + "CCGTA"
+    var costs = Costs.affine(4, 6, 2)
+    var mode = Mode.ends_free(query_start=5)
+    var band = Band(-100, -3)
+    var single = distance(reference, query, costs, mode, band=band)
+    assert_equal(single, 54)
+    var references: List[String] = [reference]
+    var queries: List[String] = [query]
+    assert_equal(distances(references, queries, costs, mode, band=band)[0], single)
+    assert_equal(alignments(references, queries, costs, mode, band=band)[0].cost, single)
+
+
+def test_free_ends_rings_count_their_free_letters() raises:
+    """Free letters start a search on every diagonal they reach, so dear gaps' rings are weighed with
+    them: an infix that took 1.2 GB under an 80 MB budget is refused, its global twin aligned."""
+    var reference = String()
+    var query = String()
+    var state = UInt64(7)
+    for index in range(200000):
+        state = state * 6364136223846793005 + 1442695040888963407
+        var letter = Int(state >> 62)
+        reference += "ACGT"[byte=letter]
+        query += "ACGT"[byte=(letter + 1) % 4 if index % 997 == 500 else letter]
+    var costs = Costs.affine(1, 0, 200)
+    assert_equal(align(reference, query, costs, max_memory=20_000_000).cost, 201)
+    with assert_raises(contains="max_memory"):
+        _ = align(reference, query, costs, Mode.INFIX, max_memory=20_000_000)
+
+
+def test_scores_refuse_what_32_bits_cannot_hold() raises:
+    """A gap score of `Int32.MIN`, whose negation wraps, and an opening near `Int.MIN`, whose sum with the
+    extension wraps an `Int`, are refused; a batch raises the error a serial loop would raise first; and
+    the diagonal transition's projection-only budget stays negative past 8 Mbp."""
+    with assert_raises():
+        _ = Scoring.uniform(2, -4, Int(Int32.MIN) + 1, -1)
+    with assert_raises():
+        _ = Scoring.uniform(2, -4, Int.MIN, -1)
+    with assert_raises():
+        _ = Scoring.uniform(2, -4, 0, Int(Int32.MIN))
+    var huge = Scoring.uniform(2, -4, 0, -10_000_000)
+    var references: List[String] = ["ACGN", String("ACGT") * 10]
+    var queries: List[String] = ["ACG", String("ACGT") * 10]
+    with assert_raises(contains="outside the alphabet"):
+        _ = scores(references, queries, huge)
+    with assert_raises(contains="outside the alphabet"):
+        _ = alignments(references, queries, huge)
+    assert_true(step_budget(10_000_000, PROJECTION_ONLY, 5) < 0)
+
+
+def test_searches_refuse_what_they_cannot_honour() raises:
+    """`search` refuses a negative `best`, which aborted the process, and a cap on a local search, which it
+    dropped without a word as every other mode with a reward refuses it; an empty pattern or text ends
+    an infix as the rule says."""
+    var references: List[String] = ["TTTT", "ACGTACGTACGT", "ACGTTCGTACGT"]
+    with assert_raises():
+        _ = search(references, "ACGTACGTACGT", best=-1)
+    assert_equal(len(search(references, "ACGTACGTACGT", best=0)), 0)
+    with assert_raises(contains="no cost cap"):
+        _ = search(references, "ACGTACGTACGT", Costs.affine(4, 6, 2), Mode.local(2), max_cost=0)
+    var empty = edit_search("", "ACGT")
+    assert_equal(empty.distance, 0)
+    assert_equal(empty.end, 4)
+    assert_equal(edit_search("ACG", "").distance, 3)
+
+
+def test_device_symbols_stay_in_their_tables() raises:
+    """On the device a letter outside a 20-letter alphabet raises as on the host rather than reading past
+    the shared table, and a pattern holding all 256 byte values keeps its last byte's code its own.
+    Skipped where no accelerator answers."""
+    if not gpu_available():
+        print("    skipped: no accelerator serves a real alignment here")
+        return
+    var device = Placement.on_gpu(0, 4)
+    var cells = List[Int8]()
+    for row in range(20):
+        for column in range(20):
+            cells.append(Int8(5) if row == column else Int8(-4))
+    var protein = Scoring.tabulated("ACDEFGHIKLMNPQRSTVWY", cells^, -6, -2)
+    var firsts: List[String] = ["ACDXFGHIK"]
+    var seconds: List[String] = ["ACDEFGHIK"]
+    with assert_raises(contains="outside the alphabet"):
+        _ = scores(firsts, seconds, protein, placement=device)
+    var every = List[UInt8]()
+    for byte in range(256):
+        every.append(UInt8(byte))
+    every.append(0xFF)
+    every.append(0)
+    var many = List[UInt8](length=300, fill=0xFF)
+    var patterns: List[String] = [text_of(Span(every))]
+    var texts: List[String] = [text_of(Span(many))]
+    assert_equal(distances(patterns, texts, placement=device)[0], distances(patterns, texts)[0])
 
 
 def main() raises:

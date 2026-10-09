@@ -117,6 +117,14 @@ def reached_from[
     return (0, 0)
 
 
+def vector_cells(rows: Int, columns: Int, band_cells: Int) -> Int:
+    """What `vector_align` holds for a `rows` by `columns` pair whose band has `band_cells` cells, in cells of
+    its three 32-bit layers: every anti-diagonal's cells and their padding, a step's spare lanes, and the
+    three indexes of the diagonals, two cells' bytes a diagonal."""
+    var diagonals = rows + columns + 1
+    return band_cells + diagonals * (2 * BAND_PADDING + 2) + WIDTH
+
+
 def vector_align(
     first: List[UInt8],
     second: List[UInt8],
@@ -277,7 +285,7 @@ def optimal_band(rows: Int, columns: Int, reward: Int, gaps: AffineGapCosts, sco
     to spend on gaps the band is the two diagonals and the run between them.
     """
     var difference = columns - rows
-    var per_gap = 2 * Int(-gaps.extend) + reward
+    var per_gap = 2 * -Int(gaps.extend) + reward
     var cost = reward * (rows + columns) - 2 * score
     var reach = max(0, (cost - per_gap * abs(difference)) // (2 * per_gap)) if per_gap > 0 else rows + columns
     return (min(0, difference) - reach, max(0, difference) + reach)

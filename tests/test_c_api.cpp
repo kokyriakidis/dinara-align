@@ -5,6 +5,7 @@
 // four threads at once, and batches.
 //
 //     pixi run test-c
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <random>
@@ -375,6 +376,26 @@ int main() {
     }
     for (auto &caller : callers) caller.join();
     for (int caller = 0; caller < 6; caller++) CHECK(agreed[caller]);
+
+    // What the swarm found: a cap of INT64_MAX is a cap everywhere, a search refuses a band rather than
+    // dropping it, a negative deletion extension is refused, and an aligner is built where it is aligned.
+    const char *banded_reference = "ACGTACGTACGTACGTTTGACCA", *banded_query = "ACGTACGAACGTACCGTTGACA";
+    dinara_options top_cap{5, 6, INT64_MAX, 1, 0, 0};
+    dinara_alignment top_raw{};
+    CHECK(dinara_distance(banded_reference, 23, banded_query, 22, nullptr, nullptr, &top_cap) == DINARA_ABOVE_MAX);
+    CHECK(dinara_align(banded_reference, 23, banded_query, 22, nullptr, nullptr, &top_cap, &top_raw) ==
+          DINARA_ABOVE_MAX);
+    dinara_options search_band{5, 6, -1, 1, 0, 0};
+    const char *search_references[] = {banded_reference};
+    int64_t search_lengths[] = {23};
+    int64_t search_index = 0, search_score = 0;
+    CHECK(dinara_search(1, search_references, search_lengths, banded_query, 22, nullptr, nullptr, &search_band, 0, 0,
+                        &search_index, &search_score) == DINARA_INVALID_MODE);
+    dinara_costs negative_deletions{4, 6, 2, -1, 0, 6, -1, -1, 0};
+    CHECK(dinara_distance("ACGT", 4, "AGT", 3, &negative_deletions, nullptr, nullptr) == DINARA_INVALID_COSTS);
+    dinara_aligner *aligned_place = dinara_aligner_new();
+    CHECK(aligned_place != nullptr && reinterpret_cast<uintptr_t>(aligned_place) % 32 == 0);
+    dinara_aligner_free(aligned_place);
 
     if (failures) {
         std::fprintf(stderr, "%d checks failed\n", failures);

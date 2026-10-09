@@ -73,6 +73,14 @@ comptime SCAN_BATCH = 16
 `inexact_scan`): enough misses in flight at once to hide most of their wait."""
 
 
+comptime MATCHES_A_SEED = 64
+"""Matches a pair's seeds may have on average before they are given up for the gap heuristic alone. Real
+reads have at most 2.5 exact matches a seed and 12 inexact (ont-500k and its genvar set); a long tandem
+repeat has thousands, every seed sharing one of a few codes with every row the repeat covers: 200 kbp of
+`ACGT` repeated took 73 seconds and 760 MB to set up, and 1 Mbp would have taken half an hour and 19 GB.
+Giving them all up keeps the bound exact, the band then pruning as it does without seeds."""
+
+
 comptime SEED_EDITS = 1500
 """Projected edits from which a band prunes with the seed heuristic. Its setup costs about ten
 nanoseconds a column; what it saves grows with the distance, the band otherwise sweeping rows in
@@ -202,8 +210,8 @@ def within_one_edit(
     The three tests folded together, with no branch to mispredict: an equal-length window within
     one substitution differs on at most one base, a shorter one is the seed less a base when the
     seed's first and last bases but one cover it between them, and a longer one the seed plus a base
-    when its first and last `INEXACT_LENGTH` bases cover the seed. An exact match leaves out the
-    shorter and longer windows, as `try_windows` does.
+    when its first and last `INEXACT_LENGTH` bases cover the seed. An exact match keeps the shorter
+    and longer windows too, as `try_windows` does.
     """
     comptime K = INEXACT_LENGTH
     comptime SHORTER = (UInt64(1) << UInt64(2 * K - 2)) - 1
@@ -211,7 +219,7 @@ def within_one_edit(
     var substituted = (whole & (whole - 1)) == 0
     var deleted = covers(differing(shorter, code >> 2), differing(shorter, code & SHORTER))
     var inserted = covers(differing(head, code), differing(tail, code))
-    return (substituted & level_open) | (((deleted & shorter_open) | (inserted & longer_open)) & (whole != 0))
+    return (substituted & level_open) | (deleted & shorter_open) | (inserted & longer_open)
 
 
 @always_inline
@@ -372,10 +380,17 @@ struct SeedHeuristic(Movable):
         var found_row = List[Int32]()
         var found_end = List[Int32]()
         var found_cost = List[Int32]()
+        var held: Bool
         if inexact:
-            self.inexact_matches(first, second, found_seed, found_row, found_end, found_cost)
+            held = self.inexact_matches(first, second, found_seed, found_row, found_end, found_cost)
         else:
-            self.exact_matches(first, second, found_seed, found_row)
+            held = self.exact_matches(first, second, found_seed, found_row)
+        if not held:
+            # Too many matches for the seeds (see `MATCHES_A_SEED`): the gap heuristic.
+            self.seeds = 0
+            self.counted = 0
+            self.remaining.clear()
+            return
 
         # Bucketed by seed: a start can dominate another match's end only from a later seed, so taking
         # the seeds last first is an order the layers can be built in, no sort.
@@ -455,8 +470,9 @@ struct SeedHeuristic(Movable):
         second: ImmPointer[UInt8, _],
         mut found_seed: List[Int32],
         mut found_row: List[Int32],
-    ):
-        """Every exact occurrence of a seed whose chain can still reach the end.
+    ) -> Bool:
+        """Every exact occurrence of a seed whose chain can still reach the end, or false once they pass
+        `MATCHES_A_SEED` a seed.
 
         Every seed's two-bit code is hashed by open addressing on the multiply's top bits; a slot
         holds its code and the first seed with it in one word, and seeds sharing a code chain on.
@@ -500,6 +516,7 @@ struct SeedHeuristic(Movable):
         # in transformed coordinates, and must lie at or below and left of the end's.
         var target_x = self.columns - self.rows
         var target_y = self.rows - self.columns
+        var budget = MATCHES_A_SEED * self.seeds
         var code = 0
         for row in range(self.rows):
             code = ((code << 2) | Int(second[unsafe_offset=row])) & MASK
@@ -526,7 +543,10 @@ struct SeedHeuristic(Movable):
                 if column - start_row - potential + 1 <= target_x and start_row - column - potential + 1 <= target_y:
                     found_seed.append(Int32(seed))
                     found_row.append(Int32(start_row))
+                    if len(found_seed) > budget:
+                        return False
                 seed = Int(chain[unsafe_offset=seed])
+        return True
 
     # Out of line: inlined into `build`, it slows the pruning loop there by a few percent.
     @inline(.never)
@@ -538,8 +558,9 @@ struct SeedHeuristic(Movable):
         mut found_row: List[Int32],
         mut found_end: List[Int32],
         mut found_cost: List[Int32],
-    ):
-        """Every occurrence of a seed within one edit whose chain can still reach the end.
+    ) -> Bool:
+        """Every occurrence of a seed within one edit whose chain can still reach the end, or false once
+        they pass `MATCHES_A_SEED` a seed.
 
         One edit leaves one half of the seed matching exactly, at the window's start or its end. Each
         half's code indexes a table of the seeds with it, and every window of the second sequence is
@@ -593,7 +614,7 @@ struct SeedHeuristic(Movable):
             rolling = (rolling >> 2) | (base << UInt64(2 * INEXACT_LENGTH - 2))
             if row <= self.rows:
                 windows[row] = rolling
-        self.inexact_scan(
+        return self.inexact_scan(
             left_start.unsafe_ptr(),
             right_start.unsafe_ptr(),
             left_entries.unsafe_ptr(),
@@ -616,9 +637,9 @@ struct SeedHeuristic(Movable):
         mut found_row: List[Int32],
         mut found_end: List[Int32],
         mut found_cost: List[Int32],
-    ):
+    ) -> Bool:
         """The inexact matches every row of the second sequence finds, from the half tables (each
-        half's bucket bounds and entries) and the windows.
+        half's bucket bounds and entries) and the windows; false once they pass `MATCHES_A_SEED` a seed.
 
         Every seed a half finds is tested against the three windows it could match without a branch
         (see `within_one_edit`), most failing all three, and only one that passes is tried in full.
@@ -636,6 +657,7 @@ struct SeedHeuristic(Movable):
         var bounds = batch.unsafe_ptr()
         # A left half needs half a seed after it.
         var end_row = self.rows - HALF + 1
+        var budget = MATCHES_A_SEED * self.seeds
         for batch_row in range(0, end_row, SCAN_BATCH):
             var batch_end = min(batch_row + SCAN_BATCH, end_row)
             for row in range(batch_row, batch_end):
@@ -681,6 +703,9 @@ struct SeedHeuristic(Movable):
                     var code = right_entries[unsafe_offset=slot] & CODE
                     if ends_within_one_edit(shorter, level, longer, code):
                         self.try_windows(code, seed, -1, end, window, found_seed, found_row, found_end, found_cost)
+                if len(found_seed) > budget:
+                    return False
+        return True
 
     @inline(.always)
     def try_windows(
@@ -703,18 +728,14 @@ struct SeedHeuristic(Movable):
         window one base shorter is the seed less one base when the two cover it between them, and
         one longer is the seed plus one base when they cover the seed.
 
-        An exact match's windows one base shorter or longer, sharing its start or its end, are left
-        out: a path crossing the seed along one costs at least one edit there, and taking the exact
-        match in its place moves the chain's gaps by one edit at most, so the heuristic stays a
-        lower bound without them.
+        An exact match's windows one base shorter or longer, sharing its start or its end, are kept
+        too: chaining is all or nothing, so a path along one of them, a diagonal off the exact match,
+        may chain on where the exact match cannot, and without them the heuristic overestimated, on
+        crafted pairs by an edit a seed.
         """
         comptime K = INEXACT_LENGTH
-        var exact = False
         for step in range(3):
-            # As long as the seed first, so an exact match is known before its neighbours.
             var extra = 0 if step == 0 else (-1 if step == 1 else 1)
-            if exact and extra != 0:
-                return
             var size = K + extra
             var low = start if start >= 0 else end - size
             var high = low + size
@@ -725,7 +746,6 @@ struct SeedHeuristic(Movable):
             var cost = 1
             if extra == 0:
                 var bases = Int(pop_count(differing(window[unsafe_offset=low], code)))
-                exact = bases == 0
                 if bases > 1 or taken:
                     continue
                 cost = bases
@@ -1032,8 +1052,8 @@ struct SeedHeuristic(Movable):
         right; the first match scores at most `cost`.
 
         Down a column a complete set of matches would hold the drop to one, the heuristic being
-        consistent, but an exact match's one-edit neighbours are left out (see `try_windows`), and
-        without them only this bound holds."""
+        consistent, but local pruning drops matches (see `worth_keeping`), and without them only this
+        bound holds."""
         return self.cost
 
     def h(mut self, column: Int, row: Int) -> Int:

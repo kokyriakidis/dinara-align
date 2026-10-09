@@ -37,6 +37,18 @@ if "$cli" --costs affine:0,6,2 -r A -q A 2>/dev/null; then
     expect "accepted" "refused" "costs a search cannot run by"
 fi
 
+# Options and values the command line would drop without a word, and bytes that are not a sequence's.
+for refused in "--mode local:2 --match-score 5" "--mode global:7" "--costs affine:4,6,2:9" "--mode infix --zdrop 3" \
+    "--mode infix --match-score -3"; do
+    # shellcheck disable=SC2086
+    if "$cli" -r ACGTACGTTTGCA -q ACGTCGTTTTGCA $refused >/dev/null 2>&1; then
+        expect "accepted" "refused" "$refused"
+    fi
+done
+if "$cli" -r GT -q "$(printf '\370\216\216\216')" --mode reference-in-query >/dev/null 2>&1; then
+    expect "accepted" "refused" "a sequence that is not ASCII"
+fi
+
 if [ "$failures" -gt 0 ]; then
     echo "$failures checks failed" >&2
     exit 1

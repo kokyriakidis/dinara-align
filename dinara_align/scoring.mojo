@@ -32,6 +32,7 @@ from .alignment import (
     band_length,
     device_align,
     device_alignments,
+    launch_bytes,
     device_score,
     device_scores,
     expand_path,
@@ -87,7 +88,7 @@ from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, started_span, sweep
 from .band_groups import banded_scores
 from .score_groups import grouped_scores
 from .substitutions import SubstitutionLookup, shuffled_table, table_extremes, uniform_pair
-from .vector_score import optimal_band, reach_back, vector_align
+from .vector_score import optimal_band, reach_back, vector_align, vector_cells
 
 
 from std.memory import bitcast
@@ -218,8 +219,10 @@ def gap_scores(opening: Int, extension: Int) raises AlignmentError -> AffineGapC
     `opening + extension`, each further one `extension`."""
     if opening > 0:
         raise AlignmentError(ErrorKind.INVALID_SCORING, "a rewarded gap opening")
-    # The kernels hold scores in 32 bits; a gap score past them would wrap rather than be refused.
-    if opening + extension < Int(Int32.MIN) or extension < Int(Int32.MIN) or extension > Int(Int32.MAX):
+    # The kernels hold scores in 32 bits; a gap score past them would wrap rather than be refused. Each part
+    # first, so their sum cannot wrap an `Int`, and no lower than `-Int32.MAX`, so a score negated still fits.
+    var lowest = -Int(Int32.MAX)
+    if opening < lowest or extension < lowest or extension > Int(Int32.MAX) or opening + extension < lowest:
         raise AlignmentError(ErrorKind.INVALID_SCORING, String("a gap of ", opening, " + ", extension, " a letter"))
     return AffineGapCosts.checked(Int32(opening + extension), Int32(extension))
 
@@ -326,7 +329,7 @@ struct ScoreReach(ImplicitlyCopyable, TrivialRegisterPassable):
     def of(scoring: Scoring) -> Self:
         """The reach of `scoring`'s table and gaps."""
         var extremes = table_extremes(scoring.substitutions, scoring.alphabet_size())
-        return Self(2 * Int(-scoring.gaps.open), max(max(extremes[0], -extremes[1]), Int(-scoring.gaps.extend)))
+        return Self(2 * -Int(scoring.gaps.open), max(max(extremes[0], -extremes[1]), -Int(scoring.gaps.extend)))
 
     def check(self, rows: Int, columns: Int, floored: Bool) raises AlignmentError:
         """Refuses a pair of `rows` and `columns` letters whose scores could pass 32 bits."""
@@ -335,13 +338,15 @@ struct ScoreReach(ImplicitlyCopyable, TrivialRegisterPassable):
             raise AlignmentError(ErrorKind.INVALID_SCORING, String("scores past 32 bits over ", rows, " by ", columns))
 
 
-def batch_within_32_bits(
-    scoring: Scoring, firsts: List[String], seconds: List[String], floored: Bool
-) raises AlignmentError:
-    """Refuses the first pair in order whose scores could pass 32 bits (see `ScoreReach`)."""
+def first_past_32_bits(scoring: Scoring, firsts: List[String], seconds: List[String], floored: Bool) -> Int:
+    """The first pair in order whose scores could pass 32 bits (see `ScoreReach`), or -1 when none could."""
     var reach = ScoreReach.of(scoring)
     for index in range(min(len(firsts), len(seconds))):
-        reach.check(firsts[index].byte_length(), seconds[index].byte_length(), floored)
+        try:
+            reach.check(firsts[index].byte_length(), seconds[index].byte_length(), floored)
+        except:
+            return index
+    return -1
 
 
 def paired_length(firsts: List[String], seconds: List[String]) raises AlignmentError -> Int:
@@ -486,7 +491,8 @@ def global_on_host(
         best = swept_score[AlignmentMode.GLOBAL](Span(codes_first), Span(codes_second), scoring)
     var band = optimal_band(len(first), len(second), lookup.best, scoring.gaps, best)
     var width = min(band[1], len(second)) - max(band[0], -len(first)) + 1
-    if (len(first) + 1) * width <= stored_cells:
+    # Its padding and indexes too: a band one diagonal wide held some thirteen times its cells.
+    if vector_cells(len(first), len(second), (len(first) + 1) * width) <= stored_cells:
         return vector_align(
             codes_first,
             codes_second,
@@ -589,7 +595,7 @@ def score_on_device[
 def gap_costs(scoring: Scoring) -> Costs:
     """A `Scoring`'s gaps as `Costs` price them, the sweep's own terms: a gap of `k` letters scoring
     `opening + k extension` costs minus that. Its mismatch stands for nothing: a table scores pairs."""
-    return Costs(1, Int(scoring.gaps.extend - scoring.gaps.open), Int(-scoring.gaps.extend), -1, 0)
+    return Costs(1, Int(scoring.gaps.extend) - Int(scoring.gaps.open), -Int(scoring.gaps.extend), -1, 0)
 
 
 def table_bits[kind: Int](scoring: Scoring, rows: Int, columns: Int) -> Int:
@@ -598,7 +604,7 @@ def table_bits[kind: Int](scoring: Scoring, rows: Int, columns: Int) -> Int:
     var extremes = table_extremes(scoring.substitutions, scoring.alphabet_size())
     var most = max(extremes[0], 0)
     var least = min(extremes[1], 0)
-    return lane_bits[kind == ANYWHERE](most, max(-least, Int(-scoring.gaps.open)), rows, columns)
+    return lane_bits[kind == ANYWHERE](most, max(-least, -Int(scoring.gaps.open)), rows, columns)
 
 
 def tabulated_end[
@@ -1200,7 +1206,6 @@ def scores_with[
     """Scores every pair; on the device, every pair one block can carry goes out in one launch."""
     var resolved = placement.or_else(Placement.default())
     var pairs = paired_length(firsts, seconds)
-    batch_within_32_bits(scoring, firsts, seconds, mode == AlignmentMode.LOCAL)
     var results = List[Int32](length=pairs, fill=0)
     if pairs == 0:
         return results^
@@ -1353,14 +1358,37 @@ def alignments_with[
                 stored_cells,
                 resolved,
             )
-    if len(batchable) > 0:
-        var tape = pack_batch(firsts, seconds, batchable, scoring.alphabet, resolved.threads)
+    # As many pairs a launch as its buffers hold, each within the device's largest allocation: their
+    # recorded decisions, and their gapped rows at the launch's widest pair's length each. One launch
+    # for every pair asked a short read's batch of 700,000 for 16 GB at once, and one long pair among
+    # many short asked as much of each.
+    var largest = scope.specs.largest_allocation
+    var start = 0
+    while start < len(batchable):
+        var end = start
+        var recorded = 0
+        var widest = 1
+        while end < len(batchable):
+            var rows = firsts[batchable[end]].byte_length()
+            var columns = seconds[batchable[end]].byte_length()
+            var wider = max(widest, rows + columns)
+            var more = launch_bytes(rows, columns)
+            if end > start and (recorded + more > largest or (end - start + 1) * wider > largest):
+                break
+            recorded += more
+            widest = wider
+            end += 1
+        var launch = List[Int](capacity=end - start)
+        for slot in range(start, end):
+            launch.append(batchable[slot])
+        var tape = pack_batch(firsts, seconds, launch, scoring.alphabet, resolved.threads)
         var aligned = device_alignments[mode](
             scope, tape.sequences, tape.offsets, scoring.substitutions, scoring.alphabet, scoring.gaps
         )
         # Each alignment moved out rather than copied, the last slot first as `pop` hands them back.
-        for slot in range(len(batchable) - 1, -1, -1):
+        for slot in range(end - 1, start - 1, -1):
             results[batchable[slot]] = aligned.pop()
+        start = end
     return results^
 
 

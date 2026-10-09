@@ -187,18 +187,21 @@ def fill_pair(
     var pattern = patterns[pair].as_bytes()
     var words = Int(words_of[pair])
     var start = Int(row_offsets[pair])
-    # Each symbol the pattern holds a code, in the order met; every other symbol the last code.
-    var codes = Array[UInt8, 256](fill=0xFF)
+    # Each symbol the pattern holds a code, in the order met; every other symbol the last code. Unseen is
+    # -1, not a code: a pattern holding all 256 byte values gives its last one code 255, which as the
+    # mark of an unseen byte coded it again as zero. Then every byte is seen, and no text letter takes
+    # the code past them, which would not fit a byte.
+    var codes = Array[Int16, 256](fill=-1)
     var count = 0
     for letter in pattern:
-        if codes[Int(letter)] == 0xFF:
-            codes[Int(letter)] = UInt8(count)
+        if codes[Int(letter)] < 0:
+            codes[Int(letter)] = Int16(count)
             count += 1
     for index in range(len(pattern)):
         var at = start + Int(codes[Int(pattern[index])]) * words + index // 64
         rows_at[unsafe_offset=at] = rows_at[unsafe_offset=at] | (UInt64(1) << UInt64(index % 64))
     var position = Int(text_offsets[pair])
     for letter in texts[pair].as_bytes():
-        var code = codes[Int(letter)]
-        text_at[unsafe_offset=position] = UInt8(count) if code == 0xFF else code
+        var code = Int(codes[Int(letter)])
+        text_at[unsafe_offset=position] = UInt8(count if code < 0 else code)
         position += 1

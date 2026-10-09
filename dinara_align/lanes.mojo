@@ -1252,6 +1252,7 @@ def lane_stage[
         worker: Int,
     ) {
         mut retaken,
+        imm band,
         imm references,
         imm queries,
         imm costs,
@@ -1285,6 +1286,9 @@ def lane_stage[
                     space.members.append(retry_ptr[unsafe_offset=4 * slot])
                     low = min(low, retry_ptr[unsafe_offset=4 * slot + 2])
                     high = max(high, retry_ptr[unsafe_offset=4 * slot + 3])
+                # Within the band as the first pass is: the diagonal the group started from may lie outside it.
+                low = max(low, band.low)
+                high = min(high, band.high)
                 var found = band_costs(references, queries, space, low, high, costs, False, 0, mode)
                 for lane in range(len(space.members)):
                     var slot = group * WIDTH + lane

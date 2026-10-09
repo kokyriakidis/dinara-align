@@ -42,7 +42,11 @@ def last_row_scores[free_start: Bool](mut profile: Profile, latest: Bool = False
     or the bound covers every row and the band the whole matrix.
     """
     if profile.rows == 0:
-        return (0, 0)
+        # The last row is the top: free, every column scoring nothing, or the border, the first alone.
+        return (0, profile.columns if free_start and latest else 0)
+    if profile.columns == 0:
+        # One column, the whole pattern against nothing; the planes are never built for no text.
+        return (profile.rows, 0)
     profile.build_planes()
     var bound = SEARCH_START
     while True:

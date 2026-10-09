@@ -1101,7 +1101,7 @@ def serial_hirschberg(
     # What a pair earns at most and a move costs at most, which say whether a half's scores fit 16 bits.
     var extremes = table_extremes(substitutions, alphabet_size)
     var reward = max(extremes[0], 0)
-    var dearest = max(-min(extremes[1], 0), Int(-scoring.open))
+    var dearest = max(-min(extremes[1], 0), -Int(scoring.open))
 
     while len(frames) > 0:
         var frame = frames.pop()
@@ -1642,6 +1642,11 @@ def strip_pair_kernel[
             produced += 1
 
     gapped_lengths[unsafe_offset=pair] = Int32(produced)
+
+
+def launch_bytes(rows: Int, columns: Int) -> Int:
+    """What a `rows` by `columns` pair's recorded decisions take in `device_alignments`, its strips' changes."""
+    return ceildiv(columns, STRIP_WIDTH) * (rows + STRIP_LANES) * STRIP_LANES * size_of[Scalar[ChangeDType]]()
 
 
 def device_alignments[

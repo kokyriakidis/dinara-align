@@ -303,6 +303,9 @@ def step_budget(columns: Int, step_tenths: Int, estimate: Int) -> Int:
     steps that is `step_tenths / 10 + estimate / EDITS_PER_STEP` a column. A short pair's band costs
     `SHORT_BAND_SETUP` more (see `SHORT_BAND_COLUMNS`).
     """
+    if step_tenths < 0:
+        # `PROJECTION_ONLY`'s budget, which no search fits; scaled by the columns, past 8 Mbp it wrapped.
+        return step_tenths
     var setup = SHORT_BAND_SETUP if columns <= SHORT_BAND_COLUMNS else 0
     return setup + columns * step_tenths // 10 + columns * estimate // EDITS_PER_STEP
 

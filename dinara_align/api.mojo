@@ -68,7 +68,8 @@ from .scoring import (
     Scoring,
     alignments_with,
     as_alignment,
-    batch_within_32_bits,
+    first_past_32_bits,
+    ScoreReach,
     paired_length,
     scores_with,
     laned_alignments,
@@ -463,12 +464,12 @@ def cost_within(
     var penalties = space.penalties_for(costs)
     if max_cost < 0:
         return None
-    if not rings_fit(penalties, reference.byte_length(), query.byte_length(), DEFAULT_MAX_MEMORY):
+    if not rings_fit(penalties, reference.byte_length(), query.byte_length(), DEFAULT_MAX_MEMORY, ends):
         # The lanes first, as a batch of this pair alone takes it; else refused.
         var laned = distance_in_lanes(reference, query, costs, mode, band, max_cost)
         if laned:
             return laned.value()
-        rings_within(penalties, reference.byte_length(), query.byte_length(), DEFAULT_MAX_MEMORY)
+        rings_within(penalties, reference.byte_length(), query.byte_length(), DEFAULT_MAX_MEMORY, ends)
     # No cap is the usual case, and a 64-bit division per pair counts when short reads take a microsecond.
     var ceiling = Int.MAX if max_cost == Int.MAX else max_cost // penalties.scale
     var cost: Int
@@ -595,12 +596,12 @@ def least_costly(
     var penalties = space.penalties_for(costs)
     if max_cost < 0:
         return None
-    if not rings_fit(penalties, reference.byte_length(), query.byte_length(), kept_bytes(limit)):
+    if not rings_fit(penalties, reference.byte_length(), query.byte_length(), kept_bytes(limit), ends):
         # The lanes first, as a batch of this pair alone takes it; else refused.
         var laned = alignment_in_lanes(reference, query, costs, mode, band, max_cost, ties, eqx, limit)
         if laned:
             return laned.take()
-        rings_within(penalties, reference.byte_length(), query.byte_length(), kept_bytes(limit))
+        rings_within(penalties, reference.byte_length(), query.byte_length(), kept_bytes(limit), ends)
     var ceiling = Int.MAX if max_cost == Int.MAX else max_cost // penalties.scale
     if mode.is_global():
         var found: Optional[AffineCigar]
@@ -742,6 +743,23 @@ def align(
     return scoring_alignment(reference, query, scoring, mode, placement, cells_within(max_memory), eqx)
 
 
+def within_32_bits(references: List[String], queries: List[String], scoring: Scoring, mode: Mode, aligned: Bool) raises:
+    """Refuses a batch holding a pair whose scores could pass 32 bits (see `ScoreReach`) with the error a
+    serial loop of `align`, or with `aligned` false of `score`, would raise first: an earlier pair's own,
+    else that pair's. Checked up front, it raised a later pair's over an earlier one's."""
+    var floored = mode.kind == Mode.SMITH_WATERMAN
+    var past = first_past_32_bits(scoring, references, queries, floored)
+    if past < 0:
+        return
+    var single = Placement.on_cpu(1)
+    for index in range(past):
+        if aligned:
+            _ = align(references[index], queries[index], scoring, mode, placement=single)
+        else:
+            _ = score(references[index], queries[index], scoring, mode, placement=single)
+    ScoreReach.of(scoring).check(references[past].byte_length(), queries[past].byte_length(), floored)
+
+
 def scores(
     references: List[String],
     queries: List[String],
@@ -753,8 +771,12 @@ def scores(
     """`score` for every pair; on the device, every pair one block can carry goes out in one launch."""
     var found: List[Int32]
     if mode.kind == Mode.SMITH_WATERMAN and mode.match_score == 0:
+        _ = paired_length(references, queries)
+        within_32_bits(references, queries, scoring, mode, False)
         found = scores_with[AlignmentMode.LOCAL](references, queries, scoring, placement)
     elif mode.is_global() and mode.match_score == 0:
+        _ = paired_length(references, queries)
+        within_32_bits(references, queries, scoring, mode, False)
         found = scores_with[AlignmentMode.GLOBAL](references, queries, scoring, placement)
     else:
         # Free ends and extensions, and modes `score` refuses: each pair as `score` takes it, over the threads
@@ -802,7 +824,7 @@ def alignments(
 ) raises -> List[Alignment]:
     """`align` for every pair; on the device, every pair both bounds admit goes out in one launch."""
     var pairs = paired_length(references, queries)
-    batch_within_32_bits(scoring, references, queries, mode.kind == Mode.SMITH_WATERMAN)
+    within_32_bits(references, queries, scoring, mode, True)
     var stored_cells = cells_within(max_memory)
     var resolved = placement.or_else(Placement.default())
     if resolved.device != Device.GPU:
@@ -1183,7 +1205,8 @@ def gpu_distances(
         var query = queries[index].byte_length()
         if min(reference, query) == 0:
             results[index] = max(reference, query) * scale
-        elif min(reference, query) <= LIMIT:
+        elif min(reference, query) <= LIMIT and max(reference, query) <= Int(Int32.MAX):
+            # The device keeps a distance in 32 bits, which a longer text could pass.
             var shorter_query = query <= reference
             patterns.append(queries[index] if shorter_query else references[index])
             texts.append(references[index] if shorter_query else queries[index])
@@ -1444,6 +1467,11 @@ def search(
     any other mode each pair's `score`. Every kept hit is then aligned on its own, when asked for, by
     `align`."""
     var count = len(references)
+    if best and best.value() < 0:
+        raise AlignmentError(ErrorKind.INVALID_ARGUMENT, String("a best of ", best.value(), " hits"))
+    if max_cost and mode.is_scored():
+        # Every mode with a reward alike: a local alignment's lanes would drop the cap without a word.
+        raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a mode with a match score takes no cost cap")
     var workers = thread_count(threads.or_else(1), count)
     var scores = List[Int](length=count, fill=Int.MIN)
     if mode.kind == Mode.SMITH_WATERMAN and mode.match_score > 0:
@@ -1461,8 +1489,6 @@ def search(
             if found[index]:
                 scores[index] = -found[index].value()
     else:
-        if max_cost:
-            raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a mode with a match score takes no cost cap")
         var out = scores.unsafe_ptr()
         var failed = List[Bool](length=count, fill=False)
         var flags = failed.unsafe_ptr()
