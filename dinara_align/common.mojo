@@ -1,13 +1,8 @@
 # This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
 # MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
-#
-# Derived from AffineGaps (https://github.com/unum-science/AffineGaps), Copyright Ash Vardanian, under the
-# Apache License, Version 2.0, and changed since: see LICENSES/Apache-2.0.txt and NOTICE.
-"""
-Primitives the alignment kernels share with the routing layer.
-
-Symbol codes, the device staging helpers, and the scoring records every entry point reads. Anything
-that presumes a rotating band or an affine gap belongs to `alignment.mojo`.
+"""What every engine shares: the element types and markers, how a call's work is spread over threads,
+where a call runs, and the device's memory, which every launch takes through one place that refuses
+what the device cannot hold.
 """
 
 from max.algorithm import parallelize
@@ -21,37 +16,33 @@ from max.gpu.host import DeviceAttribute, DeviceBuffer, DeviceContext
 
 from .errors import AlignmentError, ErrorKind
 
+# region Types and markers
+
 comptime ScoreDType = DType.int32
-"""The type of a score in the gap-affine sweeps."""
+"""A score or a cost in a `Scoring`'s sweeps, on the host and the device alike."""
 comptime SymbolDType = DType.uint8
-"""The type of a symbol's index in its alphabet."""
+"""A letter, as its place in a `Scoring`'s alphabet."""
 comptime SubstitutionDType = DType.int8
-"""The type of one entry of the substitution table."""
+"""A substitution table's entry: what aligning one letter with another scores."""
 comptime OffsetDType = DType.uint64
-"""
-Indexes the concatenated batch tape rather than one sequence, so it is bounded by the sum of every length in the batch
-and not by the longest of them.
-"""
+"""A place on a batch's tape, every sequence of the batch end to end, so up to their summed lengths."""
 
 comptime GAP_BYTE = Byte(ord("-"))
-"""The character a gapped alignment prints where a sequence has nothing."""
+"""What a gapped row holds where its sequence has no letter."""
 comptime UNKNOWN_SYMBOL = UInt8(255)
-"""No alphabet reaches 255 symbols, so it doubles as the "not in this alphabet" marker."""
-
-comptime THREADS_PER_BLOCK = 256
-"""Threads in a block launched for a block-wide reduction; the strip and tile sweeps launch one warp."""
-
-comptime WARPS_PER_BLOCK = THREADS_PER_BLOCK // WARP_SIZE
-"""Warps such a block holds, which is how many partial results a block-wide reduction combines."""
+"""The code of a byte an alphabet lacks: no alphabet holds 255 letters (see `MAX_ALPHABET_SIZE`)."""
 
 comptime MAX_ALPHABET_SIZE = 32
-"""
-Caps the substitution table staged into shared memory. Thirty-two holds all fifteen IUPAC nucleotide codes in both
-cases, and costs one kilobyte per block.
-"""
+"""The most letters a `Scoring` takes: its table, 32 by 32 bytes, sits in each GPU block's shared memory.
+The IUPAC nucleotide codes in either case fit."""
+
+comptime THREADS_PER_BLOCK = 256
+"""Threads of a GPU block whose threads combine their results; the sweeps' blocks are one warp."""
+comptime WARPS_PER_BLOCK = THREADS_PER_BLOCK // WARP_SIZE
+"""The warps of such a block, each handing on one partial result."""
 
 comptime NEGATIVE_INFINITY = Int32.MIN // 4
-"""A score below any real one, a quarter of `Int32.MIN` so adding a few penalties to it never wraps."""
+"""A score no alignment has, with room below it for a few costs added before it is compared."""
 
 comptime UNREACHED = Int32(-(1 << 28))
 """A diagonal or a cell no path reaches: far enough below zero that a few more columns or gap costs keep it
@@ -64,17 +55,9 @@ comptime FIRST_SENTINEL = UInt8(0xFE)
 comptime SECOND_SENTINEL = UInt8(0xFF)
 """Past the second sequence's last letter."""
 
+# endregion Types and markers
 
-@fieldwise_init
-struct Device(Equatable, ImplicitlyCopyable, TrivialRegisterPassable):
-    """Which hardware serves a call."""
-
-    var identifier: UInt8
-    """Which device this names."""
-    comptime CPU = Self(0)
-    """The serial reference sweep."""
-    comptime GPU = Self(1)
-    """The parallel sweep, on one accelerator."""
+# region Threads
 
 
 @always_inline
@@ -114,13 +97,8 @@ def thread_count(asked: Int, items: Int) -> Int:
 
 
 def hardware_threads() -> Int:
-    """Threads this process may actually run on, which an affinity mask or a cgroup quota narrows.
-
-    The online CPU count is the wrong answer on a shared machine: it counts cores this process has
-    been forbidden from touching. Only Linux exposes such a mask, and `sched_getaffinity` is a
-    glibc symbol, so naming it anywhere else fails at link time rather than at run time.
-    """
-
+    """The threads this process may run on at once. On Linux its affinity mask, which a scheduler or a
+    container narrows, counts them; elsewhere the logical cores, `sched_getaffinity` being Linux's alone."""
     comptime if CompilationTarget.is_linux():
         comptime WORDS = 16
         var mask = stack_allocation[WORDS, UInt64]()
@@ -134,34 +112,45 @@ def hardware_threads() -> Int:
     return max(Int(num_logical_cores()), 1)
 
 
-struct Placement(ImplicitlyCopyable, TrivialRegisterPassable):
-    """Where a call runs, and which of the machine's resources it may take.
+# endregion Threads
 
-    Reached through `on_cpu` or `on_gpu` rather than field by field, because an accelerator index on
-    a run that never reaches an accelerator is a state nothing downstream can honour.
-    """
+# region Placement
+
+
+@fieldwise_init
+struct Device(Equatable, ImplicitlyCopyable, TrivialRegisterPassable):
+    """The host's cores or a GPU."""
+
+    var kind: UInt8
+
+    comptime CPU = Self(0)
+    comptime GPU = Self(1)
+
+
+struct Placement(ImplicitlyCopyable, TrivialRegisterPassable):
+    """Where a call runs, which GPU, and how many of the host's threads it may take. Built by `on_cpu` or
+    `on_gpu`, so a call on the host never carries a GPU's number."""
 
     var device: Device
-    """Which hardware serves the call."""
     var gpu_id: Int
-    """Which accelerator, always zero under `Device.CPU`."""
+    """The GPU's number, zero on the host."""
     var threads: Int
-    """How many host threads a parallel region may take, always at least one."""
+    """Host threads the call may take, at least one and no more than the process can run."""
 
     def __init__(out self, device: Device, gpu_id: Int, threads: Int):
-        """Normalizes rather than trusts, so a host run cannot carry an accelerator index."""
+        """`device`, the GPU numbered `gpu_id` on a GPU, and `threads` held to what the process runs."""
         self.device = device
         self.gpu_id = max(gpu_id, 0) if device == Device.GPU else 0
         self.threads = thread_count(threads, Int.MAX)
 
     @staticmethod
     def on_cpu(threads: Int) -> Self:
-        """The serial sweep. The width still counts, because the linear-space traceback forks."""
+        """The host, over up to `threads` threads."""
         return Self(Device.CPU, 0, threads)
 
     @staticmethod
     def on_gpu(gpu_id: Int, threads: Int) -> Self:
-        """One accelerator, plus the width of the host region the device path forks back to."""
+        """The GPU numbered `gpu_id`, the host's part of the work, its packing, over up to `threads` threads."""
         return Self(Device.GPU, gpu_id, threads)
 
     @staticmethod
@@ -171,127 +160,66 @@ struct Placement(ImplicitlyCopyable, TrivialRegisterPassable):
         return Self.on_cpu(1)
 
 
+# endregion Placement
+
+# region Device memory
+
+
 @fieldwise_init
 struct GpuSpecs(ImplicitlyCopyable, TrivialRegisterPassable):
-    """What one accelerator reports about itself, asked once when a scope opens."""
+    """What a launch is sized by, as the GPU reports it."""
 
     var shared_memory_per_multiprocessor: Int
-    """Bytes of shared memory one multiprocessor holds, which is what bounds a strip's carry."""
+    """Shared memory on one multiprocessor, in bytes."""
     var reserved_memory_per_block: Int
-    """The slice of that a block may not opt into, which the card reports rather than us guessing."""
+    """Of that, what no block may claim for itself."""
     var largest_allocation: Int
-    """The biggest single buffer this device hands out, which is `maxBufferLength` on Metal."""
+    """The largest buffer the device allocates at once, in bytes."""
     var streaming_multiprocessors: Int
-    """How many multiprocessors a grid has to fill."""
     var max_blocks_per_multiprocessor: Int
-    """How many blocks one multiprocessor holds at once, which is what a level aims to saturate."""
+    """Blocks a multiprocessor runs at once."""
 
-
-def gpu_specs_fetch(context: DeviceContext) raises -> GpuSpecs:
-    """One cold query of the properties every sweep sizes itself from.
-
-    Each is a live driver call, so they are asked together and once.
-    """
-    comptime if has_apple_gpu_accelerator():
-        # Metal answers neither the per-multiprocessor budget, the opt-in ceiling nor the resident-block
-        # count. A threadgroup gets one fixed allotment, so that is the whole budget with nothing reserved
-        # out of it, and the thread ceiling over the one-warp blocks the sweeps launch stands in for the
-        # resident count, which only steers how finely a level splits.
-        return GpuSpecs(
-            Int(context.get_attribute(DeviceAttribute.MAX_SHARED_MEMORY_PER_BLOCK)),
-            0,
-            Int(context.max_single_alloc_size()),
-            Int(context.get_attribute(DeviceAttribute.MULTIPROCESSOR_COUNT)),
-            Int(context.get_attribute(DeviceAttribute.MAX_THREADS_PER_BLOCK)) // WARP_SIZE,
-        )
-    var per_multiprocessor = Int(context.get_attribute(DeviceAttribute.MAX_SHARED_MEMORY_PER_MULTIPROCESSOR))
-    var per_block = Int(context.get_attribute(DeviceAttribute.MAX_SHARED_MEMORY_PER_BLOCK_OPTIN))
-    return GpuSpecs(
-        per_multiprocessor,
-        per_multiprocessor - per_block,
-        Int(context.max_single_alloc_size()),
-        Int(context.get_attribute(DeviceAttribute.MULTIPROCESSOR_COUNT)),
-        Int(context.get_attribute(DeviceAttribute.MAX_BLOCKS_PER_MULTIPROCESSOR)),
-    )
+    @staticmethod
+    def of(context: DeviceContext) raises -> Self:
+        """The specs `context`'s GPU reports. Metal reports a block's shared memory alone, every block given
+        the same, and not how many blocks run at once: a block's threads over a warp stand in for that,
+        which only sets how finely a launch is cut."""
+        var largest = Int(context.max_single_alloc_size())
+        var multiprocessors = Int(context.get_attribute(DeviceAttribute.MULTIPROCESSOR_COUNT))
+        comptime if has_apple_gpu_accelerator():
+            var per_block = Int(context.get_attribute(DeviceAttribute.MAX_SHARED_MEMORY_PER_BLOCK))
+            var resident = Int(context.get_attribute(DeviceAttribute.MAX_THREADS_PER_BLOCK)) // WARP_SIZE
+            return Self(per_block, 0, largest, multiprocessors, resident)
+        var shared = Int(context.get_attribute(DeviceAttribute.MAX_SHARED_MEMORY_PER_MULTIPROCESSOR))
+        var claimable = Int(context.get_attribute(DeviceAttribute.MAX_SHARED_MEMORY_PER_BLOCK_OPTIN))
+        var resident = Int(context.get_attribute(DeviceAttribute.MAX_BLOCKS_PER_MULTIPROCESSOR))
+        return Self(shared, shared - claimable, largest, multiprocessors, resident)
 
 
 struct DeviceScope(Copyable, Movable):
-    """One accelerator and the specs it reported, so no sweep asks the driver twice."""
+    """A GPU opened for a call, with its specs, read once."""
 
     var context: DeviceContext
-    """Where every sweep is enqueued."""
     var specs: GpuSpecs
-    """What that device said about itself, asked when this scope was opened."""
 
     def __init__(out self, gpu_id: Int) raises:
-        """Opens the named accelerator and asks it, once, everything routing will need."""
+        """The GPU numbered `gpu_id`."""
         self.context = DeviceContext(device_id=gpu_id)
-        self.specs = gpu_specs_fetch(self.context)
-
-
-def uniform_matrix(
-    alphabet_size: Int, match_score: Int, mismatch_score: Int
-) raises AlignmentError -> List[Scalar[SubstitutionDType]]:
-    """Diagonal substitution matrix, refusing scores the table cannot hold rather than wrapping."""
-    comptime lowest = Int(Scalar[SubstitutionDType].MIN)
-    comptime highest = Int(Scalar[SubstitutionDType].MAX)
-    if match_score < lowest or match_score > highest:
-        raise AlignmentError(ErrorKind.INVALID_SCORING, String("match ", match_score))
-    if mismatch_score < lowest or mismatch_score > highest:
-        raise AlignmentError(ErrorKind.INVALID_SCORING, String("mismatch ", mismatch_score))
-    var matrix = List[Scalar[SubstitutionDType]](
-        length=alphabet_size * alphabet_size, fill=Scalar[SubstitutionDType](mismatch_score)
-    )
-    for index in range(alphabet_size):
-        matrix[index * alphabet_size + index] = Scalar[SubstitutionDType](match_score)
-    return matrix^
-
-
-def code_table(alphabet: String) -> Array[UInt8, 256]:
-    """Each byte's place in `alphabet`, `UNKNOWN_SYMBOL` for a byte outside it."""
-    var codes_by_byte = Array[UInt8, 256](fill=UNKNOWN_SYMBOL)
-    var alphabet_bytes = alphabet.as_bytes()
-    for index in range(len(alphabet_bytes)):
-        codes_by_byte[Int(alphabet_bytes[index])] = UInt8(index)
-    return codes_by_byte^
-
-
-def translate(text: String, alphabet: String) raises AlignmentError -> List[Scalar[SymbolDType]]:
-    """Maps characters to alphabet indices, raising on anything outside the alphabet."""
-    var text_bytes = text.as_bytes()
-    var codes_by_byte = code_table(alphabet)
-
-    var codes = List[Scalar[SymbolDType]](capacity=len(text_bytes))
-    for position in range(len(text_bytes)):
-        var code = codes_by_byte[Int(text_bytes[position])]
-        if code == UNKNOWN_SYMBOL:
-            raise AlignmentError(ErrorKind.UNKNOWN_SYMBOL, text)
-        codes.append(Scalar[SymbolDType](code))
-    return codes^
-
-
-def raise_unknown(first: String, second: String, alphabet: String) raises AlignmentError:
-    """The error translating a pair raises, for a pair a parallel packing found a letter outside `alphabet`
-    in: raised in the batch's order, it is the one a serial packing would have raised first."""
-    _ = translate(first, alphabet)
-    _ = translate(second, alphabet)
+        self.specs = GpuSpecs.of(self.context)
 
 
 def allocate[dtype: DType](scope: DeviceScope, count: Int) raises -> DeviceBuffer[dtype]:
-    """The one place a device buffer is created, and so the one place its size is refused.
-
-    A one-element floor keeps an empty batch from being its own case, and the bound comes off the
-    specs the scope already holds.
-    """
-    var elements = max(count, 1)
-    var bytes = elements * size_of[Scalar[dtype]]()
+    """A device buffer of `count` elements, one at least so an empty launch needs no case of its own;
+    refused, `SEQUENCE_TOO_LONG`, past the largest buffer the device allocates."""
+    var length = max(count, 1)
+    var bytes = length * size_of[Scalar[dtype]]()
     if bytes > scope.specs.largest_allocation:
         raise AlignmentError(ErrorKind.SEQUENCE_TOO_LONG, String(bytes, " bytes over ", scope.specs.largest_allocation))
-    return scope.context.enqueue_create_buffer[dtype](elements)
+    return scope.context.enqueue_create_buffer[dtype](length)
 
 
 def upload[dtype: DType](scope: DeviceScope, values: ImmSpan[Scalar[dtype], _]) raises -> DeviceBuffer[dtype]:
-    """Stages values onto the device, keeping a one-element floor so an empty batch is not a case."""
+    """`values` copied to a new device buffer."""
     var buffer = allocate[dtype](scope, len(values))
     if len(values) > 0:
         scope.context.enqueue_copy(buffer, values)
@@ -299,12 +227,71 @@ def upload[dtype: DType](scope: DeviceScope, values: ImmSpan[Scalar[dtype], _]) 
 
 
 def filled[dtype: DType](scope: DeviceScope, count: Int, value: Scalar[dtype]) raises -> DeviceBuffer[dtype]:
-    """A device buffer every element of which is `value` before any kernel has written it."""
+    """A new device buffer of `count` elements, each `value`."""
     var buffer = allocate[dtype](scope, count)
     scope.context.enqueue_memset(buffer, value)
     return buffer^
 
 
 def zeroed[dtype: DType](scope: DeviceScope, count: Int) raises -> DeviceBuffer[dtype]:
-    """The zero fill, which is what a buffer read before it is written usually wants."""
+    """A new device buffer of `count` zeros."""
     return filled[dtype](scope, count, Scalar[dtype](0))
+
+
+# endregion Device memory
+
+# region Letters
+
+
+def table_entry(name: StaticString, score: Int) raises AlignmentError -> Scalar[SubstitutionDType]:
+    """`score` as a substitution table's entry; refused, `INVALID_SCORING`, past what an entry holds."""
+    if score < Int(Scalar[SubstitutionDType].MIN) or score > Int(Scalar[SubstitutionDType].MAX):
+        raise AlignmentError(ErrorKind.INVALID_SCORING, String(name, " ", score))
+    return Scalar[SubstitutionDType](score)
+
+
+def uniform_matrix(
+    alphabet_size: Int, match_score: Int, mismatch_score: Int
+) raises AlignmentError -> List[Scalar[SubstitutionDType]]:
+    """The table of `alphabet_size` letters scoring `match_score` for two alike and `mismatch_score` for two
+    that differ, row by row."""
+    var hit = table_entry("match", match_score)
+    var table = List[Scalar[SubstitutionDType]](
+        length=alphabet_size * alphabet_size, fill=table_entry("mismatch", mismatch_score)
+    )
+    for letter in range(alphabet_size):
+        table[letter * (alphabet_size + 1)] = hit
+    return table^
+
+
+def code_table(alphabet: String) -> Array[UInt8, 256]:
+    """Every byte's place in `alphabet`, `UNKNOWN_SYMBOL` where it lacks the byte."""
+    var codes = Array[UInt8, 256](fill=UNKNOWN_SYMBOL)
+    var place = 0
+    for letter in alphabet.as_bytes():
+        codes[Int(letter)] = UInt8(place)
+        place += 1
+    return codes^
+
+
+def translate(text: String, alphabet: String) raises AlignmentError -> List[Scalar[SymbolDType]]:
+    """`text` as its letters' places in `alphabet`; refused, `UNKNOWN_SYMBOL`, naming the text, when it holds
+    a letter the alphabet lacks."""
+    var codes = code_table(alphabet)
+    var out = List[Scalar[SymbolDType]](capacity=text.byte_length())
+    for letter in text.as_bytes():
+        var code = codes[Int(letter)]
+        if code == UNKNOWN_SYMBOL:
+            raise AlignmentError(ErrorKind.UNKNOWN_SYMBOL, text)
+        out.append(Scalar[SymbolDType](code))
+    return out^
+
+
+def raise_unknown(first: String, second: String, alphabet: String) raises AlignmentError:
+    """Raises what translating `first`, then `second`, raises: for a pair a batch's packing, spread over
+    threads, found a letter in that `alphabet` lacks, raised in the batch's order as a serial loop would."""
+    _ = translate(first, alphabet)
+    _ = translate(second, alphabet)
+
+
+# endregion Letters

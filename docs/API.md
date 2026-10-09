@@ -282,14 +282,14 @@ def align(mut self, reference: String, query: String, costs: Costs = Costs.edit(
 struct Device
 ```
 
-Which hardware serves a call.
+The host's cores or a GPU.
 
 | field | type | |
 | :-- | :-- | :-- |
-| `identifier` | `UInt8` | Which device this names. |
+| `kind` | `UInt8` |  |
 
-- `Device.CPU` = `Device(UInt8(0))`: The serial reference sweep.
-- `Device.GPU` = `Device(UInt8(1))`: The parallel sweep, on one accelerator.
+- `Device.CPU` = `Device(UInt8(0))`: 
+- `Device.GPU` = `Device(UInt8(1))`: 
 
 ### `Placement`
 
@@ -297,16 +297,13 @@ Which hardware serves a call.
 struct Placement
 ```
 
-Where a call runs, and which of the machine's resources it may take.
-
-Reached through `on_cpu` or `on_gpu` rather than field by field, because an accelerator index on
-a run that never reaches an accelerator is a state nothing downstream can honour.
+Where a call runs, which GPU, and how many of the host's threads it may take. Built by `on_cpu` or `on_gpu`, so a call on the host never carries a GPU's number.
 
 | field | type | |
 | :-- | :-- | :-- |
-| `device` | `Device` | Which hardware serves the call. |
-| `gpu_id` | `Int` | Which accelerator, always zero under `Device.CPU`. |
-| `threads` | `Int` | How many host threads a parallel region may take, always at least one. |
+| `device` | `Device` |  |
+| `gpu_id` | `Int` | The GPU's number, zero on the host. |
+| `threads` | `Int` | Host threads the call may take, at least one and no more than the process can run. |
 
 #### `__init__`
 
@@ -314,7 +311,7 @@ a run that never reaches an accelerator is a state nothing downstream can honour
 def Placement.__init__(device: Device, gpu_id: Int, threads: Int) -> Self
 ```
 
-Normalizes rather than trusts, so a host run cannot carry an accelerator index.
+`device`, the GPU numbered `gpu_id` on a GPU, and `threads` held to what the process runs.
 
 #### `on_cpu`
 
@@ -322,7 +319,7 @@ Normalizes rather than trusts, so a host run cannot carry an accelerator index.
 def Placement.on_cpu(threads: Int) -> Self
 ```
 
-The serial sweep. The width still counts, because the linear-space traceback forks.
+The host, over up to `threads` threads.
 
 #### `on_gpu`
 
@@ -330,7 +327,7 @@ The serial sweep. The width still counts, because the linear-space traceback for
 def Placement.on_gpu(gpu_id: Int, threads: Int) -> Self
 ```
 
-One accelerator, plus the width of the host region the device path forks back to.
+The GPU numbered `gpu_id`, the host's part of the work, its packing, over up to `threads` threads.
 
 #### `default`
 
