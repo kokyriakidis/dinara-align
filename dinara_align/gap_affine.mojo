@@ -2124,11 +2124,6 @@ struct AffineCigar(Copyable, Movable, Writable):
     var cigar: String
 
 
-def affine_penalties(mismatch: Int, opening: Int, extension: Int) raises AlignmentError -> Penalties:
-    """The wavefront's costs for gap-affine costs as WFA counts them (see `penalties_of`)."""
-    return penalties_of(Costs.affine(mismatch, opening, extension))
-
-
 def penalties_of(costs: Costs) raises AlignmentError -> Penalties:
     """The wavefront's costs for `costs`, one gap piece or two, either way, divided by their common factor."""
     return scaled_penalties(costs, 0, False)
@@ -2138,13 +2133,6 @@ def rewarded_penalties(match_score: Int, costs: Costs) raises AlignmentError -> 
     """The wavefront's costs for a match earning `match_score` under `costs`, the reward folded in (see
     the module's notes), deletions and insertions each their own."""
     return scaled_penalties(costs, match_score, True)
-
-
-def affine2p_penalties(
-    mismatch: Int, opening1: Int, extension1: Int, opening2: Int, extension2: Int
-) raises AlignmentError -> Penalties:
-    """The wavefront's costs for two-piece gap-affine costs as WFA counts them (see `penalties_of`)."""
-    return penalties_of(Costs.two_piece(mismatch, opening1, extension1, opening2, extension2))
 
 
 def outside(band: Band) -> AlignmentError:
@@ -2545,17 +2533,6 @@ struct AffineExtension(Copyable, Movable, Writable):
     var matches: Int
     var cigar: String
     var dropped: Bool
-
-
-def extension_penalties(
-    match_score: Int, mismatch: Int, opening: Int, extension: Int, opening2: Int, extension2: Int
-) raises AlignmentError -> Penalties:
-    """The wavefront's costs for an extension's scores, a reward `match_score` and gap-affine costs as WFA
-    counts them, a second gap piece where `extension2` costs (see `rewarded_penalties`)."""
-    var costs = Costs.two_piece(mismatch, opening, extension, opening2, extension2) if extension2 > 0 else Costs.affine(
-        mismatch, opening, extension
-    )
-    return rewarded_penalties(match_score, costs)
 
 
 def front_best[pieces: Int](mut search: Wavefront[pieces], reward: Int, scale: Int) -> Tuple[Int, Int, Int]:

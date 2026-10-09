@@ -35,9 +35,6 @@ and not by the longest of them.
 
 comptime GAP_BYTE = Byte(ord("-"))
 """The character a gapped alignment prints where a sequence has nothing."""
-comptime FALLBACK_LETTER = Byte(ord("A"))
-"""The letter an empty alphabet falls back to, so unit-cost alignment always has one symbol."""
-
 comptime UNKNOWN_SYMBOL = UInt8(255)
 """No alphabet reaches 255 symbols, so it doubles as the "not in this alphabet" marker."""
 

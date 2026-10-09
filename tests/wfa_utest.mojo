@@ -25,8 +25,7 @@ from dinara_align.gap_affine import (
     EndsFree,
     FREE_START,
     Penalties,
-    affine2p_penalties,
-    affine_penalties,
+    penalties_of,
     cigar_of,
     solve,
 )
@@ -246,7 +245,9 @@ def main() raises:
                     exact = wfa_cigar[2](
                         first,
                         second,
-                        affine2p_penalties(mode.mismatch, mode.opening, mode.extension, mode.opening2, mode.extension2),
+                        penalties_of(
+                            Costs.two_piece(mode.mismatch, mode.opening, mode.extension, mode.opening2, mode.extension2)
+                        ),
                     )
                 elif mode.kind == REWARDED:
                     # WFA2-lib's own fold of the reward into costs (see `gap_affine`).
@@ -254,12 +255,14 @@ def main() raises:
                     exact = wfa_cigar[1](
                         first,
                         second,
-                        affine_penalties(2 * (mode.mismatch + a), 2 * mode.opening, 2 * mode.extension + a),
+                        penalties_of(Costs.affine(2 * (mode.mismatch + a), 2 * mode.opening, 2 * mode.extension + a)),
                     )
                 elif mode.name == "indel":
-                    exact = wfa_cigar[1](first, second, affine_penalties(3, 0, 1))
+                    exact = wfa_cigar[1](first, second, penalties_of(Costs.affine(3, 0, 1)))
                 else:
-                    exact = wfa_cigar[1](first, second, affine_penalties(mode.mismatch, mode.opening, mode.extension))
+                    exact = wfa_cigar[1](
+                        first, second, penalties_of(Costs.affine(mode.mismatch, mode.opening, mode.extension))
+                    )
                 if exact != theirs:
                     print("   ", mode.name, "pair", index, ": Ties.RIGHT gives", exact, "where WFA2-lib gives", theirs)
                     wrong += 1

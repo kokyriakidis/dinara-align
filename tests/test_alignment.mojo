@@ -44,7 +44,6 @@ from dinara_align.alignment import (
     GapRun,
     GappedAlignment,
     SweepHalf,
-    colorize,
     serial_align,
     vector_sweep_bands,
 )
@@ -65,16 +64,15 @@ from dinara_align.gap_affine import (
     ALIGNED,
     EndsFree,
     extension_of,
-    extension_penalties,
     free_ends_alignment,
     traced_extension,
     FIRST_GAP,
     FREE_START,
     SECOND_GAP,
     Penalties,
+    penalties_of,
+    rewarded_penalties,
     Wavefront,
-    affine2p_penalties,
-    affine_penalties,
     solve,
     trace,
     wavefront_align,
@@ -1042,21 +1040,6 @@ def test_refuses_what_it_cannot_do() raises:
         _ = align("ACGT", "ACG", Costs.edit(), Mode.extension(1), max_cost=3)
 
 
-def test_colouring_keeps_the_rows_it_paints() raises:
-    """Painting wraps every column in escapes and changes nothing else; ragged rows are refused."""
-    var painted = colorize("ACGTA", "AC-TT")
-    for row in [painted[0], painted[1]]:
-        var plain = row
-        for escape in ["\x1b[32m", "\x1b[31m", "\x1b[37m", "\x1b[0m"]:
-            plain = plain.replace(escape, "")
-        assert_true(plain == "ACGTA" or plain == "AC-TT")
-    assert_true(painted[0].startswith("\x1b[32mA"), "a match is not painted green")
-    assert_true("\x1b[37m-" in painted[1], "a gap is not painted white")
-    assert_true("\x1b[31mT" in painted[1], "a mismatch is not painted red")
-    with assert_raises(contains="do not"):
-        _ = colorize("ACGTA", "AC")
-
-
 def mutated(text: String, rate: Float64, longest_gap: Int) -> String:
     """`text` with substitutions, insertions and deletions at `rate` in all, each gap up to `longest_gap` long."""
     var letters = text.as_bytes()
@@ -1393,7 +1376,7 @@ def test_affine_ends_free_matches_the_full_matrix() raises:
         var x = costs[0]
         var o = costs[1]
         var e = costs[2]
-        var penalties = affine_penalties(x, o, e)
+        var penalties = penalties_of(Costs.affine(x, o, e))
         for trial in range(60):
             var core = random_sequence(1, 200, DNA_ALPHABET)
             var first = random_sequence(0, 40, DNA_ALPHABET) + core + random_sequence(0, 40, DNA_ALPHABET)
@@ -1704,7 +1687,7 @@ def test_two_piece_matches_the_full_matrix() raises:
         var e = costs[2]
         var o2 = costs[3]
         var e2 = costs[4]
-        var penalties = affine2p_penalties(x, o, e, o2, e2)
+        var penalties = penalties_of(Costs.two_piece(x, o, e, o2, e2))
         for trial in range(60):
             var core = random_sequence(1, 200, DNA_ALPHABET)
             var first = core
@@ -1781,7 +1764,7 @@ def test_affine_band_matches_the_full_matrix() raises:
         var o2 = costs[3]
         var e2 = costs[4]
         var two = o2 >= 0
-        var penalties = affine2p_penalties(x, o, e, o2, e2) if two else affine_penalties(x, o, e)
+        var penalties = penalties_of(Costs.two_piece(x, o, e, o2, e2)) if two else penalties_of(Costs.affine(x, o, e))
         for trial in range(80):
             var core = random_sequence(1, 200, DNA_ALPHABET)
             var first = core
@@ -2030,7 +2013,7 @@ def test_ties_follow_a_fixed_rule() raises:
         var o2 = costs[3]
         var e2 = costs[4]
         var two = o2 >= 0
-        var penalties = affine2p_penalties(x, o, e, o2, e2) if two else affine_penalties(x, o, e)
+        var penalties = penalties_of(Costs.two_piece(x, o, e, o2, e2)) if two else penalties_of(Costs.affine(x, o, e))
         for trial in range(60):
             # Repeats make ties: gaps that could sit anywhere in a run, substitutions that trade for gaps.
             var unit = random_sequence(1, 4, DNA_ALPHABET)
@@ -2733,14 +2716,7 @@ def test_traced_extension_is_the_searched_one() raises:
     seed(79)
     for costs in [Costs.affine(4, 6, 2), Costs.two_piece(4, 6, 2, 24, 1), Costs.edit()]:
         var two = costs.pieces() == 2
-        var penalties = extension_penalties(
-            2,
-            costs.mismatch,
-            costs.opening,
-            costs.extension,
-            costs.opening2 if two else 0,
-            costs.extension2 if two else 0,
-        )
+        var penalties = rewarded_penalties(2, costs)
         for trial in range(40):
             var core = random_sequence(1, 300, DNA_ALPHABET)
             var head = random_sequence(0, 100, DNA_ALPHABET) + core

@@ -67,9 +67,6 @@ comptime ChangeDType = DType.uint32
 comptime DECISION_BITS = 4
 """Bits one cell's traceback decision occupies inside a change word, which `CellDecision.nibble` writes."""
 
-comptime ALL_MODES: Array[AlignmentMode, 2] = [AlignmentMode.GLOBAL, AlignmentMode.LOCAL]
-"""An array rather than a tuple: since Mojo 1.1 an imported tuple indexed in a `comptime for` yields the tuple."""
-
 comptime CORNER_BYTES = 16
 """One aligned slot for the corner score the walk reads, which is all the strip stages beyond its table."""
 comptime STATIC_SHARED_USED = MAX_ALPHABET_SIZE * MAX_ALPHABET_SIZE + CORNER_BYTES
@@ -2669,42 +2666,3 @@ def device_align[
 
 
 # endregion GPU Wavefront
-
-
-# region Presentation
-
-
-def colorize(first_gapped: String, second_gapped: String) raises AlignmentError -> Tuple[String, String]:
-    """Green for a match, red for a mismatch, dim for a gap, as ANSI escapes."""
-    comptime green = "\x1b[32m"
-    comptime red = "\x1b[31m"
-    comptime white = "\x1b[37m"
-    comptime reset = "\x1b[0m"
-    var top = first_gapped.as_bytes()
-    var bottom = second_gapped.as_bytes()
-    if len(top) != len(bottom):
-        raise AlignmentError(ErrorKind.LENGTH_MISMATCH, "colorized alignment")
-
-    comptime painted_column = len(green.as_bytes()) + len(reset.as_bytes()) + 1
-    var painted_first = List[Byte](capacity=len(top) * painted_column)
-    # Painted byte by byte into two buffers and turned into strings once, because a column is three
-    # escape sequences and a megabase alignment is millions of them.
-    var painted_second = List[Byte](capacity=len(bottom) * painted_column)
-    for index in range(len(top)):
-        var color = red
-        if top[index] == bottom[index] and top[index] != GAP_BYTE:
-            color = green
-        elif top[index] == GAP_BYTE or bottom[index] == GAP_BYTE:
-            color = white
-        var opening = color.as_bytes()
-        var closing = reset.as_bytes()
-        painted_first.extend(opening)
-        painted_first.append(top[index])
-        painted_first.extend(closing)
-        painted_second.extend(opening)
-        painted_second.append(bottom[index])
-        painted_second.extend(closing)
-    return (String(unsafe_from_utf8=painted_first), String(unsafe_from_utf8=painted_second))
-
-
-# endregion Presentation

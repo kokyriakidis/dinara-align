@@ -103,7 +103,7 @@ answers held to the copies it replaces by the tests, and a hot path benchmarked 
 ### Phase 3: one cost model
 
 - [x] `affine_penalties`, `affine2p_penalties`, `extension_penalties` through the `Costs` factories and
-  `penalties_of`/`rewarded_penalties`; one uniform-table check (`substitutions.uniform_pair`); `Scoring.penalties`
+  `penalties_of`/`rewarded_penalties`, and since removed, the tests calling those directly; one uniform-table check (`substitutions.uniform_pair`); `Scoring.penalties`
   for five calls; `LaneCosts.of_penalties` for three; `table_extremes` for the table scans.
 - [x] One 16-bit fit rule, `scored.fits_16_bits`, behind `narrow_enough` and `table_fits`; `Costs.dearest_step`
   and `Costs.cheapest_extension`, which the sweep's Z-drop now takes as the wavefront's does.
