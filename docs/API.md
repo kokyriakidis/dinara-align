@@ -203,7 +203,7 @@ The best score `align` would return, with no alignment traced: for a mode with a
 def score(reference: String, query: String, scoring: Scoring, mode: Mode = Mode.GLOBAL, *, placement: Optional[Placement] = None) -> Int
 ```
 
-The optimal score under `scoring`, with no alignment traced: `Mode.GLOBAL` and `Mode.local()` in two rows of memory on either device (see `scoring.score_with`), free ends and extensions by sweep on the host. The table holds what a match earns, so a mode's own match score must be zero: `Mode.extension(0)` for an extension.
+The optimal score under `scoring`, with no alignment traced: `Mode.GLOBAL` and `Mode.local()` in two rows of memory on either device (see `scoring.pair_score`), free ends and extensions by sweep on the host. The table holds what a match earns, so a mode's own match score must be zero: `Mode.extension(0)` for an extension.
 
 ### `scores`
 
@@ -879,25 +879,17 @@ One reference's result in a search: its place in the list searched, its best sco
 struct Scoring
 ```
 
-An alphabet, the substitution table it indexes, and the affine gap model, which travel together.
+What an alignment earns: a score for every pair of letters, and a score for every gap.
 
-Built through `dna`, `edit_distance`, `uniform` or `tabulated` rather than field by field, so a
-table whose shape disagrees with its alphabet cannot be expressed. A gap of `k` letters scores
-`opening + k extension`, both scores zero or less, as `Costs` counts a gap's cost.
+The factories, `dna`, `edit_distance`, `uniform` and `tabulated`, check what they build: an alphabet
+the kernels can index, a square table over it, and gap scores that cost. The fieldwise constructor
+checks nothing. A gap of `k` letters scores `opening + k extension`, the way `Costs` prices one.
 
 | field | type | |
 | :-- | :-- | :-- |
-| `alphabet` | `String` | The letters a sequence may hold, in the order the table is indexed by. |
-| `substitutions` | `List[Int8]` | Row-major, one row per letter of `alphabet`. |
-| `gaps` | `AffineGapCosts` | The gap scores as the kernels take them: a gap's first letter scores `open`, each further one `extend`. |
-
-#### `__init__`
-
-```mojo
-def Scoring.__init__(out self, var alphabet: String, var substitutions: List[Int8], gaps: AffineGapCosts)
-```
-
-Trusts its arguments; the factories are the checked way in.
+| `alphabet` | `String` | The letters a sequence may hold; letter `i` indexes row and column `i` of the table. |
+| `substitutions` | `List[Int8]` | The table, row by row: what aligning letter `i` of the first sequence to letter `j` of the second scores sits at `i * alphabet_size() + j`. |
+| `gaps` | `AffineGapCosts` | The gap scores in the kernels' terms: `open` for a gap's first letter, `extend` for each one after. |
 
 #### `dna`
 
@@ -905,7 +897,7 @@ Trusts its arguments; the factories are the checked way in.
 def Scoring.dna() -> Self
 ```
 
-Minimap2's scoring over `ACGT`: match 2, mismatch -4, a gap of `k` letters `-(4 + 2k)`.
+Minimap2's defaults over `ACGT`: a match scores 2, a mismatch -4, a gap of `k` letters `-(4 + 2k)`.
 
 #### `edit_distance`
 
@@ -913,7 +905,7 @@ Minimap2's scoring over `ACGT`: match 2, mismatch -4, a gap of `k` letters `-(4 
 def Scoring.edit_distance(alphabet: String = DNA_ALPHABET) -> Self
 ```
 
-Unit costs, under which a global score is the negated Levenshtein distance.
+Every edit scoring -1 and a match 0, so a global score is minus the Levenshtein distance.
 
 #### `uniform`
 
@@ -921,7 +913,7 @@ Unit costs, under which a global score is the negated Levenshtein distance.
 def Scoring.uniform(match_score: Int, mismatch_score: Int, opening: Int = Int(-4), extension: Int = Int(-2), alphabet: String = DNA_ALPHABET) -> Self
 ```
 
-One score for equal letters and one for unequal, over any alphabet.
+`match_score` for two equal letters and `mismatch_score` for two different ones, over `alphabet`.
 
 #### `tabulated`
 
@@ -929,15 +921,7 @@ One score for equal letters and one for unequal, over any alphabet.
 def Scoring.tabulated(alphabet: String, var substitutions: List[Int8], opening: Int = Int(-4), extension: Int = Int(-2)) -> Self
 ```
 
-A caller's own table, refused unless it is square in the alphabet that indexes it.
-
-#### `penalties`
-
-```mojo
-def penalties(self) -> Optional[Penalties]
-```
-
-The wavefront's costs for this table, if it holds one match and one mismatch score whose folded costs a wavefront can grow by (see `gap_affine.wavefront_penalties`).
+A table of the caller's, row by row, which must hold a score for every pair of `alphabet`'s letters.
 
 #### `alphabet_size`
 
@@ -945,7 +929,15 @@ The wavefront's costs for this table, if it holds one match and one mismatch sco
 def alphabet_size(self) -> Int
 ```
 
-Letters the table is indexed by, which is its stride.
+How many letters the table covers, the length of each of its rows.
+
+#### `penalties`
+
+```mojo
+def penalties(self) -> Optional[Penalties]
+```
+
+The wavefront's costs, if the table holds a single match and a single mismatch score whose folded costs a wavefront can grow by (see `gap_affine.wavefront_penalties`).
 
 ## Constants
 

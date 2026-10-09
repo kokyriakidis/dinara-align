@@ -1005,7 +1005,7 @@ def test_refuses_what_it_cannot_do() raises:
     with assert_raises(contains="unequal length"):
         _ = scores(["AC", "CA"], ["AC"], dna, GLOBAL)
     var rewarded = Mode.INFIX.with_match_score(2)
-    with assert_raises(contains="holds what a match earns"):
+    with assert_raises(contains="a match score in the mode"):
         _ = score("ACGT", "ACG", dna, rewarded)
     with assert_raises(contains="no search can use"):
         _ = Costs.affine(0, 6, 2)

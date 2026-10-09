@@ -66,12 +66,12 @@ from .modes import ANY_LENGTH, Alignment, Anchor, Band, Costs, Mode, Ties
 from .scoring import (
     cells_within,
     Scoring,
-    alignments_with,
+    device_batch_alignments,
     as_alignment,
     first_past_32_bits,
     ScoreReach,
-    paired_length,
-    scores_with,
+    pair_count,
+    batch_scores,
     laned_alignments,
     scoring_alignment,
     scoring_score,
@@ -716,7 +716,7 @@ def score(
     placement: Optional[Placement] = None,
 ) raises -> Int:
     """The optimal score under `scoring`, with no alignment traced: `Mode.GLOBAL` and `Mode.local()` in two
-    rows of memory on either device (see `scoring.score_with`), free ends and extensions by sweep on the
+    rows of memory on either device (see `scoring.pair_score`), free ends and extensions by sweep on the
     host. The table holds what a match earns, so a mode's own match score must be zero:
     `Mode.extension(0)` for an extension."""
     return scoring_score(reference, query, scoring, mode, placement)
@@ -771,17 +771,17 @@ def scores(
     """`score` for every pair; on the device, every pair one block can carry goes out in one launch."""
     var found: List[Int32]
     if mode.kind == Mode.SMITH_WATERMAN and mode.match_score == 0:
-        _ = paired_length(references, queries)
+        _ = pair_count(references, queries)
         within_32_bits(references, queries, scoring, mode, False)
-        found = scores_with[AlignmentMode.LOCAL](references, queries, scoring, placement)
+        found = batch_scores[AlignmentMode.LOCAL](references, queries, scoring, placement)
     elif mode.is_global() and mode.match_score == 0:
-        _ = paired_length(references, queries)
+        _ = pair_count(references, queries)
         within_32_bits(references, queries, scoring, mode, False)
-        found = scores_with[AlignmentMode.GLOBAL](references, queries, scoring, placement)
+        found = batch_scores[AlignmentMode.GLOBAL](references, queries, scoring, placement)
     else:
         # Free ends and extensions, and modes `score` refuses: each pair as `score` takes it, over the threads
         # asked for, a pair that raises raising here as a serial loop would have raised it first.
-        var pairs = paired_length(references, queries)
+        var pairs = pair_count(references, queries)
         var results = List[Int](length=pairs, fill=0)
         var failed = List[Bool](length=pairs, fill=False)
         var out = results.unsafe_ptr()
@@ -823,7 +823,7 @@ def alignments(
     eqx: Bool = True,
 ) raises -> List[Alignment]:
     """`align` for every pair; on the device, every pair both bounds admit goes out in one launch."""
-    var pairs = paired_length(references, queries)
+    var pairs = pair_count(references, queries)
     within_32_bits(references, queries, scoring, mode, True)
     var stored_cells = cells_within(max_memory)
     var resolved = placement.or_else(Placement.default())
@@ -883,9 +883,9 @@ def alignments(
         return results^
     var gapped: List[GappedAlignment]
     if mode.kind == Mode.SMITH_WATERMAN and mode.match_score == 0:
-        gapped = alignments_with[AlignmentMode.LOCAL](references, queries, scoring, placement, stored_cells)
+        gapped = device_batch_alignments[AlignmentMode.LOCAL](references, queries, scoring, resolved, stored_cells)
     elif mode.is_global() and mode.match_score == 0:
-        gapped = alignments_with[AlignmentMode.GLOBAL](references, queries, scoring, placement, stored_cells)
+        gapped = device_batch_alignments[AlignmentMode.GLOBAL](references, queries, scoring, resolved, stored_cells)
     else:
         var results = List[Alignment](capacity=pairs)
         for index in range(pairs):
@@ -1193,7 +1193,7 @@ def gpu_distances(
 ) raises -> List[Int]:
     """Every pair's unit-cost distance times `scale`, on the device where its shorter sequence fits a
     thread (see `device_edit`), on the host otherwise."""
-    var pairs = paired_length(references, queries)
+    var pairs = pair_count(references, queries)
     var results = List[Int](length=pairs, fill=0)
     var patterns = List[String]()
     var texts = List[String]()
@@ -1243,7 +1243,7 @@ def capped_distances(
 ) raises AlignmentError -> List[Optional[Int]]:
     """Every pair's `cost_within`, on every thread asked for, longest first. With no cap, a pair no
     alignment inside `band` fits raises as a failed pair does, in the batch's order."""
-    var pairs = paired_length(references, queries)
+    var pairs = pair_count(references, queries)
     var results = List[Optional[Int]](length=pairs, fill=None)
     if pairs == 0:
         return results^
@@ -1346,7 +1346,7 @@ def capped_alignments(
 ) raises AlignmentError -> List[Optional[Alignment]]:
     """Every pair's `aligned_within`, on every thread asked for, longest first. With no cap, a pair no
     alignment inside `band` fits raises as a failed pair does, in the batch's order."""
-    var pairs = paired_length(references, queries)
+    var pairs = pair_count(references, queries)
     var results = List[Optional[Alignment]](capacity=pairs)
     for _ in range(pairs):
         results.append(None)
