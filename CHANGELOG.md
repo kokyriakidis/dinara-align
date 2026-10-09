@@ -19,8 +19,9 @@ Apache-2.0 as well (see NOTICE).
   with an optional Z-drop, local, overlap, and free ends rewarding every match).
 - Unit costs by A\*PA2's bit-parallel band doubling with its seed heuristic; every other cost model by
   a gap-affine wavefront from both ends after BiWFA; local alignment, overlaps and rewarded free
-  ends by an anti-diagonal sweep in 16-bit lanes; all exact, every alignment's memory bounded
-  (`max_memory`).
+  ends by an anti-diagonal sweep in 16-bit lanes while the scores fit, one sweep for every score, a
+  local alignment's start and a linear-space traceback's halves; all exact, every alignment's memory
+  bounded (`max_memory`).
 - A `Scoring`, any alphabet's substitution table with affine gap scores, in every mode on the CPU,
   and globally or locally on the GPU: a batch's global scores there first over a band of sixteen
   diagonals, a thread a pair, each kept where the pair's own cost proves no path off the band could

@@ -84,8 +84,7 @@ struct SubstitutionLookup(Copyable, Movable):
     var cells: List[Int32]
     """Pair `(a, b)`'s score at `a * stride + b`, for a gather."""
     var stride: Int
-    """The alphabet's size. A code past it, the padding past either sequence's end, reads as the last
-    letter: no sweep keeps a lane that reads padding."""
+    """The alphabet's size, which every code read lies within: the sweeps pad their sequences with code zero."""
     var uniform: Bool
     """Whether every match scores `reward` and every mismatch `mismatch`, so one comparison scores a pair."""
     var reward: Int32
@@ -117,47 +116,58 @@ struct SubstitutionLookup(Copyable, Movable):
         self.reward = Int32(reward)
         self.mismatch = Int32(mismatch)
 
-    def lanes[width: Int](self) -> SubstitutionLanes[width]:
-        """The table as a sweep of `width` lanes reads it, held in registers for the sweep's length; the
-        lookup must outlive it."""
-        return SubstitutionLanes[width](
+    @staticmethod
+    def uniform_of(reward: Int, mismatch: Int) -> Self:
+        """The lookup of every match scoring `reward` and every mismatch `mismatch`, over any letters, which a
+        sweep reads by comparison alone (see `lanes`), there being no table to read."""
+        var table: List[Scalar[SubstitutionDType]] = [Scalar[SubstitutionDType](0)]
+        var lookup = Self(table, 1)
+        lookup.reward = Int32(reward)
+        lookup.mismatch = Int32(mismatch)
+        lookup.best = reward
+        return lookup^
+
+    def lanes[
+        width: Int, dtype: DType = DType.int32, compared: Bool = False
+    ](self) -> SubstitutionLanes[width, dtype, compared]:
+        """The table as a sweep of `width` lanes of `dtype` reads it, held in registers for the sweep's
+        length; the lookup must outlive it. `compared` says the table is uniform, read by comparison alone."""
+        return SubstitutionLanes[width, dtype, compared](
             self.cells.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin](),
             self.stride,
             self.uniform,
-            self.reward,
-            self.mismatch,
+            Scalar[dtype](self.reward),
+            Scalar[dtype](self.mismatch),
             self.small,
             self.shuffled,
         )
 
 
 @fieldwise_init
-struct SubstitutionLanes[width: Int](ImplicitlyCopyable, TrivialRegisterPassable):
+struct SubstitutionLanes[width: Int, dtype: DType = DType.int32, compared: Bool = False](
+    ImplicitlyCopyable, TrivialRegisterPassable
+):
     """A `SubstitutionLookup` as one sweep reads it, `width` pairs a call (see `SubstitutionLookup.lanes`)."""
 
     var cells: ImmPointer[Int32, ImmUntrackedOrigin]
     var stride: Int
     var uniform: Bool
-    var reward: Int32
-    var mismatch: Int32
+    var reward: Scalar[Self.dtype]
+    var mismatch: Scalar[Self.dtype]
     var small: Bool
     var shuffled: SIMD[DType.uint8, SHUFFLED_ENTRIES]
 
     @inline(.always)
     def __call__(
         self, mine: SIMD[DType.uint8, Self.width], theirs: SIMD[DType.uint8, Self.width]
-    ) -> SIMD[DType.int32, Self.width]:
-        """Each lane's pair's score: by comparison for a uniform table, by byte shuffle for a small one,
-        else gathered from the table, a code past the alphabet, the sweeps' padding, read as its last
-        letter."""
-        comptime Scores = SIMD[DType.int32, Self.width]
-        if self.uniform:
+    ) -> SIMD[Self.dtype, Self.width]:
+        """Each lane's pair's score, `mine` the table's row: by comparison for a uniform table, by byte
+        shuffle for a small one, else gathered from the table."""
+        comptime Scores = SIMD[Self.dtype, Self.width]
+        comptime if Self.compared:
             return mine.eq(theirs).select(Scores(self.reward), Scores(self.mismatch))
-        var last = SIMD[DType.uint8, Self.width](UInt8(self.stride - 1))
-        var row = min(mine, last)
-        var column = min(theirs, last)
         if self.small:
-            return looked_up[DType.int32, Self.width](self.shuffled, row * UInt8(self.stride) + column)
+            return looked_up[Self.dtype, Self.width](self.shuffled, mine * UInt8(self.stride) + theirs)
         return self.cells.unsafe_gather[width=Self.width](
-            row.cast[DType.int32]() * Int32(self.stride) + column.cast[DType.int32]()
-        )
+            mine.cast[DType.int32]() * Int32(self.stride) + theirs.cast[DType.int32]()
+        ).cast[Self.dtype]()

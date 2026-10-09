@@ -80,7 +80,8 @@ from .lanes import (
     lane_local_scores,
 )
 from .modes import Alignment, Anchor, Band, Costs, Mode
-from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, fits_16_bits, started_span, sweep
+from .anti_diagonals import fits_16_bits
+from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, started_span, sweep
 from .band_groups import banded_scores
 from .score_groups import grouped_scores
 from .substitutions import SubstitutionLookup, shuffled_table, table_extremes, uniform_pair
@@ -463,7 +464,8 @@ def local_by_span(
     if best <= 0:
         return GappedAlignment(0, String(), String())
     var lookup = SubstitutionLookup(scoring.substitutions, scoring.alphabet_size())
-    var start = reach_back(codes_first, codes_second, end[1], end[2], lookup, scoring.gaps, Int32(best))
+    var narrow = table_fits[FROM_EDGE](scoring, end[1], end[2])
+    var start = reach_back(codes_first, codes_second, end[1], end[2], lookup, scoring.gaps, Int32(best), narrow)
     var inner = global_on_host(first[start[0] : end[1]], second[start[1] : end[2]], scoring, stored_cells, best)
     # A global alignment of the span scores what the local one does, and is one.
     return inner^
@@ -540,12 +542,12 @@ def gap_costs(scoring: Scoring) -> Costs:
 
 
 def table_fits[kind: Int](scoring: Scoring, rows: Int, columns: Int) -> Bool:
-    """Whether every score of a sweep under the table fits 16 bits (see `scored.fits_16_bits`): its best
+    """Whether every score of a sweep under the table fits 16 bits (see `anti_diagonals.fits_16_bits`): its best
     pair, and its dearest move, a mismatch or a gap's first letter."""
     var extremes = table_extremes(scoring.substitutions, scoring.alphabet_size())
     var most = max(extremes[0], 0)
     var least = min(extremes[1], 0)
-    return fits_16_bits[kind](most, max(-least, Int(-scoring.gaps.open)), rows, columns)
+    return fits_16_bits[kind == ANYWHERE](most, max(-least, Int(-scoring.gaps.open)), rows, columns)
 
 
 def tabulated_end[

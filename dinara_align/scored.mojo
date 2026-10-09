@@ -16,9 +16,8 @@ sweep back from its end for its start, the span the one `Ties` names, the letter
 alignment whose reward folds into the costs (see `rewarded_alignment`).
 """
 
-from std.memory import bitcast
 
-from .common import FIRST_SENTINEL, SECOND_SENTINEL, SubstitutionDType
+from .common import SubstitutionDType
 from .cigar import reversed_list, cigar_counts, cigar_matches, cigar_runs, reversed_cigar, reversed_text, text_of
 from .errors import AlignmentError
 from .gap_affine import (
@@ -31,7 +30,8 @@ from .gap_affine import (
     traced_extension,
 )
 from .modes import Alignment, Anchor, Band, Costs, Ties
-from .substitutions import SHUFFLED_ENTRIES, looked_up
+from .anti_diagonals import AntiDiagonals, GapLanes, fits_16_bits
+from .substitutions import SubstitutionLookup
 
 
 comptime ANYWHERE = 0
@@ -59,23 +59,21 @@ def best_end[
     """The best score of an alignment starting and ending where `kind` allows, where it ends, and whether
     a Z-drop gave the sweep up (see `swept_cells`)."""
     var unused = List[Int32]()
-    var no_table = List[Scalar[dtype]]()
-    return swept_cells[pieces, dtype, width, transposed, kind, False](
-        reference, query, costs, match_score, ends, highest, no_table, 0, -1, unused
+    var lookup = SubstitutionLookup.uniform_of(match_score, -costs.mismatch)
+    return swept_cells[pieces, dtype, width, transposed, kind, False, True](
+        reference, query, costs, ends, highest, lookup, -1, unused
     )
 
 
 def swept_cells[
-    pieces: Int, dtype: DType, width: Int, transposed: Bool, kind: Int, columns_kept: Bool, tabulated: Bool = False
+    pieces: Int, dtype: DType, width: Int, transposed: Bool, kind: Int, columns_kept: Bool, compared: Bool
 ](
     reference: Span[UInt8, _],
     query: Span[UInt8, _],
     costs: Costs,
-    match_score: Int,
     ends: EndsFree,
     highest: Bool,
-    table: List[Scalar[dtype]],
-    alphabet: Int,
+    lookup: SubstitutionLookup,
     zdrop: Int,
     mut kept: List[Int32],
 ) -> Tuple[Int, Int, Int, Bool]:
@@ -85,18 +83,17 @@ def swept_cells[
     furthest along the reference less the query, or with `highest` false the lowest; an extension's
     as a local alignment's. With `columns_kept`, for a local alignment, `kept` holds after it the best
     score of every column: of the cells with as many reference letters, `len(reference) + 1` of them.
-    With `tabulated` the sequences are codes into `table`, `alphabet` codes a row, which scores each
-    pair, a `Scoring`'s substitutions, in place of `match_score` and `costs.mismatch`. An extension with
-    a `zdrop` of zero or more stops as KSW2's does: once a diagonal's best lies more than `zdrop`, plus
-    an extension a diagonal between them, below the best so far, the best so far stands.
+    `lookup` scores each pair, the reference's letter its row: a `Scoring`'s substitutions, the sequences
+    codes into them, or with `compared` a match's reward and `costs.mismatch`. An extension with a `zdrop` of zero or more
+    stops as KSW2's does: once a diagonal's best lies more than `zdrop`, plus an extension a diagonal
+    between them, below the best so far, the best so far stands.
 
     Gotoh's recurrence over scores, a local alignment's every cell floored at zero, swept by
-    anti-diagonal as `vector_score.reach_back` sweeps it: every cell of `d = i + j` reads only diagonals `d - 1`
-    and `d - 2`, so a diagonal's cells fill `width` lanes of `dtype`, as narrow as the scores allow
-    (see `local_alignment`). For a local alignment each lane keeps its best of the diagonal and the
-    step it came at, and the diagonal's best is placed only when it meets the best so far; one from
-    the edges, `ends` saying which letters at each end are free, ends on the last row or column, at
-    most two cells a diagonal, read once it is done."""
+    anti-diagonal (see `anti_diagonals`) in `width` lanes of `dtype`, as narrow as the scores allow (see
+    `local_alignment`). For a local alignment each lane keeps its best of the diagonal and the step it came
+    at, and the diagonal's best is placed only when it meets the best so far; one from the edges, `ends`
+    saying which letters at each end are free, ends on the last row or column, at most two cells a
+    diagonal, read once it is done."""
     comptime Lanes = SIMD[dtype, width]
     comptime Value = Scalar[dtype]
     comptime LOW = Value.MIN // 4
@@ -106,7 +103,6 @@ def swept_cells[
     var across_letters = reference if transposed else query
     var rows = len(down_letters)
     var columns = len(across_letters)
-    comptime two = pieces == 2
     comptime local = kind == ANYWHERE
     # A local alignment and an extension end at any cell, the best so far kept as the sweep goes.
     comptime anywhere_end = kind != FROM_EDGE
@@ -116,28 +112,8 @@ def swept_cells[
     var down_end = ends.second_end if transposed else ends.first_end
     var across_start = Int.MAX if local else (ends.first_begin if transposed else ends.second_begin)
     var across_end = ends.first_end if transposed else ends.second_end
-    # Lane `i` reads the reference's letter `i - 1`, stored one place on, and the query back to front,
-    # so a diagonal's letters load contiguously; both padded past their ends by bytes no text holds, or
-    # under a table by a code it holds, whose cells nothing reads.
-    var letters = List[UInt8](length=rows + 1 + width, fill=UInt8(0) if tabulated else FIRST_SENTINEL)
-    for index in range(rows):
-        letters[index + 1] = down_letters[index]
-    var reversed = List[UInt8](length=columns + width, fill=UInt8(0) if tabulated else SECOND_SENTINEL)
-    for index in range(columns):
-        reversed[index] = across_letters[columns - 1 - index]
-    var size = rows + 1 + width
-    var two_back = List[Value](length=size, fill=0)
-    var one_back = List[Value](length=size, fill=0)
-    var current = List[Value](length=size, fill=0)
-    # A gap of reference letters alone grows down the lanes, one of query letters across diagonals.
-    var deletes_back = List[Value](length=size, fill=LOW)
-    var deletes = List[Value](length=size, fill=LOW)
-    var inserts_back = List[Value](length=size, fill=LOW)
-    var inserts = List[Value](length=size, fill=LOW)
-    var deletes2_back = List[Value](length=size if two else 0, fill=LOW)
-    var deletes2 = List[Value](length=size if two else 0, fill=LOW)
-    var inserts2_back = List[Value](length=size if two else 0, fill=LOW)
-    var inserts2 = List[Value](length=size if two else 0, fill=LOW)
+    var sweep = AntiDiagonals[dtype, width, pieces](down_letters, across_letters, LOW)
+    var cells = sweep.cells()
     # A gap's first letter pays the opening and its extension, each further letter the extension: a
     # gap down the lanes is of the lanes' letters, the reference's a deletion's, across them the other's.
     var down_opening = costs.opening if transposed else costs.deletion_opening
@@ -148,28 +124,23 @@ def swept_cells[
     var across_extension = costs.deletion_extension if transposed else costs.extension
     var across_opening2 = costs.deletion_opening2 if transposed else costs.opening2
     var across_extension2 = costs.deletion_extension2 if transposed else costs.extension2
-    var first = Lanes(Value(down_opening + down_extension))
-    var further = Lanes(Value(down_extension))
-    var first2 = Lanes(Value(down_opening2 + down_extension2) if two else 0)
-    var further2 = Lanes(Value(down_extension2) if two else 0)
-    var first_across = Lanes(Value(across_opening + across_extension))
-    var further_across = Lanes(Value(across_extension))
-    var first2_across = Lanes(Value(across_opening2 + across_extension2) if two else 0)
-    var further2_across = Lanes(Value(across_extension2) if two else 0)
-    var matched = Lanes(Value(match_score))
-    var mismatched = Lanes(-Value(costs.mismatch))
+    comptime two = pieces == 2
+    var gaps = GapLanes[dtype, width](
+        Lanes(Value(-down_opening - down_extension)),
+        Lanes(Value(-down_extension)),
+        Lanes(Value(-across_opening - across_extension)),
+        Lanes(Value(-across_extension)),
+        Lanes(Value(-down_opening2 - down_extension2) if two else 0),
+        Lanes(Value(-down_extension2) if two else 0),
+        Lanes(Value(-across_opening2 - across_extension2) if two else 0),
+        Lanes(Value(-across_extension2) if two else 0),
+    )
+    var substitute = lookup.lanes[width, dtype, compared]()
     var zero = Lanes(0)
     # A Z-drop's slack a diagonal between two bests: the cheapest a gap grows a letter.
     var slack = costs.cheapest_extension()
     # What a lane past the diagonal's last row counts as: nothing a best could be.
     var nothing = zero if local else Lanes(LOW)
-    var codes_a_row = SIMD[DType.int32, width](Int32(alphabet))
-    # A table of up to sixteen entries sits in a register, read by byte shuffle rather than gathered.
-    var small = tabulated and alphabet * alphabet <= SHUFFLED_ENTRIES
-    var shuffled = SIMD[DType.uint8, SHUFFLED_ENTRIES](0)
-    if small:
-        for cell in range(alphabet * alphabet):
-            shuffled[cell] = bitcast[DType.uint8](Int8(table[cell]))
     var lane_index = Lanes()
     comptime for lane in range(width):
         lane_index[lane] = Value(lane)
@@ -221,11 +192,11 @@ def swept_cells[
 
     @inline(.always)
     def ending(
-        values: List[Value], diagonal: Int, mut best: Int, mut best_row: Int, mut best_diagonal: Int
+        diagonal: Int, last_row: Value, last_column: Value, mut best: Int, mut best_row: Int, mut best_diagonal: Int
     ) {imm rows, imm columns, imm across_end, imm down_end, imm highest}:
-        """The ends on anti-diagonal `diagonal`: its cells on the last row and the last column within the
-        letters free there, the one on the highest diagonal, the reference's letters less the query's, or
-        with `highest` false the lowest, on a tie."""
+        """The ends on anti-diagonal `diagonal`, its cells on the last row and the last column given: those
+        within the letters free there, the one on the highest diagonal, the reference's letters less the
+        query's, or with `highest` false the lowest, on a tie."""
         for side in range(2):
             var row = rows if side == 0 else diagonal - columns
             if row < 0 or row > rows or diagonal - row < 0 or diagonal - row > columns:
@@ -234,7 +205,7 @@ def swept_cells[
                 continue
             if side == 1 and rows - row > down_end:
                 continue
-            var value = Int(values[row])
+            var value = Int(last_row if side == 0 else last_column)
             # The reference's letters less the query's, from the lanes' row and the rest of the anti-diagonal.
             var lean = (diagonal - 2 * row) if transposed else (2 * row - diagonal)
             var best_lean = (best_diagonal - 2 * best_row) if transposed else (2 * best_row - best_diagonal)
@@ -245,10 +216,10 @@ def swept_cells[
                 best_diagonal = diagonal
 
     # Diagonal one, beside the origin: a letter of either sequence against nothing.
-    one_back[0] = edge(1, across_start, False)
-    one_back[1] = edge(1, down_start, True)
+    cells.one_back[unsafe_offset=0] = edge(1, across_start, False)
+    cells.one_back[unsafe_offset=1] = edge(1, down_start, True)
     comptime if not anywhere_end:
-        ending(one_back, 1, best, best_row, best_diagonal)
+        ending(1, cells.filled(rows), cells.filled(max(1 - columns, 0)), best, best_row, best_diagonal)
     for diagonal in range(2, rows + columns + 1):
         var low = max(1, diagonal - columns)
         var high = min(rows, diagonal - 1)
@@ -259,50 +230,7 @@ def swept_cells[
         var top_step = zero
         var step = Value(0)
         while row <= high:
-            var above = one_back.unsafe_ptr().unsafe_offset(row - 1).unsafe_load[width=width]()
-            var left = one_back.unsafe_ptr().unsafe_offset(row).unsafe_load[width=width]()
-            var above_left = two_back.unsafe_ptr().unsafe_offset(row - 1).unsafe_load[width=width]()
-            var mine = letters.unsafe_ptr().unsafe_offset(row).unsafe_load[width=width]()
-            var theirs = reversed.unsafe_ptr().unsafe_offset(lag + row).unsafe_load[width=width]()
-            var deletion = max(
-                above - first, deletes_back.unsafe_ptr().unsafe_offset(row - 1).unsafe_load[width=width]() - further
-            )
-            var insertion = max(
-                left - first_across,
-                inserts_back.unsafe_ptr().unsafe_offset(row).unsafe_load[width=width]() - further_across,
-            )
-            var substituted: Lanes
-            comptime if tabulated:
-                # A table's cell for each lane's pair of codes: the reference's code its row, of `alphabet`
-                # codes, and the query's its column, whichever runs down the lanes.
-                if small:
-                    var cell = (theirs * UInt8(alphabet) + mine) if transposed else (mine * UInt8(alphabet) + theirs)
-                    substituted = looked_up[dtype, width](shuffled, cell)
-                else:
-                    var at = (theirs.cast[DType.int32]() * codes_a_row + mine.cast[DType.int32]()) if transposed else (
-                        mine.cast[DType.int32]() * codes_a_row + theirs.cast[DType.int32]()
-                    )
-                    substituted = table.unsafe_ptr().unsafe_gather(at)
-            else:
-                substituted = mine.eq(theirs).select(matched, mismatched)
-            var score = max(above_left + substituted, max(deletion, insertion))
-            deletes.unsafe_ptr().unsafe_offset(row).unsafe_store(deletion)
-            inserts.unsafe_ptr().unsafe_offset(row).unsafe_store(insertion)
-            comptime if two:
-                var deletion2 = max(
-                    above - first2,
-                    deletes2_back.unsafe_ptr().unsafe_offset(row - 1).unsafe_load[width=width]() - further2,
-                )
-                var insertion2 = max(
-                    left - first2_across,
-                    inserts2_back.unsafe_ptr().unsafe_offset(row).unsafe_load[width=width]() - further2_across,
-                )
-                score = max(score, max(deletion2, insertion2))
-                deletes2.unsafe_ptr().unsafe_offset(row).unsafe_store(deletion2)
-                inserts2.unsafe_ptr().unsafe_offset(row).unsafe_store(insertion2)
-            comptime if local:
-                score = max(score, zero)
-            current.unsafe_ptr().unsafe_offset(row).unsafe_store(score)
+            var score = cells.step[local, transposed](row, lag, substitute, gaps)
             comptime if anywhere_end:
                 # Lanes past the diagonal's last row hold no cell.
                 var counted = score
@@ -340,24 +268,25 @@ def swept_cells[
         # The border cells of this diagonal, written after the lanes that may have run over them: free
         # within the letters free there, past them a gap. No interior cell reads a border's gap layers.
         if diagonal <= columns:
-            current[0] = edge(diagonal, across_start, False)
-            deletes[0] = LOW
+            cells.current[unsafe_offset=0] = edge(diagonal, across_start, False)
+            cells.deletes[unsafe_offset=0] = LOW
             comptime if two:
-                deletes2[0] = LOW
+                cells.deletes2[unsafe_offset=0] = LOW
         if diagonal <= rows:
-            current[diagonal] = edge(diagonal, down_start, True)
-            inserts[diagonal] = LOW
+            cells.current[unsafe_offset=diagonal] = edge(diagonal, down_start, True)
+            cells.inserts[unsafe_offset=diagonal] = LOW
             comptime if two:
-                inserts2[diagonal] = LOW
+                cells.inserts2[unsafe_offset=diagonal] = LOW
+        cells.advance()
         comptime if not anywhere_end:
-            ending(current, diagonal, best, best_row, best_diagonal)
-        swap(two_back, one_back)
-        swap(one_back, current)
-        swap(deletes_back, deletes)
-        swap(inserts_back, inserts)
-        comptime if two:
-            swap(deletes2_back, deletes2)
-            swap(inserts2_back, inserts2)
+            ending(
+                diagonal,
+                cells.filled(rows),
+                cells.filled(max(diagonal - columns, 0)),
+                best,
+                best_row,
+                best_diagonal,
+            )
     comptime if columns_kept:
         var length = len(reference)
         kept = List[Int32](length=length + 1, fill=0)
@@ -370,21 +299,8 @@ def swept_cells[
 
 
 def narrow_enough[kind: Int](costs: Costs, match_score: Int, rows: Int, columns: Int) -> Bool:
-    """Whether every score of the sweep under `costs` fits 16 bits (see `fits_16_bits`)."""
-    return fits_16_bits[kind](match_score, costs.dearest_step(), rows, columns)
-
-
-def fits_16_bits[kind: Int](reward: Int, dearest: Int, rows: Int, columns: Int) -> Bool:
-    """Whether every score of a sweep fits 16 bits, a pair earning at most `reward` and a move costing at
-    most `dearest`. None passes the reward of the shorter sequence matched throughout. A local
-    alignment's none falls further below zero than the dearest single move, as each cell takes the best of
-    its moves from cells of zero or more; an overlap's none falls below every letter of both paying the
-    dearest move. Nor does a gap's sentinel, a quarter of the way down, fall further than one extension
-    below it."""
-    var fits = reward * (min(rows, columns) + 1) < 32000 and dearest < 4000
-    comptime if kind != ANYWHERE:
-        fits = fits and dearest * (rows + columns + 1) < 8000
-    return fits
+    """Whether every score of the sweep under `costs` fits 16 bits (see `anti_diagonals.fits_16_bits`)."""
+    return fits_16_bits[kind == ANYWHERE](match_score, costs.dearest_step(), rows, columns)
 
 
 def swept[
@@ -460,31 +376,30 @@ def sweep_in[
 ) -> Tuple[Int, Int, Int, Bool]:
     """`sweep` in lanes of `dtype`, `width` of them."""
     var transposed = len(query) < len(reference)
-    var table = List[Scalar[dtype]](capacity=len(substitutions))
-    for value in substitutions:
-        table.append(Scalar[dtype](value))
     if alphabet > 0:
+        var table = SubstitutionLookup(substitutions, alphabet)
         if transposed:
-            return swept_cells[1, dtype, width, True, kind, columns_kept, True](
-                reference, query, costs, match_score, ends, highest, table, alphabet, zdrop, kept
+            return swept_cells[1, dtype, width, True, kind, columns_kept, False](
+                reference, query, costs, ends, highest, table, zdrop, kept
             )
-        return swept_cells[1, dtype, width, False, kind, columns_kept, True](
-            reference, query, costs, match_score, ends, highest, table, alphabet, zdrop, kept
+        return swept_cells[1, dtype, width, False, kind, columns_kept, False](
+            reference, query, costs, ends, highest, table, zdrop, kept
         )
+    var lookup = SubstitutionLookup.uniform_of(match_score, -costs.mismatch)
     if costs.pieces() == 2:
         if transposed:
-            return swept_cells[2, dtype, width, True, kind, columns_kept](
-                reference, query, costs, match_score, ends, highest, table, 0, zdrop, kept
+            return swept_cells[2, dtype, width, True, kind, columns_kept, True](
+                reference, query, costs, ends, highest, lookup, zdrop, kept
             )
-        return swept_cells[2, dtype, width, False, kind, columns_kept](
-            reference, query, costs, match_score, ends, highest, table, 0, zdrop, kept
+        return swept_cells[2, dtype, width, False, kind, columns_kept, True](
+            reference, query, costs, ends, highest, lookup, zdrop, kept
         )
     if transposed:
-        return swept_cells[1, dtype, width, True, kind, columns_kept](
-            reference, query, costs, match_score, ends, highest, table, 0, zdrop, kept
+        return swept_cells[1, dtype, width, True, kind, columns_kept, True](
+            reference, query, costs, ends, highest, lookup, zdrop, kept
         )
-    return swept_cells[1, dtype, width, False, kind, columns_kept](
-        reference, query, costs, match_score, ends, highest, table, 0, zdrop, kept
+    return swept_cells[1, dtype, width, False, kind, columns_kept, True](
+        reference, query, costs, ends, highest, lookup, zdrop, kept
     )
 
 

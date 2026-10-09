@@ -396,7 +396,7 @@ Writes the kind as a short phrase naming the failure.
 struct AlignedCounts
 ```
 
-An alignment's columns by kind (see `Alignment.counts`).
+An alignment's columns by kind (see `cigar_counts`).
 
 | field | type | |
 | :-- | :-- | :-- |
@@ -441,6 +441,14 @@ def clipped_cigar(self, query_length: Int, *, hard: Bool = False) -> String
 ```
 
 The CIGAR as a SAM record writes it: the query's letters outside the span clipped, soft (`S`), their letters kept in the record's sequence, or with `hard` hard (`H`), dropped from it. The record's position is `reference_start + 1`; the reference's letters outside the span need no operation.
+
+#### `mirrored`
+
+```mojo
+def mirrored(self, reference_length: Int, query_length: Int) -> Self
+```
+
+This alignment of both sequences reversed, `reference_length` and `query_length` letters, turned back: its CIGAR's runs in the other order and its spans counted from the other ends.
 
 #### `counts`
 
@@ -537,6 +545,22 @@ def covers(self, columns: Int, rows: Int) -> Bool
 ```
 
 Whether every diagonal of a `columns` by `rows` matrix lies inside: no band at all for it.
+
+#### `covers_any`
+
+```mojo
+def covers_any(self) -> Bool
+```
+
+Whether every diagonal of any pair a batch could hold lies inside, sequences of up to `1 << 40` letters: no band for any pair.
+
+#### `clamped`
+
+```mojo
+def Band.clamped(low: Int, high: Int) -> Self
+```
+
+The band from `low` to `high`, an integer type's limits standing for no band, kept clear of overflow at `UNBOUNDED`.
 
 #### `shifted`
 
@@ -647,6 +671,22 @@ def unit_scale(self) -> Int
 ```
 
 The factor these costs are of unit costs, zero when they are not: a pair's edit distance times it is then their least cost, which the bit-parallel search finds.
+
+#### `cheapest_extension`
+
+```mojo
+def cheapest_extension(self) -> Int
+```
+
+The cheapest a gap grows a letter, either way, at either piece: a Z-drop's slack a diagonal, as KSW2 charges a long gap.
+
+#### `dearest_step`
+
+```mojo
+def dearest_step(self) -> Int
+```
+
+The dearest single move: a substitution, or a gap's first letter at either piece either way.
 
 #### `gap`
 
@@ -889,6 +929,14 @@ def Scoring.tabulated(alphabet: String, var substitutions: List[Int8], opening: 
 ```
 
 A caller's own table, refused unless it is square in the alphabet that indexes it.
+
+#### `penalties`
+
+```mojo
+def penalties(self) -> Optional[Penalties]
+```
+
+The wavefront's costs for this table, if it holds one match and one mismatch score whose folded costs a wavefront can grow by (see `gap_affine.wavefront_penalties`).
 
 #### `alphabet_size`
 

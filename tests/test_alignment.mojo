@@ -38,12 +38,22 @@ from dinara_align import (
     scores,
     search,
 )
-from dinara_align.alignment import AlignmentMode, GappedAlignment, colorize, serial_align
-from dinara_align.scoring import DNA_ALPHABET
+from dinara_align.alignment import (
+    AffineGapCosts,
+    AlignmentMode,
+    GapRun,
+    GappedAlignment,
+    SweepHalf,
+    colorize,
+    serial_align,
+    vector_sweep_bands,
+)
+from dinara_align.scoring import DNA_ALPHABET, tabulated_end
+from dinara_align.vector_score import reach_back
 from dinara_align.cigar import cigar_runs
 from dinara_align.cigar import reversed_text as reversed_bytes
 from dinara_align.edit_distance import edit_distance as bit_parallel_distance
-from dinara_align.scored import best_end, end_of
+from dinara_align.scored import ANYWHERE, best_end, end_of
 from dinara_align.seeds import SEED_COLUMNS
 from dinara_align.bit_parallel import Profile
 from dinara_align.diagonal import DiagonalFronts, diagonal_transition, trace_diagonals
@@ -2431,6 +2441,95 @@ def test_local_sweeps_agree_in_either_width() raises:
                 assert_equal(found[index][0], found[0][0])
                 assert_equal(found[index][1], found[0][1])
                 assert_equal(found[index][2], found[0][2])
+
+
+def test_gotoh_sweeps_agree_in_either_width() raises:
+    """A half's last row swept in 16-bit lanes is the one swept in 32-bit lanes, from either end and with
+    a deletion run entering open or not, and a local alignment's start found back from its end is the
+    same in either, under uniform tables and one telling transitions from transversions."""
+    seed(29)
+    var regimes = scoring_regimes()
+    var transitions: List[Int8] = [2, -3, -1, -3, -3, 2, -3, -1, -1, -3, 2, -3, -3, -1, -3, 2]
+    regimes.append(Scoring("ACGT", transitions^, AffineGapCosts(-5, -2)))
+    for scoring in regimes:
+        var lookup = SubstitutionLookup(scoring.substitutions, scoring.alphabet_size())
+        for trial in range(12):
+            var first = List[UInt8]()
+            var second = List[UInt8]()
+            for _ in range(Int(random_ui64(1, 200))):
+                first.append(UInt8(random_ui64(0, 3)))
+            for _ in range(Int(random_ui64(1, 200))):
+                second.append(UInt8(random_ui64(0, 3)))
+            var run = GapRun.EXTENDS if trial % 2 == 1 else GapRun.OPENS
+            var columns = len(second) + 1
+            var narrow_scores = List[Int32](length=columns, fill=0)
+            var narrow_deletes = List[Int32](length=columns, fill=0)
+            var wide_scores = List[Int32](length=columns, fill=0)
+            var wide_deletes = List[Int32](length=columns, fill=0)
+            for reverse in [False, True]:
+                if reverse:
+                    vector_sweep_bands[SweepHalf.REVERSE, DType.int16, 32](
+                        first,
+                        second,
+                        0,
+                        len(first),
+                        0,
+                        len(second),
+                        run,
+                        lookup,
+                        scoring.gaps,
+                        narrow_scores,
+                        narrow_deletes,
+                    )
+                    vector_sweep_bands[SweepHalf.REVERSE, DType.int32, 16](
+                        first,
+                        second,
+                        0,
+                        len(first),
+                        0,
+                        len(second),
+                        run,
+                        lookup,
+                        scoring.gaps,
+                        wide_scores,
+                        wide_deletes,
+                    )
+                else:
+                    vector_sweep_bands[SweepHalf.FORWARD, DType.int16, 32](
+                        first,
+                        second,
+                        0,
+                        len(first),
+                        0,
+                        len(second),
+                        run,
+                        lookup,
+                        scoring.gaps,
+                        narrow_scores,
+                        narrow_deletes,
+                    )
+                    vector_sweep_bands[SweepHalf.FORWARD, DType.int32, 16](
+                        first,
+                        second,
+                        0,
+                        len(first),
+                        0,
+                        len(second),
+                        run,
+                        lookup,
+                        scoring.gaps,
+                        wide_scores,
+                        wide_deletes,
+                    )
+                for column in range(columns):
+                    assert_equal(narrow_scores[column], wide_scores[column])
+                    assert_equal(narrow_deletes[column], wide_deletes[column])
+            var end = tabulated_end[ANYWHERE](Span(first), Span(second), scoring, EndsFree(), True)
+            if end[0] > 0:
+                var narrow = reach_back(first, second, end[1], end[2], lookup, scoring.gaps, Int32(end[0]), True)
+                var wide = reach_back(first, second, end[1], end[2], lookup, scoring.gaps, Int32(end[0]), False)
+                assert_equal(narrow[0], wide[0])
+                assert_equal(narrow[1], wide[1])
 
 
 def test_end_bonus_reaches_the_end_when_it_pays() raises:

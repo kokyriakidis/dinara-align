@@ -100,8 +100,13 @@ answers held to the copies it replaces by the tests, and a hot path benchmarked 
 - [x] The cost lanes 64 bytes a group, several registers where the CPU's are narrower: on the M2 1 kbp
   distances 1.8 times as fast.
 - [x] One Gotoh recurrence, `alignment.gotoh_lanes`, for `gotoh_cell` and the three vector sweeps.
-- [ ] One anti-diagonal sweep driver for `swept_cells`, `reach_back`, `vector_align` and `vector_sweep_bands`,
-  borders and observers its parameters, which would give the last three 16-bit lanes.
+- [x] One anti-diagonal sweep, `anti_diagonals`: its letters, its rolling diagonals in registers
+  (`DiagonalCells`), its step and its 16-bit rule, for `swept_cells`, `reach_back` and `vector_sweep_bands`,
+  each keeping its borders and what it watches for; `vector_align`, which keeps its band whole, shares the
+  letters and the recurrence. `reach_back` and the halves now take 16-bit lanes while they fit: on the M2 a
+  `Scoring`'s 1 kbp local alignment 1.2 times as fast, its linear-space global one 1.4 times. The score
+  sweeps came out 2 to 5% slower on the M2 at 1 kbp, in 32-bit lanes, their inner loops instruction for
+  instruction the old ones.
 - [ ] One row fill and walk in `alignment.mojo`; `step_front` in `grow_to` and `forward_segment`;
   `edit_search` on `band.Band`.
 
