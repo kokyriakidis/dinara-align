@@ -244,5 +244,5 @@ it builds on:
 
 ## License
 
-dinara-align is licensed under the [Mozilla Public License 2.0](LICENSE). Some files carry an
-additional license notice; see [NOTICE](NOTICE).
+dinara-align is licensed under the [Mozilla Public License 2.0](LICENSE). [NOTICE](NOTICE) credits
+the work it builds on.

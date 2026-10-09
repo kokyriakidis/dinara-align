@@ -3,17 +3,6 @@ Copyright 2026 Konstantinos Kyriakidis
 
 dinara-align is licensed under the Mozilla Public License, Version 2.0 (see LICENSE).
 
-This product includes software derived from AffineGaps
-(https://github.com/unum-science/AffineGaps, v1.0.0, commit
-1fe01e1fa21bf5910d737f7c2a7f586d82da37bc), Copyright Ash Vardanian,
-licensed under the Apache License, Version 2.0 (see LICENSES/Apache-2.0.txt).
-The portions taken from it remain under that license; the changes made to them,
-and everything else in this repository, are under the Mozilla Public License.
-
-dinara_align/scoring.mojo keeps parts of the dispatch and batch packing of
-AffineGaps' affinegaps.mojo, rewritten from Python objects to native Mojo types,
-as its header says.
-
 The unit-cost edit distance, dinara_align/bit_parallel.mojo, diagonal.mojo,
 seeds.mojo, band.mojo, traceback.mojo, edit_distance.mojo, edit_search.mojo and
 slides.mojo, is ported from pa-bitpacking in A*PA

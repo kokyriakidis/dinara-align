@@ -94,10 +94,8 @@ if [ -n "$left" ]; then
     echo "$left" >&2
     exit 1
 fi
-# The licenses travel with every bundle: MPL-2.0, and Apache-2.0 for the parts NOTICE names.
+# The license and its notice travel with every bundle.
 cp "$root/LICENSE" "$root/NOTICE" "$out/"
-mkdir -p "$out/LICENSES"
-cp "$root/LICENSES/Apache-2.0.txt" "$out/LICENSES/"
 runtime=$(ls "$out" | grep -c "^lib" || true)
 $library && runtime=$((runtime - 1))
 echo "$out: $file for $cpu with $runtime runtime libraries, $(du -sh "$out" | cut -f1)"

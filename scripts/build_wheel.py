@@ -69,7 +69,7 @@ def main() -> None:
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(PACKAGE.iterdir()):
             # The licenses go in the metadata below, where installers look for them.
-            if path.name in ("__pycache__", "LICENSE", "NOTICE", "LICENSES"):
+            if path.name in ("__pycache__", "LICENSE", "NOTICE"):
                 continue
             data = path.read_bytes()
             name = f"dinara_align/{path.name}"
@@ -79,8 +79,8 @@ def main() -> None:
             info_entry.compress_type = zipfile.ZIP_DEFLATED
             archive.writestr(info_entry, data)
             records.append(f"{name},{digest(data)},{len(data)}")
-        # The licenses, where installers look for them: MPL-2.0, and Apache-2.0 for the parts NOTICE names.
-        for source in ("LICENSE", "NOTICE", "LICENSES/Apache-2.0.txt"):
+        # The license and its notice, where installers look for them.
+        for source in ("LICENSE", "NOTICE"):
             data = (ROOT / source).read_bytes()
             name = f"{info}/licenses/{source}"
             archive.writestr(name, data)
