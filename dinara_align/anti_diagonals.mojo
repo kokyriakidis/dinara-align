@@ -36,17 +36,40 @@ def gotoh_lanes[
     further its `extension`, with the local clamp folded in at comptime: the score, the deletion layer and
     the insertion layer.
 
-    This is the single transcription of the recurrence that AffineGaps' NumPy reference holds as the oracle;
-    every sweep of it on the host and on the device goes through it, a cell or an anti-diagonal's lanes at
-    a time. The device's kernels holding cells shifted by their anti-diagonal (see `score_groups`) take
-    the same recurrence in three additions instead."""
-    var deletion = max(above + deletion_opening, above_delete + deletion_extension)
-    var insertion = max(left + insertion_opening, left_insert + insertion_extension)
+    This, with its two parts `gap_layer` and `best_move`, is the single transcription of the recurrence that
+    AffineGaps' NumPy reference holds as the oracle; every sweep of it on the host and on the device goes
+    through it or its parts, a cell or an anti-diagonal's lanes at a time. The device's kernels holding cells
+    shifted by their anti-diagonal (see `score_groups`) take the same recurrence in three additions instead."""
+    var deletion = gap_layer(above, above_delete, deletion_opening, deletion_extension)
+    var insertion = gap_layer(left, left_insert, insertion_opening, insertion_extension)
+    return (best_move[local](above_left + substitution, deletion, insertion), deletion, insertion)
+
+
+@always_inline
+def gap_layer[
+    dtype: DType, width: Int
+](
+    before: SIMD[dtype, width],
+    gap_before: SIMD[dtype, width],
+    opening: SIMD[dtype, width],
+    extension: SIMD[dtype, width],
+) -> SIMD[dtype, width]:
+    """`width` cells of a gap layer of the Gotoh recurrence (see `gotoh_lanes`): a gap opened after the cell
+    `before` or the gap ending at `gap_before` extended."""
+    return max(before + opening, gap_before + extension)
+
+
+@always_inline
+def best_move[
+    local: Bool, dtype: DType, width: Int
+](diagonal: SIMD[dtype, width], deletion: SIMD[dtype, width], insertion: SIMD[dtype, width]) -> SIMD[dtype, width]:
+    """`width` cells' scores of the Gotoh recurrence (see `gotoh_lanes`), their pair's move `diagonal` and their
+    gap layers', with a local alignment's clamp at zero."""
     # The substitution, the slowest to come, waits on one maximum alone.
-    var score = max(above_left + substitution, max(deletion, insertion))
+    var score = max(diagonal, max(deletion, insertion))
     comptime if local:
         score = max(score, SIMD[dtype, width](0))
-    return (score, deletion, insertion)
+    return score
 
 
 def fits_16_bits[floored: Bool](reward: Int, dearest: Int, rows: Int, columns: Int) -> Bool:
@@ -239,12 +262,12 @@ struct DiagonalCells[dtype: DType, width: Int, pieces: Int, origin: MutOrigin](
 
     @always_inline
     def step[
-        local: Bool = False, transposed: Bool = False
+        compared: Bool, //, local: Bool = False, transposed: Bool = False
     ](
         self,
         row: Int,
         lag: Int,
-        substitute: SubstitutionLanes[Self.width, Self.dtype, _],
+        substitute: SubstitutionLanes[Self.width, Self.dtype, compared],
         gaps: GapLanes[Self.dtype, Self.width],
     ) -> Self.Lanes:
         """The cells on rows `row ..< row + width` of the diagonal `columns - lag`, stored, their scores
@@ -253,34 +276,43 @@ struct DiagonalCells[dtype: DType, width: Int, pieces: Int, origin: MutOrigin](
         var above = self.one_back.unsafe_offset(row - 1).unsafe_load[width=Self.width]()
         var left = self.one_back.unsafe_offset(row).unsafe_load[width=Self.width]()
         var above_left = self.two_back.unsafe_offset(row - 1).unsafe_load[width=Self.width]()
-        var above_delete = self.deletes_back.unsafe_offset(row - 1).unsafe_load[width=Self.width]()
-        var left_insert = self.inserts_back.unsafe_offset(row).unsafe_load[width=Self.width]()
         var mine = self.letters.unsafe_offset(row).unsafe_load[width=Self.width]()
         var theirs = self.others.unsafe_offset(lag + row).unsafe_load[width=Self.width]()
-        var pair = substitute(theirs, mine) if transposed else substitute(mine, theirs)
-        var cell = gotoh_lanes[Self.dtype, Self.width, local and Self.pieces == 1](
-            above_left,
+        # `gotoh_lanes` in its two parts, each gap layer loaded where it is used, and a table's pair scored
+        # after both, a comparison's before: with the layers loaded up front and the cell taken whole, LLVM
+        # scheduled the loop 2 to 5% slower on the M2, and a comparison scored last 2% slower.
+        var pair = Self.Lanes(0)
+        comptime if compared:
+            pair = substitute(theirs, mine) if transposed else substitute(mine, theirs)
+        var deletion = gap_layer(
             above,
-            above_delete,
-            left,
-            left_insert,
-            pair,
+            self.deletes_back.unsafe_offset(row - 1).unsafe_load[width=Self.width](),
             gaps.down_first,
             gaps.down_further,
+        )
+        var insertion = gap_layer(
+            left,
+            self.inserts_back.unsafe_offset(row).unsafe_load[width=Self.width](),
             gaps.across_first,
             gaps.across_further,
         )
-        var score = cell[0]
-        self.deletes.unsafe_offset(row).unsafe_store(cell[1])
-        self.inserts.unsafe_offset(row).unsafe_store(cell[2])
+        comptime if not compared:
+            pair = substitute(theirs, mine) if transposed else substitute(mine, theirs)
+        var score = best_move[local and Self.pieces == 1](above_left + pair, deletion, insertion)
+        self.deletes.unsafe_offset(row).unsafe_store(deletion)
+        self.inserts.unsafe_offset(row).unsafe_store(insertion)
         comptime if Self.pieces == 2:
-            var deletion2 = max(
-                above + gaps.down_first2,
-                self.deletes2_back.unsafe_offset(row - 1).unsafe_load[width=Self.width]() + gaps.down_further2,
+            var deletion2 = gap_layer(
+                above,
+                self.deletes2_back.unsafe_offset(row - 1).unsafe_load[width=Self.width](),
+                gaps.down_first2,
+                gaps.down_further2,
             )
-            var insertion2 = max(
-                left + gaps.across_first2,
-                self.inserts2_back.unsafe_offset(row).unsafe_load[width=Self.width]() + gaps.across_further2,
+            var insertion2 = gap_layer(
+                left,
+                self.inserts2_back.unsafe_offset(row).unsafe_load[width=Self.width](),
+                gaps.across_first2,
+                gaps.across_further2,
             )
             score = max(score, max(deletion2, insertion2))
             comptime if local:
