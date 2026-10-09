@@ -522,6 +522,12 @@ def Band.__init__() -> Self
 
 No band: every diagonal.
 
+```mojo
+def Band.__init__(low: Int, high: Int) -> Self
+```
+
+The diagonals `low ..= high`, each bound held within `UNBOUNDED` of the origin's, past any pair's diagonals, so an integer type's limits stand for no bound and nothing overflows.
+
 #### `around`
 
 ```mojo
@@ -553,14 +559,6 @@ def covers_any(self) -> Bool
 ```
 
 Whether every diagonal of any pair a batch could hold lies inside, sequences of up to `1 << 40` letters: no band for any pair.
-
-#### `clamped`
-
-```mojo
-def Band.clamped(low: Int, high: Int) -> Self
-```
-
-The band from `low` to `high`, an integer type's limits standing for no band, kept clear of overflow at `UNBOUNDED`.
 
 #### `shifted`
 

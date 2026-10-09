@@ -44,6 +44,7 @@ from .common import (
     spread,
     Device,
     DeviceScope,
+    GAP_BYTE,
     MAX_ALPHABET_SIZE,
     OffsetDType,
     Placement,
@@ -122,6 +123,18 @@ comptime DEFAULT_GAP_EXTENSION = -2
 """Minimap2's gap extension, `-E2`."""
 
 
+def checked_alphabet(alphabet: String) raises AlignmentError -> Int:
+    """The size of an alphabet a `Scoring` can index: refused with no letters, with more than the staged
+    table holds, or naming `-`, which an alignment's gapped rows read as a gap."""
+    var size = alphabet.byte_length()
+    if size == 0 or size > MAX_ALPHABET_SIZE:
+        raise AlignmentError(ErrorKind.ALPHABET_TOO_LARGE, String(size, " letters"))
+    for letter in alphabet.as_bytes():
+        if letter == GAP_BYTE:
+            raise AlignmentError(ErrorKind.INVALID_SCORING, "a gap, '-', among the letters")
+    return size
+
+
 struct Scoring(Copyable, Movable):
     """An alphabet, the substitution table it indexes, and the affine gap model, which travel together.
 
@@ -164,9 +177,7 @@ struct Scoring(Copyable, Movable):
         alphabet: String = String(DNA_ALPHABET),
     ) raises AlignmentError -> Self:
         """One score for equal letters and one for unequal, over any alphabet."""
-        var size = alphabet.byte_length()
-        if size == 0 or size > MAX_ALPHABET_SIZE:
-            raise AlignmentError(ErrorKind.ALPHABET_TOO_LARGE, String(size, " letters"))
+        var size = checked_alphabet(alphabet)
         return Self(
             alphabet,
             uniform_matrix(size, match_score, mismatch_score),
@@ -181,9 +192,7 @@ struct Scoring(Copyable, Movable):
         extension: Int = DEFAULT_GAP_EXTENSION,
     ) raises AlignmentError -> Self:
         """A caller's own table, refused unless it is square in the alphabet that indexes it."""
-        var size = alphabet.byte_length()
-        if size == 0 or size > MAX_ALPHABET_SIZE:
-            raise AlignmentError(ErrorKind.ALPHABET_TOO_LARGE, String(size, " letters"))
+        var size = checked_alphabet(alphabet)
         if len(substitutions) != size * size:
             raise AlignmentError(ErrorKind.INVALID_SCORING, String(len(substitutions), " cells for ", size, " letters"))
         return Self(alphabet, substitutions^, gap_scores(opening, extension))
@@ -203,6 +212,9 @@ def gap_scores(opening: Int, extension: Int) raises AlignmentError -> AffineGapC
     `opening + extension`, each further one `extension`."""
     if opening > 0:
         raise AlignmentError(ErrorKind.INVALID_SCORING, "a rewarded gap opening")
+    # The kernels hold scores in 32 bits; a gap score past them would wrap rather than be refused.
+    if opening + extension < Int(Int32.MIN) or extension < Int(Int32.MIN) or extension > Int(Int32.MAX):
+        raise AlignmentError(ErrorKind.INVALID_SCORING, String("a gap of ", opening, " + ", extension, " a letter"))
     return AffineGapCosts.checked(Int32(opening + extension), Int32(extension))
 
 

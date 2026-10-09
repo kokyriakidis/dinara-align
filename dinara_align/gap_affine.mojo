@@ -2531,10 +2531,11 @@ def extend[
     ) {imm reward, imm scale, imm columns, imm rows, imm shortest, imm cheapest} -> Bool:
         """Whether no point a cost of `next` or more reaches scores past `threshold`, twice over: none
         covers more than every letter, and `i + j` is at most twice the shorter sequence plus `|i - j|`,
-        which a path pays at least the cheapest extension a letter to reach."""
-        return reward * (columns + rows) - scale * next <= threshold or (
+        which a path pays at least the cheapest extension a letter to reach. The products in 128 bits: an
+        end bonus far past any score puts `threshold` far below them."""
+        return reward * (columns + rows) - scale * next <= threshold or Int128(
             2 * reward * shortest - threshold
-        ) * cheapest <= next * (scale * cheapest - reward)
+        ) * Int128(cheapest) <= Int128(next) * Int128(scale * cheapest - reward)
 
     while True:
         var slot = search.fronts.current

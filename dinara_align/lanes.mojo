@@ -1038,8 +1038,9 @@ def dealt[
         for index in range(pairs * stretch // stretches, pairs * (stretch + 1) // stretches):
             var rows = references.length(index)
             var columns = queries.length(index)
-            # A byte holds any pair, its saturation telling; 16 bits only a pair whose costs fit.
-            var held = value == DType.uint8 or costs.fits(rows, columns)
+            # A byte holds any pair its lanes' 16-bit coordinates reach, its saturation telling; 16 bits only
+            # a pair whose costs fit, which `fits` keeps far shorter.
+            var held = (value == DType.uint8 and max(rows, columns) <= Int(Int16.MAX)) or costs.fits(rows, columns)
             if whole:
                 held = held and rows > 0 and columns > 0 and covering.covers(columns, rows)
             if not settled[unsafe_offset=index] and held:
@@ -1331,11 +1332,11 @@ def proof[
     or one past the cap could not come under it; else the pair is filed, its cost and the band a cheaper
     path needs, by that band's width. With `strict`, as an alignment needs, no path off them may even
     match it: the tie rule's path, an optimal one, then lies inside. A path cannot leave the matrix, nor
-    the band. A byte's 255 may be any cost from there up, or none inside the band: such a pair is left
-    for 16 bits."""
-    comptime if value == DType.uint8:
-        if found >= far_of[value]():
-            return UNHELD
+    the band. A cost at FAR may be any from there up, or none inside the band: such a pair is left, by a
+    byte's lanes for 16 bits, by 16 bits' for the pair's own search. 16 bits reach FAR only where a band
+    rules out the path `LaneCosts.fits` bounds a pair's cost by."""
+    if found >= far_of[value]():
+        return UNHELD
     var end = columns - rows
     if max(ends.start_low(), band.low) > min(ends.start_high(), band.high) or max(ends.end_low(end), band.low) > min(
         ends.end_high(end), band.high

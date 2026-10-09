@@ -154,7 +154,7 @@ def options_of(fields: OptionalPointer[Int, MutAnyOrigin]) -> Options:
         return Options(Band(), -1, True, Ties.LEFT, DEFAULT_MAX_MEMORY)
     var at = fields.value()
     # The C integer limits stand for no band.
-    var band = Band.clamped(at[unsafe_offset=0], at[unsafe_offset=1])
+    var band = Band(at[unsafe_offset=0], at[unsafe_offset=1])
     var ties = Ties.RIGHT if at[unsafe_offset=4] != 0 else Ties.LEFT
     var memory = at[unsafe_offset=5] if at[unsafe_offset=5] > 0 else DEFAULT_MAX_MEMORY
     return Options(band, at[unsafe_offset=2], at[unsafe_offset=3] != 0, ties, memory)

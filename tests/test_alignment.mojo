@@ -2532,6 +2532,74 @@ def test_gotoh_sweeps_agree_in_either_width() raises:
                 assert_equal(narrow[1], wide[1])
 
 
+def test_extreme_arguments_are_held_or_refused() raises:
+    """An integer type's limits as a band's bounds, a Z-drop or an end bonus mean no bound at all, never an
+    overflow; an alphabet naming `-`, the gapped rows' gap, and a gap score past 32 bits are refused."""
+    var reference = "TTACGTACGTTTGCAGG"
+    var query = "ACGTCGTTTTGCA"
+    var costs = Costs.affine(4, 6, 2)
+    var free = align(reference, query, costs)
+    for band in [Band.around(Int.MAX), Band(Int.MIN, 1 << 40), Band(Int.MIN, Int.MAX)]:
+        var banded = align(reference, query, costs, band=band)
+        assert_equal(banded.cost, free.cost)
+        assert_equal(banded.cigar, free.cigar)
+    # A band holding no diagonal holds no alignment, at either limit.
+    for band in [Band(Int.MIN, Int.MIN), Band(Int.MAX, Int.MAX), Band(0, Int.MIN)]:
+        with assert_raises():
+            _ = align("", "ACG", Costs.edit(), band=band)
+        with assert_raises():
+            _ = distance("", "ACG", Costs.edit(), band=band)
+    var start = "ACGTTGCAAGGCGAGATTGCAAGGCATTACG"
+    var other = "ACGTTGCAAGGCCTCTTTGCAAGGCATTACG"
+    for drop in [1 << 62, Int.MAX]:
+        assert_equal(
+            align(start, other, costs, Mode.extension(3, zdrop=drop)).score,
+            align(start, other, costs, Mode.extension(3)).score,
+        )
+        assert_equal(
+            score(start, other, Scoring.dna(), Mode.extension(0, zdrop=drop)),
+            score(start, other, Scoring.dna(), Mode.extension(0)),
+        )
+    var read = "ACGTTGCAAGGCGAGAACGT"
+    var window = "ACGTTGCAAGGCTTTTACGT"
+    var reaching = align(window, read, costs, Mode.extension(1, end_bonus=50))
+    for bonus in [1 << 61, 1 << 62, Int.MAX]:
+        var found = align(window, read, costs, Mode.extension(1, end_bonus=bonus))
+        assert_equal(found.score, reaching.score)
+        assert_equal(found.cigar, reaching.cigar)
+        assert_equal(
+            score(window, read, Scoring.dna(), Mode.extension(0, end_bonus=bonus)),
+            score(window, read, Scoring.dna(), Mode.extension(0, end_bonus=50)),
+        )
+    with assert_raises():
+        _ = Scoring.uniform(2, -3, -5, -1, "ACGT-")
+    with assert_raises():
+        _ = Scoring.uniform(2, -4, -(1 << 40), -1)
+
+
+def test_lanes_leave_what_they_cannot_hold() raises:
+    """A pair longer than the lanes' 16-bit coordinates, and a banded pair whose cost reaches 16 bits' far
+    value, are left to their own searches, which the batch then agrees with."""
+    var query = "ACGTTGCAACGTGGCATTACGATCGATCGGATCCATGCAAGT"
+    var long_reference = query + String("A") * 65536
+    var references: List[String] = [long_reference, query]
+    var queries: List[String] = [query, long_reference]
+    var found = distances(references, queries, Costs.edit())
+    for index in range(2):
+        assert_equal(found[index], distance(references[index], queries[index], Costs.edit()))
+    var ungapped = Band.around(0)
+    var costs = Costs.affine(300, 0, 1)
+    var all_a: List[String] = [String("A") * 55]
+    var all_c: List[String] = [String("C") * 55]
+    var single = distance(all_a[0], all_c[0], costs, band=ungapped)
+    assert_equal(distances(all_a, all_c, costs, band=ungapped)[0], single)
+    assert_false(Bool(distances(all_a, all_c, costs, band=ungapped, max_cost=single - 100)[0]))
+    assert_equal(
+        distances(all_a, all_c, costs, Mode.PREFIX, band=ungapped)[0],
+        distance(all_a[0], all_c[0], costs, Mode.PREFIX, band=ungapped),
+    )
+
+
 def test_end_bonus_reaches_the_end_when_it_pays() raises:
     """An extension's end bonus, KSW2's: the read is aligned to its end once the bonus passes what
     stopping short gains, and not a point before, the comparison strict, as KSW2's is; the alignment

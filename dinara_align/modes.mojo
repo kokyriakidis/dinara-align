@@ -7,6 +7,8 @@ what comes back. The first sequence is always the reference and the second the q
 reads them: `D` a letter of the reference alone, `I` one of the query alone.
 """
 
+from std.math import clamp
+
 from .cigar import AlignedCounts, cigar_counts, cigar_runs, reversed_cigar, text_of
 from .errors import AlignmentError, ErrorKind
 
@@ -316,7 +318,8 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         var bonus = end_bonus.or_else(-1)
         if end_bonus and bonus < 0:
             raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "an end bonus below zero")
-        return Self(Self.EXTENSION, 0, 0, 0, 0, match_score, anchor, drop, bonus)
+        # Past any score a pair can reach, so neither overflows the comparisons it enters.
+        return Self(Self.EXTENSION, 0, 0, 0, 0, match_score, anchor, min(drop, UNBOUNDED), min(bonus, UNBOUNDED))
 
     def reaching_end(self) -> Self:
         """The free ends an extension that reaches the query's far end takes, for its end bonus: from the
@@ -393,7 +396,6 @@ struct Ties(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     """Every edit as late as it allows, gaps shifted right: WFA2-lib's own CIGARs, byte for byte."""
 
 
-@fieldwise_init
 struct Band(ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     """The diagonals an alignment may use, `low ..= high`: a cell's diagonal is the reference's letters
     aligned or skipped up to it less the query's, counted from the alignment's fixed origin, so every
@@ -414,6 +416,12 @@ struct Band(ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         self.low = -UNBOUNDED
         self.high = UNBOUNDED
 
+    def __init__(out self, low: Int, high: Int):
+        """The diagonals `low ..= high`, each bound held within `UNBOUNDED` of the origin's, past any pair's
+        diagonals, so an integer type's limits stand for no bound and nothing overflows."""
+        self.low = clamp(low, -UNBOUNDED, UNBOUNDED)
+        self.high = clamp(high, -UNBOUNDED, UNBOUNDED)
+
     @staticmethod
     def around(width: Int) -> Band:
         """The diagonals at most `width` from the origin's, either way."""
@@ -431,12 +439,6 @@ struct Band(ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         """Whether every diagonal of any pair a batch could hold lies inside, sequences of up to `1 << 40`
         letters: no band for any pair."""
         return self.covers(ANY_LENGTH, ANY_LENGTH)
-
-    @staticmethod
-    def clamped(low: Int, high: Int) -> Band:
-        """The band from `low` to `high`, an integer type's limits standing for no band, kept clear of
-        overflow at `UNBOUNDED`."""
-        return Band(max(low, -UNBOUNDED), min(high, UNBOUNDED))
 
     def shifted(self, origin: Int) -> Band:
         """The band as seen from a cell on diagonal `origin`, the start of a piece after a split."""

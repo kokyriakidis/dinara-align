@@ -129,7 +129,7 @@ def options_of(fields: PythonObject) raises -> Options:
     """The `Options` an options tuple asks for."""
     var at = ints(fields)
     # A band past any diagonal is no band.
-    var band = Band.clamped(at[0], at[1])
+    var band = Band(at[0], at[1])
     var memory = at[5] if at[5] > 0 else DEFAULT_MAX_MEMORY
     return Options(band, at[2], at[3] != 0, Ties.RIGHT if at[4] != 0 else Ties.LEFT, memory)
 
