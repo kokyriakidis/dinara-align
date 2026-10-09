@@ -2575,6 +2575,18 @@ def test_extreme_arguments_are_held_or_refused() raises:
         _ = Scoring.uniform(2, -3, -5, -1, "ACGT-")
     with assert_raises():
         _ = Scoring.uniform(2, -4, -(1 << 40), -1)
+    # Scores that could pass 32 bits over a pair are refused, by every way in, rather than wrapped.
+    var huge = Scoring.uniform(2, -3, -10, -2_000_000)
+    assert_equal(score("ACGT", "ACGT", huge), 8)
+    var long_side: List[String] = [String("A") * 1200]
+    with assert_raises():
+        _ = score(long_side[0], long_side[0], huge)
+    with assert_raises():
+        _ = align(long_side[0], long_side[0], huge)
+    with assert_raises():
+        _ = scores(long_side, long_side, huge)
+    with assert_raises():
+        _ = alignments(long_side, long_side, huge)
 
 
 def test_lanes_leave_what_they_cannot_hold() raises:

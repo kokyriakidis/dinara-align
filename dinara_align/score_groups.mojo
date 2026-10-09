@@ -156,9 +156,11 @@ def group_scores[
     var first_column = member * columns_per_lane
     var owned = clamp(columns - first_column, 0, columns_per_lane)
     var symbols = Array[Int32, columns_per_lane](fill=0)
-    comptime for slot in range(columns_per_lane):
-        var column = clamp(first_column + slot, 0, max(columns - 1, 0))
-        symbols[slot] = Int32(letters[unsafe_offset=second_start + column])
+    # A pair with no columns has no letters of its own to read: the last pair's would lie past the tape.
+    if columns > 0:
+        comptime for slot in range(columns_per_lane):
+            var column = clamp(first_column + slot, 0, columns - 1)
+            symbols[slot] = Int32(letters[unsafe_offset=second_start + column])
 
     # The border: a global alignment's, shifted, `open - extend` but at the origin, which is 0; a local
     # one's 0. A gap layer at the border is a gap's cost more than the cell, so a path never takes it.

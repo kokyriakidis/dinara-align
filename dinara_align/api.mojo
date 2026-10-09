@@ -67,6 +67,7 @@ from .scoring import (
     Scoring,
     alignments_with,
     as_alignment,
+    batch_within_32_bits,
     paired_length,
     scores_with,
     laned_alignments,
@@ -696,6 +697,7 @@ def alignments(
 ) raises -> List[Alignment]:
     """`align` for every pair; on the device, every pair both bounds admit goes out in one launch."""
     var pairs = paired_length(references, queries)
+    batch_within_32_bits(scoring, references, queries, mode.kind == Mode.SMITH_WATERMAN)
     var stored_cells = cells_within(max_memory)
     var resolved = placement.or_else(Placement.default())
     if resolved.device != Device.GPU:

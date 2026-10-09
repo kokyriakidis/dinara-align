@@ -306,6 +306,38 @@ def encoded_into(text: String, codes_by_byte: Array[UInt8, 256], target: MutPoin
     return not unknown
 
 
+@fieldwise_init
+struct ScoreReach(ImplicitlyCopyable, TrivialRegisterPassable):
+    """How far from zero a `Scoring`'s cells can lie over a pair, which the 32 bits every one of its kernels
+    holds them in must hold, clear of their sentinels a quarter of the way down: a gap's first letter twice
+    over, where the shifted kernels' gap layers start, plus twice the dearest of a pair's score and a gap's
+    further letter for every letter of both, or of the shorter for a local alignment, its cells floored."""
+
+    var opening: Int
+    var step: Int
+
+    @staticmethod
+    def of(scoring: Scoring) -> Self:
+        """The reach of `scoring`'s table and gaps."""
+        var extremes = table_extremes(scoring.substitutions, scoring.alphabet_size())
+        return Self(2 * Int(-scoring.gaps.open), max(max(extremes[0], -extremes[1]), Int(-scoring.gaps.extend)))
+
+    def check(self, rows: Int, columns: Int, floored: Bool) raises AlignmentError:
+        """Refuses a pair of `rows` and `columns` letters whose scores could pass 32 bits."""
+        var letters = min(rows, columns) if floored else rows + columns
+        if self.opening + 2 * (letters + 2) * self.step >= 1 << 28:
+            raise AlignmentError(ErrorKind.INVALID_SCORING, String("scores past 32 bits over ", rows, " by ", columns))
+
+
+def batch_within_32_bits(
+    scoring: Scoring, firsts: List[String], seconds: List[String], floored: Bool
+) raises AlignmentError:
+    """Refuses the first pair in order whose scores could pass 32 bits (see `ScoreReach`)."""
+    var reach = ScoreReach.of(scoring)
+    for index in range(min(len(firsts), len(seconds))):
+        reach.check(firsts[index].byte_length(), seconds[index].byte_length(), floored)
+
+
 def paired_length(firsts: List[String], seconds: List[String]) raises AlignmentError -> Int:
     """The number of pairs, refusing two sides that do not line up."""
     if len(firsts) != len(seconds):
@@ -692,6 +724,7 @@ def scoring_alignment(
     """`scoring_alignment` through `space`'s searches, which a batch's worker keeps from pair to pair."""
     if mode.match_score > 0:
         raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a Scoring's table holds what a match earns")
+    ScoreReach.of(scoring).check(first.byte_length(), second.byte_length(), mode.kind == Mode.SMITH_WATERMAN)
     var on_host = not placement or placement.value().device != Device.GPU
     if on_host and mode.is_global() and first.byte_length() > 0 and second.byte_length() > 0:
         # A table of one match and one mismatch score: the wavefront's own moves spell the CIGAR, with
@@ -744,6 +777,7 @@ def scoring_score(
     either device (see `score_with`), free ends and extensions by their sweep on the host."""
     if mode.match_score > 0:
         raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a Scoring's table holds what a match earns")
+    ScoreReach.of(scoring).check(first.byte_length(), second.byte_length(), mode.kind == Mode.SMITH_WATERMAN)
     if mode.kind == Mode.SMITH_WATERMAN:
         return Int(score_with[AlignmentMode.LOCAL](first, second, scoring, placement))
     if mode.is_global():
@@ -1157,6 +1191,7 @@ def scores_with[
     """Scores every pair; on the device, every pair one block can carry goes out in one launch."""
     var resolved = placement.or_else(Placement.default())
     var pairs = paired_length(firsts, seconds)
+    batch_within_32_bits(scoring, firsts, seconds, mode == AlignmentMode.LOCAL)
     var results = List[Int32](length=pairs, fill=0)
     if pairs == 0:
         return results^
