@@ -989,30 +989,30 @@ def test_seeded_bands_fold_symbols_past_acgt() raises:
 def test_refuses_what_it_cannot_do() raises:
     """Every contradiction is refused rather than quietly answered."""
     var dna = Scoring.dna()
-    with assert_raises(contains="outside the alphabet"):
+    with assert_raises(contains="the alphabet lacks"):
         _ = score("ACGT", "ACGN", dna, GLOBAL)
-    with assert_raises(contains="outside the alphabet"):
+    with assert_raises(contains="the alphabet lacks"):
         _ = score("ACGT", "acgt", dna, GLOBAL)
-    with assert_raises(contains="cannot be served"):
+    with assert_raises(contains="no search can use"):
         _ = Scoring.uniform(5, -4, 1, -2)
-    with assert_raises(contains="cannot be served"):
+    with assert_raises(contains="no search can use"):
         _ = Scoring.uniform(5, -4, -1, 1)
-    with assert_raises(contains="cannot be served"):
+    with assert_raises(contains="no search can use"):
         _ = Scoring.uniform(500, -4)
-    with assert_raises(contains="cannot be served"):
+    with assert_raises(contains="no search can use"):
         _ = Scoring.tabulated("AC", List[Int8](length=9, fill=0))
-    with assert_raises(contains="do not"):
+    with assert_raises(contains="unequal length"):
         _ = scores(["AC", "CA"], ["AC"], dna, GLOBAL)
     var rewarded = Mode.INFIX.with_match_score(2)
     with assert_raises(contains="holds what a match earns"):
         _ = score("ACGT", "ACG", dna, rewarded)
-    with assert_raises(contains="cannot be served"):
+    with assert_raises(contains="no search can use"):
         _ = Costs.affine(0, 6, 2)
-    with assert_raises(contains="cannot be served"):
+    with assert_raises(contains="no search can use"):
         _ = Costs.two_piece(4, 6, 2, 24, 0)
-    with assert_raises(contains="cannot be served"):
+    with assert_raises(contains="no search can use"):
         _ = Mode.extension(-1)
-    with assert_raises(contains="rejected"):
+    with assert_raises(contains="outside what the call takes"):
         _ = Mode.ends_free(reference_start=-1)
     with assert_raises(contains="score"):
         _ = distance("ACGT", "ACG", Costs.edit(), Mode.local(1))
@@ -3786,9 +3786,9 @@ def test_scores_refuse_what_32_bits_cannot_hold() raises:
     var huge = Scoring.uniform(2, -4, 0, -10_000_000)
     var references: List[String] = ["ACGN", String("ACGT") * 10]
     var queries: List[String] = ["ACG", String("ACGT") * 10]
-    with assert_raises(contains="outside the alphabet"):
+    with assert_raises(contains="the alphabet lacks"):
         _ = scores(references, queries, huge)
-    with assert_raises(contains="outside the alphabet"):
+    with assert_raises(contains="the alphabet lacks"):
         _ = alignments(references, queries, huge)
     assert_true(step_budget(10_000_000, PROJECTION_ONLY, 5) < 0)
 
@@ -3824,7 +3824,7 @@ def test_device_symbols_stay_in_their_tables() raises:
     var protein = Scoring.tabulated("ACDEFGHIKLMNPQRSTVWY", cells^, -6, -2)
     var firsts: List[String] = ["ACDXFGHIK"]
     var seconds: List[String] = ["ACDEFGHIK"]
-    with assert_raises(contains="outside the alphabet"):
+    with assert_raises(contains="the alphabet lacks"):
         _ = scores(firsts, seconds, protein, placement=device)
     var every = List[UInt8]()
     for byte in range(256):

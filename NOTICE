@@ -10,9 +10,8 @@ licensed under the Apache License, Version 2.0 (see LICENSES/Apache-2.0.txt).
 The portions taken from it remain under that license; the changes made to them,
 and everything else in this repository, are under the Mozilla Public License.
 
-The files dinara_align/alignment.mojo, dinara_align/common.mojo and
-dinara_align/errors.mojo derive from AffineGaps' alignment.mojo, common.mojo and
-errors.mojo, and have been changed since: the folding, cofolding, protein-scoring,
+The files dinara_align/alignment.mojo and dinara_align/common.mojo derive from
+AffineGaps' alignment.mojo and common.mojo, and have been changed since: the folding, cofolding, protein-scoring,
 Python-binding and command-line code was removed, the sources were migrated to
 Mojo 1.1, the device specs query gained a branch for Apple GPUs, which Metal
 answers only in part, and the host sweeps, traceback and linear-space recursion

@@ -1,75 +1,71 @@
 # This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
 # MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
-#
-# Derived from AffineGaps (https://github.com/unum-science/AffineGaps), Copyright Ash Vardanian, under the
-# Apache License, Version 2.0, and changed since: see LICENSES/Apache-2.0.txt and NOTICE.
-"""The one error type this package raises, so every fallible entry point declares the same one.
+"""Errors: every call that can fail raises an `AlignmentError`, its `kind` saying which way it failed and
+its `detail` what it failed on.
 
-Mojo allows at most one error type per function and never widens a typed `raises` into a plain
-one, so a second type here would force every caller to catch and convert. The `detail` names the
-sequence, the option or the capacity that was at fault, which is what turns a failure into a
-diagnosis.
+One type for the whole package, since a Mojo function declares a single error type and a caller would
+otherwise convert between them at every call.
 """
 
 
 @fieldwise_init
 struct ErrorKind(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
-    """Why a call into the kernels failed."""
+    """The way a call failed, which callers branch on: the C API turns each into its own code."""
 
-    var code: Int32
-    """The negative identifier this kind is reported as."""
+    var id: UInt8
 
-    comptime UNKNOWN_SYMBOL = Self(-1)
-    """A sequence carried a character the alphabet does not name."""
-    comptime ALPHABET_TOO_LARGE = Self(-2)
-    """The alphabet exceeds the substitution table staged into shared memory."""
-    comptime SEQUENCE_TOO_LONG = Self(-3)
-    """The memory this input needs passes what it may take: a device table past one allocation, or a
-    search's fronts past the memory allowed."""
-    comptime SCRATCH_TOO_SMALL = Self(-4)
-    """Device scratch was sized for a smaller problem than the one dispatched."""
-    comptime LENGTH_MISMATCH = Self(-5)
-    """Two inputs that must line up position for position do not."""
-    comptime INVALID_SCORING = Self(-6)
-    """The gap costs or the substitution scores cannot be served together."""
-    comptime INVALID_ARGUMENT = Self(-7)
-    """An argument named something this build does not offer, or omitted a value."""
-    comptime OUTSIDE_BAND = Self(-9)
-    """No alignment stays inside the band of diagonals asked for."""
+    comptime UNKNOWN_SYMBOL = Self(1)
+    """A sequence holds a letter its `Scoring`'s alphabet lacks, or a byte no sequence may hold."""
+    comptime ALPHABET_TOO_LARGE = Self(2)
+    """An alphabet with more letters than a substitution table holds."""
+    comptime SEQUENCE_TOO_LONG = Self(3)
+    """The input needs more memory than it may take: past `max_memory`, or past what the device can
+    allocate at once."""
+    comptime SCRATCH_TOO_SMALL = Self(4)
+    """Device memory sized for a smaller problem than the one launched on it."""
+    comptime LENGTH_MISMATCH = Self(5)
+    """Two lists, or two gapped rows, of unequal length where each item pairs with one of the other."""
+    comptime INVALID_SCORING = Self(6)
+    """Costs or scores no search can use: an edit that costs nothing, a reward that costs, a value past
+    the range its arithmetic holds."""
+    comptime INVALID_ARGUMENT = Self(7)
+    """An argument outside what the call takes: a mode, a band, a cap or a count it refuses."""
+    comptime OUTSIDE_BAND = Self(8)
+    """Every alignment leaves the band of diagonals asked for."""
+
+    def phrase(self) -> StaticString:
+        """The failure in a few words, the start of every message of this kind."""
+        if self == Self.UNKNOWN_SYMBOL:
+            return "a letter the alphabet lacks"
+        if self == Self.ALPHABET_TOO_LARGE:
+            return "too many letters for a substitution table"
+        if self == Self.SEQUENCE_TOO_LONG:
+            return "the memory this input needs passes what it may take"
+        if self == Self.SCRATCH_TOO_SMALL:
+            return "device memory too small for its launch"
+        if self == Self.LENGTH_MISMATCH:
+            return "inputs of unequal length"
+        if self == Self.INVALID_SCORING:
+            return "costs or scores no search can use"
+        if self == Self.INVALID_ARGUMENT:
+            return "an argument outside what the call takes"
+        if self == Self.OUTSIDE_BAND:
+            return "no alignment stays inside the band"
+        return "an unknown failure"
 
     def write_to(self, mut writer: Some[Writer]):
-        """Writes the kind as a short phrase naming the failure."""
-        # Every kind names itself, and a kind added without a line says so rather than borrowing
-        # the last one's sentence.
-        if self == Self.UNKNOWN_SYMBOL:
-            writer.write("a character outside the alphabet")
-        elif self == Self.ALPHABET_TOO_LARGE:
-            writer.write("the alphabet is larger than the staged table")
-        elif self == Self.SEQUENCE_TOO_LONG:
-            writer.write("the memory this input needs passes what it may take")
-        elif self == Self.SCRATCH_TOO_SMALL:
-            writer.write("the device scratch is too small for this dispatch")
-        elif self == Self.LENGTH_MISMATCH:
-            writer.write("two inputs that must line up do not")
-        elif self == Self.INVALID_SCORING:
-            writer.write("the scoring cannot be served")
-        elif self == Self.INVALID_ARGUMENT:
-            writer.write("an argument was rejected")
-        elif self == Self.OUTSIDE_BAND:
-            writer.write("no alignment stays inside the band")
-        else:
-            writer.write("an unnamed failure")
+        """The kind's phrase."""
+        writer.write(self.phrase())
 
 
 @fieldwise_init
 struct AlignmentError(Copyable, ImplicitlyCopyable, Writable):
-    """What went wrong, and which sequence, option or capacity it was."""
+    """A failed call: which way it failed, and what it failed on, the value or the input to look at."""
 
     var kind: ErrorKind
-    """Which category of failure occurred."""
     var detail: String
-    """The sequence, option or capacity the failure names."""
 
     def write_to(self, mut writer: Some[Writer]):
-        """Writes the error as `dinara-align: <kind> [<detail>]`."""
-        writer.write("dinara-align: ", self.kind, " [", self.detail, "]")
+        """`dinara-align: <phrase> [<detail>]`, the form the C API, the Python package and the command line
+        pass on."""
+        writer.write("dinara-align: ", self.kind.phrase(), " [", self.detail, "]")

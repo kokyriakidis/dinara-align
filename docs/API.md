@@ -346,12 +346,12 @@ The host, on the caller's own thread: an application spreads its calls over its 
 struct AlignmentError
 ```
 
-What went wrong, and which sequence, option or capacity it was.
+A failed call: which way it failed, and what it failed on, the value or the input to look at.
 
 | field | type | |
 | :-- | :-- | :-- |
-| `kind` | `ErrorKind` | Which category of failure occurred. |
-| `detail` | `String` | The sequence, option or capacity the failure names. |
+| `kind` | `ErrorKind` |  |
+| `detail` | `String` |  |
 
 #### `write_to`
 
@@ -359,7 +359,7 @@ What went wrong, and which sequence, option or capacity it was.
 def write_to(self, mut writer: T)
 ```
 
-Writes the error as `dinara-align: <kind> [<detail>]`.
+`dinara-align: <phrase> [<detail>]`, the form the C API, the Python package and the command line pass on.
 
 ### `ErrorKind`
 
@@ -367,20 +367,28 @@ Writes the error as `dinara-align: <kind> [<detail>]`.
 struct ErrorKind
 ```
 
-Why a call into the kernels failed.
+The way a call failed, which callers branch on: the C API turns each into its own code.
 
 | field | type | |
 | :-- | :-- | :-- |
-| `code` | `Int32` | The negative identifier this kind is reported as. |
+| `id` | `UInt8` |  |
 
-- `ErrorKind.UNKNOWN_SYMBOL` = `ErrorKind(Int32(-1))`: A sequence carried a character the alphabet does not name.
-- `ErrorKind.ALPHABET_TOO_LARGE` = `ErrorKind(Int32(-2))`: The alphabet exceeds the substitution table staged into shared memory.
-- `ErrorKind.SEQUENCE_TOO_LONG` = `ErrorKind(Int32(-3))`: The memory this input needs passes what it may take: a device table past one allocation, or a search's fronts past the memory allowed.
-- `ErrorKind.SCRATCH_TOO_SMALL` = `ErrorKind(Int32(-4))`: Device scratch was sized for a smaller problem than the one dispatched.
-- `ErrorKind.LENGTH_MISMATCH` = `ErrorKind(Int32(-5))`: Two inputs that must line up position for position do not.
-- `ErrorKind.INVALID_SCORING` = `ErrorKind(Int32(-6))`: The gap costs or the substitution scores cannot be served together.
-- `ErrorKind.INVALID_ARGUMENT` = `ErrorKind(Int32(-7))`: An argument named something this build does not offer, or omitted a value.
-- `ErrorKind.OUTSIDE_BAND` = `ErrorKind(Int32(-9))`: No alignment stays inside the band of diagonals asked for.
+- `ErrorKind.UNKNOWN_SYMBOL` = `ErrorKind(UInt8(1))`: A sequence holds a letter its `Scoring`'s alphabet lacks, or a byte no sequence may hold.
+- `ErrorKind.ALPHABET_TOO_LARGE` = `ErrorKind(UInt8(2))`: An alphabet with more letters than a substitution table holds.
+- `ErrorKind.SEQUENCE_TOO_LONG` = `ErrorKind(UInt8(3))`: The input needs more memory than it may take: past `max_memory`, or past what the device can allocate at once.
+- `ErrorKind.SCRATCH_TOO_SMALL` = `ErrorKind(UInt8(4))`: Device memory sized for a smaller problem than the one launched on it.
+- `ErrorKind.LENGTH_MISMATCH` = `ErrorKind(UInt8(5))`: Two lists, or two gapped rows, of unequal length where each item pairs with one of the other.
+- `ErrorKind.INVALID_SCORING` = `ErrorKind(UInt8(6))`: Costs or scores no search can use: an edit that costs nothing, a reward that costs, a value past the range its arithmetic holds.
+- `ErrorKind.INVALID_ARGUMENT` = `ErrorKind(UInt8(7))`: An argument outside what the call takes: a mode, a band, a cap or a count it refuses.
+- `ErrorKind.OUTSIDE_BAND` = `ErrorKind(UInt8(8))`: Every alignment leaves the band of diagonals asked for.
+
+#### `phrase`
+
+```mojo
+def phrase(self) -> StaticString
+```
+
+The failure in a few words, the start of every message of this kind.
 
 #### `write_to`
 
@@ -388,7 +396,7 @@ Why a call into the kernels failed.
 def write_to(self, mut writer: T)
 ```
 
-Writes the kind as a short phrase naming the failure.
+The kind's phrase.
 
 ### `AlignedCounts`
 
