@@ -268,6 +268,56 @@ pair of a few letters would take hundreds of megabytes, and the layers' costs co
 Dear gaps far past any aligner's, an opening of 100,000 among them, stay within it."""
 
 
+comptime ORDINARY_WINDOW = 64
+"""The most costs a search's rings span that are never weighed against the memory allowed: every aligner's
+costs span fewer, and their rings grow with the pair as every wavefront's fronts do."""
+
+
+def rings_fit(penalties: Penalties, columns: Int, rows: Int, budget: Int) -> Bool:
+    """Whether the two searches' rings for a `columns` by `rows` pair stay within `budget` bytes, or span an
+    ordinary window (see `ORDINARY_WINDOW`).
+
+    A ring holds a front for each of the last `window` costs, the dearest move's, every layer as wide as
+    the diagonals a search reaches. A search climbs past the optimum by the dearest opening and the
+    window, and the optimum costs no more than the letters along the diagonal and a gap for the rest; a
+    front at a cost reaches no further off its diagonal than that cost pays in its cheapest extension.
+    Dear gaps took a pair of a thousand letters gigabytes of rings."""
+    var two = penalties.extension2 > 0 or penalties.deletion_extension2 > 0
+    var window = penalties.window[2]() if two else penalties.window[1]()
+    if window <= ORDINARY_WINDOW:
+        return True
+    var layers = layers_of[2]() if two else layers_of[1]()
+    var cheapest = max(penalties.cheapest_extension[2]() if two else penalties.cheapest_extension[1](), 1)
+    var opening = penalties.widest_opening[2]() if two else penalties.widest_opening[1]()
+    var shorter = min(columns, rows)
+    var rest = max(columns, rows) - shorter
+    var dearest_gap = max(penalties.extension, penalties.deletion_extension)
+    var bound = shorter * penalties.mismatch + (opening + rest * dearest_gap if rest > 0 else 0)
+    var climb = (bound + opening + 2 * window) // cheapest
+    # The rows double as they outgrow their diagonals, so they may hold twice those they need.
+    var width = max(4 * LANES, 2 * (min(columns, climb) + min(rows, climb) + 1)) + ROW_PADDING
+    var per_diagonal = 2 * (window + 1) * layers * 4
+    return width <= budget // per_diagonal
+
+
+def kept_bytes(limit: Int) -> Int:
+    """The bytes `limit` kept fronts' entries take, `Int.MAX` past what an `Int` counts."""
+    return Int.MAX if limit >= Int.MAX // KEPT_BYTES else limit * KEPT_BYTES
+
+
+def rings_within(penalties: Penalties, columns: Int, rows: Int, budget: Int) raises AlignmentError:
+    """Refuses a pair whose searches' rings could pass `budget` bytes (see `rings_fit`)."""
+    if not rings_fit(penalties, columns, rows, budget):
+        raise AlignmentError(
+            ErrorKind.SEQUENCE_TOO_LONG,
+            String(
+                "costs this dear may keep more than ",
+                budget,
+                " bytes of fronts for this pair; a larger max_memory allows it",
+            ),
+        )
+
+
 def scaled_penalties(costs: Costs, reward: Int, folded: Bool) raises AlignmentError -> Penalties:
     """The wavefront's costs for `costs`, deletions and insertions each their own, with `folded` a match
     earning `reward` folded in as for a global alignment or an extension (see the module's notes), all

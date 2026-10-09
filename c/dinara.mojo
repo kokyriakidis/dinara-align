@@ -52,7 +52,8 @@ from dinara_align.lanes import LaneCosts, Texts, lane_alignments, lane_distances
 comptime UNSUPPORTED_SYMBOLS = -1
 """A 0xFE or 0xFF byte, which the wavefront's sentinels are and UTF-8 never holds."""
 comptime OUT_OF_MEMORY = -2
-"""The CIGAR's memory could not be allocated."""
+"""The CIGAR's memory could not be allocated, or costs this dear would keep more fronts than the memory
+allowed."""
 comptime INVALID_COSTS = -3
 """Costs no alignment can be searched by: a free mismatch or extension, or a negative cost."""
 comptime ABOVE_MAX = -4
@@ -186,6 +187,8 @@ def failure(error: AlignmentError) -> Int:
         return INVALID_COSTS
     if error.kind == ErrorKind.INVALID_ARGUMENT:
         return INVALID_MODE
+    if error.kind == ErrorKind.SEQUENCE_TOO_LONG:
+        return OUT_OF_MEMORY
     return UNSUPPORTED_SYMBOLS
 
 

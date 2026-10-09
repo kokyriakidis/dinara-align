@@ -375,7 +375,7 @@ Why a call into the kernels failed.
 
 - `ErrorKind.UNKNOWN_SYMBOL` = `ErrorKind(Int32(-1))`: A sequence carried a character the alphabet does not name.
 - `ErrorKind.ALPHABET_TOO_LARGE` = `ErrorKind(Int32(-2))`: The alphabet exceeds the substitution table staged into shared memory.
-- `ErrorKind.SEQUENCE_TOO_LONG` = `ErrorKind(Int32(-3))`: A table this input needs is larger than one device allocation may be.
+- `ErrorKind.SEQUENCE_TOO_LONG` = `ErrorKind(Int32(-3))`: The memory this input needs passes what it may take: a device table past one allocation, or a search's fronts past the memory allowed.
 - `ErrorKind.SCRATCH_TOO_SMALL` = `ErrorKind(Int32(-4))`: Device scratch was sized for a smaller problem than the one dispatched.
 - `ErrorKind.LENGTH_MISMATCH` = `ErrorKind(Int32(-5))`: Two inputs that must line up position for position do not.
 - `ErrorKind.INVALID_SCORING` = `ErrorKind(Int32(-6))`: The gap costs or the substitution scores cannot be served together.

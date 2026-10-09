@@ -57,6 +57,7 @@ from .common import (
     uniform_matrix,
 )
 from .errors import AlignmentError, ErrorKind
+from .gap_affine import rings_fit
 from .gap_affine import (
     DEFAULT_MAX_MEMORY,
     FREE_START,
@@ -95,6 +96,11 @@ from std.math import gcd
 comptime STORED_CELL_BYTES = 12
 """Bytes the host traceback keeps a stored cell in: three `int32` layers. The device packs a nibble per cell
 and is capped again by `DEVICE_STORED_CELLS`."""
+
+
+def cells_bytes(cells: Int) -> Int:
+    """The bytes `cells` stored cells take, `Int.MAX` past what an `Int` counts."""
+    return Int.MAX if cells >= Int.MAX // STORED_CELL_BYTES else cells * STORED_CELL_BYTES
 
 
 def cells_within(max_memory: Int) -> Int:
@@ -405,7 +411,8 @@ def host_score[
         # A table of one match and one mismatch score has a wavefront, whose work grows with the
         # score rather than the matrix; it hands back a pair a full sweep would serve sooner.
         var penalties = scoring.penalties()
-        if penalties:
+        # Costs too dear for the rings' memory take the sweep, whose memory they do not set.
+        if penalties and rings_fit(penalties.value(), len(codes_first), len(codes_second), DEFAULT_MAX_MEMORY):
             var found = wavefront_score(codes_first, codes_second, penalties.value())
             if found:
                 return Int32(found.value())
@@ -465,7 +472,7 @@ def global_on_host(
     var codes_second = List[UInt8](second)
     # The wavefront's work grows with the score rather than the matrix, and it never hands a pair back.
     var penalties = scoring.penalties()
-    if penalties:
+    if penalties and rings_fit(penalties.value(), len(codes_first), len(codes_second), cells_bytes(stored_cells)):
         var traced = wavefront_align(
             codes_first, codes_second, penalties.value(), scoring.alphabet, fronts_within(stored_cells)
         )
@@ -730,7 +737,9 @@ def scoring_alignment(
         # A table of one match and one mismatch score: the wavefront's own moves spell the CIGAR, with
         # no rows between, the same alignment `align_on_host` would give (see `wavefront_align`).
         var penalties = scoring.penalties()
-        if penalties:
+        if penalties and rings_fit(
+            penalties.value(), first.byte_length(), second.byte_length(), cells_bytes(stored_cells)
+        ):
             var codes_first = translate(first, scoring.alphabet)
             var codes_second = translate(second, scoring.alphabet)
             var moves = List[UInt8](capacity=len(codes_first) + len(codes_second))

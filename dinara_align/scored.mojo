@@ -20,6 +20,7 @@ alignment whose reward folds into the costs (see `rewarded_alignment`).
 from .common import SubstitutionDType
 from .cigar import reversed_list, cigar_counts, cigar_matches, cigar_runs, reversed_cigar, reversed_text, text_of
 from .errors import AlignmentError
+from .gap_affine import kept_bytes, rings_within
 from .gap_affine import (
     AffineExtension,
     EndsFree,
@@ -472,6 +473,7 @@ def latest_local(
     var end_row = found[2]
     var two = costs.pieces() == 2
     var penalties = rewarded_penalties(match_score, costs)
+    rings_within(penalties, end_column, end_row, kept_bytes(limit))
     var head = text_of(reference.as_bytes()[:end_column])
     var lead = text_of(query.as_bytes()[:end_row])
     # The best alignment ending at that cell, and starting wherever pays: an extension back from it,
@@ -641,6 +643,7 @@ def global_rewarded(
     when none fits the band."""
     var two = costs.pieces() == 2
     var penalties = rewarded_penalties(match_score, costs)
+    rings_within(penalties, reference.byte_length(), query.byte_length(), kept_bytes(limit))
     var found = cigar_within[2](reference, query, penalties, eqx, Int.MAX, band, ties, limit) if two else cigar_within[
         1
     ](reference, query, penalties, eqx, Int.MAX, band, ties, limit)

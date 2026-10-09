@@ -43,6 +43,7 @@ from .scored import (
     swept,
 )
 from .lanes import LaneCosts, StringTexts, Texts, lane_alignments, lane_distances, lane_free_alignments
+from .gap_affine import kept_bytes, rings_within
 from .gap_affine import (
     AffineCigar,
     DEFAULT_MAX_MEMORY,
@@ -253,6 +254,7 @@ def score(
     var two = costs.pieces() == 2
     _ = penalties_of(costs)
     var penalties = rewarded_penalties(mode.match_score, costs)
+    rings_within(penalties, columns, rows, DEFAULT_MAX_MEMORY)
     if mode.kind == Mode.EXTENSION:
         if not band.holds(0):
             raise outside(band)
@@ -369,6 +371,7 @@ def cost_within(
             if error.kind != ErrorKind.UNKNOWN_SYMBOL:
                 raise error
     var penalties = space.penalties_for(costs)
+    rings_within(penalties, reference.byte_length(), query.byte_length(), DEFAULT_MAX_MEMORY)
     if max_cost < 0:
         return None
     # No cap is the usual case, and a 64-bit division per pair counts when short reads take a microsecond.
@@ -495,6 +498,7 @@ def least_costly(
             if error.kind != ErrorKind.UNKNOWN_SYMBOL:
                 raise error
     var penalties = space.penalties_for(costs)
+    rings_within(penalties, reference.byte_length(), query.byte_length(), kept_bytes(limit))
     if max_cost < 0:
         return None
     var ceiling = Int.MAX if max_cost == Int.MAX else max_cost // penalties.scale
@@ -566,6 +570,7 @@ def extended_alignment(
         raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "an end bonus takes no band")
     var two = costs.pieces() == 2
     var penalties = rewarded_penalties(mode.match_score, costs)
+    rings_within(penalties, reference.byte_length(), query.byte_length(), kept_bytes(limit))
     # The Z-drop's slack a diagonal is the cheapest extension, as KSW2 charges a long gap.
     var drop_extension = costs.cheapest_extension()
     var found = extension_of[2](

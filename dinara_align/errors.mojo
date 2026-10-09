@@ -24,7 +24,8 @@ struct ErrorKind(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writabl
     comptime ALPHABET_TOO_LARGE = Self(-2)
     """The alphabet exceeds the substitution table staged into shared memory."""
     comptime SEQUENCE_TOO_LONG = Self(-3)
-    """A table this input needs is larger than one device allocation may be."""
+    """The memory this input needs passes what it may take: a device table past one allocation, or a
+    search's fronts past the memory allowed."""
     comptime SCRATCH_TOO_SMALL = Self(-4)
     """Device scratch was sized for a smaller problem than the one dispatched."""
     comptime LENGTH_MISMATCH = Self(-5)
@@ -45,7 +46,7 @@ struct ErrorKind(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writabl
         elif self == Self.ALPHABET_TOO_LARGE:
             writer.write("the alphabet is larger than the staged table")
         elif self == Self.SEQUENCE_TOO_LONG:
-            writer.write("the tables this input needs exceed one device allocation")
+            writer.write("the memory this input needs passes what it may take")
         elif self == Self.SCRATCH_TOO_SMALL:
             writer.write("the device scratch is too small for this dispatch")
         elif self == Self.LENGTH_MISMATCH:

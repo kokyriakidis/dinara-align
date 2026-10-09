@@ -21,7 +21,8 @@ Apache-2.0 as well (see NOTICE).
   a gap-affine wavefront from both ends after BiWFA; local alignment, overlaps and rewarded free
   ends by an anti-diagonal sweep in 16-bit lanes while the scores fit, one sweep for every score, a
   local alignment's start and a linear-space traceback's halves; all exact, every alignment's memory
-  bounded (`max_memory`).
+  bounded (`max_memory`): costs so dear that a search's fronts could pass it are refused, and under a
+  `Scoring` swept instead.
 - A `Scoring`, any alphabet's substitution table with affine gap scores, in every mode on the CPU,
   and globally or locally on the GPU: a batch's global scores there first over a band of sixteen
   diagonals, a thread a pair, each kept where the pair's own cost proves no path off the band could

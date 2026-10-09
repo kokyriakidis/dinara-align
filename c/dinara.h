@@ -33,7 +33,8 @@ extern "C" {
 
 /* A 0xFE or 0xFF byte in either sequence. */
 #define DINARA_UNSUPPORTED_SYMBOLS (-1)
-/* The CIGAR's memory could not be allocated. */
+/* The CIGAR's memory could not be allocated, or costs this dear would keep more fronts than the memory
+ * allowed (`max_memory`, or 80 MB for a distance or a score). */
 #define DINARA_OUT_OF_MEMORY (-2)
 /* Costs no alignment can be searched by: a mismatch or extension of zero, or a negative cost. */
 #define DINARA_INVALID_COSTS (-3)

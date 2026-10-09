@@ -2825,9 +2825,10 @@ def gotoh_cost(first: String, second: String, mismatch: Int, opening: Int, exten
 def test_dear_gaps_cost_what_the_matrix_says() raises:
     """Gap costs far dearer than a mismatch leave most costs reachable by no path, which a search must
     not pay for: the distance and the score of pairs up to 40 letters, unrelated and close, empty
-    sides among them, are the full matrix's, at an opening of 100,000 and at ordinary costs alike."""
+    sides among them, are the full matrix's, at an opening of 10,000 and at ordinary costs alike. Costs
+    dearer still, whose fronts could pass the memory allowed, are refused, or under a `Scoring` swept."""
     seed(71)
-    for costs in [(4, 100_000, 10_000), (3, 50_000, 1), (1, 2, 1)]:
+    for costs in [(4, 10_000, 1_000), (3, 5_000, 1), (1, 2, 1)]:
         var mismatch = costs[0]
         var opening = costs[1]
         var extension = costs[2]
@@ -2838,6 +2839,13 @@ def test_dear_gaps_cost_what_the_matrix_says() raises:
             var expected = gotoh_cost(first, second, mismatch, opening, extension)
             assert_equal(distance(first, second, Costs.affine(mismatch, opening, extension)), expected)
             assert_equal(score(first, second, scoring, GLOBAL), -expected)
+    # An opening of a million under a mismatch of one: the fronts of a million costs.
+    var long_first = random_sequence(400, 400, DNA_ALPHABET)
+    var long_second = mutated(long_first, 0.1, 4)
+    with assert_raises():
+        _ = align(long_first, long_second, Costs.affine(1, 1_000_000, 1))
+    var dear = Scoring.uniform(0, -1, -1_000_000, -1)
+    assert_equal(score(long_first, long_second, dear, GLOBAL), -gotoh_cost(long_first, long_second, 1, 1_000_000, 1))
 
 
 def test_lane_batches_match_single_pairs() raises:
