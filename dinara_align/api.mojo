@@ -715,7 +715,7 @@ def score(
     *,
     placement: Optional[Placement] = None,
 ) raises -> Int:
-    """The optimal score under `scoring`, with no alignment traced: `Mode.GLOBAL` and `Mode.LOCAL` in two
+    """The optimal score under `scoring`, with no alignment traced: `Mode.GLOBAL` and `Mode.local()` in two
     rows of memory on either device (see `scoring.score_with`), free ends and extensions by sweep on the
     host. The table holds what a match earns, so a mode's own match score must be zero:
     `Mode.extension(0)` for an extension."""
@@ -734,7 +734,7 @@ def align(
 ) raises -> Alignment:
     """An optimal alignment under `scoring`, as `Costs` give one (see `Alignment`), its `cost` minus its
     score: both sequences whole for `Mode.GLOBAL`, Needleman-Wunsch, the best-scoring window of each
-    for `Mode.LOCAL`, Smith-Waterman, on either device; free ends and extensions, with Z-drop as KSW2
+    for `Mode.local()`, Smith-Waterman, on either device; free ends and extensions, with Z-drop as KSW2
     gauges it, on the host, their span by sweep and the letters between aligned globally (see
     `scoring.scoring_alignment`). Its rows come back with `Alignment.gapped`. Of equally good
     alignments, Gotoh's walk picks the CIGAR (see `alignment.reconstruct`), not `Ties`. A traceback whose

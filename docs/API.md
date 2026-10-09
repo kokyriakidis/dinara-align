@@ -63,12 +63,13 @@ for index in range(len(references)):
 | `Mode.PREFIX`, `Mode.SUFFIX` | a prefix, a suffix | whole |
 | `Mode.ends_free(...)` | as many letters free at either end as asked | likewise |
 | `Mode.extension(match_score, anchor)` | from one end, as far as pays | from the same end |
-| `Mode.REFERENCE_IN_QUERY` | whole | any part |
-| `Mode.local(match_score)` | any part | any part |
+| `Mode.local(match_score)`, `Mode.local()` under a `Scoring` | any part | any part |
 | `Mode.overlap(match_score)` | a prefix or suffix | a suffix or prefix, or whole |
 
 Free ends minimize the costs alone, as Edlib and WFA2-lib count them; `mode.with_match_score(a)`
-rewards every match instead, as parasail's and hyalite's semi-global modes do.
+rewards every match instead, as parasail's and hyalite's semi-global modes do. The named free ends are
+presets of `ends_free`: the reference whole inside the query is `Mode.ends_free(query_start=n,
+query_end=n)` for any `n` past the query's length.
 
 A `Scoring`, an alphabet's substitution table and gap scores, which an alignment maximizes, aligns
 globally or locally by Gotoh's Needleman-Wunsch or Smith-Waterman, with the initialization corrections
@@ -82,7 +83,7 @@ from dinara_align import Mode, Scoring, align, score
 var scoring = Scoring.dna()  # minimap2's: match 2, mismatch -4, a gap of k letters -(4 + 2k)
 var found = align("ACGTACGTTTGCA", "ACGTCGTTTTGCA", scoring)  # an Alignment, its cost minus its score
 var rows = found.gapped("ACGTACGTTTGCA", "ACGTCGTTTTGCA")  # the two gapped rows
-var best = score("TTTTACGTACGTTTTT", "ACGTACGT", scoring, Mode.LOCAL)  # 16
+var best = score("TTTTACGTACGTTTTT", "ACGTACGT", scoring, Mode.local())  # 16
 # Any table, in every mode on the CPU: a read placed in a window, or a seed's extension.
 var placed = align("TTTTACGTACGTTTTT", "ACGTACGT", scoring, Mode.INFIX)  # score 16, reference 4..12
 ```
@@ -121,7 +122,7 @@ def align(reference: String, query: String, costs: Costs = Costs.edit(), mode: M
 def align(reference: String, query: String, scoring: Scoring, mode: Mode = Mode.GLOBAL, *, placement: Optional[Placement] = None, max_memory: Int = Int(83886080), eqx: Bool = True) -> Alignment
 ```
 
-An optimal alignment under `scoring`, as `Costs` give one (see `Alignment`), its `cost` minus its score: both sequences whole for `Mode.GLOBAL`, Needleman-Wunsch, the best-scoring window of each for `Mode.LOCAL`, Smith-Waterman, on either device; free ends and extensions, with Z-drop as KSW2 gauges it, on the host, their span by sweep and the letters between aligned globally (see `scoring.scoring_alignment`). Its rows come back with `Alignment.gapped`. Of equally good alignments, Gotoh's walk picks the CIGAR (see `alignment.reconstruct`), not `Ties`. A traceback whose stored matrix would pass `max_memory` bytes recurses in linear space instead (see `scoring.cells_within`).
+An optimal alignment under `scoring`, as `Costs` give one (see `Alignment`), its `cost` minus its score: both sequences whole for `Mode.GLOBAL`, Needleman-Wunsch, the best-scoring window of each for `Mode.local()`, Smith-Waterman, on either device; free ends and extensions, with Z-drop as KSW2 gauges it, on the host, their span by sweep and the letters between aligned globally (see `scoring.scoring_alignment`). Its rows come back with `Alignment.gapped`. Of equally good alignments, Gotoh's walk picks the CIGAR (see `alignment.reconstruct`), not `Ties`. A traceback whose stored matrix would pass `max_memory` bytes recurses in linear space instead (see `scoring.cells_within`).
 
 ### `alignments`
 
@@ -203,7 +204,7 @@ The best score `align` would return, with no alignment traced: for a mode with a
 def score(reference: String, query: String, scoring: Scoring, mode: Mode = Mode.GLOBAL, *, placement: Optional[Placement] = None) -> Int
 ```
 
-The optimal score under `scoring`, with no alignment traced: `Mode.GLOBAL` and `Mode.LOCAL` in two rows of memory on either device (see `scoring.score_with`), free ends and extensions by sweep on the host. The table holds what a match earns, so a mode's own match score must be zero: `Mode.extension(0)` for an extension.
+The optimal score under `scoring`, with no alignment traced: `Mode.GLOBAL` and `Mode.local()` in two rows of memory on either device (see `scoring.score_with`), free ends and extensions by sweep on the host. The table holds what a match earns, so a mode's own match score must be zero: `Mode.extension(0)` for an extension.
 
 ### `scores`
 
@@ -708,14 +709,14 @@ Which alignments of the two sequences count: how many letters at each end of eac
 | `INFIX` | any part | whole | semi-global, glocal, Edlib's HW |
 | `PREFIX` | a prefix | whole | Edlib's SHW |
 | `SUFFIX` | a suffix | whole | |
-| `ends_free(...)` | as asked | as asked | WFA2-lib's ends-free, overlaps |
+| `ends_free(...)` | as asked | as asked | WFA2-lib's ends-free; the query's ends free place the reference inside it |
 | `extension(...)` | from one end | from the same end | KSW2's extension, with or without Z-drop |
-| `local(...)`, `LOCAL` | any part | any part | Smith-Waterman, abPOA's local mode |
+| `local(...)` | any part | any part | Smith-Waterman, abPOA's local mode |
 | `overlap(...)` | a prefix or suffix | a suffix or prefix | semi-global, parasail's `sg`, hyalite's OV |
 
 Free ends minimize the costs alone, as Edlib and WFA2-lib count them, unless a match earns
-something (see `with_match_score`), as parasail's and hyalite's do.
-| `REFERENCE_IN_QUERY` | whole | any part | hyalite's SHW |
+something (see `with_match_score`), as parasail's and hyalite's do. Three kinds lie beneath, as WFA2-lib's
+ends-free and extension and abPOA's local are: the named free ends are presets of `ends_free`.
 
 | field | type | |
 | :-- | :-- | :-- |
@@ -736,16 +737,14 @@ something (see `with_match_score`), as parasail's and hyalite's do.
 - `Mode.INFIX` = `Mode(Mode.ENDS, Int(1152921504606846976), Int(1152921504606846976), Int(0), Int(0), Int(0), Anchor.START, Int(-1), Int(-1))`: The whole query against wherever in the reference it fits best: a read placed in a window.
 - `Mode.PREFIX` = `Mode(Mode.ENDS, Int(0), Int(1152921504606846976), Int(0), Int(0), Int(0), Anchor.START, Int(-1), Int(-1))`: The whole query against the reference's best prefix.
 - `Mode.SUFFIX` = `Mode(Mode.ENDS, Int(1152921504606846976), Int(0), Int(0), Int(0), Int(0), Anchor.START, Int(-1), Int(-1))`: The whole query against the reference's best suffix.
-- `Mode.REFERENCE_IN_QUERY` = `Mode(Mode.ENDS, Int(0), Int(0), Int(1152921504606846976), Int(1152921504606846976), Int(0), Anchor.START, Int(-1), Int(-1))`: `INFIX` the other way round: the whole reference against wherever in the query it fits best.
-- `Mode.LOCAL` = `Mode(Mode.SMITH_WATERMAN, Int(0), Int(0), Int(0), Int(0), Int(0), Anchor.START, Int(-1), Int(-1))`: The best-scoring part of each under a `Scoring`, Smith-Waterman, whose table says what a match earns; under `Costs`, `local` names the reward.
 
 #### `ends_free`
 
 ```mojo
-def Mode.ends_free(*, reference_start: Int = Int(0), reference_end: Int = Int(0), query_start: Int = Int(0), query_end: Int = Int(0), match_score: Int = Int(0)) -> Self
+def Mode.ends_free(*, reference_start: Int = Int(0), reference_end: Int = Int(0), query_start: Int = Int(0), query_end: Int = Int(0)) -> Self
 ```
 
-Up to so many letters at each end of each sequence left unaligned for nothing, as WFA2-lib's ends-free alignment counts them; all zero is `GLOBAL`. An overlap of two reads frees one's start and the other's end. With costs alone, freeing both ends of both lets the empty alignment win, at no cost; a `match_score` makes the alignment the best-scoring one instead (see `with_match_score`).
+Up to so many letters at each end of each sequence left unaligned for nothing, as WFA2-lib's ends-free alignment counts them; all zero is `GLOBAL`. An overlap of two reads frees one's start and the other's end, and the query's both ends place the whole reference inside it. With costs alone, freeing both ends of both lets the empty alignment win, at no cost; a match score makes the alignment the best-scoring one instead (see `with_match_score`).
 
 #### `with_match_score`
 
@@ -788,10 +787,10 @@ The free ends an extension that reaches the query's far end takes, for its end b
 #### `local`
 
 ```mojo
-def Mode.local(match_score: Int) -> Self
+def Mode.local(match_score: Int = Int(0)) -> Self
 ```
 
-The best-scoring alignment of any part of the reference against any part of the query, Smith-Waterman: a match earns `match_score` and every edit costs what `Costs` charges. It is every end free, with a reward: with costs alone, aligning nothing would always win. Its time grows with the matrix, as every local aligner's does (see `scored`).
+The best-scoring alignment of any part of the reference against any part of the query, Smith-Waterman: under `Costs` a match earns `match_score`, above zero, and every edit costs what they charge; under a `Scoring`, `Mode.local()`, its table says what each pair earns. It is every end free, with a reward: with costs alone, aligning nothing would always win. Its time grows with the matrix, as every local aligner's does (see `scored`).
 
 #### `overlap`
 

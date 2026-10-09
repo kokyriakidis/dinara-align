@@ -99,7 +99,7 @@ def main() -> None:
     scores = da.local_scores("ACGTACGTAC" + "T" * 20 + "ACGTACGTAC", "ACGTACGTAC", affine, da.Mode.local(2), window=5)
     assert (scores.score, scores.second_score, scores.second_reference_end) == (20, 20, 10)
     dna = da.Scoring.dna()
-    assert da.score("TTTTACGTACGTTTTT", "ACGTACGT", dna, da.Mode.LOCAL) == 16
+    assert da.score("TTTTACGTACGTTTTT", "ACGTACGT", dna, da.Mode.local()) == 16
     placed = da.align("TTTTACGTACGTTTTT", "ACGTACGT", dna, da.Mode.INFIX)
     assert (placed.score, placed.reference_start, placed.cigar) == (16, 4, "8=")
     blosum_like = da.Scoring.tabulated("ACGT", [5, -1, -2, -1, -1, 5, -3, -2, -2, -3, 5, -1, -1, -2, -1, 5], -6, -1)

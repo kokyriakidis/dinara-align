@@ -14,9 +14,10 @@ Apache-2.0 as well (see NOTICE).
 ### Alignment
 
 - One API for every cost model and mode: `distance`, `align` and `score` take `Costs` (unit, linear,
-  gap-affine, two-piece gap-affine, deletions priced apart from insertions) and a `Mode` (global,
-  infix, prefix, suffix, the reference inside the query, any free ends, extension from either end
-  with an optional Z-drop, local, overlap, and free ends rewarding every match).
+  gap-affine, two-piece gap-affine, deletions priced apart from insertions) and a `Mode` of three
+  kinds, as WFA2-lib's ends-free and extension and abPOA's local: any free ends, with the presets
+  global, infix, prefix, suffix and overlap, and a reward for every match when asked; an extension
+  from either end with an optional Z-drop and end bonus; and local.
 - Unit costs by A\*PA2's bit-parallel band doubling with its seed heuristic; every other cost model by
   a gap-affine wavefront from both ends after BiWFA; local alignment, overlaps and rewarded free
   ends by an anti-diagonal sweep in 16-bit lanes while the scores fit, one sweep for every score, a

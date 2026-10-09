@@ -49,7 +49,7 @@ def answer(reference: String, query: String, workload: String, scoring: Scoring)
         return align(reference, query, Costs.two_piece(4, 6, 2, 24, 1)).cost
     if workload == "table-global":
         return align(reference, query, scoring, Mode.GLOBAL).score
-    return align(reference, query, scoring, Mode.LOCAL).score
+    return align(reference, query, scoring, Mode.local()).score
 
 
 def main() raises:

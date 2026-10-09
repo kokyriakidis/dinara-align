@@ -62,12 +62,13 @@ for index in range(len(references)):
 | `Mode.PREFIX`, `Mode.SUFFIX` | a prefix, a suffix | whole |
 | `Mode.ends_free(...)` | as many letters free at either end as asked | likewise |
 | `Mode.extension(match_score, anchor)` | from one end, as far as pays | from the same end |
-| `Mode.REFERENCE_IN_QUERY` | whole | any part |
-| `Mode.local(match_score)` | any part | any part |
+| `Mode.local(match_score)`, `Mode.local()` under a `Scoring` | any part | any part |
 | `Mode.overlap(match_score)` | a prefix or suffix | a suffix or prefix, or whole |
 
 Free ends minimize the costs alone, as Edlib and WFA2-lib count them; `mode.with_match_score(a)`
-rewards every match instead, as parasail's and hyalite's semi-global modes do.
+rewards every match instead, as parasail's and hyalite's semi-global modes do. The named free ends are
+presets of `ends_free`: the reference whole inside the query is `Mode.ends_free(query_start=n,
+query_end=n)` for any `n` past the query's length.
 
 A `Scoring`, an alphabet's substitution table and gap scores, which an alignment maximizes, aligns
 globally or locally by Gotoh's Needleman-Wunsch or Smith-Waterman, with the initialization corrections
@@ -81,7 +82,7 @@ from dinara_align import Mode, Scoring, align, score
 var scoring = Scoring.dna()  # minimap2's: match 2, mismatch -4, a gap of k letters -(4 + 2k)
 var found = align("ACGTACGTTTGCA", "ACGTCGTTTTGCA", scoring)  # an Alignment, its cost minus its score
 var rows = found.gapped("ACGTACGTTTGCA", "ACGTCGTTTTGCA")  # the two gapped rows
-var best = score("TTTTACGTACGTTTTT", "ACGTACGT", scoring, Mode.LOCAL)  # 16
+var best = score("TTTTACGTACGTTTTT", "ACGTACGT", scoring, Mode.local())  # 16
 # Any table, in every mode on the CPU: a read placed in a window, or a seed's extension.
 var placed = align("TTTTACGTACGTTTTT", "ACGTACGT", scoring, Mode.INFIX)  # score 16, reference 4..12
 ```

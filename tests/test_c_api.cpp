@@ -198,7 +198,7 @@ int main() {
         dinara::align("TTTTACGTACGTTTTT", "ACGTCGT", affine, Mode::infix().with_match_score(2));
     CHECK(placed_scored.score == 6 && placed_scored.cigar == "4=1D3=" && placed_scored.reference_start == 4);
     // The whole reference inside the query: one gap where it lies at 4, or two mismatches at 8, both 8.
-    dinara::Alignment inside = dinara::align("ACGTCGT", "TTTTACGTACGTTTTT", affine, Mode::reference_in_query());
+    dinara::Alignment inside = dinara::align("ACGTCGT", "TTTTACGTACGTTTTT", affine, Mode::ends_free(0, 0, DINARA_ALL, DINARA_ALL));
     CHECK(inside.cost == 8 && inside.reference_start == 0 && inside.reference_end == 7);
     bool no_cost = false;
     try {

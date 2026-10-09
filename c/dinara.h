@@ -297,12 +297,10 @@ struct Mode {
     static Mode prefix() { return ends_free(0, DINARA_ALL, 0, 0); }
     /* The whole query against the reference's best suffix. */
     static Mode suffix() { return ends_free(DINARA_ALL, 0, 0, 0); }
-    /* The whole reference against wherever in the query it fits best. */
-    static Mode reference_in_query() { return ends_free(0, 0, DINARA_ALL, DINARA_ALL); }
-    /* Up to so many letters at each end of each sequence left unaligned for nothing. */
-    static Mode ends_free(int64_t reference_start, int64_t reference_end, int64_t query_start, int64_t query_end,
-                          int64_t match_score = 0) {
-        return {{DINARA_ENDS_FREE, reference_start, reference_end, query_start, query_end, match_score, 0, 0}};
+    /* Up to so many letters at each end of each sequence left unaligned for nothing; the query's both ends
+     * free place the whole reference inside it. */
+    static Mode ends_free(int64_t reference_start, int64_t reference_end, int64_t query_start, int64_t query_end) {
+        return {{DINARA_ENDS_FREE, reference_start, reference_end, query_start, query_end, 0, 0, 0}};
     }
     /* These free ends with a match earning `match_score`: the best score rather than the least cost. */
     Mode with_match_score(int64_t match_score) const {
@@ -317,8 +315,9 @@ struct Mode {
                           int64_t end_bonus = 0) {
         return {{DINARA_EXTENSION, 0, 0, 0, 0, match_score, anchor == Anchor::end ? 1 : 0, zdrop, end_bonus}};
     }
-    /* The best-scoring alignment of any part of each, a match earning `match_score`: Smith-Waterman. */
-    static Mode local(int64_t match_score) { return {{DINARA_LOCAL, 0, 0, 0, 0, match_score, 0, 0}}; }
+    /* The best-scoring alignment of any part of each, a match earning `match_score`: Smith-Waterman; under a
+     * table's scores, its own rewards, `local()`. */
+    static Mode local(int64_t match_score = 0) { return {{DINARA_LOCAL, 0, 0, 0, 0, match_score, 0, 0}}; }
     /* The best-scoring alignment with every end gap free, a match earning `match_score`: an overlap. */
     static Mode overlap(int64_t match_score) { return {{DINARA_OVERLAP, 0, 0, 0, 0, match_score, 0, 0}}; }
 };

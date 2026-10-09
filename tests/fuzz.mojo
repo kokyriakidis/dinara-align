@@ -144,7 +144,7 @@ def random_mode(columns: Int, rows: Int) raises AlignmentError -> Mode:
     if kind == 2:
         return Mode.PREFIX if chance(0.5) else Mode.SUFFIX
     if kind == 3:
-        return Mode.REFERENCE_IN_QUERY
+        return Mode.ends_free(query_start=Int.MAX, query_end=Int.MAX)
     if kind == 4 or kind == 5:
         var free = Mode.ends_free(
             reference_start=allowance(columns),
@@ -460,9 +460,11 @@ def scoring_mode(columns: Int, rows: Int) raises AlignmentError -> Mode:
     if kind == 0:
         return Mode.GLOBAL
     if kind == 1:
-        return Mode.LOCAL
+        return Mode.local()
     if kind == 2:
-        return [Mode.INFIX, Mode.PREFIX, Mode.SUFFIX, Mode.REFERENCE_IN_QUERY][draw(0, 3)]
+        return [Mode.INFIX, Mode.PREFIX, Mode.SUFFIX, Mode.ends_free(query_start=Int.MAX, query_end=Int.MAX)][
+            draw(0, 3)
+        ]
     if kind == 3 or kind == 4:
         return Mode.ends_free(
             reference_start=allowance(columns),

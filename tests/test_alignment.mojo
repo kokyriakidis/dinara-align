@@ -83,7 +83,8 @@ from dinara_align.gap_affine import (
 from dinara_align.substitutions import SubstitutionLookup
 
 comptime GLOBAL = Mode.GLOBAL
-comptime LOCAL = Mode.LOCAL
+comptime LOCAL = Mode(Mode.SMITH_WATERMAN, 0, 0, 0, 0, 0, Anchor.START, -1, -1)
+"""`Mode.local()`, a local alignment under a `Scoring`, as a constant."""
 comptime REPETITIONS = 20
 """Random draws per randomized test."""
 
@@ -1018,9 +1019,12 @@ def test_refuses_what_it_cannot_do() raises:
     with assert_raises(contains="score"):
         _ = distance("ACGT", "ACG", Costs.edit(), Mode.local(1))
     with assert_raises(contains="earns"):
-        _ = align("ACGT", "ACG", Costs.edit(), Mode.LOCAL)
+        _ = align("ACGT", "ACG", Costs.edit(), Mode.local())
     with assert_raises(contains="earns"):
-        _ = Mode.local(0)
+        # `local()` is a `Scoring`'s, whose table rewards; under `Costs` a match must earn.
+        _ = align("ACGT", "ACG", Costs.edit(), Mode.local(0))
+    with assert_raises(contains="earns"):
+        _ = Mode.local(-1)
     with assert_raises(contains="earns"):
         _ = Mode.overlap(0)
     with assert_raises(contains="score"):
@@ -2405,7 +2409,7 @@ def test_every_mode_matches_the_full_matrix() raises:
                             String(query[byte = found.query_start : found.query_end]),
                             found.cigar,
                         )
-            var inside = align(query, reference, costs, Mode.REFERENCE_IN_QUERY)
+            var inside = align(query, reference, costs, Mode.ends_free(query_start=Int.MAX, query_end=Int.MAX))
             var flipped = align(reference, query, costs, Mode.INFIX)
             assert_equal(inside.cost, flipped.cost)
     # Unit costs inside a reference: the sweep and the wavefront, under a cap, find the same span.
@@ -2926,7 +2930,7 @@ def test_lane_free_ends_match_single_pairs() raises:
         Mode.INFIX,
         Mode.PREFIX,
         Mode.SUFFIX,
-        Mode.REFERENCE_IN_QUERY,
+        Mode.ends_free(query_start=Int.MAX, query_end=Int.MAX),
         Mode.ends_free(reference_start=8, reference_end=8, query_start=3, query_end=3),
         Mode.ends_free(reference_end=40, query_start=40),
     ]
@@ -2968,7 +2972,7 @@ def test_lane_free_alignments_match_single_pairs() raises:
         Mode.INFIX,
         Mode.PREFIX,
         Mode.SUFFIX,
-        Mode.REFERENCE_IN_QUERY,
+        Mode.ends_free(query_start=Int.MAX, query_end=Int.MAX),
         Mode.ends_free(reference_start=8, reference_end=8, query_start=3, query_end=3),
         Mode.ends_free(reference_end=40, query_start=40),
     ]

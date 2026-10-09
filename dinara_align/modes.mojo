@@ -217,14 +217,14 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     | `INFIX` | any part | whole | semi-global, glocal, Edlib's HW |
     | `PREFIX` | a prefix | whole | Edlib's SHW |
     | `SUFFIX` | a suffix | whole | |
-    | `ends_free(...)` | as asked | as asked | WFA2-lib's ends-free, overlaps |
+    | `ends_free(...)` | as asked | as asked | WFA2-lib's ends-free; the query's ends free place the reference inside it |
     | `extension(...)` | from one end | from the same end | KSW2's extension, with or without Z-drop |
-    | `local(...)`, `LOCAL` | any part | any part | Smith-Waterman, abPOA's local mode |
+    | `local(...)` | any part | any part | Smith-Waterman, abPOA's local mode |
     | `overlap(...)` | a prefix or suffix | a suffix or prefix | semi-global, parasail's `sg`, hyalite's OV |
 
     Free ends minimize the costs alone, as Edlib and WFA2-lib count them, unless a match earns
-    something (see `with_match_score`), as parasail's and hyalite's do.
-    | `REFERENCE_IN_QUERY` | whole | any part | hyalite's SHW |
+    something (see `with_match_score`), as parasail's and hyalite's do. Three kinds lie beneath, as WFA2-lib's
+    ends-free and extension and abPOA's local are: the named free ends are presets of `ends_free`.
     """
 
     var kind: UInt8
@@ -257,11 +257,6 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     """The whole query against the reference's best prefix."""
     comptime SUFFIX = Self(Self.ENDS, UNBOUNDED, 0, 0, 0, 0, Anchor.START, -1, -1)
     """The whole query against the reference's best suffix."""
-    comptime REFERENCE_IN_QUERY = Self(Self.ENDS, 0, 0, UNBOUNDED, UNBOUNDED, 0, Anchor.START, -1, -1)
-    """`INFIX` the other way round: the whole reference against wherever in the query it fits best."""
-    comptime LOCAL = Self(Self.SMITH_WATERMAN, 0, 0, 0, 0, 0, Anchor.START, -1, -1)
-    """The best-scoring part of each under a `Scoring`, Smith-Waterman, whose table says what a match
-    earns; under `Costs`, `local` names the reward."""
 
     @staticmethod
     def ends_free(
@@ -270,18 +265,14 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         reference_end: Int = 0,
         query_start: Int = 0,
         query_end: Int = 0,
-        match_score: Int = 0,
     ) raises AlignmentError -> Self:
         """Up to so many letters at each end of each sequence left unaligned for nothing, as WFA2-lib's
         ends-free alignment counts them; all zero is `GLOBAL`. An overlap of two reads frees one's start
-        and the other's end. With costs alone, freeing both ends of both lets the empty alignment win,
-        at no cost; a `match_score` makes the alignment the best-scoring one instead (see
-        `with_match_score`)."""
+        and the other's end, and the query's both ends place the whole reference inside it. With costs
+        alone, freeing both ends of both lets the empty alignment win, at no cost; a match score makes
+        the alignment the best-scoring one instead (see `with_match_score`)."""
         if min(min(reference_start, reference_end), min(query_start, query_end)) < 0:
             raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a free end of fewer than no letters")
-        if match_score < 0:
-            raise AlignmentError(ErrorKind.INVALID_SCORING, "a match that costs")
-        _ = checked_cost(match_score, "a match's reward")
         # Past every pair's letters, so no count of them overflows what it enters.
         return Self(
             Self.ENDS,
@@ -289,7 +280,7 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
             min(reference_end, UNBOUNDED),
             min(query_start, UNBOUNDED),
             min(query_end, UNBOUNDED),
-            match_score,
+            0,
             Anchor.START,
             -1,
             -1,
@@ -371,12 +362,13 @@ struct Mode(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         )
 
     @staticmethod
-    def local(match_score: Int) raises AlignmentError -> Self:
+    def local(match_score: Int = 0) raises AlignmentError -> Self:
         """The best-scoring alignment of any part of the reference against any part of the query,
-        Smith-Waterman: a match earns `match_score` and every edit costs what `Costs` charges. It is
+        Smith-Waterman: under `Costs` a match earns `match_score`, above zero, and every edit costs what
+        they charge; under a `Scoring`, `Mode.local()`, its table says what each pair earns. It is
         every end free, with a reward: with costs alone, aligning nothing would always win. Its time
         grows with the matrix, as every local aligner's does (see `scored`)."""
-        if match_score <= 0:
+        if match_score < 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "a local alignment needs a match that earns")
         _ = checked_cost(match_score, "a match's reward")
         return Self(Self.SMITH_WATERMAN, 0, 0, 0, 0, match_score, Anchor.START, -1, -1)

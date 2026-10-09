@@ -51,8 +51,8 @@ Modes:
   --mode global                    both sequences end to end (the default)
   --mode infix                     the whole query inside the reference
   --mode prefix | suffix           the whole query against a prefix, or a suffix, of the reference
-  --mode reference-in-query        the whole reference inside the query
-  --mode ends:RS,RE,QS,QE          so many letters free at each end of each
+  --mode ends:RS,RE,QS,QE          so many letters free at each end of each; the reference inside the
+                                   query is ends:0,0,Q,Q with Q its length or more
   --mode local:A                   Smith-Waterman, a match earning A
   --mode overlap:A                 every end gap free, a match earning A
   --mode extension:A[,end]         fixed at the start (or end) of both, a match earning A
@@ -173,7 +173,7 @@ def mode_of(text: String, match_score: Int, zdrop: Int, end_bonus: Int) raises -
     var kind = String(text.split(":")[0])
     var values = numbers(String(text.split(":")[1])) if ":" in text and not text.endswith(",end") else List[Int]()
     var mode: Mode
-    if kind in ["global", "infix", "prefix", "suffix", "reference-in-query"] and ":" in text:
+    if kind in ["global", "infix", "prefix", "suffix"] and ":" in text:
         raise Error(String("--mode ", text, ": ", kind, " takes no values"))
     if kind == "global":
         mode = Mode.GLOBAL
@@ -183,8 +183,6 @@ def mode_of(text: String, match_score: Int, zdrop: Int, end_bonus: Int) raises -
         mode = Mode.PREFIX
     elif kind == "suffix":
         mode = Mode.SUFFIX
-    elif kind == "reference-in-query":
-        mode = Mode.REFERENCE_IN_QUERY
     elif kind == "ends" and len(values) == 4:
         mode = Mode.ends_free(
             reference_start=values[0], reference_end=values[1], query_start=values[2], query_end=values[3]

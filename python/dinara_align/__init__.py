@@ -165,10 +165,9 @@ class Anchor:
 
 @dataclass(frozen=True)
 class Mode:
-    """Which alignments count: `GLOBAL`, `INFIX` (the whole query inside the reference), `PREFIX`,
-    `SUFFIX`, `REFERENCE_IN_QUERY`, `ends_free(...)`, `extension(...)`, `local(...)` (`LOCAL` under a
-    `Scoring`) and `overlap(...)`. Free ends minimize costs alone unless `with_match_score` rewards
-    every match."""
+    """Which alignments count: `ends_free(...)` and its presets `GLOBAL`, `INFIX` (the whole query inside the
+    reference), `PREFIX`, `SUFFIX` and `overlap(...)`; `extension(...)`; and `local(...)` (`local()` under
+    a `Scoring`). Free ends minimize costs alone unless `with_match_score` rewards every match."""
 
     kind: int = _ENDS
     reference_start: int = 0
@@ -184,8 +183,6 @@ class Mode:
     INFIX = None
     PREFIX = None
     SUFFIX = None
-    REFERENCE_IN_QUERY = None
-    LOCAL = None
 
     @staticmethod
     def ends_free(
@@ -193,10 +190,10 @@ class Mode:
         reference_end: int = 0,
         query_start: int = 0,
         query_end: int = 0,
-        match_score: int = 0,
     ) -> "Mode":
-        """Up to so many letters at each end of each sequence left unaligned for nothing."""
-        return Mode(_ENDS, reference_start, reference_end, query_start, query_end, match_score)
+        """Up to so many letters at each end of each sequence left unaligned for nothing; the query's both
+        ends free place the whole reference inside it."""
+        return Mode(_ENDS, reference_start, reference_end, query_start, query_end)
 
     def with_match_score(self, match_score: int) -> "Mode":
         """These free ends with every match earning `match_score`: the best score, not the least cost."""
@@ -222,8 +219,9 @@ class Mode:
         )
 
     @staticmethod
-    def local(match_score: int) -> "Mode":
-        """The best-scoring alignment of any part of each, Smith-Waterman, a match earning `match_score`."""
+    def local(match_score: int = 0) -> "Mode":
+        """The best-scoring alignment of any part of each, Smith-Waterman, a match earning `match_score`; under a
+        `Scoring`, `local()`, its table's own rewards."""
         return Mode(_LOCAL, match_score=match_score)
 
     @staticmethod
@@ -252,8 +250,6 @@ Mode.GLOBAL = Mode()
 Mode.INFIX = Mode(_ENDS, UNBOUNDED, UNBOUNDED, 0, 0)
 Mode.PREFIX = Mode(_ENDS, 0, UNBOUNDED, 0, 0)
 Mode.SUFFIX = Mode(_ENDS, UNBOUNDED, 0, 0, 0)
-Mode.REFERENCE_IN_QUERY = Mode(_ENDS, 0, 0, UNBOUNDED, UNBOUNDED)
-Mode.LOCAL = Mode(_LOCAL)
 
 
 @dataclass(frozen=True)

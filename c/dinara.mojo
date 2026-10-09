@@ -151,8 +151,7 @@ def mode_of(fields: OptionalPointer[Int, MutAnyOrigin]) raises AlignmentError ->
         reference_end=at[unsafe_offset=2],
         query_start=at[unsafe_offset=3],
         query_end=at[unsafe_offset=4],
-        match_score=at[unsafe_offset=5],
-    )
+    ).with_match_score(at[unsafe_offset=5])
 
 
 @fieldwise_init

@@ -95,7 +95,7 @@ def costs_of(fields: PythonObject) raises -> Costs:
 
 def mode_of(fields: PythonObject) raises -> Mode:
     """`(kind, reference_start, reference_end, query_start, query_end, match_score, anchor, zdrop,
-    end_bonus)`, as `dinara_mode`, the last two -1 for none; for a `Scoring`, kind `C_LOCAL` with a match score of zero is `Mode.LOCAL`.
+    end_bonus)`, as `dinara_mode`, the last two -1 for none; for a `Scoring`, kind `C_LOCAL` with a match score of zero is `Mode.local()`.
     """
     var at = ints(fields)
     if at[0] == C_EXTENSION:
@@ -104,14 +104,14 @@ def mode_of(fields: PythonObject) raises -> Mode:
         var bonus = Optional[Int](at[8]) if at[8] >= 0 else None
         return Mode.extension(at[5], anchor, zdrop=zdrop, end_bonus=bonus)
     if at[0] == C_LOCAL:
-        return Mode.LOCAL if at[5] == 0 else Mode.local(at[5])
+        return Mode.local(at[5])
     if at[0] == C_OVERLAP:
         return Mode.overlap(at[5])
     if at[0] != C_ENDS_FREE:
         raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "an unknown mode")
     return Mode.ends_free(
-        reference_start=at[1], reference_end=at[2], query_start=at[3], query_end=at[4], match_score=at[5]
-    )
+        reference_start=at[1], reference_end=at[2], query_start=at[3], query_end=at[4]
+    ).with_match_score(at[5])
 
 
 @fieldwise_init

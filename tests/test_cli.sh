@@ -45,7 +45,7 @@ for refused in "--mode local:2 --match-score 5" "--mode global:7" "--costs affin
         expect "accepted" "refused" "$refused"
     fi
 done
-if "$cli" -r GT -q "$(printf '\370\216\216\216')" --mode reference-in-query >/dev/null 2>&1; then
+if "$cli" -r GT -q "$(printf '\370\216\216\216')" --mode infix >/dev/null 2>&1; then
     expect "accepted" "refused" "a sequence that is not ASCII"
 fi
 
