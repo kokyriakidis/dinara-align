@@ -41,8 +41,6 @@ comptime C_EXTENSION = 1
 """A mode tuple's kind for an extension from one end (`DINARA_EXTENSION`)."""
 comptime C_LOCAL = 2
 """A mode tuple's kind for a local alignment (`DINARA_LOCAL`)."""
-comptime C_OVERLAP = 3
-"""A mode tuple's kind for an overlap (`DINARA_OVERLAP`)."""
 
 
 @export
@@ -105,8 +103,6 @@ def mode_of(fields: PythonObject) raises -> Mode:
         return Mode.extension(at[5], anchor, zdrop=zdrop, end_bonus=bonus)
     if at[0] == C_LOCAL:
         return Mode.local(at[5])
-    if at[0] == C_OVERLAP:
-        return Mode.overlap(at[5])
     if at[0] != C_ENDS_FREE:
         raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "an unknown mode")
     return Mode.ends_free(

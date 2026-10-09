@@ -72,8 +72,6 @@ comptime C_EXTENSION = 1
 """`DINARA_EXTENSION`: a `dinara_mode`'s kind for an extension from one end."""
 comptime C_LOCAL = 2
 """`DINARA_LOCAL`: a `dinara_mode`'s kind for a local alignment."""
-comptime C_OVERLAP = 3
-"""`DINARA_OVERLAP`: a `dinara_mode`'s kind for an overlap, each sequence free at one end."""
 
 comptime CInts = ImmPointer[Int, MutAnyOrigin]
 """A C struct of `int64_t` fields, read by index; null for the default."""
@@ -142,8 +140,6 @@ def mode_of(fields: OptionalPointer[Int, MutAnyOrigin]) raises AlignmentError ->
         return Mode.extension(at[unsafe_offset=5], anchor, zdrop=zdrop, end_bonus=bonus)
     if at[unsafe_offset=0] == C_LOCAL:
         return Mode.local(at[unsafe_offset=5])
-    if at[unsafe_offset=0] == C_OVERLAP:
-        return Mode.overlap(at[unsafe_offset=5])
     if at[unsafe_offset=0] != C_ENDS_FREE:
         raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "an unknown mode")
     return Mode.ends_free(

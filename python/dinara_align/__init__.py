@@ -56,7 +56,7 @@ Text = Union[str, bytes]
 """A sequence as `str`, or as ASCII `bytes`."""
 
 # A mode's kind, as `dinara_mode` numbers it.
-_ENDS, _EXTENSION, _LOCAL, _OVERLAP = 0, 1, 2, 3
+_ENDS, _EXTENSION, _LOCAL = 0, 1, 2
 
 
 def _text(sequence: Text) -> str:
@@ -226,8 +226,11 @@ class Mode:
 
     @staticmethod
     def overlap(match_score: int) -> "Mode":
-        """Every end gap free, a match earning `match_score`: two reads overlapping, or one inside the other."""
-        return Mode(_OVERLAP, match_score=match_score)
+        """Every end gap free, a match earning `match_score`: two reads overlapping, or one inside the other.
+        Free ends with a reward, as with costs alone every end free lets the empty alignment win."""
+        if _ints(match_score)[0] <= 0:
+            raise ValueError("an overlap needs a match that earns")
+        return Mode(_ENDS, UNBOUNDED, UNBOUNDED, UNBOUNDED, UNBOUNDED, match_score)
 
     def _fields(self) -> tuple:
         """The mode as the extension takes it, in `dinara_mode`'s order, free letters capped at `UNBOUNDED`."""

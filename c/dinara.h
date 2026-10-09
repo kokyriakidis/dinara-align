@@ -74,8 +74,6 @@ typedef struct {
 #define DINARA_EXTENSION 1
 /* A `dinara_mode`'s kind: a local alignment, Smith-Waterman. */
 #define DINARA_LOCAL 2
-/* A `dinara_mode`'s kind: an overlap, every end gap free. */
-#define DINARA_OVERLAP 3
 /* As many free letters as any sequence has. */
 #define DINARA_ALL INT64_MAX
 
@@ -87,11 +85,11 @@ typedef struct {
  * modes count it. DINARA_EXTENSION: fixed at both sequences' starts, or with `anchor` nonzero their
  * ends, and free to stop anywhere, a match earning `match_score`: a seed's extension, as KSW2's, with
  * its Z-drop when `zdrop` is above zero, and its end bonus when `end_bonus` is. DINARA_LOCAL: any part of each, a match earning
- * `match_score`, Smith-Waterman, as abPOA's local mode. DINARA_OVERLAP: every end gap free, a
- * match earning `match_score`, semi-global, as parasail's `sg`. A null pointer is a global alignment.
+ * `match_score`, Smith-Waterman, as abPOA's local mode. An overlap, parasail's `sg`, is free ends with
+ * every count DINARA_ALL and a match earning. A null pointer is a global alignment.
  */
 typedef struct {
-    int64_t kind;            /* DINARA_ENDS_FREE, DINARA_EXTENSION, DINARA_LOCAL or DINARA_OVERLAP. */
+    int64_t kind;            /* DINARA_ENDS_FREE, DINARA_EXTENSION or DINARA_LOCAL. */
     int64_t reference_start; /* Free ends: the reference's letters free before the alignment. */
     int64_t reference_end;   /* Free ends: the reference's letters free after it. */
     int64_t query_start;     /* Free ends: the query's letters free before it. */
@@ -319,7 +317,11 @@ struct Mode {
      * table's scores, its own rewards, `local()`. */
     static Mode local(int64_t match_score = 0) { return {{DINARA_LOCAL, 0, 0, 0, 0, match_score, 0, 0}}; }
     /* The best-scoring alignment with every end gap free, a match earning `match_score`: an overlap. */
-    static Mode overlap(int64_t match_score) { return {{DINARA_OVERLAP, 0, 0, 0, 0, match_score, 0, 0}}; }
+    static Mode overlap(int64_t match_score) {
+        // With costs alone every end free lets the empty alignment win.
+        if (match_score <= 0) throw std::invalid_argument("dinara: an overlap needs a match that earns");
+        return ends_free(DINARA_ALL, DINARA_ALL, DINARA_ALL, DINARA_ALL).with_match_score(match_score);
+    }
 };
 
 /* The diagonals every move stays on, `low ..= high`; the default is every diagonal. */
