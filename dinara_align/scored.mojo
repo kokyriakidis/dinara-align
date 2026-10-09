@@ -30,7 +30,7 @@ from .gap_affine import (
     traced_extension,
 )
 from .modes import Alignment, Anchor, Band, Costs, Ties
-from .anti_diagonals import AntiDiagonals, GapLanes, fits_16_bits
+from .anti_diagonals import AntiDiagonals, GapLanes, lane_bits
 from .substitutions import SubstitutionLookup
 
 
@@ -58,7 +58,7 @@ def best_end[
 ) -> Tuple[Int, Int, Int, Bool]:
     """The best score of an alignment starting and ending where `kind` allows, where it ends, and whether
     a Z-drop gave the sweep up (see `swept_cells`)."""
-    var unused = List[Int32]()
+    var unused = List[Int]()
     var lookup = SubstitutionLookup.uniform_of(match_score, -costs.mismatch)
     return swept_cells[pieces, dtype, width, transposed, kind, False, True](
         reference, query, costs, ends, highest, lookup, -1, unused
@@ -75,7 +75,7 @@ def swept_cells[
     highest: Bool,
     lookup: SubstitutionLookup,
     zdrop: Int,
-    mut kept: List[Int32],
+    mut kept: List[Int],
 ) -> Tuple[Int, Int, Int, Bool]:
     """The best score of an alignment starting and ending where `kind` allows, and the reference's and
     the query's letters up to where it ends: of several such ends, for a local alignment the furthest
@@ -160,7 +160,7 @@ def swept_cells[
     if rows == 0 or columns == 0:
         comptime if anywhere_end:
             comptime if columns_kept:
-                kept = List[Int32](length=len(reference) + 1, fill=0)
+                kept = List[Int](length=len(reference) + 1, fill=0)
             return (0, 0, 0, False)
         # One sequence empty: the alignment lies along the other's edge, ending within its free letters,
         # the furthest such end on a tie.
@@ -289,18 +289,18 @@ def swept_cells[
             )
     comptime if columns_kept:
         var length = len(reference)
-        kept = List[Int32](length=length + 1, fill=0)
+        kept = List[Int](length=length + 1, fill=0)
         for letters in range(length + 1):
-            kept[letters] = Int32(column_best[(columns - letters) if transposed else letters])
+            kept[letters] = Int(column_best[(columns - letters) if transposed else letters])
     # `best_row` counts the lanes' sequence, the rest of the diagonal the other's.
     if transposed:
         return (best, best_diagonal - best_row, best_row, dropped)
     return (best, best_row, best_diagonal - best_row, dropped)
 
 
-def narrow_enough[kind: Int](costs: Costs, match_score: Int, rows: Int, columns: Int) -> Bool:
-    """Whether every score of the sweep under `costs` fits 16 bits (see `anti_diagonals.fits_16_bits`)."""
-    return fits_16_bits[kind == ANYWHERE](match_score, costs.dearest_step(), rows, columns)
+def sweep_bits[kind: Int](costs: Costs, match_score: Int, rows: Int, columns: Int) -> Int:
+    """The narrowest lanes every score of the sweep under `costs` fits (see `anti_diagonals.lane_bits`)."""
+    return lane_bits[kind == ANYWHERE](match_score, costs.dearest_step(), rows, columns)
 
 
 def swept[
@@ -313,9 +313,8 @@ def swept[
     ends: EndsFree = EndsFree(),
     highest: Bool = True,
 ) -> Tuple[Int, Int, Int, Bool]:
-    """`best_end` with its lanes along the shorter sequence, 16 bits to a lane while the scores fit, else 32
-    (see `sweep`)."""
-    var unused = List[Int32]()
+    """`best_end` with its lanes along the shorter sequence, as narrow as the scores allow (see `sweep`)."""
+    var unused = List[Int]()
     var no_table = List[Scalar[SubstitutionDType]]()
     return sweep[kind](
         reference,
@@ -324,7 +323,7 @@ def swept[
         match_score,
         ends,
         highest,
-        narrow_enough[kind](costs, match_score, len(reference), len(query)),
+        sweep_bits[kind](costs, match_score, len(reference), len(query)),
         no_table,
         0,
         -1,
@@ -341,21 +340,25 @@ def sweep[
     match_score: Int,
     ends: EndsFree,
     highest: Bool,
-    narrow: Bool,
+    bits: Int,
     substitutions: ImmSpan[Scalar[SubstitutionDType], _],
     alphabet: Int,
     zdrop: Int,
-    mut kept: List[Int32],
+    mut kept: List[Int],
 ) -> Tuple[Int, Int, Int, Bool]:
-    """`swept_cells` with its lanes along the shorter sequence, 16 bits to a lane with `narrow`, 32 lanes an
-    AVX-512 register, else 32 bits, each pair's score read from `substitutions` over an alphabet of `alphabet`
-    codes where it is one, else a match earning `match_score`: the one choice of type, pieces, orientation and
-    table every sweep's caller makes."""
-    if narrow:
+    """`swept_cells` with its lanes along the shorter sequence, `bits` to a lane, 16, 32 or 64 (see
+    `anti_diagonals.lane_bits`), a register's 64 bytes of them, each pair's score read from `substitutions`
+    over an alphabet of `alphabet` codes where it is one, else a match earning `match_score`: the one choice
+    of type, pieces, orientation and table every sweep's caller makes."""
+    if bits == 16:
         return sweep_in[DType.int16, 32, kind, columns_kept](
             reference, query, costs, match_score, ends, highest, substitutions, alphabet, zdrop, kept
         )
-    return sweep_in[DType.int32, 16, kind, columns_kept](
+    if bits == 32:
+        return sweep_in[DType.int32, 16, kind, columns_kept](
+            reference, query, costs, match_score, ends, highest, substitutions, alphabet, zdrop, kept
+        )
+    return sweep_in[DType.int64, 8, kind, columns_kept](
         reference, query, costs, match_score, ends, highest, substitutions, alphabet, zdrop, kept
     )
 
@@ -372,7 +375,7 @@ def sweep_in[
     substitutions: ImmSpan[Scalar[SubstitutionDType], _],
     alphabet: Int,
     zdrop: Int,
-    mut kept: List[Int32],
+    mut kept: List[Int],
 ) -> Tuple[Int, Int, Int, Bool]:
     """`sweep` in lanes of `dtype`, `width` of them."""
     var transposed = len(query) < len(reference)
@@ -423,7 +426,7 @@ def local_scores(
     """The best local score and where it ends, by the sweep `end_of` runs, and the best of every
     column more than `window` reference letters from that end (see `LocalScores`), from each column's
     best the same sweep keeps."""
-    var kept = List[Int32]()
+    var kept = List[Int]()
     var no_table = List[Scalar[SubstitutionDType]]()
     var found = sweep[ANYWHERE, True](
         reference,
@@ -432,7 +435,7 @@ def local_scores(
         match_score,
         EndsFree(),
         True,
-        narrow_enough[ANYWHERE](costs, match_score, len(reference), len(query)),
+        sweep_bits[ANYWHERE](costs, match_score, len(reference), len(query)),
         no_table,
         0,
         -1,
@@ -443,8 +446,8 @@ def local_scores(
     for letters in range(len(kept)):
         if abs(letters - found[1]) <= window:
             continue
-        if Int(kept[letters]) > second:
-            second = Int(kept[letters])
+        if kept[letters] > second:
+            second = kept[letters]
             second_end = letters
     return LocalScores(found[0], found[1], found[2], second, second_end)
 

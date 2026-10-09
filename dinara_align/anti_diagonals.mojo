@@ -8,7 +8,7 @@ Every cell of `d = row + column` reads only diagonals `d - 1` and `d - 2`, so a 
 independent and fills vector lanes. Indexed by row, a diagonal's cells read the rows' sequence forward and
 the columns' backward, so the columns' is stored back to front and both load contiguously; each step
 scores its pairs at once (see `substitutions`), in lanes of 16 bits while the scores fit (see
-`fits_16_bits`). The sweeps differ in their borders, in what they watch each step for and in what they
+`lane_bits`). The sweeps differ in their borders, in what they watch each step for and in what they
 keep, which stay theirs: `scored.swept_cells` a best end, from local or free starts; `vector_score.reach_back`
 where a local alignment starts; `alignment.vector_sweep_bands` a half's last row. `vector_score.vector_align`
 keeps every diagonal of its band rather than the last two, so it shares the letters and the recurrence.
@@ -60,6 +60,17 @@ def fits_16_bits[floored: Bool](reward: Int, dearest: Int, rows: Int, columns: I
     comptime if not floored:
         fits = fits and dearest * (rows + columns + 1) < 8000
     return fits
+
+
+def lane_bits[floored: Bool](reward: Int, dearest: Int, rows: Int, columns: Int) -> Int:
+    """The narrowest lanes, 16, 32 or 64 bits, every score of a sweep fits (see `fits_16_bits`): 32 bits'
+    bounds are 16 bits' scaled to them, a sentinel a quarter of the way down."""
+    if fits_16_bits[floored](reward, dearest, rows, columns):
+        return 16
+    var fits = reward * (min(rows, columns) + 1) < 1 << 30 and dearest < 1 << 27
+    comptime if not floored:
+        fits = fits and dearest * (rows + columns + 1) < 1 << 28
+    return 32 if fits else 64
 
 
 @fieldwise_init

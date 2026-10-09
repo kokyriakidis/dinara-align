@@ -81,7 +81,7 @@ from .lanes import (
     lane_local_scores,
 )
 from .modes import Alignment, Anchor, Band, Costs, Mode
-from .anti_diagonals import fits_16_bits
+from .anti_diagonals import lane_bits
 from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, started_span, sweep
 from .band_groups import banded_scores
 from .score_groups import grouped_scores
@@ -508,7 +508,7 @@ def local_by_span(
     if best <= 0:
         return GappedAlignment(0, String(), String())
     var lookup = SubstitutionLookup(scoring.substitutions, scoring.alphabet_size())
-    var narrow = table_fits[FROM_EDGE](scoring, end[1], end[2])
+    var narrow = table_bits[FROM_EDGE](scoring, end[1], end[2]) == 16
     var start = reach_back(codes_first, codes_second, end[1], end[2], lookup, scoring.gaps, Int32(best), narrow)
     var inner = global_on_host(first[start[0] : end[1]], second[start[1] : end[2]], scoring, stored_cells, best)
     # A global alignment of the span scores what the local one does, and is one.
@@ -585,13 +585,13 @@ def gap_costs(scoring: Scoring) -> Costs:
     return Costs(1, Int(scoring.gaps.extend - scoring.gaps.open), Int(-scoring.gaps.extend), -1, 0)
 
 
-def table_fits[kind: Int](scoring: Scoring, rows: Int, columns: Int) -> Bool:
-    """Whether every score of a sweep under the table fits 16 bits (see `anti_diagonals.fits_16_bits`): its best
-    pair, and its dearest move, a mismatch or a gap's first letter."""
+def table_bits[kind: Int](scoring: Scoring, rows: Int, columns: Int) -> Int:
+    """The narrowest lanes every score of a sweep under the table fits (see `anti_diagonals.lane_bits`): its
+    best pair, and its dearest move, a mismatch or a gap's first letter."""
     var extremes = table_extremes(scoring.substitutions, scoring.alphabet_size())
     var most = max(extremes[0], 0)
     var least = min(extremes[1], 0)
-    return fits_16_bits[kind == ANYWHERE](most, max(-least, Int(-scoring.gaps.open)), rows, columns)
+    return lane_bits[kind == ANYWHERE](most, max(-least, Int(-scoring.gaps.open)), rows, columns)
 
 
 def tabulated_end[
@@ -602,8 +602,8 @@ def tabulated_end[
     """The best score under `scoring` of an alignment `kind` allows, where it ends, and whether a Z-drop
     gave the sweep up, by the sweep
     `scored.swept_cells` runs, each pair's score read from the table: `first` and `second` are codes
-    into the alphabet. Lanes along the shorter sequence, 16 bits while the scores fit."""
-    var unused = List[Int32]()
+    into the alphabet. Lanes along the shorter sequence, as narrow as the scores allow."""
+    var unused = List[Int]()
     return sweep[kind](
         first,
         second,
@@ -611,7 +611,7 @@ def tabulated_end[
         0,
         ends,
         highest,
-        table_fits[kind](scoring, len(first), len(second)),
+        table_bits[kind](scoring, len(first), len(second)),
         scoring.substitutions,
         scoring.alphabet_size(),
         zdrop,

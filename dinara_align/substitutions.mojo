@@ -87,8 +87,8 @@ struct SubstitutionLookup(Copyable, Movable):
     """The alphabet's size, which every code read lies within: the sweeps pad their sequences with code zero."""
     var uniform: Bool
     """Whether every match scores `reward` and every mismatch `mismatch`, so one comparison scores a pair."""
-    var reward: Int32
-    var mismatch: Int32
+    var reward: Int
+    var mismatch: Int
     var shuffled: SIMD[DType.uint8, SHUFFLED_ENTRIES]
     """The table as bytes for `looked_up`, when it has no more than `SHUFFLED_ENTRIES` entries."""
     var small: Bool
@@ -113,8 +113,8 @@ struct SubstitutionLookup(Copyable, Movable):
             for column in range(alphabet_size):
                 if Int(substitutions[row * alphabet_size + column]) != (reward if row == column else mismatch):
                     self.uniform = False
-        self.reward = Int32(reward)
-        self.mismatch = Int32(mismatch)
+        self.reward = reward
+        self.mismatch = mismatch
 
     @staticmethod
     def uniform_of(reward: Int, mismatch: Int) -> Self:
@@ -122,8 +122,8 @@ struct SubstitutionLookup(Copyable, Movable):
         sweep reads by comparison alone (see `lanes`), there being no table to read."""
         var table: List[Scalar[SubstitutionDType]] = [Scalar[SubstitutionDType](0)]
         var lookup = Self(table, 1)
-        lookup.reward = Int32(reward)
-        lookup.mismatch = Int32(mismatch)
+        lookup.reward = reward
+        lookup.mismatch = mismatch
         lookup.best = reward
         return lookup^
 

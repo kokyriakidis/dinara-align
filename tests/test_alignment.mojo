@@ -2589,6 +2589,36 @@ def test_extreme_arguments_are_held_or_refused() raises:
         _ = alignments(long_side, long_side, huge)
 
 
+def test_scores_scale_past_32_bits() raises:
+    """Every cost and reward a billion times over scores a billion times over, in every mode, the sweeps
+    taking lanes as wide as the scores need: no score wraps."""
+    seed(41)
+    comptime BILLION = 1_000_000_000
+    for trial in range(12):
+        var reference = random_sequence(20, 90, DNA_ALPHABET)
+        var query = mutated(reference, 0.1, 3) if trial % 3 != 2 else random_sequence(20, 90, DNA_ALPHABET)
+        for two in [False, True]:
+            var small = Costs.two_piece(4, 6, 2, 24, 1) if two else Costs.affine(4, 6, 2)
+            var large = Costs.two_piece(4 * BILLION, 6 * BILLION, 2 * BILLION, 24 * BILLION, BILLION) if two else (
+                Costs.affine(4 * BILLION, 6 * BILLION, 2 * BILLION)
+            )
+            var smalls: List[Mode] = [Mode.local(2), Mode.overlap(2), Mode.INFIX.with_match_score(2), Mode.extension(2)]
+            var larges: List[Mode] = [
+                Mode.local(2 * BILLION),
+                Mode.overlap(2 * BILLION),
+                Mode.INFIX.with_match_score(2 * BILLION),
+                Mode.extension(2 * BILLION),
+            ]
+            for index in range(len(smalls)):
+                var expected = score(reference, query, small, smalls[index]) * BILLION
+                assert_equal(score(reference, query, large, larges[index]), expected)
+                assert_equal(align(reference, query, large, larges[index]).score, expected)
+            assert_equal(
+                local_scores(reference, query, large, Mode.local(2 * BILLION)).score,
+                local_scores(reference, query, small, Mode.local(2)).score * BILLION,
+            )
+
+
 def test_lanes_leave_what_they_cannot_hold() raises:
     """A pair longer than the lanes' 16-bit coordinates, and a banded pair whose cost reaches 16 bits' far
     value, are left to their own searches, which the batch then agrees with."""
