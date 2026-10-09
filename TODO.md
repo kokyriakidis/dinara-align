@@ -10,7 +10,8 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
   Lowering later rounds' bounds at checkpoints, as the first round does, never ended on some reads. The sweep itself runs near the
   hardware's limit for Myers' recurrence, about 2.4 cycles a word-column on AVX-512, so the band
   only gets faster by sweeping fewer cells. On genvar 16% of the band's word-columns go to rounds
-  that fail and are retried (7% on ont-500k), three to six rounds a pair.
+  that fail and are retried (7% on ont-500k), three to six rounds a pair. What is left of them is
+  an upper bound to aim at, tried and left below (see "An upper bound on the distance").
 - [x] **Wider vectors on AVX-512.** A sweep there now runs two eight-lane groups at a time, one under
   the other in one loop: genvar 7% and ont-500k 5% faster on the Skylake-X, the sample sets within
   noise (measured best of five beside the owner's jobs). One sixteen-lane group did about as well on
@@ -28,7 +29,7 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
   loops run 0 to 2 times. A branch-free scan, eight entries a bucket in one vector and the test on
   all eight, would spend about 25M cycles a pair to save about 34M: 1 to 2% on long pairs, nothing
   on short reads. Left for that.
-- [ ] **Seed setup.** Still 34 to 45% of a long pair's time on the Skylake-X and 9 to 32% on the M2
+- [-] **Seed setup.** Still 34 to 45% of a long pair's time on the Skylake-X and 9 to 32% on the M2
   (2026-10-06, `197656a`): on genvar 157 ms of inexact matching, 94 of local pruning and 19 of layers
   in 698; on 100 kbp pairs at 15% 27, 16 and 1 in 104; on ont-500k 64, 69 and 10 in 468.
   - Inexact matching: the half tables' lookups cost 5.5 ns a row, and the rest is the candidates,
@@ -36,7 +37,13 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
     against 3 and 28 on the M2. A chance candidate shares an 8-base half with the window, likely
     with 41,000 seeds a read over 65,536 halves. Keying on two exact parts, a 12-base prefix and a
     quarter at the end, would cut them some thirtyfold for about eight hashed lookups a row in place
-    of two direct ones: perhaps 5 to 10% on genvar and divergent 100 kbp pairs, untried.
+    of two direct ones: perhaps 5 to 10% on genvar and divergent 100 kbp pairs. Tried and left
+    (2026-10-09, M2): those keys as a gate before the half tables, a Bloom filter of two bits a key
+    and 16 bits a key in all, then one cache line a row keyed by the row's half, found the same
+    matches and halved the candidates (genvar 0.74 to 0.37 a row), but the matches themselves are
+    dense there, 0.13 a row, and the gate's eight tests a row cost about 11 ns, nearly what the
+    candidates did: inexact matching 12 to 15% faster, the alignments 1.5 to 2%. Hashed tables on the
+    same keys would cost more a lookup than the gate's tests.
   - Tried and left: no local pruning (genvar 21% and ont-500k 72% slower: it repays itself many
     times), a lookahead of 8 seeds for inexact matches (neutral to 4% slower), and of 6 to 10 for all
     (mid-length reads up to 6% faster on the M2, ont-500k 17% and 100 kbp at 5% 30% slower), and
@@ -45,8 +52,11 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
     M2's mid-length reads); exact pruning, 600 thousand matches of which 174 thousand are kept, is
     now the larger half there. Going further than this means indexing the second sequence instead
     of the seeds, at more memory.
-- [ ] **Traceback (about 0.9 s).** Retracing the final round's tiles from their recorded left
-  edges.
+- [x] **Traceback (about 0.9 s).** Retracing the final round's tiles from their recorded left
+  edges. Since this was profiled, each tile is traced by a forward search over one window of
+  diagonals, eight at a time, its recompute reusing its buffers (`f1e9a96`, `8f9c92f`, `7821fe8`,
+  `ce286ba`, `6dcb6fa`): on the M2 (2026-10-09) `forward_segment` is 65 of 3,900 samples aligning
+  genvar and 122 of 5,600 on ont-500k, about 2%, the recompute too rare to show.
 - [x] **The M2's two lost rows.** 100 kbp pairs at 6 and 7% divergence lost to A*PA2-full there, the
   M2's 40% cutoff rebuilding inexact seeds that did not pay on spread errors. A pair whose two
   projections agree, as spread errors' do, now rebuilds only below 20%: 3.75 and 3.92 ms against
@@ -167,8 +177,19 @@ stands on each.
   the tile edges and the seeds' layers together: the diagonal transition's fronts are gone by then,
   as Mojo destroys a value after its last use, and the moves copied reversed to write a CIGAR come
   after the edges are freed, so writing them in place left the peak where it was.
-- [ ] **A\* on the diagonal transition** at low divergence. dinara-align runs a plain diagonal
+- [-] **A\* on the diagonal transition** at low divergence. dinara-align runs a plain diagonal
   transition first and falls back to the band; it is fast below 2% but uses no heuristic there.
+  Tried and left (2026-10-09, M2): a front trimmed at both ends wherever its score plus the exact
+  seeds' heuristic at its furthest cell passes a bound, the bound from the origin's heuristic
+  doubling its margin from 16, is exact (the heuristic never overestimates, and a cell further down
+  a diagonal never costs more to finish from) and keeps the tie rule, since every cell an optimal
+  path passes keeps its value. On uniform 100 kbp pairs at 2 and 3% it took 0.93 and 1.08 ms
+  against the two-ended search's 2.02 and 2.27, but 0.9 against 0.55 at 1%, 1.8 against 2.0 at 5%
+  and 8.6 against 3.4 at 8%, where the fronts widen and rounds repeat; and on real reads, whose
+  errors gather, 3 to 5 times slower: ont-10k 0.30 against 0.08 ms, ont-50k 2.2 against 0.41,
+  sars-cov-2 0.33 against 0.13. Two thirds of its time at 2% is the seeds' setup, 0.7 ms, and most
+  of the rest the trimming's heuristic queries, about 40 ns each. A gate taking it only for uniform
+  1.5 to 4% would rest on constants fitted to one machine, for synthetic pairs alone.
 - [-] **An upper bound on the distance** to keep bounds from overshooting. Tried and left
   (2026-10-06): a beam, a band of 128 to 1024 rows kept around the lowest score down each tile's edge,
   whose corner is a real alignment's cost. It found the distance itself on most pairs, and one round
@@ -178,10 +199,16 @@ stands on each.
   added 1.5% to genvar, whose insertions it loses, and nothing elsewhere, while the M2 gained 4 to 12%
   on seeded sets. Four tuned parts for that was judged not worth it. A cheaper bound, or one that
   follows large indels, might still be.
-- [ ] **Affine costs with the seed heuristic.** The affine aligners are exact but sweep without a
-  heuristic; A*PA2's method for affine costs needs a gap-chaining seed heuristic of its own.
+- [-] **Affine costs with the seed heuristic.** The affine aligners are exact but sweep without a
+  heuristic; A*PA2's method for affine costs needs a gap-chaining seed heuristic of its own. Weighed
+  and left (2026-10-09): the affine aligners are wavefronts, so a heuristic would trim their fronts
+  as above, and the unit-cost trial there paid only on uniform pairs at 2 to 3% and lost on every
+  real dataset. An affine heuristic is also looser: a seed broken by one edit may have cost a
+  mismatch, so it charges `min(x, o + e)` while the edit may cost more, and its fronts would trim
+  less.
 - [x] **Low divergence (below 2%)** was A*PA2's weak spot against BiWFA; the diagonal transition
   before any band now beats BiWFA and WFA there (146 µs against 302 and 605 at 0%, 100 kbp).
 - [~] **The seeds' setup** was A*PA2's other limitation. Exact matching is filtered, seeds holding an
   `N` are handled, and AVX-512 builds skip seeds below 86 kbp where they do not pay, but it is still a
-  third or more of a long read's alignment on the Skylake-X (see above).
+  third or more of a long read's alignment on the Skylake-X (see above), where every idea listed
+  has now been tried.
