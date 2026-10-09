@@ -243,7 +243,7 @@ def vector_align(
         starts.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
         lows.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
     )
-    var reconstruction = reconstruct(
+    var reconstruction = reconstruct[AlignmentMode.GLOBAL](
         scores,
         deletes,
         inserts,
@@ -256,7 +256,6 @@ def vector_align(
         columns,
         alphabet,
         gaps,
-        AlignmentMode.GLOBAL,
     )
     var final_score = scores[layout.index(rows, columns)]
     # The layout reads `starts` and `lows` through pointers, so both must outlive every use of it.

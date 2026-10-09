@@ -422,72 +422,22 @@ def serial_align[
     """Full-matrix reference, transcribed from the `_*_kernel` plus `_reconstruct_alignment`."""
     var rows = len(first)
     var columns = len(second)
-    var stride = columns + 1
-    var cells = (rows + 1) * stride
+    var layout = RowMajor(columns + 1)
+    var cells = (rows + 1) * (columns + 1)
+    # The fill writes every cell, its borders among them.
     var scores = List[Int32](unsafe_uninit_length=cells)
     var deletes = List[Int32](unsafe_uninit_length=cells)
-    # The sweep writes every interior cell, and the two borders below are what the walk reads beyond them.
     var inserts = List[Int32](unsafe_uninit_length=cells)
-
-    scores[0] = 0
-    deletes[0] = 0
-    inserts[0] = 0
-    for column in range(1, stride):
-        if mode == AlignmentMode.GLOBAL:
-            scores[column] = scoring.run(column)
-            deletes[column] = scores[column] + scoring.open + scoring.extend
-        else:
-            scores[column] = 0
-            deletes[column] = scoring.open + scoring.extend
-        inserts[column] = 0
-
-    var best = Int32(0)
-    var best_row = 0
-    var best_column = 0
-
-    for row in range(1, rows + 1):
-        var base = row * stride
-        var above = base - stride
-        deletes[base] = 0
-        if mode == AlignmentMode.GLOBAL:
-            scores[base] = scoring.run(row)
-            inserts[base] = scores[base] + scoring.open + scoring.extend
-        else:
-            scores[base] = 0
-            inserts[base] = scoring.open + scoring.extend
-
-        for column in range(1, stride):
-            var substitution = Int32(substitutions[Int(first[row - 1]) * alphabet_size + Int(second[column - 1])])
-            var cell = gotoh_cell[mode](
-                scores[above + column - 1],
-                scores[above + column],
-                deletes[above + column],
-                scores[base + column - 1],
-                inserts[base + column - 1],
-                substitution,
-                scoring,
-            )
-            scores[base + column] = cell.score
-            deletes[base + column] = cell.deletion
-            inserts[base + column] = cell.insertion
-
-            comptime if mode == AlignmentMode.LOCAL:
-                if cell.score > best:
-                    best = cell.score
-                    best_row = row
-                    best_column = column
-
-    var start_row = rows
-    var start_column = columns
-    if mode == AlignmentMode.LOCAL:
-        start_row = best_row
-        start_column = best_column
-
-    var reconstruction = reconstruct(
+    var best = fill_rows[mode, SweepHalf.FORWARD](
+        first, second, substitutions, alphabet_size, scoring, GapRun.OPENS, layout, scores, deletes, inserts
+    )
+    var start_row = best[1] if mode == AlignmentMode.LOCAL else rows
+    var start_column = best[2] if mode == AlignmentMode.LOCAL else columns
+    var reconstruction = reconstruct[mode](
         scores,
         deletes,
         inserts,
-        RowMajor(stride),
+        layout,
         first,
         second,
         substitutions,
@@ -496,9 +446,8 @@ def serial_align[
         start_column,
         alphabet,
         scoring,
-        mode,
     )
-    var final_score = scores[start_row * stride + start_column]
+    var final_score = scores[layout.index(start_row, start_column)]
     return GappedAlignment(final_score, reconstruction[0], reconstruction[1])
 
 
@@ -523,6 +472,20 @@ struct RowMajor(CellLayout, TrivialRegisterPassable):
         return row * self.stride + column
 
 
+@fieldwise_init
+struct RollingRows(CellLayout, TrivialRegisterPassable):
+    """Two rows of `stride` cells in turn, the one being filled and the one above it: a linear-space
+    sweep's, which keeps no more."""
+
+    var stride: Int
+    """Cells to a row, one more than the second sequence's length."""
+
+    @inline(.always)
+    def index(self, row: Int, column: Int) -> Int:
+        """The flat offset of cell `(row, column)`, in the first row for an even `row` and the second for an odd."""
+        return (row & 1) * self.stride + column
+
+
 comptime BAND_PADDING = 2
 """Cells stored either side of each anti-diagonal's band, reading as unreachable, so a step and the
 traceback read a band's neighbours unchecked."""
@@ -545,8 +508,141 @@ struct AntiDiagonalMajor(CellLayout, TrivialRegisterPassable):
         return self.starts[unsafe_offset=diagonal] + BAND_PADDING + row - self.lows[unsafe_offset=diagonal]
 
 
+def fill_rows[
+    mode: AlignmentMode, half: SweepHalf, Layout: CellLayout
+](
+    first: ImmSpan[Scalar[SymbolDType], _],
+    second: ImmSpan[Scalar[SymbolDType], _],
+    substitutions: ImmSpan[Scalar[SubstitutionDType], _],
+    alphabet_size: Int,
+    scoring: AffineGapCosts,
+    top: GapRun,
+    layout: Layout,
+    scores: MutSpan[Int32, _],
+    deletes: MutSpan[Int32, _],
+    inserts: MutSpan[Int32, _],
+) -> Tuple[Int32, Int, Int]:
+    """Gotoh's three layers of `first`'s letters, the rows, against `second`'s, the columns, filled row by
+    row where `layout` keeps them, read from their ends for the `REVERSE` half; and of a local alignment the
+    best cell, the first by row and then column: its score, row and column.
+
+    A global alignment's borders are gap runs from the corner, the first column's paying no opening where a
+    deletion run enters already open (`top`); an open run arrives at the corner only, so a deletion from any
+    other cell of the first row pays a fresh opening. A local alignment's borders are zero. No cell reads a
+    border's other gap layer, the deletion layer of the first column or the insertion layer of the first row.
+    """
+    var rows = len(first)
+    var columns = len(second)
+    comptime reversed_order = half == SweepHalf.REVERSE
+    comptime local = mode == AlignmentMode.LOCAL
+    var opened = scoring.open + scoring.extend
+    # Every index below lies inside the layers the layout spans, so the loop reads them unchecked.
+    var score_cells = scores.unsafe_ptr()
+    var delete_cells = deletes.unsafe_ptr()
+    var insert_cells = inserts.unsafe_ptr()
+    var table = substitutions.unsafe_ptr()
+    var rows_letters = first.unsafe_ptr()
+    var columns_letters = second.unsafe_ptr()
+    for column in range(columns + 1):
+        var here = layout.index(0, column)
+        score_cells[unsafe_offset=here] = 0 if local else scoring.run(column)
+        delete_cells[unsafe_offset=here] = score_cells[unsafe_offset=here] + opened
+        insert_cells[unsafe_offset=here] = 0
+
+    var best = Int32(0)
+    var best_row = 0
+    var best_column = 0
+    for row in range(1, rows + 1):
+        var left = layout.index(row, 0)
+        var border: Int32
+        comptime if local:
+            border = 0
+        else:
+            border = Int32(row) * scoring.extend if top == GapRun.EXTENDS else scoring.run(row)
+        score_cells[unsafe_offset=left] = border
+        delete_cells[unsafe_offset=left] = border
+        insert_cells[unsafe_offset=left] = border + opened
+        var letter = Int(rows_letters[unsafe_offset=rows - row if reversed_order else row - 1]) * alphabet_size
+        for column in range(1, columns + 1):
+            var here = layout.index(row, column)
+            var above = layout.index(row - 1, column)
+            var other = Int(columns_letters[unsafe_offset=columns - column if reversed_order else column - 1])
+            var cell = gotoh_cell[mode](
+                score_cells[unsafe_offset=above - 1],
+                score_cells[unsafe_offset=above],
+                delete_cells[unsafe_offset=above],
+                score_cells[unsafe_offset=here - 1],
+                insert_cells[unsafe_offset=here - 1],
+                Int32(table[unsafe_offset=letter + other]),
+                scoring,
+            )
+            score_cells[unsafe_offset=here] = cell.score
+            delete_cells[unsafe_offset=here] = cell.deletion
+            insert_cells[unsafe_offset=here] = cell.insertion
+            comptime if local:
+                if cell.score > best:
+                    best = cell.score
+                    best_row = row
+                    best_column = column
+    return (best, best_row, best_column)
+
+
+def walk[
+    mode: AlignmentMode, Layout: CellLayout, F: def(Int, Int, Move) -> None
+](
+    scores: ImmSpan[Int32, _],
+    deletes: ImmSpan[Int32, _],
+    inserts: ImmSpan[Int32, _],
+    layout: Layout,
+    first: ImmSpan[Scalar[SymbolDType], _],
+    second: ImmSpan[Scalar[SymbolDType], _],
+    substitutions: ImmSpan[Scalar[SubstitutionDType], _],
+    alphabet_size: Int,
+    scoring: AffineGapCosts,
+    start_row: Int,
+    start_column: Int,
+    state: Layer,
+    taken: F,
+) -> Tuple[Int, Int]:
+    """The three-state walk back over stored layers from `(start_row, start_column)` in `state`, each step
+    handed to `taken` with the cell it leaves, until it reaches the first row or column or, for a local
+    alignment in the aligning layer, a cell its path starts at; where it stopped.
+
+    AffineGaps' NumPy reference walks a single layer: after a deletion step it reads the winning operation of the
+    next cell instead of asking whether that deletion was opened or extended, so it can split one
+    run into two and return a path that does not achieve its own reported score. Carrying the state
+    fixes that. Ties resolve towards opening, which leaves the linear-gap case walking exactly as
+    that reference does.
+    """
+    var row = start_row
+    var column = start_column
+    var layer = state
+    while row > 0 and column > 0:
+        var here = layout.index(row, column)
+        var above = layout.index(row - 1, column)
+        var left = layout.index(row, column - 1)
+        var above_left = layout.index(row - 1, column - 1)
+        var substitution = Int32(substitutions[Int(first[row - 1]) * alphabet_size + Int(second[column - 1])])
+        var decision = decide[mode](
+            Cell(scores[here], deletes[here], inserts[here]),
+            scores[above_left] + substitution,
+            Cell(scores[above], deletes[above], inserts[above]),
+            Cell(scores[left], deletes[left], inserts[left]),
+            scoring,
+        )
+        comptime if mode == AlignmentMode.LOCAL:
+            if layer == Layer.ALIGNING and decision.reach() == PathReach.ENDS_HERE:
+                break
+        var step = advance(layer, decision)
+        taken(row, column, step)
+        row += step.row_advance
+        column += step.column_advance
+        layer = step.lands_in
+    return (row, column)
+
+
 def reconstruct[
-    Layout: CellLayout
+    mode: AlignmentMode, Layout: CellLayout
 ](
     scores: ImmSpan[Int32, _],
     deletes: ImmSpan[Int32, _],
@@ -560,59 +656,43 @@ def reconstruct[
     start_column: Int,
     alphabet: String,
     scoring: AffineGapCosts,
-    mode: AlignmentMode,
 ) -> Tuple[String, String]:
-    """Three-state backward walk over the match, deletion and insertion layers.
-
-    AffineGaps' NumPy reference walks a single layer: after a deletion step it reads the winning operation of the
-    next cell instead of asking whether that deletion was opened or extended, so it can split one
-    run into two and return a path that does not achieve its own reported score. Carrying the state
-    fixes that. Ties resolve towards opening, which leaves the linear-gap case walking exactly as
-    that reference does.
-    """
+    """The gapped rows of the path `walk` takes back from `(start_row, start_column)`."""
     var letters = alphabet.as_bytes()
     var first_reversed = List[UInt8]()
     var second_reversed = List[UInt8]()
-    var row = start_row
-    var column = start_column
-    var state = Layer.ALIGNING
 
-    while row > 0 and column > 0:
-        var here = layout.index(row, column)
-        var above = layout.index(row - 1, column)
-        var left = layout.index(row, column - 1)
-        var above_left = layout.index(row - 1, column - 1)
-        var substitution = Int32(substitutions[Int(first[row - 1]) * alphabet_size + Int(second[column - 1])])
-        # `mode` is a runtime argument here, and only the local walk below reads `reach`, so the flag is always computed
-        # and always gated at the point of use.
-        var decision = decide[AlignmentMode.LOCAL](
-            Cell(scores[here], deletes[here], inserts[here]),
-            scores[above_left] + substitution,
-            Cell(scores[above], deletes[above], inserts[above]),
-            Cell(scores[left], deletes[left], inserts[left]),
-            scoring,
-        )
-        if mode == AlignmentMode.LOCAL and state == Layer.ALIGNING:
-            if decision.reach() == PathReach.ENDS_HERE:
-                break
-        var anti_diagonal = advance(state, decision)
-        first_reversed.append(letters[Int(first[row - 1])] if anti_diagonal.row_advance != 0 else GAP_BYTE)
-        second_reversed.append(letters[Int(second[column - 1])] if anti_diagonal.column_advance != 0 else GAP_BYTE)
-        row += anti_diagonal.row_advance
-        column += anti_diagonal.column_advance
-        state = anti_diagonal.lands_in
+    def taken(
+        row: Int, column: Int, step: Move
+    ) {mut first_reversed, mut second_reversed, imm letters, imm first, imm second}:
+        """The column a step aligns: its letters, or a gap where it does not advance."""
+        first_reversed.append(letters[Int(first[row - 1])] if step.row_advance != 0 else GAP_BYTE)
+        second_reversed.append(letters[Int(second[column - 1])] if step.column_advance != 0 else GAP_BYTE)
 
+    var stop = walk[mode](
+        scores,
+        deletes,
+        inserts,
+        layout,
+        first,
+        second,
+        substitutions,
+        alphabet_size,
+        scoring,
+        start_row,
+        start_column,
+        Layer.ALIGNING,
+        taken,
+    )
     # A global path must reach the origin, so what remains really is aligned against gaps. A local
     # path stops wherever the score falls to zero, and everything before that is outside it.
-    if mode == AlignmentMode.GLOBAL:
-        while row > 0:
+    comptime if mode == AlignmentMode.GLOBAL:
+        for row in range(stop[0], 0, -1):
             first_reversed.append(letters[Int(first[row - 1])])
             second_reversed.append(GAP_BYTE)
-            row -= 1
-        while column > 0:
+        for column in range(stop[1], 0, -1):
             first_reversed.append(GAP_BYTE)
             second_reversed.append(letters[Int(second[column - 1])])
-            column -= 1
 
     first_reversed.reverse()
     second_reversed.reverse()
@@ -658,30 +738,22 @@ struct Frame(Copyable, Movable, TrivialRegisterPassable):
 
 
 struct SweepBands(Movable):
-    """The five row bands a linear-space sweep writes, sized for the widest frame it will see.
+    """A linear-space sweep's three layers, two rows each (see `RollingRows`), sized for the widest frame
+    it will see.
 
     One recursion reuses the same bands for every frame, and a sweep writes each entry before it
     reads it, so nothing here is filled at construction.
     """
 
-    var scores_above: List[Int32]
-    """Score layer of the row above the one being computed."""
-    var deletes_above: List[Int32]
-    """Deletion layer of that same row."""
-    var scores_row: List[Int32]
-    """Score layer of the row being computed."""
-    var deletes_row: List[Int32]
-    """Deletion layer of that row."""
-    var inserts_row: List[Int32]
-    """Insertion layer of that row."""
+    var scores: List[Int32]
+    var deletes: List[Int32]
+    var inserts: List[Int32]
 
     def __init__(out self, columns: Int):
         """Bands for frames up to `columns` wide, left unfilled."""
-        self.scores_above = List[Int32](unsafe_uninit_length=columns + 1)
-        self.deletes_above = List[Int32](unsafe_uninit_length=columns + 1)
-        self.scores_row = List[Int32](unsafe_uninit_length=columns + 1)
-        self.deletes_row = List[Int32](unsafe_uninit_length=columns + 1)
-        self.inserts_row = List[Int32](unsafe_uninit_length=columns + 1)
+        self.scores = List[Int32](unsafe_uninit_length=2 * (columns + 1))
+        self.deletes = List[Int32](unsafe_uninit_length=2 * (columns + 1))
+        self.inserts = List[Int32](unsafe_uninit_length=2 * (columns + 1))
 
 
 def sweep_bands[
@@ -708,47 +780,22 @@ def sweep_bands[
     """
     var rows = first_to - first_from
     var columns = second_to - second_from
-
-    bands.scores_above[0] = 0
-    bands.deletes_above[0] = scoring.open + scoring.extend
-    # An open run arrives at the top-left corner only. Reaching any other cell of the top row
-    # means the run already ended, so a deletion from there pays a fresh opening.
-    for column in range(1, columns + 1):
-        bands.scores_above[column] = scoring.run(column)
-        bands.deletes_above[column] = bands.scores_above[column] + scoring.open + scoring.extend
-
-    for row in range(1, rows + 1):
-        if entering_run == GapRun.EXTENDS:
-            bands.scores_row[0] = Int32(row) * scoring.extend
-        else:
-            bands.scores_row[0] = scoring.run(row)
-        bands.deletes_row[0] = bands.scores_row[0]
-        bands.inserts_row[0] = bands.scores_row[0] + scoring.open + scoring.extend
-
-        comptime reversed_order = half == SweepHalf.REVERSE
-        var first_index = first_to - row if reversed_order else first_from + row - 1
-        for column in range(1, columns + 1):
-            var second_index = second_to - column if reversed_order else second_from + column - 1
-            var substitution = Int32(substitutions[Int(first[first_index]) * alphabet_size + Int(second[second_index])])
-            var cell = gotoh_cell[AlignmentMode.GLOBAL](
-                bands.scores_above[column - 1],
-                bands.scores_above[column],
-                bands.deletes_above[column],
-                bands.scores_row[column - 1],
-                bands.inserts_row[column - 1],
-                substitution,
-                scoring,
-            )
-            bands.scores_row[column] = cell.score
-            bands.deletes_row[column] = cell.deletion
-            bands.inserts_row[column] = cell.insertion
-
-        swap(bands.scores_above, bands.scores_row)
-        swap(bands.deletes_above, bands.deletes_row)
-
+    var layout = RollingRows(columns + 1)
+    _ = fill_rows[AlignmentMode.GLOBAL, half](
+        first[first_from:first_to],
+        second[second_from:second_to],
+        substitutions,
+        alphabet_size,
+        scoring,
+        entering_run,
+        layout,
+        bands.scores,
+        bands.deletes,
+        bands.inserts,
+    )
     for column in range(columns + 1):
-        final_scores[column] = bands.scores_above[column]
-        final_deletes[column] = bands.deletes_above[column]
+        final_scores[column] = bands.scores[layout.index(rows, column)]
+        final_deletes[column] = bands.deletes[layout.index(rows, column)]
 
 
 comptime SWEEP_LANES = 16
@@ -861,84 +908,47 @@ def solve_rectangle(
     """
     var rows = first_to - first_from
     var columns = second_to - second_from
-    var stride = columns + 1
-    var cells = (rows + 1) * stride
+    var layout = RowMajor(columns + 1)
+    var cells = (rows + 1) * (columns + 1)
+    # The fill writes every cell, its borders among them.
     var scores = List[Int32](unsafe_uninit_length=cells)
     var deletes = List[Int32](unsafe_uninit_length=cells)
-    # The sweep writes every interior cell, and the top row below is the only border either pass reads.
     var inserts = List[Int32](unsafe_uninit_length=cells)
-
-    scores[0] = 0
-    deletes[0] = 0
-    inserts[0] = 0
-    # An open run arrives at the top-left corner only. Reaching any other cell of the top row
-    # means the run already ended, so a deletion from there pays a fresh opening.
-    for column in range(1, stride):
-        scores[column] = scoring.run(column)
-        deletes[column] = scores[column] + scoring.open + scoring.extend
-        inserts[column] = 0
-
-    for row in range(1, rows + 1):
-        var base = row * stride
-        var above = base - stride
-        if top == GapRun.EXTENDS:
-            scores[base] = Int32(row) * scoring.extend
-        else:
-            scores[base] = scoring.run(row)
-        deletes[base] = scores[base]
-        inserts[base] = scores[base] + scoring.open + scoring.extend
-        for column in range(1, stride):
-            var substitution = Int32(
-                substitutions[Int(first[first_from + row - 1]) * alphabet_size + Int(second[second_from + column - 1])]
-            )
-            var cell = gotoh_cell[AlignmentMode.GLOBAL](
-                scores[above + column - 1],
-                scores[above + column],
-                deletes[above + column],
-                scores[base + column - 1],
-                inserts[base + column - 1],
-                substitution,
-                scoring,
-            )
-            scores[base + column] = cell.score
-            deletes[base + column] = cell.deletion
-            inserts[base + column] = cell.insertion
-
-    var row = rows
-    var column = columns
-    var state = Layer.ALIGNING
-    # An open run at the bottom edge is a fact the join established, not a candidate to weigh:
-    # the two halves were scored on the assumption that this walk leaves in the deleting layer.
-    if bottom == GapRun.EXTENDS:
-        state = Layer.DELETING
+    var rows_letters = first[first_from:first_to]
+    var columns_letters = second[second_from:second_to]
+    _ = fill_rows[AlignmentMode.GLOBAL, SweepHalf.FORWARD](
+        rows_letters, columns_letters, substitutions, alphabet_size, scoring, top, layout, scores, deletes, inserts
+    )
 
     # Only a row-consuming step records anything, so sibling subproblems tile the row axis.
-    while row > 0 and column > 0:
-        var here = row * stride + column
-        var substitution = Int32(
-            substitutions[Int(first[first_from + row - 1]) * alphabet_size + Int(second[second_from + column - 1])]
-        )
-        var decision = decide[AlignmentMode.GLOBAL](
-            Cell(scores[here], deletes[here], inserts[here]),
-            scores[here - stride - 1] + substitution,
-            Cell(scores[here - stride], deletes[here - stride], inserts[here - stride]),
-            Cell(scores[here - 1], deletes[here - 1], inserts[here - 1]),
-            scoring,
-        )
-        var anti_diagonal = advance(state, decision)
-        if anti_diagonal.row_advance != 0:
-            path_layers[first_from + row] = Layer.ALIGNING if anti_diagonal.column_advance != 0 else Layer.DELETING
-            path_columns[first_from + row - 1] = Int32(second_from + column + anti_diagonal.column_advance)
-        row += anti_diagonal.row_advance
-        column += anti_diagonal.column_advance
-        state = anti_diagonal.lands_in
+    def record(row: Int, column: Int, step: Move) {imm path_columns, imm path_layers, imm first_from, imm second_from}:
+        """Where the path leaves row `row`, and in which layer it crosses into it."""
+        if step.row_advance != 0:
+            path_layers[first_from + row] = Layer.ALIGNING if step.column_advance != 0 else Layer.DELETING
+            path_columns[first_from + row - 1] = Int32(second_from + column + step.column_advance)
 
-    while row > 0:
+    # An open run at the bottom edge is a fact the join established, not a candidate to weigh:
+    # the two halves were scored on the assumption that this walk leaves in the deleting layer.
+    var stop = walk[AlignmentMode.GLOBAL](
+        scores,
+        deletes,
+        inserts,
+        layout,
+        rows_letters,
+        columns_letters,
+        substitutions,
+        alphabet_size,
+        scoring,
+        rows,
+        columns,
+        Layer.DELETING if bottom == GapRun.EXTENDS else Layer.ALIGNING,
+        record,
+    )
+    for row in range(stop[0], 0, -1):
         path_layers[first_from + row] = Layer.DELETING
-        path_columns[first_from + row - 1] = Int32(second_from + column)
-        row -= 1
+        path_columns[first_from + row - 1] = Int32(second_from + stop[1])
 
-    return scores[rows * stride + columns]
+    return scores[layout.index(rows, columns)]
 
 
 @fieldwise_init
