@@ -24,7 +24,7 @@ from std.atomic import Atomic
 from std.bit import count_leading_zeros
 
 
-from .alignment import AlignmentMode, GappedAlignment
+from .gotoh import AlignmentMode, GappedAlignment
 from .common import Device, DeviceScope, Placement, next_share, spread, thread_count
 from .device_edit import MAX_PATTERN_WORDS, device_edit_distances
 from .edit_distance import edit_cigar, edit_distance

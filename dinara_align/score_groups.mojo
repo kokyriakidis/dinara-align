@@ -33,7 +33,7 @@ from max.gpu import WARP_SIZE, barrier, block_idx, thread_idx
 from max.gpu.host import DeviceContext
 from max.gpu.primitives.warp import shuffle_up, shuffle_xor
 
-from .alignment import AffineGapCosts, AlignmentMode
+from .gotoh import AffineGapCosts, AlignmentMode
 from .bit_parallel import base_codes, not_bases
 from .common import (
     spread,

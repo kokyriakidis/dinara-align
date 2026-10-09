@@ -38,11 +38,12 @@ from dinara_align import (
     scores,
     search,
 )
-from dinara_align.alignment import (
+from dinara_align.gotoh import (
     AffineGapCosts,
     AlignmentMode,
     GapRun,
     GappedAlignment,
+    Rectangle,
     SweepHalf,
     serial_align,
     vector_sweep_bands,
@@ -2461,10 +2462,7 @@ def test_gotoh_sweeps_agree_in_either_width() raises:
                     vector_sweep_bands[SweepHalf.REVERSE, DType.int16, 32](
                         first,
                         second,
-                        0,
-                        len(first),
-                        0,
-                        len(second),
+                        Rectangle(0, len(first), 0, len(second)),
                         run,
                         lookup,
                         scoring.gaps,
@@ -2474,10 +2472,7 @@ def test_gotoh_sweeps_agree_in_either_width() raises:
                     vector_sweep_bands[SweepHalf.REVERSE, DType.int32, 16](
                         first,
                         second,
-                        0,
-                        len(first),
-                        0,
-                        len(second),
+                        Rectangle(0, len(first), 0, len(second)),
                         run,
                         lookup,
                         scoring.gaps,
@@ -2488,10 +2483,7 @@ def test_gotoh_sweeps_agree_in_either_width() raises:
                     vector_sweep_bands[SweepHalf.FORWARD, DType.int16, 32](
                         first,
                         second,
-                        0,
-                        len(first),
-                        0,
-                        len(second),
+                        Rectangle(0, len(first), 0, len(second)),
                         run,
                         lookup,
                         scoring.gaps,
@@ -2501,10 +2493,7 @@ def test_gotoh_sweeps_agree_in_either_width() raises:
                     vector_sweep_bands[SweepHalf.FORWARD, DType.int32, 16](
                         first,
                         second,
-                        0,
-                        len(first),
-                        0,
-                        len(second),
+                        Rectangle(0, len(first), 0, len(second)),
                         run,
                         lookup,
                         scoring.gaps,

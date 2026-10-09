@@ -10,11 +10,11 @@ licensed under the Apache License, Version 2.0 (see LICENSES/Apache-2.0.txt).
 The portions taken from it remain under that license; the changes made to them,
 and everything else in this repository, are under the Mozilla Public License.
 
-The file dinara_align/alignment.mojo derives from AffineGaps' alignment.mojo, and
-has been changed since: the folding, cofolding, protein-scoring,
-Python-binding and command-line code was removed, the sources were migrated to
-Mojo 1.1, and the host sweeps, traceback and linear-space recursion
-were extended and vectorized. dinara_align/scoring.mojo keeps parts of the
+The file dinara_align/alignment.mojo, the GPU kernels, derives from AffineGaps'
+alignment.mojo, and has been changed since: the folding, cofolding,
+protein-scoring, Python-binding and command-line code was removed, the sources
+were migrated to Mojo 1.1, and the host's alignment moved out to
+dinara_align/gotoh.mojo, written anew and no longer derived from it. dinara_align/scoring.mojo keeps parts of the
 dispatch and batch packing of AffineGaps' affinegaps.mojo, rewritten from Python
 objects to native Mojo types. Each of these files says so in its header.
 

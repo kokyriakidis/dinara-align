@@ -21,25 +21,26 @@ one by one, so a single oversized pair never sinks the batch it arrived in.
 
 from .cigar import reversed_list
 from .alignment import (
-    AffineGapCosts,
-    AlignmentMode,
-    GappedAlignment,
     DEFAULT_LEAF_CELLS,
     DEVICE_STORED_CELLS,
-    Layer,
     Space,
-    SweepHalf,
     band_length,
     device_align,
     device_alignments,
     launch_bytes,
     device_score,
     device_scores,
-    expand_path,
-    score_path,
-    serial_align,
-    serial_hirschberg,
     serving_space,
+)
+from .gotoh import (
+    AffineGapCosts,
+    AlignmentMode,
+    GappedAlignment,
+    Rectangle,
+    RowPath,
+    SweepHalf,
+    linear_path,
+    serial_align,
 )
 from .common import (
     spread,
@@ -367,36 +368,21 @@ def global_linear(
     scoring: Scoring,
 ) raises -> GappedAlignment:
     """Global alignment in linear space, splitting rows and joining halves Myers-Miller style."""
-    var path_columns = List[Int32](length=len(first) + 1, fill=Int32(0))
-    var path_layers = List[Layer](length=len(first) + 1, fill=Layer.ALIGNING)
-    serial_hirschberg(
+    var path = RowPath(len(first))
+    linear_path(
         first,
         second,
-        0,
-        len(first),
-        0,
-        len(second),
+        Rectangle(0, len(first), 0, len(second)),
         scoring.substitutions,
         scoring.alphabet_size(),
         scoring.gaps,
         DEFAULT_LEAF_CELLS,
-        path_columns,
-        path_layers,
+        path,
     )
-    var score = score_path(
-        first,
-        second,
-        path_columns,
-        path_layers,
-        scoring.substitutions,
-        scoring.alphabet_size(),
-        scoring.gaps,
-        len(first),
+    var rows = path.gapped(first, second, scoring.alphabet, AlignmentMode.GLOBAL, 0, len(first))
+    return GappedAlignment(
+        path.score(first, second, scoring.substitutions, scoring.alphabet_size(), scoring.gaps), rows[0], rows[1]
     )
-    var expanded = expand_path(
-        first, second, path_columns, path_layers, scoring.alphabet, AlignmentMode.GLOBAL, 0, len(first)
-    )
-    return GappedAlignment(score, expanded[0], expanded[1])
 
 
 # endregion Linear-Space Host Traceback

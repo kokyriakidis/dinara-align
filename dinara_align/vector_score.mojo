@@ -12,12 +12,12 @@ sweep's (see `scoring.swept_score`).
 
 from .common import UNREACHED
 from .anti_diagonals import AntiDiagonals, GapLanes, column_letters, gotoh_lanes, row_letters
-from .alignment import (
+from .gotoh import (
     AffineGapCosts,
     AlignmentMode,
-    GappedAlignment,
     AntiDiagonalMajor,
     BAND_PADDING,
+    GappedAlignment,
     reconstruct,
     serial_align,
 )

@@ -41,7 +41,7 @@ from std.atomic import Atomic
 from max.gpu import barrier, block_idx, thread_idx
 from max.gpu.host import DeviceContext
 
-from .alignment import AffineGapCosts, AlignmentMode
+from .gotoh import AffineGapCosts, AlignmentMode
 from .common import (
     MAX_ALPHABET_SIZE,
     NEGATIVE_INFINITY,
