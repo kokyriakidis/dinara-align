@@ -5,7 +5,7 @@
 Where the time still goes in a single-threaded alignment, profiled on the Skylake-X (3.3 GHz,
 pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
 
-- [~] **Band rounds that fail (about 1 s of the band's 6.5 s).** A retry now aims a quarter of the
+- [x] **Band rounds that fail (about 1 s of the band's 6.5 s).** A retry now aims a quarter of the
   estimated climb past its estimate, not half: genvar 2% and ont-500k 7.5% faster on the Skylake-X.
   Lowering later rounds' bounds at checkpoints, as the first round does, never ended on some reads. The sweep itself runs near the
   hardware's limit for Myers' recurrence, about 2.4 cycles a word-column on AVX-512, so the band
@@ -208,7 +208,7 @@ stands on each.
   less.
 - [x] **Low divergence (below 2%)** was A*PA2's weak spot against BiWFA; the diagonal transition
   before any band now beats BiWFA and WFA there (146 µs against 302 and 605 at 0%, 100 kbp).
-- [~] **The seeds' setup** was A*PA2's other limitation. Exact matching is filtered, seeds holding an
+- [x] **The seeds' setup** was A*PA2's other limitation. Exact matching is filtered, seeds holding an
   `N` are handled, and AVX-512 builds skip seeds below 86 kbp where they do not pay, but it is still a
   third or more of a long read's alignment on the Skylake-X (see above), where every idea listed
   has now been tried.
