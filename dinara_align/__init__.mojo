@@ -87,8 +87,7 @@ var best = score("TTTTACGTACGTTTTT", "ACGTACGT", scoring, Mode.local())  # 16
 var placed = align("TTTTACGTACGTTTTT", "ACGTACGT", scoring, Mode.INFIX)  # score 16, reference 4..12
 ```
 
-Ported from AffineGaps by Ash Vardanian, https://github.com/unum-science/AffineGaps, alignment only;
-the edit distance from A*PA by Ragnar Groot Koerkamp and Pesho Ivanov (see NOTICE).
+The edit distance is ported from A*PA by Ragnar Groot Koerkamp and Pesho Ivanov (see NOTICE).
 """
 
 from .api import Aligner, align, alignments, distance, distances, local_scores, score, scores, search

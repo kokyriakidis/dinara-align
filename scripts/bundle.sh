@@ -94,7 +94,7 @@ if [ -n "$left" ]; then
     echo "$left" >&2
     exit 1
 fi
-# The licenses travel with every bundle: MPL-2.0, and Apache-2.0 for the parts taken from AffineGaps (see NOTICE).
+# The licenses travel with every bundle: MPL-2.0, and Apache-2.0 for the parts NOTICE names.
 cp "$root/LICENSE" "$root/NOTICE" "$out/"
 mkdir -p "$out/LICENSES"
 cp "$root/LICENSES/Apache-2.0.txt" "$out/LICENSES/"

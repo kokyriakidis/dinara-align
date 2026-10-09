@@ -36,9 +36,8 @@ def gotoh_lanes[
     further its `extension`, with the local clamp folded in at comptime: the score, the deletion layer and
     the insertion layer.
 
-    This, with its two parts `gap_layer` and `best_move`, is the single transcription of the recurrence that
-    AffineGaps' NumPy reference holds as the oracle; every sweep of it on the host and on the device goes
-    through it or its parts, a cell or an anti-diagonal's lanes at a time. The device's kernels holding cells
+    This, with its two parts `gap_layer` and `best_move`, is the single transcription of the recurrence;
+    every sweep of it on the host and on the device goes through it or its parts, a cell or an anti-diagonal's lanes at a time. The device's kernels holding cells
     shifted by their anti-diagonal (see `score_groups`) take the same recurrence in three additions instead."""
     var deletion = gap_layer(above, above_delete, deletion_opening, deletion_extension)
     var insertion = gap_layer(left, left_insert, insertion_opening, insertion_extension)

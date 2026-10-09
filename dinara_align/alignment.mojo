@@ -6,9 +6,7 @@
 """
 Gotoh affine-gap alignment for CPU and GPU, with the reconstruction itself on the device.
 
-The alignment is recovered in linear space, not just the score. The scoring recurrences, the
-tie-breaking and the border initialization are transcribed from the NumPy reference in
-AffineGaps, which stays the parity oracle upstream.
+The alignment is recovered in linear space, not just the score.
 
 A row is the wrong sweep axis for a GPU, because the insertion term of a cell reads the
 insertion term of its left neighbour. This module sweeps anti-diagonals instead, where every
@@ -21,10 +19,6 @@ traceback over a stored decision tile.
 
 The traceback walks all three layers — match, deletion and insertion — so every path realizes
 the score reported alongside it, which is not automatic for affine gaps.
-
-For score-only work at much higher throughput, see `ashvardanian/StringZilla`, whose
-`stringzillas/similarities` kernels compute the same distances and scores. It carries no
-traceback, which is what this module exists to provide.
 """
 
 from std.math import ceildiv, clamp
@@ -605,11 +599,10 @@ def walk[
     handed to `taken` with the cell it leaves, until it reaches the first row or column or, for a local
     alignment in the aligning layer, a cell its path starts at; where it stopped.
 
-    AffineGaps' NumPy reference walks a single layer: after a deletion step it reads the winning operation of the
-    next cell instead of asking whether that deletion was opened or extended, so it can split one
-    run into two and return a path that does not achieve its own reported score. Carrying the state
-    fixes that. Ties resolve towards opening, which leaves the linear-gap case walking exactly as
-    that reference does.
+    A walk over a single layer, reading after a deletion step the winning operation of the next cell
+    instead of asking whether that deletion was opened or extended, can split one run into two and
+    return a path that does not achieve its own reported score; carrying the state avoids that. Ties
+    resolve towards opening.
     """
     var row = start_row
     var column = start_column

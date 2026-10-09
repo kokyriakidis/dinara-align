@@ -8,8 +8,7 @@ release's notes (see `.github/workflows/release.yml`).
 The first release: exact pairwise alignment in every mode, from Mojo, C, C++, Python and the command
 line.
 
-Licensed under the Mozilla Public License 2.0, with the parts taken from AffineGaps still under
-Apache-2.0 as well (see NOTICE).
+Licensed under the Mozilla Public License 2.0 (see LICENSE and NOTICE).
 
 ### Alignment
 
