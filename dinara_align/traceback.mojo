@@ -492,6 +492,12 @@ def window_segment[
     while step > 0:
         var column = first_column + step - 1
         var inside = row > lowest
+        if not inside and not whole:
+            # On the window's top row a substitution or a gap from the row above, which the rule takes
+            # before a deletion, cannot be weighed: a taller window must tell. Taking the deletion there
+            # traced an equally cheap path the rule does not name.
+            give_up(moves)
+            return -1
         var differs = inside and profile.column_codes[column] != profile.row_codes[row - 1]
         if differs:
             var found = optimal(step - 1, row - 1, current - 1)
@@ -514,10 +520,6 @@ def window_segment[
             step -= 1
             continue
         if not inside:
-            if not whole:
-                # A gap through the window's top may be the one to take: a taller window must tell.
-                give_up(moves)
-                return -1
             # The band's top: the path keeps to the band, so it goes on up the gap.
             moves.append(UP)
             current -= 1

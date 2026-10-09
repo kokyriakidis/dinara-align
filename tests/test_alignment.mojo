@@ -2646,6 +2646,19 @@ def test_fuzzed_edges_hold() raises:
     assert_equal(align(longer, shorter).cost, 12000)
 
 
+def test_unit_ties_hold_across_a_retraced_window() raises:
+    """Two sequences sharing no letter, long enough that the band's traceback retraces its tiles a window
+    of rows at a time: the CIGAR is the rule's, the one the wavefront under a cap traces, under either
+    rule. A deletion taken on a window's top row, where a substitution from the row above could not be
+    weighed, once traced another path as cheap."""
+    var reference = String("RRZR") * 156
+    var query = String("ggK") * 139
+    for ties in [Ties.LEFT, Ties.RIGHT]:
+        var found = align(reference, query, Costs.edit(), ties=ties)
+        var capped = align(reference, query, Costs.edit(), max_cost=1 << 40, ties=ties, max_memory=Int.MAX)
+        assert_equal(found.cigar, capped.value().cigar)
+
+
 def test_lanes_leave_what_they_cannot_hold() raises:
     """A pair longer than the lanes' 16-bit coordinates, and a banded pair whose cost reaches 16 bits' far
     value, are left to their own searches, which the batch then agrees with."""
