@@ -13,6 +13,7 @@ there is no such waste. Other modes take each pair's own search, the pairs sprea
 for.
 """
 
+from .common import FIRST_SENTINEL, SECOND_SENTINEL
 from .lanes import LocalCosts, StringTexts, Texts, lane_local_scores
 from .modes import Alignment, Costs
 
@@ -58,7 +59,7 @@ def local_scores_by_lane(
         StringTexts.of(references),
         RepeatedText(query.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin](), query.byte_length()),
         LocalCosts.of(costs, match_score),
-        (UInt8(0xFE), UInt8(0xFF)),
+        (FIRST_SENTINEL, SECOND_SENTINEL),
         max(threads, 1),
         found.unsafe_ptr(),
         settled.unsafe_ptr(),

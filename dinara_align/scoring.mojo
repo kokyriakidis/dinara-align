@@ -19,6 +19,7 @@ A batch on the device goes out as one launch for every pair both bounds admit; t
 one by one, so a single oversized pair never sinks the batch it arrived in.
 """
 
+from .cigar import reversed_list
 from .alignment import (
     AffineGapCosts,
     AlignmentMode,
@@ -49,6 +50,8 @@ from .common import (
     SubstitutionDType,
     SymbolDType,
     UNKNOWN_SYMBOL,
+    code_table,
+    raise_unknown,
     translate,
     uniform_matrix,
 )
@@ -56,7 +59,7 @@ from .errors import AlignmentError, ErrorKind
 from .gap_affine import (
     DEFAULT_MAX_MEMORY,
     FREE_START,
-    HISTORY_LIMIT,
+    KEPT_BYTES,
     EndsFree,
     Penalties,
     cigar_of,
@@ -80,7 +83,7 @@ from .modes import Alignment, Anchor, Band, Costs, Mode
 from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, swept_cells
 from .band_groups import banded_scores
 from .score_groups import grouped_scores
-from .substitutions import SubstitutionLookup
+from .substitutions import SubstitutionLookup, shuffled_table
 from .vector_score import optimal_band, reach_back, vector_align
 
 
@@ -95,6 +98,12 @@ and is capped again by `DEVICE_STORED_CELLS`."""
 def cells_within(max_memory: Int) -> Int:
     """Cells a traceback may store within `max_memory` bytes, above which it recurses in linear space."""
     return max(max_memory, 0) // STORED_CELL_BYTES
+
+
+def fronts_within(stored_cells: Int) -> Int:
+    """Entries the wavefront may keep of its fronts in the bytes `stored_cells` cells take, as `Costs`' alignments
+    keep theirs within `max_memory`, above which it splits where an optimal path crosses."""
+    return max(stored_cells, 0) * STORED_CELL_BYTES // KEPT_BYTES
 
 
 # region Scoring
@@ -215,10 +224,7 @@ def pack_batch(
     pairs' codes straight onto the tape: one thread translating a sequence at a time into a list of
     its own took three times as long as the kernel that scored 500,000 short reads. A letter outside
     the alphabet raises as `translate` does, for the first pair in order holding one."""
-    var codes_by_byte = Array[UInt8, 256](fill=UNKNOWN_SYMBOL)
-    var alphabet_bytes = alphabet.as_bytes()
-    for index in range(len(alphabet_bytes)):
-        codes_by_byte[Int(alphabet_bytes[index])] = UInt8(index)
+    var codes_by_byte = code_table(alphabet)
     var pairs = len(indices)
     var offsets = List[Scalar[OffsetDType]](capacity=2 * pairs + 1)
     offsets.append(0)
@@ -266,9 +272,7 @@ def pack_batch(
     spread(encode, stretches, stretches)
     for slot in range(pairs):
         if failed[slot]:
-            # The pair's own translation raises the error the serial packing raised.
-            _ = translate(firsts[indices[slot]], alphabet)
-            _ = translate(seconds[indices[slot]], alphabet)
+            raise_unknown(firsts[indices[slot]], seconds[indices[slot]], alphabet)
     return BatchTape(sequences^, offsets^)
 
 
@@ -416,7 +420,9 @@ def global_on_host(
         scoring.substitutions, scoring.alphabet_size(), Int(scoring.gaps.open), Int(scoring.gaps.extend)
     )
     if penalties:
-        var traced = wavefront_align(codes_first, codes_second, penalties.value(), scoring.alphabet)
+        var traced = wavefront_align(
+            codes_first, codes_second, penalties.value(), scoring.alphabet, fronts_within(stored_cells)
+        )
         return GappedAlignment(Int32(traced[0]), traced[1], traced[2])
     var lookup = SubstitutionLookup(scoring.substitutions, scoring.alphabet_size())
     # Not `known.or_else(...)`, which would sweep for the score whether it is known or not.
@@ -583,16 +589,6 @@ def tabulated_end[
     )
 
 
-def ends_of(mode: Mode, columns: Int, rows: Int) -> EndsFree:
-    """A mode's free letters, none past its sequence's length."""
-    return EndsFree(
-        min(mode.reference_start, columns),
-        min(mode.reference_end, columns),
-        min(mode.query_start, rows),
-        min(mode.query_end, rows),
-    )
-
-
 def extension_span(
     first: List[Scalar[SymbolDType]], second: List[Scalar[SymbolDType]], scoring: Scoring, mode: Mode
 ) -> Tuple[Int, Int, Int, Int, Int, Bool]:
@@ -602,12 +598,8 @@ def extension_span(
     var columns = len(first)
     var rows = len(second)
     if mode.anchor == Anchor.END:
-        var back_first = List[Scalar[SymbolDType]](capacity=columns)
-        for index in range(columns - 1, -1, -1):
-            back_first.append(first[index])
-        var back_second = List[Scalar[SymbolDType]](capacity=rows)
-        for index in range(rows - 1, -1, -1):
-            back_second.append(second[index])
+        var back_first = reversed_list(Span(first))
+        var back_second = reversed_list(Span(second))
         var found = tabulated_end[FROM_ORIGIN](back_first, back_second, scoring, EndsFree(), True, mode.zdrop)
         return (found[0], columns - found[1], rows - found[2], columns, rows, found[3])
     var found = tabulated_end[FROM_ORIGIN](first, second, scoring, EndsFree(), True, mode.zdrop)
@@ -637,18 +629,14 @@ def mode_span(
             if reaching[0] + mode.end_bonus > stop[0]:
                 return reaching
         return (stop[0], stop[1], stop[2], stop[3], stop[4])
-    var ends = ends_of(mode, columns, rows)
+    var ends = EndsFree.of(mode, columns, rows)
     var forward = tabulated_end[FROM_EDGE](first, second, scoring, ends, True)
     var end_column = forward[1]
     var end_row = forward[2]
     if not started:
         return (forward[0], 0, 0, end_column, end_row)
-    var head = List[Scalar[SymbolDType]](capacity=end_column)
-    for index in range(end_column - 1, -1, -1):
-        head.append(first[index])
-    var lead = List[Scalar[SymbolDType]](capacity=end_row)
-    for index in range(end_row - 1, -1, -1):
-        lead.append(second[index])
+    var head = reversed_list(Span(first)[:end_column])
+    var lead = reversed_list(Span(second)[:end_row])
     var back = tabulated_end[FROM_EDGE](head, lead, scoring, EndsFree(0, ends.first_begin, 0, ends.second_begin), False)
     return (forward[0], end_column - back[1], end_row - back[2], end_column, end_row)
 
@@ -725,7 +713,7 @@ def scoring_alignment(
                 penalties.value(),
                 FREE_START,
                 FREE_START,
-                HISTORY_LIMIT,
+                fronts_within(stored_cells),
                 moves,
             )
             var score = penalties.value().score(cost, len(codes_first) + len(codes_second))
@@ -830,20 +818,18 @@ def unknown_letters(firsts: List[String], seconds: List[String], alphabet: Strin
     """Which pairs hold a letter outside `alphabet`, checked over `workers` threads: the lanes leave those
     for their own calls to raise as they do."""
     var pairs = len(firsts)
-    var held = Array[Bool, 256](fill=False)
-    for letter in alphabet.as_bytes():
-        held[Int(letter)] = True
+    var codes_by_byte = code_table(alphabet)
     var refused = List[Bool](length=pairs, fill=False)
     var refused_ptr = refused.unsafe_ptr()
 
-    def refuse(stretch: Int) {imm firsts, imm seconds, imm held, imm pairs, imm workers, imm refused_ptr}:
+    def refuse(stretch: Int) {imm firsts, imm seconds, imm codes_by_byte, imm pairs, imm workers, imm refused_ptr}:
         """Marks stretch `stretch`'s pairs holding a letter outside the alphabet."""
         for index in range(pairs * stretch // workers, pairs * (stretch + 1) // workers):
             var known = True
             for letter in firsts[index].as_bytes():
-                known = known and held[Int(letter)]
+                known = known and codes_by_byte[Int(letter)] != UNKNOWN_SYMBOL
             for letter in seconds[index].as_bytes():
-                known = known and held[Int(letter)]
+                known = known and codes_by_byte[Int(letter)] != UNKNOWN_SYMBOL
             if not known:
                 refused_ptr[unsafe_offset=index] = True
 
@@ -870,8 +856,8 @@ def laned_scores(
     var found = List[Optional[Int]](length=pairs, fill=None)
     _ = lane_distances(
         pairs,
-        StringTexts(firsts.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
-        StringTexts(seconds.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
+        StringTexts.of(firsts),
+        StringTexts.of(seconds),
         costs,
         Band(),
         Int.MAX,
@@ -920,8 +906,8 @@ def laned_alignments(
         paths.append(List[UInt8]())
     _ = lane_alignments(
         pairs,
-        StringTexts(firsts.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
-        StringTexts(seconds.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
+        StringTexts.of(firsts),
+        StringTexts.of(seconds),
         costs,
         Band(),
         Int.MAX,
@@ -951,6 +937,7 @@ def laned_alignments(
         imm path_ptr,
         imm refused_ptr,
         imm alignments_out,
+        imm budget,
     }:
         """Spells the CIGARs of stretch `stretch`'s pairs the lanes traced, and unsettles the rest."""
         for index in range(pairs * stretch // workers, pairs * (stretch + 1) // workers):
@@ -960,8 +947,8 @@ def laned_alignments(
             var cost = laned_ptr[unsafe_offset=index].value()
             var columns = firsts[index].byte_length()
             var rows = seconds[index].byte_length()
-            # The searches split a pair whose fronts pass `HISTORY_LIMIT`, which they cannot below this.
-            if 2 * (cost + 1) * (columns + rows + 1) > HISTORY_LIMIT:
+            # The searches split a pair whose fronts pass `max_memory`'s entries, which they cannot below this.
+            if 2 * (cost + 1) * (columns + rows + 1) > budget // KEPT_BYTES:
                 settled_ptr[unsafe_offset=index] = False
                 continue
             var moves = List[UInt8]()
@@ -999,12 +986,10 @@ def laned_local_scores(
     var uniform = uniform_scores(scoring)
     if not uniform:
         return List[Bool](length=pairs, fill=False)
-    var held = Array[Bool, 256](fill=False)
-    for letter in scoring.alphabet.as_bytes():
-        held[Int(letter)] = True
+    var codes_by_byte = code_table(scoring.alphabet)
     var pads = List[UInt8]()
     for byte in range(256):
-        if not held[byte] and len(pads) < 2:
+        if codes_by_byte[byte] == UNKNOWN_SYMBOL and len(pads) < 2:
             pads.append(UInt8(byte))
     if len(pads) < 2:
         return List[Bool](length=pairs, fill=False)
@@ -1012,8 +997,8 @@ def laned_local_scores(
     var settled = refused.copy()
     _ = lane_local_scores(
         pairs,
-        StringTexts(firsts.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
-        StringTexts(seconds.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
+        StringTexts.of(firsts),
+        StringTexts.of(seconds),
         LocalCosts.symmetric(uniform.value()[0], uniform.value()[1], Int(scoring.gaps.open), Int(scoring.gaps.extend)),
         (pads[0], pads[1]),
         workers,
@@ -1051,10 +1036,7 @@ struct CodedBatch(Movable):
 def coded_batch(firsts: List[String], seconds: List[String], alphabet: String, workers: Int) -> CodedBatch:
     """Every pair's letters as `alphabet`'s codes, translated over `workers` threads."""
     var pairs = len(firsts)
-    var codes_by_byte = Array[UInt8, 256](fill=UInt8(255))
-    var alphabet_bytes = alphabet.as_bytes()
-    for index in range(len(alphabet_bytes)):
-        codes_by_byte[Int(alphabet_bytes[index])] = UInt8(index)
+    var codes_by_byte = code_table(alphabet)
     # Sequence `i` of the firsts, then of the seconds, from `starts[i]`, and one entry past the last.
     var starts = List[Int](capacity=2 * pairs + 1)
     var total = 0
@@ -1100,11 +1082,7 @@ def coded_batch(firsts: List[String], seconds: List[String], alphabet: String, w
 
 def lane_table(scoring: Scoring) -> SIMD[DType.uint8, TABLE_ENTRIES]:
     """The table's signed scores as bytes, row by row, for the lanes' byte shuffle."""
-    var table = SIMD[DType.uint8, TABLE_ENTRIES](0)
-    var size = scoring.alphabet_size()
-    for cell in range(min(size * size, TABLE_ENTRIES)):
-        table[cell] = bitcast[DType.uint8](Int8(scoring.substitutions[cell]))
-    return table
+    return shuffled_table(scoring.substitutions, scoring.alphabet_size())
 
 
 def tabled_scores[

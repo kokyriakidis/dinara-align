@@ -50,6 +50,56 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
   projections agree, as spread errors' do, now rebuilds only below 20%: 3.75 and 3.92 ms against
   A*PA2-full's 5.25 and 5.0, at a cost of 1 to 2.5% on the M2's real long reads, still well ahead.
 
+## Consolidation
+
+What the library computes twice, from four audits on 2026-10-08 (DP sweeps, cost types, batch plumbing,
+traceback and text helpers). Each item shares one implementation, every copy's optimizations kept, its
+answers held to the copies it replaces by the tests, and a hot path benchmarked before and after.
+
+### Phase 1: copies that no longer agree
+
+- [x] One batch core, `api.distances_in_lanes`, `alignments_in_lanes`, `alignment_from_lanes`, `each_pair` and
+  `longest_first` over `Texts`, for the API's batches and the C API's: C now deals pairs longest first and
+  takes the same memory budget. Bytes 0xFE and 0xFF stay C's to refuse: a `String` never holds them.
+- [x] `Scoring` alignments honour `max_memory` (`fronts_within`), not `HISTORY_LIMIT`.
+- [x] The GPU distances' host fallback over the threads asked for. Left: `search` copying the query a
+  reference, about a millisecond for 20,000, which sharing would need a per-pair path over any texts for.
+- [x] Latent: `cigar_of`'s room with a free mismatch, `band_flags` reading a table, one `looked_up` for
+  `byte_lookup` (which fell short under 16 lanes), `joined_cigar` merging neighbours.
+
+### Phase 2: shared leaf helpers
+
+- [x] Byte reversal: `cigar.reverse_bytes`, `reversed_into`, `reversed_list`, `append_reversed`,
+  `reversed_text` in place of six copies.
+- [x] CIGARs: one `CigarWriter` (in `cigar`) for `GappedAlignment.cigar`, `joined_cigar` and the tracebacks;
+  one walk, `cigar_counts`, for `cigar_matches`, `Alignment.counts` and `costs_of_cigar`.
+- [x] Move codes: `gap_affine`'s defined from `bit_parallel`'s, the lanes' mask and layers from
+  `gap_affine`'s (`layer_bit`, `gap_layer`).
+- [x] Constants in `common`: `UNREACHED`, `NEGATIVE_INFINITY` for `NOWHERE`, the sentinel bytes; `Band.covers_any`,
+  `Band.clamped` and `ANY_LENGTH` for the bindings' and the API's own spellings.
+- [x] `common.code_table` for five tables, `raise_unknown` for three loops, `EndsFree.of` for three clamps,
+  `Alignment.mirrored`, `matches_along`, `AffineGapCosts.run`, `text_of`, `StringTexts.of` throughout.
+- [x] Tests: `reversed_text` from the library. Kept apart on purpose: the fuzzer's and the tests'
+  `reversed_cigar`, `rescore`, `priced`, `cigar_of_moves`, which check the library rather than share it.
+
+### Phase 3: one cost model
+
+- [ ] `Costs` canonical with one `validate()`; `Scoring`'s gaps as its gap part, `AffineGapCosts` the
+  kernels' two numbers alone.
+- [ ] One match-reward fold for `scaled_penalties`, `wavefront_penalties`, `extension_penalties`,
+  `tabled_scores`, `band_groups` and `optimal_band`; `LaneCosts.of_penalties`; `Scoring.penalties()`.
+- [ ] One 16-bit fit rule (`narrow_enough`, `table_fits`, `LaneCosts.fits`, `local_stage`), one table
+  summary (uniform, best, least, shuffled).
+
+### Phase 4: engines
+
+- [ ] One span finder (`rewarded_span`, `mode_span`, `framed_spans`); `extend` and `traced_extension`
+  sharing their search; one sweep dispatcher.
+- [ ] The cost lanes several registers wide where the CPU's are narrow, as the local lanes are.
+- [ ] One anti-diagonal sweep (`swept_cells`, `reach_back`, `vector_align`, `vector_sweep_bands`) with
+  borders and observers; one row fill and walk in `alignment.mojo`; `step_front` in `grow_to` and
+  `forward_segment`; `edit_search` on `band.Band`.
+
 ## From A*PA2's discussion
 
 Its limitations and future work (curiouscoding.nl/posts/astarpa2/#discussion), and where dinara-align

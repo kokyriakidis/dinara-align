@@ -7,12 +7,15 @@ what comes back. The first sequence is always the reference and the second the q
 reads them: `D` a letter of the reference alone, `I` one of the query alone.
 """
 
-from .cigar import cigar_runs
+from .cigar import AlignedCounts, cigar_counts, cigar_runs, reversed_cigar, text_of
 from .errors import AlignmentError, ErrorKind
 
 
 comptime UNBOUNDED = 1 << 60
 """Past any diagonal or length, and far enough from overflow to shift by any sequence's length."""
+
+comptime ANY_LENGTH = 1 << 40
+"""Longer than any sequence a batch holds: free letters or a band this far reach every one."""
 
 
 @fieldwise_init
@@ -405,6 +408,17 @@ struct Band(ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         """Whether every diagonal of a `columns` by `rows` matrix lies inside: no band at all for it."""
         return self.low <= -rows and self.high >= columns
 
+    def covers_any(self) -> Bool:
+        """Whether every diagonal of any pair a batch could hold lies inside, sequences of up to `1 << 40`
+        letters: no band for any pair."""
+        return self.covers(ANY_LENGTH, ANY_LENGTH)
+
+    @staticmethod
+    def clamped(low: Int, high: Int) -> Band:
+        """The band from `low` to `high`, an integer type's limits standing for no band, kept clear of
+        overflow at `UNBOUNDED`."""
+        return Band(max(low, -UNBOUNDED), min(high, UNBOUNDED))
+
     def shifted(self, origin: Int) -> Band:
         """The band as seen from a cell on diagonal `origin`, the start of a piece after a split."""
         return Band(self.low - origin, self.high - origin)
@@ -476,33 +490,23 @@ struct Alignment(Copyable, Movable, Writable):
             out += String(query_length - self.query_end, clip)
         return out
 
+    def mirrored(self, reference_length: Int, query_length: Int) -> Alignment:
+        """This alignment of both sequences reversed, `reference_length` and `query_length` letters, turned
+        back: its CIGAR's runs in the other order and its spans counted from the other ends."""
+        return Alignment(
+            self.cost,
+            self.score,
+            reversed_cigar(self.cigar),
+            reference_length - self.reference_end,
+            reference_length - self.reference_start,
+            query_length - self.query_end,
+            query_length - self.query_start,
+        )
+
     def counts(self, reference: String, query: String) -> AlignedCounts:
         """How many letters the alignment pairs equal and unequal, and leaves gapped either way, `M` runs
         compared letter by letter."""
-        var first = reference.as_bytes()
-        var second = query.as_bytes()
-        var column = self.reference_start
-        var row = self.query_start
-        var counted = AlignedCounts(0, 0, 0, 0)
-        var runs = cigar_runs(self.cigar)
-        for index in range(len(runs[0])):
-            var letter = runs[0][index]
-            var length = runs[1][index]
-            if letter == UInt8(ord("D")):
-                counted.deleted += length
-                column += length
-            elif letter == UInt8(ord("I")):
-                counted.inserted += length
-                row += length
-            else:
-                for _ in range(length):
-                    if first[column] == second[row]:
-                        counted.matches += 1
-                    else:
-                        counted.mismatches += 1
-                    column += 1
-                    row += 1
-        return counted
+        return cigar_counts(reference.as_bytes(), query.as_bytes(), self.cigar, self.reference_start, self.query_start)
 
     def edit_distance(self, reference: String, query: String) -> Int:
         """The alignment's edits, SAM's `NM` tag: its substitutions and gapped letters."""
@@ -537,7 +541,7 @@ struct Alignment(Copyable, Movable, Writable):
             elif letter == UInt8(ord("D")):
                 out += String(matched, "^")
                 matched = 0
-                out += String(StringSlice(unsafe_from_utf8=first[column : column + length]))
+                out += text_of(first[column : column + length])
                 column += length
             else:
                 for _ in range(length):
@@ -546,20 +550,8 @@ struct Alignment(Copyable, Movable, Writable):
                     else:
                         out += String(matched)
                         matched = 0
-                        out += String(StringSlice(unsafe_from_utf8=first[column : column + 1]))
+                        out += text_of(first[column : column + 1])
                     column += 1
                     row += 1
         out += String(matched)
         return out
-
-
-@fieldwise_init
-struct AlignedCounts(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
-    """An alignment's columns by kind (see `Alignment.counts`)."""
-
-    var matches: Int
-    var mismatches: Int
-    var deleted: Int
-    """Reference letters against a gap, `D`."""
-    var inserted: Int
-    """Query letters against a gap, `I`."""

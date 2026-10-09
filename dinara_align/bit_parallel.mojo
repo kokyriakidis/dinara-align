@@ -27,6 +27,8 @@ from std.math import ceildiv
 from std.sys import inlined_assembly, simd_width_of
 from std.sys.info import CompilationTarget
 
+from .common import FIRST_SENTINEL, SECOND_SENTINEL
+from .cigar import reverse_bytes
 from .errors import AlignmentError, ErrorKind
 
 
@@ -105,14 +107,6 @@ slope is most of the work, and narrower tiles cut it at the cost of more triangl
 
 comptime CODE_PADDING = 16
 """Sentinel bytes after each sequence's codes, enough for a sixteen-byte comparison at the last base."""
-
-
-comptime FIRST_SENTINEL = UInt8(0xFE)
-"""Past the first sequence's last base: no code, and unequal to `SECOND_SENTINEL`."""
-
-
-comptime SECOND_SENTINEL = UInt8(0xFF)
-"""Past the second sequence's last base."""
 
 
 comptime COLUMN_PADDING = LANES
@@ -833,27 +827,6 @@ def folded(codes: List[UInt8]) -> List[UInt8]:
     return out^
 
 
-def reverse_in_place(codes: MutPointer[UInt8, _], count: Int):
-    """`count` codes back to front, sixteen from each end at a time."""
-    comptime CHUNK = 16
-    var low = 0
-    var high = count
-    while high - low >= 2 * CHUNK:
-        var front = codes.unsafe_offset(low).unsafe_load[width=CHUNK]()
-        var back = codes.unsafe_offset(high - CHUNK).unsafe_load[width=CHUNK]()
-        codes.unsafe_offset(low).unsafe_store(back.reversed())
-        codes.unsafe_offset(high - CHUNK).unsafe_store(front.reversed())
-        low += CHUNK
-        high -= CHUNK
-    high -= 1
-    while low < high:
-        var swapped = codes[unsafe_offset=low]
-        codes[unsafe_offset=low] = codes[unsafe_offset=high]
-        codes[unsafe_offset=high] = swapped
-        low += 1
-        high -= 1
-
-
 struct Profile(Movable):
     """Both sequences as codes, and once a band needs them, as the bit planes `Sweep` reads; see
     `Sweep` for the encoding."""
@@ -925,8 +898,8 @@ struct Profile(Movable):
         if self.extended:
             symbol_codes(first, second, self.column_codes, self.row_codes)
         if reverse:
-            reverse_in_place(self.column_codes.unsafe_ptr(), self.columns)
-            reverse_in_place(self.row_codes.unsafe_ptr(), self.rows)
+            reverse_bytes(self.column_codes.unsafe_ptr(), self.columns)
+            reverse_bytes(self.row_codes.unsafe_ptr(), self.rows)
         # Past the last base of each, sentinels that match nothing, the two of them distinct, so a
         # match extension stops at the matrix's edge without checking it (see `slide_forward`).
         self.column_codes.resize(unsafe_uninit_length=self.columns + CODE_PADDING)

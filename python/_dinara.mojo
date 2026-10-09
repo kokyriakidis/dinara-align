@@ -128,9 +128,8 @@ struct Options(ImplicitlyCopyable):
 def options_of(fields: PythonObject) raises -> Options:
     """The `Options` an options tuple asks for."""
     var at = ints(fields)
-    comptime EDGE = 1 << 60
-    # A band past any diagonal is no band; clamping it keeps the library's arithmetic clear of overflow.
-    var band = Band(max(at[0], -EDGE), min(at[1], EDGE))
+    # A band past any diagonal is no band.
+    var band = Band.clamped(at[0], at[1])
     var memory = at[5] if at[5] > 0 else DEFAULT_MAX_MEMORY
     return Options(band, at[2], at[3] != 0, Ties.RIGHT if at[4] != 0 else Ties.LEFT, memory)
 

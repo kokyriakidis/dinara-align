@@ -41,6 +41,7 @@ from dinara_align import (
 from dinara_align.alignment import AlignmentMode, GappedAlignment, colorize, serial_align
 from dinara_align.scoring import DNA_ALPHABET
 from dinara_align.cigar import cigar_runs
+from dinara_align.cigar import reversed_text as reversed_bytes
 from dinara_align.edit_distance import edit_distance as bit_parallel_distance
 from dinara_align.scored import best_end, end_of
 from dinara_align.seeds import SEED_COLUMNS
@@ -1624,11 +1625,7 @@ def extension_price(cigar: String, a: Int, x: Int, o: Int, e: Int, o2: Int, e2: 
 
 def reversed_text(text: String) -> String:
     """`text`'s bytes in reverse order."""
-    var bytes = List[UInt8]()
-    var source = text.as_bytes()
-    for index in range(len(source) - 1, -1, -1):
-        bytes.append(source[index])
-    return String(unsafe_from_utf8=bytes)
+    return reversed_bytes(text.as_bytes())
 
 
 def reversed_cigar(cigar: String) -> String:

@@ -21,20 +21,31 @@ alphabet's, DNA's."""
 
 
 @inline(.always)
-def byte_lookup[
-    dtype: DType, width: Int
-](table: SIMD[DType.uint8, SHUFFLED_ENTRIES], index: SIMD[DType.uint8, width]) -> SIMD[dtype, width]:
-    """Each lane's entry of a table of up to sixteen signed bytes, widened to `dtype`: one byte shuffle per
-    sixteen lanes, `pshufb` on x86 and `tbl` on Arm, in place of a gather from memory."""
-    var out = SIMD[dtype, width]()
+@always_inline
+def looked_up[
+    value: DType, width: Int
+](table: SIMD[DType.uint8, SHUFFLED_ENTRIES], index: SIMD[DType.uint8, width]) -> SIMD[value, width]:
+    """Each lane's entry of `table`, `pshufb` or `tbl` a sixteen lanes, widened to `value`, signed for a
+    signed `value`."""
+    var out = SIMD[value, width]()
+    comptime if width < SHUFFLED_ENTRIES:
+        # Fewer lanes than a shuffle takes, as NEON's eight 16-bit ones: one shuffle, its first lanes kept.
+        var part = table._dynamic_shuffle(SIMD[DType.uint8, SHUFFLED_ENTRIES](0).insert[offset=0](index)).slice[width]()
+        comptime if value.is_signed():
+            return bitcast[DType.int8, width](part).cast[value]()
+        else:
+            return part.cast[value]()
     comptime for chunk in range(width // SHUFFLED_ENTRIES):
         var part = table._dynamic_shuffle(index.slice[SHUFFLED_ENTRIES, offset=chunk * SHUFFLED_ENTRIES]())
-        out = out.insert[offset=chunk * SHUFFLED_ENTRIES](bitcast[DType.int8, SHUFFLED_ENTRIES](part).cast[dtype]())
+        comptime if value.is_signed():
+            out = out.insert[offset=chunk * SHUFFLED_ENTRIES](bitcast[DType.int8, SHUFFLED_ENTRIES](part).cast[value]())
+        else:
+            out = out.insert[offset=chunk * SHUFFLED_ENTRIES](part.cast[value]())
     return out
 
 
 def shuffled_table(substitutions: ImmSpan[Scalar[SubstitutionDType], _], alphabet_size: Int) -> SIMD[DType.uint8, 16]:
-    """A table of at most `SHUFFLED_ENTRIES` entries as the bytes `byte_lookup` reads, row by row; the
+    """A table of at most `SHUFFLED_ENTRIES` entries as the bytes `looked_up` reads, row by row; the
     rest zero."""
     var table = SIMD[DType.uint8, SHUFFLED_ENTRIES](0)
     for cell in range(min(alphabet_size * alphabet_size, SHUFFLED_ENTRIES)):
@@ -56,7 +67,7 @@ struct SubstitutionLookup(Copyable, Movable):
     var reward: Int32
     var mismatch: Int32
     var shuffled: SIMD[DType.uint8, SHUFFLED_ENTRIES]
-    """The table as bytes for `byte_lookup`, when it has no more than `SHUFFLED_ENTRIES` entries."""
+    """The table as bytes for `looked_up`, when it has no more than `SHUFFLED_ENTRIES` entries."""
     var small: Bool
     var best: Int
     """The table's largest score: no substitution earns more."""
@@ -122,7 +133,7 @@ struct SubstitutionLanes[width: Int](ImplicitlyCopyable, TrivialRegisterPassable
         var row = min(mine, last)
         var column = min(theirs, last)
         if self.small:
-            return byte_lookup[DType.int32, Self.width](self.shuffled, row * UInt8(self.stride) + column)
+            return looked_up[DType.int32, Self.width](self.shuffled, row * UInt8(self.stride) + column)
         return self.cells.unsafe_gather[width=Self.width](
             row.cast[DType.int32]() * Int32(self.stride) + column.cast[DType.int32]()
         )

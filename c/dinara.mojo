@@ -34,8 +34,17 @@ from dinara_align import (
     score,
     search,
 )
-from dinara_align.api import aligned_within, bits_serve, cost_within
-from dinara_align.common import next_share, spread
+from dinara_align.api import (
+    aligned_within,
+    alignment_from_lanes,
+    alignments_in_lanes,
+    cost_within,
+    distances_in_lanes,
+    each_pair,
+    longest_first,
+)
+from dinara_align.cigar import text_of
+from dinara_align.common import FIRST_SENTINEL, spread
 from dinara_align.gap_affine import KEPT_BYTES, Penalties, SearchSpace, cigar_of, penalties_of
 from dinara_align.lanes import LaneCosts, Texts, lane_alignments, lane_distances, lane_free_alignments
 
@@ -70,13 +79,13 @@ def sequence(bytes: ImmPointer[UInt8, MutAnyOrigin], length: Int) -> String:
     """A sequence from C bytes; an empty one may come as a null pointer, never read."""
     if length <= 0:
         return String()
-    return String(StringSlice(unsafe_from_utf8=Span(unsafe_ptr=bytes, length=length)))
+    return text_of(Span(unsafe_ptr=bytes, length=length))
 
 
 def plain_bytes(bytes: ImmPointer[UInt8, MutAnyOrigin], length: Int) -> Bool:
     """Whether no byte is one of the two UTF-8 never holds, which the wavefront's sentinels are."""
     for index in range(length):
-        if bytes[unsafe_offset=index] >= 0xFE:
+        if bytes[unsafe_offset=index] >= FIRST_SENTINEL:
             return False
     return True
 
@@ -144,9 +153,8 @@ def options_of(fields: OptionalPointer[Int, MutAnyOrigin]) -> Options:
     if not fields:
         return Options(Band(), -1, True, Ties.LEFT, DEFAULT_MAX_MEMORY)
     var at = fields.value()
-    comptime EDGE = 1 << 60
-    # The C integer limits stand for no band, kept clear of overflow.
-    var band = Band(max(at[unsafe_offset=0], -EDGE), min(at[unsafe_offset=1], EDGE))
+    # The C integer limits stand for no band.
+    var band = Band.clamped(at[unsafe_offset=0], at[unsafe_offset=1])
     var ties = Ties.RIGHT if at[unsafe_offset=4] != 0 else Ties.LEFT
     var memory = at[unsafe_offset=5] if at[unsafe_offset=5] > 0 else DEFAULT_MAX_MEMORY
     return Options(band, at[unsafe_offset=2], at[unsafe_offset=3] != 0, ties, memory)
@@ -489,6 +497,31 @@ def workers_for(pairs: Int, threads: Int) -> Int:
     return max(min(threads, pairs), 1)
 
 
+def refused_pairs(
+    pairs: Int,
+    references: CSequences,
+    reference_lengths: CInts,
+    queries: CSequences,
+    query_lengths: CInts,
+    workers: Int,
+) -> List[Bool]:
+    """Which pairs hold a byte the library refuses (see `plain_bytes`), on `workers` threads: the lanes leave
+    them, and each is answered with its own code."""
+    var refused = List[Bool](length=max(pairs, 1), fill=False)
+    var refused_ptr = refused.unsafe_ptr()
+
+    def refuse(stretch: Int) {imm}:
+        """Marks stretch `stretch`'s pairs holding such a byte."""
+        for index in range(pairs * stretch // workers, pairs * (stretch + 1) // workers):
+            if not plain_bytes(references[unsafe_offset=index], reference_lengths[unsafe_offset=index]) or not (
+                plain_bytes(queries[unsafe_offset=index], query_lengths[unsafe_offset=index])
+            ):
+                refused_ptr[unsafe_offset=index] = True
+
+    spread(refuse, workers, workers)
+    return refused^
+
+
 @export("dinara_distances")
 def dinara_distances(
     pairs: Int,
@@ -515,80 +548,54 @@ def dinara_distances(
 
     if pairs <= 0:
         return 0
-    var taken = Atomic[Int64](0)
     var workers = workers_for(pairs, threads)
 
-    # Costs with no reward, globally or with free ends, go many pairs at once into the lanes of a register,
-    # as `distances` sends them (see `lanes`): every pair whose bytes the library takes and 16 bits hold. A pair the
-    # library refuses, and every pair of costs it refuses, goes one at a time for its own code.
-    var settled = List[Bool](length=pairs, fill=False)
-    var found = List[Optional[Int]](length=pairs, fill=None)
-    var laned = List[Bool](length=pairs, fill=False)
-    var settled_ptr = settled.unsafe_ptr()
-    var found_ptr = found.unsafe_ptr()
-    var laned_ptr = laned.unsafe_ptr()
-    var lane_costs = LaneCosts.of(wanted_costs, wanted_mode, free_ends=True)
-    if lane_costs:
-        try:
-            _ = penalties_of(wanted_costs)
-        except:
-            lane_costs = None
+    # As `distances` sends them (see `api.distances_in_lanes`): the lanes first, every pair whose bytes the library
+    # takes; a pair it refuses, and every pair of costs it refuses, one at a time for its own code, the longest
+    # first.
     var cap = asked.max_cost if asked.max_cost >= 0 else Int.MAX
-    if lane_costs:
+    var settled = refused_pairs(pairs, references, reference_lengths, queries, query_lengths, workers)
+    var before = settled.copy()
+    var found = List[Optional[Int]](length=pairs, fill=None)
+    var found_ptr = found.unsafe_ptr()
+    var reference_texts = ByteTexts.of(references, reference_lengths)
+    var query_texts = ByteTexts.of(queries, query_lengths)
+    _ = distances_in_lanes(
+        pairs,
+        reference_texts,
+        query_texts,
+        wanted_costs,
+        wanted_mode,
+        asked.band,
+        cap,
+        workers,
+        found_ptr,
+        settled.unsafe_ptr(),
+    )
+    var laned = List[Bool](length=pairs, fill=False)
+    for index in range(pairs):
+        laned[index] = settled[index] and not before[index]
+    var laned_ptr = laned.unsafe_ptr()
 
-        def refuse(stretch: Int) {imm}:
-            """Marks stretch `stretch`'s pairs holding bytes the library refuses, which the lanes leave."""
-            for index in range(pairs * stretch // workers, pairs * (stretch + 1) // workers):
-                if not plain_bytes(references[unsafe_offset=index], reference_lengths[unsafe_offset=index]) or not (
-                    plain_bytes(queries[unsafe_offset=index], query_lengths[unsafe_offset=index])
-                ):
-                    settled_ptr[unsafe_offset=index] = True
-
-        spread(refuse, workers, workers)
-        var before = settled.copy()
-        _ = lane_distances(
-            pairs,
-            ByteTexts.of(references, reference_lengths),
-            ByteTexts.of(queries, query_lengths),
-            lane_costs.value(),
-            asked.band,
-            cap,
-            workers,
-            found_ptr,
-            settled_ptr,
+    def one(index: Int, mut space: SearchSpace) {imm}:
+        """Pair `index`'s least cost or its code, from the lanes where they settled it."""
+        if laned_ptr[unsafe_offset=index]:
+            var cost = found_ptr[unsafe_offset=index]
+            # Under a cap, a band no alignment fits also leaves nothing within it.
+            results[unsafe_offset=index] = cost.value() if cost else (OUTSIDE_BAND if cap == Int.MAX else ABOVE_MAX)
+            return
+        results[unsafe_offset=index] = distance_code(
+            references[unsafe_offset=index],
+            reference_lengths[unsafe_offset=index],
+            queries[unsafe_offset=index],
+            query_lengths[unsafe_offset=index],
+            wanted_costs,
             wanted_mode,
+            asked,
+            space,
         )
-        for index in range(pairs):
-            laned[index] = settled[index] and not before[index]
 
-    def work(slot: Int) {mut taken, imm}:
-        """Takes the next pairs not yet taken and writes each one's least cost or code, until none is left."""
-        var last = 0
-        var space = SearchSpace()
-        while True:
-            var share = next_share(taken, pairs, workers, last)
-            if share[0] >= pairs:
-                return
-            for index in range(share[0], share[1]):
-                if laned_ptr[unsafe_offset=index]:
-                    var cost = found_ptr[unsafe_offset=index]
-                    # Under a cap, a band no alignment fits also leaves nothing within it.
-                    results[unsafe_offset=index] = cost.value() if cost else (
-                        OUTSIDE_BAND if cap == Int.MAX else ABOVE_MAX
-                    )
-                    continue
-                results[unsafe_offset=index] = distance_code(
-                    references[unsafe_offset=index],
-                    reference_lengths[unsafe_offset=index],
-                    queries[unsafe_offset=index],
-                    query_lengths[unsafe_offset=index],
-                    wanted_costs,
-                    wanted_mode,
-                    asked,
-                    space,
-                )
-
-    spread(work, workers, workers)
+    each_pair(one, longest_first(pairs, reference_texts, query_texts, workers), workers)
     return 0
 
 
@@ -620,139 +627,83 @@ def dinara_alignments(
 
     if pairs <= 0:
         return 0
-    var taken = Atomic[Int64](0)
     var workers = workers_for(pairs, threads)
 
-    # Alignments go many pairs at once into the lanes of a register, as `alignments` sends them (see
-    # `lanes.lane_alignments`, and with free ends `lanes.lane_free_alignments`): every pair whose bytes the
-    # library takes. A pair the library refuses, and every pair of costs it refuses or of a mode that
-    # scores, goes one at a time for its own code.
+    # As `alignments` sends them (see `api.alignments_in_lanes`): the lanes first, every pair whose bytes the
+    # library takes, each one's CIGAR spelled from their path; a pair the library refuses, every pair of costs it
+    # refuses or of a mode that scores, and a pair the searches might split, one at a time for its own code, the
+    # longest first.
     var capped = asked.max_cost >= 0
-    var settled = List[Bool](length=pairs, fill=False)
+    var settled = refused_pairs(pairs, references, reference_lengths, queries, query_lengths, workers)
+    var before = settled.copy()
     var found = List[Optional[Int]](length=pairs, fill=None)
-    var laned = List[Bool](length=pairs, fill=False)
     var paths = List[List[UInt8]](capacity=pairs)
     for _ in range(pairs):
         paths.append(List[UInt8]())
-    var settled_ptr = settled.unsafe_ptr()
-    var found_ptr = found.unsafe_ptr()
-    var laned_ptr = laned.unsafe_ptr()
-    var path_ptr = paths.unsafe_ptr()
-    # Each laned pair's span: the reference's first letter and the one past its last, then the query's.
     var spans = List[Int](length=4 * pairs, fill=0)
+    var found_ptr = found.unsafe_ptr()
+    var path_ptr = paths.unsafe_ptr()
     var span_ptr = spans.unsafe_ptr()
-    # As `alignments` sends them: unit costs the bit-parallel sweep serves take it pair by pair, and free ends
-    # take the lanes only with no band.
-    var unbanded = asked.band.covers(1 << 40, 1 << 40)
-    var lane_costs = LaneCosts.of(wanted_costs, wanted_mode, unbanded) if not bits_serve(
-        wanted_costs, wanted_mode, asked.band, asked.max_cost if capped else Int.MAX
-    ) else None
-    var penalties: Optional[Penalties] = None
-    if lane_costs:
-        try:
-            penalties = penalties_of(wanted_costs)
-        except:
-            lane_costs = None
     var limit = asked.max_memory // KEPT_BYTES
-    if lane_costs:
+    var reference_texts = ByteTexts.of(references, reference_lengths)
+    var query_texts = ByteTexts.of(queries, query_lengths)
+    var penalties = alignments_in_lanes(
+        pairs,
+        reference_texts,
+        query_texts,
+        wanted_costs,
+        wanted_mode,
+        asked.band,
+        asked.max_cost if capped else Int.MAX,
+        asked.ties,
+        workers,
+        limit,
+        found_ptr,
+        path_ptr,
+        span_ptr,
+        settled.unsafe_ptr(),
+    )
+    var laned = List[Bool](length=pairs, fill=False)
+    for index in range(pairs):
+        laned[index] = settled[index] and not before[index]
+    var laned_ptr = laned.unsafe_ptr()
 
-        def refuse(stretch: Int) {imm}:
-            """Marks stretch `stretch`'s pairs holding bytes the library refuses, which the lanes leave."""
-            for index in range(pairs * stretch // workers, pairs * (stretch + 1) // workers):
-                if not plain_bytes(references[unsafe_offset=index], reference_lengths[unsafe_offset=index]) or not (
-                    plain_bytes(queries[unsafe_offset=index], query_lengths[unsafe_offset=index])
-                ):
-                    settled_ptr[unsafe_offset=index] = True
-
-        spread(refuse, workers, workers)
-        var before = settled.copy()
-        if wanted_mode.is_global():
-            for index in range(pairs):
-                span_ptr[unsafe_offset=4 * index + 1] = reference_lengths[unsafe_offset=index]
-                span_ptr[unsafe_offset=4 * index + 3] = query_lengths[unsafe_offset=index]
-            _ = lane_alignments(
-                pairs,
-                ByteTexts.of(references, reference_lengths),
-                ByteTexts.of(queries, query_lengths),
-                lane_costs.value(),
-                asked.band,
-                asked.max_cost if capped else Int.MAX,
-                asked.ties == Ties.LEFT,
-                workers,
-                asked.max_memory,
-                found_ptr,
-                path_ptr,
-                settled_ptr,
-            )
-        else:
-            lane_free_alignments(
-                pairs,
-                ByteTexts.of(references, reference_lengths),
-                ByteTexts.of(queries, query_lengths),
-                lane_costs.value(),
-                wanted_mode,
-                asked.max_cost if capped else Int.MAX,
-                asked.ties == Ties.RIGHT,
-                workers,
-                asked.max_memory,
-                found_ptr,
-                path_ptr,
-                span_ptr,
-                settled_ptr,
-            )
-        for index in range(pairs):
-            laned[index] = settled[index] and not before[index]
-
-    def work(slot: Int) {mut taken, imm}:
-        """Takes the next pairs not yet taken and writes each one's alignment and status, until none is left;
-        a pair the lanes settled has its CIGAR spelled from their path."""
-        var last = 0
-        var space = SearchSpace()
-        while True:
-            var share = next_share(taken, pairs, workers, last)
-            if share[0] >= pairs:
+    def one(index: Int, mut space: SearchSpace) {imm}:
+        """Pair `index`'s alignment and status, a pair the lanes settled spelled from their path."""
+        if laned_ptr[unsafe_offset=index]:
+            if not found_ptr[unsafe_offset=index]:
+                statuses[unsafe_offset=index] = ABOVE_MAX if capped else OUTSIDE_BAND
                 return
-            for index in range(share[0], share[1]):
-                if laned_ptr[unsafe_offset=index]:
-                    if not found_ptr[unsafe_offset=index]:
-                        statuses[unsafe_offset=index] = ABOVE_MAX if capped else OUTSIDE_BAND
-                        continue
-                    var cost = found_ptr[unsafe_offset=index].value()
-                    var first_start = span_ptr[unsafe_offset=4 * index]
-                    var first_end = span_ptr[unsafe_offset=4 * index + 1]
-                    var second_start = span_ptr[unsafe_offset=4 * index + 2]
-                    var second_end = span_ptr[unsafe_offset=4 * index + 3]
-                    ref scaled = penalties.value()
-                    # As `alignments` keeps them: only a pair the searches would never split for memory.
-                    var letters = first_end - first_start + second_end - second_start
-                    if 2 * (cost // scaled.scale + 1) * (letters + 1) <= limit:
-                        var first = sequence(
-                            references[unsafe_offset=index].unsafe_offset(first_start), first_end - first_start
-                        )
-                        var second = sequence(
-                            queries[unsafe_offset=index].unsafe_offset(second_start), second_end - second_start
-                        )
-                        var moves = List[UInt8]()
-                        swap(moves, path_ptr[unsafe_offset=index])
-                        var cigar = cigar_of(first, second, moves^, cost // scaled.scale, scaled, asked.eqx)
-                        statuses[unsafe_offset=index] = written(
-                            Alignment(cost, -cost, cigar^, first_start, first_end, second_start, second_end),
-                            alignments.unsafe_offset(index * ALIGNMENT_FIELDS),
-                        )
-                        continue
-                statuses[unsafe_offset=index] = align_into(
-                    references[unsafe_offset=index],
-                    reference_lengths[unsafe_offset=index],
-                    queries[unsafe_offset=index],
-                    query_lengths[unsafe_offset=index],
-                    wanted_costs,
-                    wanted_mode,
-                    asked,
-                    alignments.unsafe_offset(index * ALIGNMENT_FIELDS),
-                    space,
+            var moves = List[UInt8]()
+            swap(moves, path_ptr[unsafe_offset=index])
+            var spelled = alignment_from_lanes(
+                Span(unsafe_ptr=references[unsafe_offset=index], length=reference_lengths[unsafe_offset=index]),
+                Span(unsafe_ptr=queries[unsafe_offset=index], length=query_lengths[unsafe_offset=index]),
+                found_ptr[unsafe_offset=index].value(),
+                moves^,
+                span_ptr.unsafe_offset(4 * index),
+                penalties.value(),
+                asked.eqx,
+                limit,
+            )
+            if spelled:
+                statuses[unsafe_offset=index] = written(
+                    spelled.value(), alignments.unsafe_offset(index * ALIGNMENT_FIELDS)
                 )
+                return
+        statuses[unsafe_offset=index] = align_into(
+            references[unsafe_offset=index],
+            reference_lengths[unsafe_offset=index],
+            queries[unsafe_offset=index],
+            query_lengths[unsafe_offset=index],
+            wanted_costs,
+            wanted_mode,
+            asked,
+            alignments.unsafe_offset(index * ALIGNMENT_FIELDS),
+            space,
+        )
 
-    spread(work, workers, workers)
+    each_pair(one, longest_first(pairs, reference_texts, query_texts, workers), workers)
     return 0
 
 

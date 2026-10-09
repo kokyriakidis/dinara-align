@@ -37,6 +37,8 @@ from max.gpu.primitives.warp import shuffle_down, shuffle_up, shuffle_xor
 from max.gpu.host import DeviceBuffer, FuncAttribute
 from max.gpu.memory import external_memory
 
+from .cigar import CigarWriter
+from .common import FIRST_SENTINEL, SECOND_SENTINEL
 from .errors import AlignmentError, ErrorKind
 from .common import (
     spread,
@@ -197,6 +199,11 @@ struct AffineGapCosts(ImplicitlyCopyable, TrivialRegisterPassable):
         if extend > 0:
             raise AlignmentError(ErrorKind.INVALID_SCORING, "a rewarded gap")
         return Self(open, extend)
+
+    @always_inline
+    def run(self, length: Int) -> Int32:
+        """The score of a gap run of `length` letters, opened once and extended after, nothing for none."""
+        return 0 if length == 0 else self.open + Int32(length - 1) * self.extend
 
 
 @fieldwise_init
@@ -383,24 +390,8 @@ struct GappedAlignment(Copyable, Movable):
         comptime GAP = UInt8(ord("-"))
         var top = self.first_gapped.as_bytes()
         var bottom = self.second_gapped.as_bytes()
-        # Bytes written straight, each run's digits then its letter: no string per run.
-        var out = List[UInt8](capacity=64)
-
-        def emit(mut out: List[UInt8], run: Int, letter: UInt8):
-            """Appends one run to `out`: the decimal digits of `run`, most significant first, then `letter`."""
-            var digits = Array[UInt8, 20](fill=0)
-            var count = 0
-            var value = run
-            while value > 0:
-                digits[count] = UInt8(ord("0")) + UInt8(value % 10)
-                value //= 10
-                count += 1
-            for index in range(count - 1, -1, -1):
-                out.append(digits[index])
-            out.append(letter)
-
-        var last = UInt8(0)
-        var run = 0
+        # A run of `n` columns takes its digits and its letter, never more than `2 n` bytes.
+        var writer = CigarWriter(2 * len(top) + 1)
         for column in range(len(top)):
             var letter: UInt8
             if top[column] == GAP:
@@ -411,14 +402,8 @@ struct GappedAlignment(Copyable, Movable):
                 letter = UInt8(ord("M"))
             else:
                 letter = UInt8(ord("=")) if top[column] == bottom[column] else UInt8(ord("X"))
-            if letter != last and run > 0:
-                emit(out, run, last)
-                run = 0
-            last = letter
-            run += 1
-        if run > 0:
-            emit(out, run, last)
-        return String(unsafe_from_utf8=out^)
+            writer.add(letter, 1)
+        return writer^.finish()
 
 
 def serial_align[
@@ -446,7 +431,7 @@ def serial_align[
     inserts[0] = 0
     for column in range(1, stride):
         if mode == AlignmentMode.GLOBAL:
-            scores[column] = scoring.open + Int32(column - 1) * scoring.extend
+            scores[column] = scoring.run(column)
             deletes[column] = scores[column] + scoring.open + scoring.extend
         else:
             scores[column] = 0
@@ -462,7 +447,7 @@ def serial_align[
         var above = base - stride
         deletes[base] = 0
         if mode == AlignmentMode.GLOBAL:
-            scores[base] = scoring.open + Int32(row - 1) * scoring.extend
+            scores[base] = scoring.run(row)
             inserts[base] = scores[base] + scoring.open + scoring.extend
         else:
             scores[base] = 0
@@ -726,14 +711,14 @@ def sweep_bands[
     # An open run arrives at the top-left corner only. Reaching any other cell of the top row
     # means the run already ended, so a deletion from there pays a fresh opening.
     for column in range(1, columns + 1):
-        bands.scores_above[column] = scoring.open + Int32(column - 1) * scoring.extend
+        bands.scores_above[column] = scoring.run(column)
         bands.deletes_above[column] = bands.scores_above[column] + scoring.open + scoring.extend
 
     for row in range(1, rows + 1):
         if entering_run == GapRun.EXTENDS:
             bands.scores_row[0] = Int32(row) * scoring.extend
         else:
-            bands.scores_row[0] = scoring.open + Int32(row - 1) * scoring.extend
+            bands.scores_row[0] = scoring.run(row)
         bands.deletes_row[0] = bands.scores_row[0]
         bands.inserts_row[0] = bands.scores_row[0] + scoring.open + scoring.extend
 
@@ -798,10 +783,10 @@ def vector_sweep_bands[
     var extend = scoring.extend
     # Row `i` reads letter `i` of this half's rows; the columns are stored back to front, so a
     # diagonal's letters load contiguously.
-    var letters = List[UInt8](length=rows + 1 + SWEEP_LANES, fill=0xFE)
+    var letters = List[UInt8](length=rows + 1 + SWEEP_LANES, fill=FIRST_SENTINEL)
     for row in range(1, rows + 1):
         letters[row] = UInt8(first[first_to - row] if reversed_order else first[first_from + row - 1])
-    var others = List[UInt8](length=columns + SWEEP_LANES, fill=0xFF)
+    var others = List[UInt8](length=columns + SWEEP_LANES, fill=SECOND_SENTINEL)
     for index in range(columns):
         var column = columns - index
         others[index] = UInt8(second[second_to - column] if reversed_order else second[second_from + column - 1])
@@ -915,7 +900,7 @@ def solve_rectangle(
     # An open run arrives at the top-left corner only. Reaching any other cell of the top row
     # means the run already ended, so a deletion from there pays a fresh opening.
     for column in range(1, stride):
-        scores[column] = scoring.open + Int32(column - 1) * scoring.extend
+        scores[column] = scoring.run(column)
         deletes[column] = scores[column] + scoring.open + scoring.extend
         inserts[column] = 0
 
@@ -925,7 +910,7 @@ def solve_rectangle(
         if top == GapRun.EXTENDS:
             scores[base] = Int32(row) * scoring.extend
         else:
-            scores[base] = scoring.open + Int32(row - 1) * scoring.extend
+            scores[base] = scoring.run(row)
         deletes[base] = scores[base]
         inserts[base] = scores[base] + scoring.open + scoring.extend
         for column in range(1, stride):
@@ -1436,7 +1421,7 @@ def strip_pair_kernel[
     if thread_idx.x == 0:
         var span = rows + columns
         comptime if mode == AlignmentMode.GLOBAL:
-            reported[unsafe_offset=0] = 0 if span == 0 else scoring.open + Int32(span - 1) * scoring.extend
+            reported[unsafe_offset=0] = scoring.run(span)
         else:
             reported[unsafe_offset=0] = 0
 
@@ -1446,7 +1431,7 @@ def strip_pair_kernel[
     for index in range(Int(thread_idx.x), rows + 1, Int(block_dim.x)):
         var border = Int32(0)
         comptime if mode == AlignmentMode.GLOBAL:
-            border = 0 if index == 0 else scoring.open + Int32(index - 1) * scoring.extend
+            border = scoring.run(index)
         carry_scores[unsafe_offset=index] = border
         carry_insertions[unsafe_offset=index] = border + scoring.open + scoring.extend
     barrier()
@@ -1468,18 +1453,18 @@ def strip_pair_kernel[
         var deletions = Array[Int32, STRIP_COLUMNS](fill=0)
         comptime for column_slot in range(STRIP_COLUMNS):
             comptime if mode == AlignmentMode.GLOBAL:
-                scores[column_slot] = scoring.open + Int32(first_column + column_slot) * scoring.extend
+                scores[column_slot] = scoring.run(first_column + column_slot + 1)
             deletions[column_slot] = scores[column_slot] + scoring.open + scoring.extend
 
         var past = first_column + STRIP_COLUMNS
         var edge_score = Int32(0)
         comptime if mode == AlignmentMode.GLOBAL:
-            edge_score = scoring.open + Int32(past - 1) * scoring.extend
+            edge_score = scoring.run(past)
         var edge_insertion = edge_score + scoring.open + scoring.extend
 
         var above_left_carry = Int32(0)
         comptime if mode == AlignmentMode.GLOBAL:
-            above_left_carry = 0 if first_column == 0 else scoring.open + Int32(first_column - 1) * scoring.extend
+            above_left_carry = scoring.run(first_column)
 
         for anti_diagonal in range(1, rows + STRIP_LANES + 1):
             var row = anti_diagonal - lane
@@ -2514,10 +2499,7 @@ def border_score[mode: AlignmentMode](rows: Int, columns: Int, scoring: AffineGa
     """The score of a rectangle with no interior, which no sweep writes a frontier for."""
     comptime if mode == AlignmentMode.LOCAL:
         return Int32(0)
-    var span = rows + columns
-    if span == 0:
-        return Int32(0)
-    return scoring.open + Int32(span - 1) * scoring.extend
+    return scoring.run(rows + columns)
 
 
 def device_score[

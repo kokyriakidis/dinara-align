@@ -44,11 +44,14 @@ from max.gpu.host import DeviceContext
 from .alignment import AffineGapCosts, AlignmentMode
 from .common import (
     MAX_ALPHABET_SIZE,
+    NEGATIVE_INFINITY,
     DeviceScope,
     ScoreDType,
     SubstitutionDType,
     THREADS_PER_BLOCK,
     UNKNOWN_SYMBOL,
+    code_table,
+    raise_unknown,
     allocate,
     spread,
     translate,
@@ -70,8 +73,6 @@ from .score_groups import (
 comptime BAND = 16
 """A pair's diagonals, a register each for its scores, deletions and insertions."""
 
-comptime NOWHERE = Int32(-(1 << 29))
-"""A cell no path inside the band reaches, far enough down that adding a few gaps stays far down."""
 
 comptime SHAPE_FIELDS = 4
 """A pair's numbers for the kernel: the word its first sequence starts at on the packed tape, its second
@@ -135,10 +136,10 @@ def band_score_kernel[
         return
 
     var opening = open - extend
-    var scores = Array[Int32, BAND](fill=NOWHERE)
-    var deletions = Array[Int32, BAND](fill=NOWHERE)
-    var insertions = Array[Int32, BAND](fill=NOWHERE)
-    var reported = NOWHERE
+    var scores = Array[Int32, BAND](fill=NEGATIVE_INFINITY)
+    var deletions = Array[Int32, BAND](fill=NEGATIVE_INFINITY)
+    var insertions = Array[Int32, BAND](fill=NEGATIVE_INFINITY)
+    var reported = NEGATIVE_INFINITY
 
     # On even anti-diagonal `t` slot `2 j` holds row `top - j` and column `left + j`, and on the odd one
     # after slot `2 j + 1` the same row and column `left + j + 1`, `top` and `left` half of `t` less and
@@ -211,15 +212,15 @@ def band_score_kernel[
         its borders or on its last row."""
         comptime if edged:
             if row < 0 or row > rows or column < 0 or column > columns:
-                scores[slot] = NOWHERE
-                deletions[slot] = NOWHERE
-                insertions[slot] = NOWHERE
+                scores[slot] = NEGATIVE_INFINITY
+                deletions[slot] = NEGATIVE_INFINITY
+                insertions[slot] = NEGATIVE_INFINITY
                 return
             if row == 0 or column == 0:
                 # A border: the origin, or a gap along the first row or column, shifted.
                 scores[slot] = Int32(0) if row == column else opening
-                deletions[slot] = NOWHERE
-                insertions[slot] = NOWHERE
+                deletions[slot] = NEGATIVE_INFINITY
+                insertions[slot] = NEGATIVE_INFINITY
                 return
         var deletion = max(up_score + opening, up_deletion)
         var insertion = max(left_score + opening, left_insertion)
@@ -264,8 +265,8 @@ def band_score_kernel[
                         row_entries[j] + column_codes[j],
                         scores[slot + 1],
                         deletions[slot + 1],
-                        NOWHERE if slot == 0 else scores[slot - 1],
-                        NOWHERE if slot == 0 else insertions[slot - 1],
+                        NEGATIVE_INFINITY if slot == 0 else scores[slot - 1],
+                        NEGATIVE_INFINITY if slot == 0 else insertions[slot - 1],
                     )
                 comptime for j in range(half):
                     comptime slot = 2 * j + 1
@@ -274,8 +275,8 @@ def band_score_kernel[
                         top - j,
                         left + j + 1,
                         row_entries[j] + column_codes[j + 1],
-                        NOWHERE if slot == BAND - 1 else scores[slot + 1],
-                        NOWHERE if slot == BAND - 1 else deletions[slot + 1],
+                        NEGATIVE_INFINITY if slot == BAND - 1 else scores[slot + 1],
+                        NEGATIVE_INFINITY if slot == BAND - 1 else deletions[slot + 1],
                         scores[slot - 1],
                         insertions[slot - 1],
                     )
@@ -301,7 +302,7 @@ def band_score_kernel[
         step += 2
 
     # The corner shifted back by its anti-diagonal.
-    if reported == NOWHERE:
+    if reported == NEGATIVE_INFINITY:
         leave()
         return
     var score = reported + Int32(rows + columns) * extend
@@ -439,10 +440,7 @@ def banded_scores(
     var copies = copy_stream(gpu_id)
     var streams = Bool(copies)
     var copier = copies.take() if streams else DeviceContext(device_id=gpu_id)
-    var codes_by_byte = Array[UInt8, 256](fill=UNKNOWN_SYMBOL)
-    var alphabet_bytes = alphabet.as_bytes()
-    for index in range(size):
-        codes_by_byte[Int(alphabet_bytes[index])] = UInt8(index)
+    var codes_by_byte = code_table(alphabet)
     var failed = List[Bool](length=pairs, fill=False)
     var tape = codes.unsafe_ptr()
     var fields = shapes.unsafe_ptr()
@@ -577,9 +575,7 @@ def banded_scores(
     copier.synchronize()
     for index in range(pairs):
         if failed[index]:
-            # The pair's own translation raises the error a serial packing would have raised.
-            _ = translate(firsts[index], alphabet)
-            _ = translate(seconds[index], alphabet)
+            raise_unknown(firsts[index], seconds[index], alphabet)
     # With no shape to score them whole, the leftovers go back unscored.
     var settled = List[Bool](length=pairs, fill=True)
     if chosen < 0:

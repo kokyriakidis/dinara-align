@@ -43,6 +43,8 @@ from .common import (
     SubstitutionDType,
     THREADS_PER_BLOCK,
     UNKNOWN_SYMBOL,
+    code_table,
+    raise_unknown,
     allocate,
     translate,
     upload,
@@ -375,10 +377,7 @@ def grouped_scores[
     var copies = copy_stream(gpu_id)
     var streams = Bool(copies)
     var copier = copies.take() if streams else DeviceContext(device_id=gpu_id)
-    var codes_by_byte = Array[UInt8, 256](fill=UNKNOWN_SYMBOL)
-    var alphabet_bytes = alphabet.as_bytes()
-    for index in range(size):
-        codes_by_byte[Int(alphabet_bytes[index])] = UInt8(index)
+    var codes_by_byte = code_table(alphabet)
     var failed = List[Bool](length=pairs, fill=False)
     var tape = codes.unsafe_ptr()
     var places = shapes.unsafe_ptr()
@@ -482,9 +481,7 @@ def grouped_scores[
     copier.synchronize()
     for slot in range(pairs):
         if failed[slot]:
-            # The pair's own translation raises the error a serial packing would have raised.
-            _ = translate(firsts[indices[slot]], alphabet)
-            _ = translate(seconds[indices[slot]], alphabet)
+            raise_unknown(firsts[indices[slot]], seconds[indices[slot]], alphabet)
     # Back in one copy to page-locked memory, and from there in one more.
     var landed = scope.context.enqueue_create_host_buffer[ScoreDType](pairs)
     scope.context.enqueue_copy(landed, results_buffer)

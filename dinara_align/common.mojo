@@ -56,6 +56,17 @@ cases, and costs one kilobyte per block.
 comptime NEGATIVE_INFINITY = Int32.MIN // 4
 """A score below any real one, a quarter of `Int32.MIN` so adding a few penalties to it never wraps."""
 
+comptime UNREACHED = Int32(-(1 << 28))
+"""A diagonal or a cell no path reaches: far enough below zero that a few more columns or gap costs keep it
+there."""
+
+comptime FIRST_SENTINEL = UInt8(0xFE)
+"""Past the first sequence's last letter: never a letter, UTF-8 never holding it, and unequal to
+`SECOND_SENTINEL`."""
+
+comptime SECOND_SENTINEL = UInt8(0xFF)
+"""Past the second sequence's last letter."""
+
 
 @fieldwise_init
 struct Device(Equatable, ImplicitlyCopyable, TrivialRegisterPassable):
@@ -233,13 +244,19 @@ def uniform_matrix(
     return matrix^
 
 
-def translate(text: String, alphabet: String) raises AlignmentError -> List[Scalar[SymbolDType]]:
-    """Maps characters to alphabet indices, raising on anything outside the alphabet."""
-    var alphabet_bytes = alphabet.as_bytes()
-    var text_bytes = text.as_bytes()
+def code_table(alphabet: String) -> Array[UInt8, 256]:
+    """Each byte's place in `alphabet`, `UNKNOWN_SYMBOL` for a byte outside it."""
     var codes_by_byte = Array[UInt8, 256](fill=UNKNOWN_SYMBOL)
+    var alphabet_bytes = alphabet.as_bytes()
     for index in range(len(alphabet_bytes)):
         codes_by_byte[Int(alphabet_bytes[index])] = UInt8(index)
+    return codes_by_byte^
+
+
+def translate(text: String, alphabet: String) raises AlignmentError -> List[Scalar[SymbolDType]]:
+    """Maps characters to alphabet indices, raising on anything outside the alphabet."""
+    var text_bytes = text.as_bytes()
+    var codes_by_byte = code_table(alphabet)
 
     var codes = List[Scalar[SymbolDType]](capacity=len(text_bytes))
     for position in range(len(text_bytes)):
@@ -248,6 +265,13 @@ def translate(text: String, alphabet: String) raises AlignmentError -> List[Scal
             raise AlignmentError(ErrorKind.UNKNOWN_SYMBOL, text)
         codes.append(Scalar[SymbolDType](code))
     return codes^
+
+
+def raise_unknown(first: String, second: String, alphabet: String) raises AlignmentError:
+    """The error translating a pair raises, for a pair a parallel packing found a letter outside `alphabet`
+    in: raised in the batch's order, it is the one a serial packing would have raised first."""
+    _ = translate(first, alphabet)
+    _ = translate(second, alphabet)
 
 
 def allocate[dtype: DType](scope: DeviceScope, count: Int) raises -> DeviceBuffer[dtype]:

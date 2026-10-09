@@ -15,6 +15,8 @@ diagonals its score bounds, to be traced (`vector_align`). A score alone is the 
 `scoring.swept_score`).
 """
 
+from .common import FIRST_SENTINEL, SECOND_SENTINEL
+from .common import UNREACHED
 from .alignment import (
     AffineGapCosts,
     AlignmentMode,
@@ -57,18 +59,16 @@ def reach_back(
     var extend = gaps.extend
 
     @inline(.always)
-    def border(length: Int) {imm open, imm extend} -> Int32:
+    def border(length: Int) {imm gaps} -> Int32:
         """The score of a gap run of `length` along the anchored border."""
-        if length == 0:
-            return 0
-        return open + Int32(length - 1) * extend
+        return gaps.run(length)
 
     # Row `i` reads the `i`-th letter back from the end; a diagonal reads the second sequence's prefix
     # backward from the end, which stored for loads running forward is the prefix as it stands.
-    var letters = List[UInt8](length=rows + 1 + WIDTH, fill=0xFE)
+    var letters = List[UInt8](length=rows + 1 + WIDTH, fill=FIRST_SENTINEL)
     for index in range(1, rows + 1):
         letters[index] = first[end_row - index]
-    var reversed = List[UInt8](length=columns + WIDTH, fill=0xFF)
+    var reversed = List[UInt8](length=columns + WIDTH, fill=SECOND_SENTINEL)
     for index in range(columns):
         reversed[index] = second[index]
     var size = rows + 1 + WIDTH
@@ -162,11 +162,9 @@ def vector_align(
     var high_band = min(high_diagonal, columns)
 
     @inline(.always)
-    def border(length: Int) {imm open, imm extend} -> Int32:
+    def border(length: Int) {imm gaps} -> Int32:
         """The score of a gap run of `length` along the global border."""
-        if length == 0:
-            return 0
-        return open + Int32(length - 1) * extend
+        return gaps.run(length)
 
     # Diagonal `d`'s cells lie on rows `lows[d] ..= highs[d]`: inside the matrix, and with
     # `column - row` inside the band, column being `d - row`.
@@ -184,10 +182,10 @@ def vector_align(
     var scores = List[Int32](unsafe_uninit_length=cells + WIDTH)
     var deletes = List[Int32](unsafe_uninit_length=cells + WIDTH)
     var inserts = List[Int32](unsafe_uninit_length=cells + WIDTH)
-    var letters = List[UInt8](length=rows + 1 + WIDTH, fill=0xFE)
+    var letters = List[UInt8](length=rows + 1 + WIDTH, fill=FIRST_SENTINEL)
     for index in range(rows):
         letters[index + 1] = first[index]
-    var reversed = List[UInt8](length=columns + WIDTH, fill=0xFF)
+    var reversed = List[UInt8](length=columns + WIDTH, fill=SECOND_SENTINEL)
     for index in range(columns):
         reversed[index] = second[columns - 1 - index]
 
@@ -198,9 +196,9 @@ def vector_align(
     @inline(.always)
     def unreachable(index: Int) {imm score_cells, imm delete_cells, imm insert_cells}:
         """Marks stored cell `index` unreachable in all three layers, as band padding reads."""
-        score_cells[unsafe_offset=index] = UNREACHABLE
-        delete_cells[unsafe_offset=index] = UNREACHABLE
-        insert_cells[unsafe_offset=index] = UNREACHABLE
+        score_cells[unsafe_offset=index] = UNREACHED
+        delete_cells[unsafe_offset=index] = UNREACHED
+        insert_cells[unsafe_offset=index] = UNREACHED
 
     # Diagonal zero: the origin, which every band holds.
     for index in range(BAND_PADDING):
@@ -277,10 +275,6 @@ def vector_align(
     _ = len(lows)
     _ = len(lookup.cells)
     return GappedAlignment(final_score, reconstruction[0], reconstruction[1])
-
-
-comptime UNREACHABLE = Int32(-(1 << 28))
-"""A cell outside the band: far enough below any score that a few gap costs keep it there."""
 
 
 def optimal_band(rows: Int, columns: Int, reward: Int, gaps: AffineGapCosts, score: Int) -> Tuple[Int, Int]:

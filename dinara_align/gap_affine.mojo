@@ -63,26 +63,22 @@ searches find keeping only their last few costs, and each piece is aligned the s
 from std.math import gcd
 from std.sys import size_of
 
+from .common import FIRST_SENTINEL, SECOND_SENTINEL, UNREACHED
+from .cigar import append_reversed, reversed_into, reversed_list, text_of
+from .bit_parallel import DIAGONAL, LEFT, UP
 from .edit_distance import EditSpace
 from .errors import AlignmentError, ErrorKind
-from .modes import Anchor, Band, Costs, Ties
+from .modes import Anchor, Band, Costs, Ties, Mode
 from .slides import GATHERED_SLIDES, gathered_slides, slide
 from .traceback import cigar_string, EditPath
 
 comptime Slot = MutPointer[Int32, MutUntrackedOrigin]
 """A front read or written by `step`, indexed by diagonal: a source and its destination may share a row."""
 
-comptime UNREACHED = Int32(-(1 << 28))
-"""A diagonal no path of the cost reaches: far enough below zero that a few more columns stay negative."""
 
 comptime PADDING = 16
 """Sentinels after each sequence's codes, so a slide reads eight letters at a time past the end."""
 
-comptime FIRST_SENTINEL = UInt8(0xFE)
-"""Ends the first sequence's codes; never a letter, and never the second's sentinel."""
-
-comptime SECOND_SENTINEL = UInt8(0xFF)
-"""Ends the second sequence's codes."""
 
 comptime LANES = 8
 """Diagonals a front step computes at once."""
@@ -106,14 +102,15 @@ comptime DEFAULT_MAX_MEMORY = HISTORY_LIMIT * KEPT_BYTES
 comptime HISTORY_KEPT_PER_LETTER = 8
 """Diagonals a recording search makes room for per letter of the pair before its kept fronts first grow."""
 
-comptime ALIGNED = 0
-"""The front ending in two letters aligned, a match or a substitution."""
-comptime FIRST_GAP = 1
+comptime ALIGNED = Int(DIAGONAL)
+"""The front ending in two letters aligned, a match or a substitution; as a move, the bit-parallel
+traceback's `DIAGONAL`, so either's moves spell a CIGAR alike (see `traceback.cigar_string`)."""
+comptime FIRST_GAP = Int(LEFT)
 """The front ending in a letter of the first sequence against a gap of the first piece; a move that
-consumes a letter of the first sequence alone."""
-comptime SECOND_GAP = 2
+consumes a letter of the first sequence alone, `LEFT`."""
+comptime SECOND_GAP = Int(UP)
 """The front ending in a letter of the second sequence against a gap of the first piece; a move that
-consumes a letter of the second sequence alone."""
+consumes a letter of the second sequence alone, `UP`."""
 comptime MAX_PIECES = 2
 """Gap pieces a cost may have: a gap of `k` letters costs the least of `opening + k extension` over them."""
 
@@ -330,6 +327,17 @@ struct EndsFree(ImplicitlyCopyable, TrivialRegisterPassable, Writable):
         self.second_begin = 0
         self.second_end = 0
 
+    @staticmethod
+    def of(mode: Mode, columns: Int, rows: Int) -> Self:
+        """`mode`'s free letters for a reference of `columns` letters and a query of `rows`, none past its
+        sequence's length."""
+        return Self(
+            min(mode.reference_start, columns),
+            min(mode.reference_end, columns),
+            min(mode.query_start, rows),
+            min(mode.query_end, rows),
+        )
+
 
 def wavefront_penalties(
     substitutions: List[Scalar[DType.int8]], alphabet_size: Int, open: Int, extend: Int
@@ -386,18 +394,10 @@ def padded_into(mut out: List[UInt8], codes: Span[UInt8, _], sentinel: UInt8, re
     var destination = out.unsafe_ptr().unsafe_offset(guard)
     for index in range(count, count + PADDING):
         destination[unsafe_offset=index] = sentinel
-    if not reverse:
+    if reverse:
+        reversed_into(destination, source, count)
+    else:
         Span(unsafe_ptr=destination, length=count).copy_from(codes)
-        return
-    comptime CHUNK = 16
-    var index = 0
-    while index + CHUNK <= count:
-        var chunk = source.unsafe_offset(count - index - CHUNK).unsafe_load[width=CHUNK]()
-        destination.unsafe_offset(index).unsafe_store(chunk.reversed())
-        index += CHUNK
-    while index < count:
-        destination[unsafe_offset=index] = source[unsafe_offset=count - 1 - index]
-        index += 1
 
 
 comptime ENTRY_MASK = UInt8(7)
@@ -405,9 +405,14 @@ comptime ENTRY_MASK = UInt8(7)
 
 
 @always_inline
+def layer_bit(layer: Int) -> UInt8:
+    """A flag's bit for gap layer `layer`, above `ENTRY_MASK`'s three."""
+    return UInt8(1) << UInt8(2 + layer)
+
+
 def opened_bit(layer: Int) -> UInt8:
     """A flag bit: gap layer `layer` came from an opening, not an extension."""
-    return UInt8(1) << UInt8(2 + layer)
+    return layer_bit(layer)
 
 
 struct History(Movable):
@@ -1802,8 +1807,7 @@ def canonical[
     var path = List[UInt8](capacity=columns + rows)
     trace(ahead.history, ahead.penalties, ALIGNED, total, columns - rows, columns, path)
     if mirrored:
-        for index in range(len(path) - 1, -1, -1):
-            moves.append(path[index])
+        append_reversed(moves, path)
     else:
         moves.extend(path^)
 
@@ -1908,8 +1912,7 @@ def solve[
                 columns - best.column,
                 behind,
             )
-            for index in range(len(behind) - 1, -1, -1):
-                moves.append(behind[index])
+            append_reversed(moves, behind)
             trace(forward.history, penalties, best.layer, best.forward_cost, best.diagonal, best.column, moves)
             return best.cost
         # Too large to keep: the searches go on from where they stopped keeping only their rings.
@@ -2149,15 +2152,27 @@ def cigar_within[
 def cigar_of(
     first: String, second: String, var moves: List[UInt8], cost: Int, penalties: Penalties, eqx: Bool
 ) -> String:
+    """`cigar_of` over the two sequences' bytes."""
+    return cigar_of(first.as_bytes(), second.as_bytes(), moves^, cost, penalties, eqx)
+
+
+def cigar_of(
+    first: ImmSpan[UInt8, _],
+    second: ImmSpan[UInt8, _],
+    var moves: List[UInt8],
+    cost: Int,
+    penalties: Penalties,
+    eqx: Bool,
+) -> String:
     """The CIGAR of the moves `solve` appended for two sequences, at that cost."""
     # The CIGAR's room is bounded by the edits: every gapped letter, and a substitution per mismatch cost.
     var gapped = 0
     for move in moves:
         if move != UInt8(ALIGNED):
             gapped += 1
-    var path = EditPath(
-        moves^, List[UInt8](), first.byte_length(), second.byte_length(), gapped + cost // penalties.mismatch
-    )
+    # Each substitution costs a mismatch, so the cost bounds them; free ones only the moves do.
+    var substitutions = cost // penalties.mismatch if penalties.mismatch > 0 else len(moves)
+    var path = EditPath(moves^, List[UInt8](), len(first), len(second), gapped + substitutions)
     return cigar_string(first, second, path, eqx)
 
 
@@ -2398,13 +2413,8 @@ def free_ends_alignment[
                 return None
             start_column = end_column - back.value()[1]
             start_row = end_row - back.value()[2]
-        if left:
-            var mirrored_start = (columns - end_column, rows - end_row)
-            end_column = columns - start_column
-            end_row = rows - start_row
-            start_column = mirrored_start[0]
-            start_row = mirrored_start[1]
-    if left and (columns == 0 or rows == 0):
+    if left:
+        # Found over both sequences reversed: the span turned back.
         var mirrored_start = (columns - end_column, rows - end_row)
         end_column = columns - start_column
         end_row = rows - start_row
@@ -2428,8 +2438,8 @@ def free_ends_alignment[
     )
     if cost < 0 or cost > ceiling:
         return None
-    var part = String(StringSlice(unsafe_from_utf8=a[start_column:end_column]))
-    var piece = String(StringSlice(unsafe_from_utf8=b[start_row:end_row]))
+    var part = text_of(a[start_column:end_column])
+    var piece = text_of(b[start_row:end_row])
     return Spanned(
         cost * penalties.scale,
         cigar_of(part, piece, moves^, cost, penalties, eqx),
@@ -2623,6 +2633,24 @@ def extend[
     return (best_cost, best_column, best_row, dropped, best_end_cost, best_end_column)
 
 
+def matches_along(first: ImmSpan[UInt8, _], second: ImmSpan[UInt8, _], moves: List[UInt8]) -> Int:
+    """The matches among the letters an alignment pairs, its moves right to left from the end of both."""
+    var matches = 0
+    var column = len(first)
+    var row = len(second)
+    for move in moves:
+        if move == UInt8(ALIGNED):
+            column -= 1
+            row -= 1
+            if first[column] == second[row]:
+                matches += 1
+        elif move == UInt8(FIRST_GAP):
+            column -= 1
+        else:
+            row -= 1
+    return matches
+
+
 def traced_extension[
     pieces: Int
 ](first: String, second: String, penalties: Penalties, eqx: Bool, known: Int, limit: Int = HISTORY_LIMIT) -> Optional[
@@ -2675,25 +2703,9 @@ def traced_extension[
     trace(search.history, penalties, ALIGNED, best_cost, best_column - best_row, best_column, moves)
     # The search's sequences run back from the end, so the letters it covers are the last of each,
     # and its moves, right to left over those reversed, read left to right over them as they stand.
-    var covered_first = List[UInt8](capacity=best_column)
-    for index in range(columns - 1, columns - 1 - best_column, -1):
-        covered_first.append(a[index])
-    var covered_second = List[UInt8](capacity=best_row)
-    for index in range(rows - 1, rows - 1 - best_row, -1):
-        covered_second.append(b[index])
-    var matches = 0
-    var column = best_column
-    var row = best_row
-    for move in moves:
-        if move == UInt8(ALIGNED):
-            column -= 1
-            row -= 1
-            if covered_first[column] == covered_second[row]:
-                matches += 1
-        elif move == UInt8(FIRST_GAP):
-            column -= 1
-        else:
-            row -= 1
+    var covered_first = reversed_list(a[columns - best_column :])
+    var covered_second = reversed_list(b[rows - best_row :])
+    var matches = matches_along(Span(covered_first), Span(covered_second), moves)
     var cigar = cigar_of(
         String(unsafe_from_utf8=covered_first^),
         String(unsafe_from_utf8=covered_second^),
@@ -2771,21 +2783,9 @@ def extension_of[
         ties,
     )
     # The moves run right to left; the matches among the aligned pairs give the cost from the score.
-    var matches = 0
-    var column = columns
-    var row = rows
-    for move in moves:
-        if move == UInt8(ALIGNED):
-            column -= 1
-            row -= 1
-            if covered_first[column] == covered_second[row]:
-                matches += 1
-        elif move == UInt8(FIRST_GAP):
-            column -= 1
-        else:
-            row -= 1
-    var piece_first = String(StringSlice(unsafe_from_utf8=covered_first))
-    var piece_second = String(StringSlice(unsafe_from_utf8=covered_second))
+    var matches = matches_along(Span(covered_first), Span(covered_second), moves)
+    var piece_first = text_of(covered_first)
+    var piece_second = text_of(covered_second)
     return AffineExtension(
         penalties.score(cost, columns + rows),
         columns,

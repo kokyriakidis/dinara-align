@@ -11,7 +11,7 @@ distance from the pattern to any substring of the text, and an alignment there.
 from std.math import ceildiv
 
 from .band import CHECK_MARGIN, CHECKPOINTS
-from .cigar import reversed_text
+from .cigar import reversed_text, text_of
 from .bit_parallel import ALL_ONES, BAND_COLUMNS, Frontier, Profile, WORD_BITS, word_value
 from .diagonal import PROBE_MARGIN
 from .errors import AlignmentError
@@ -226,7 +226,7 @@ def edit_search(
         var backward = Profile(reversed_text(text.as_bytes()[0:length]), reversed_text(pattern.as_bytes()))
         var found = last_row_scores[True](backward, True)
         var start = length - found[1]
-        var tail = String(StringSlice(unsafe_from_utf8=text.as_bytes()[start:]))
+        var tail = text_of(text.as_bytes()[start:])
         var forward = Profile(tail, pattern)
         var end_found = last_row_scores[False](forward)
         return EditHit(found[0], start, start + end_found[1])

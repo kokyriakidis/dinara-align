@@ -18,7 +18,8 @@ alignment whose reward folds into the costs (see `rewarded_alignment`).
 
 from std.memory import bitcast
 
-from .cigar import cigar_matches, cigar_runs, reversed_cigar, reversed_text
+from .common import FIRST_SENTINEL, SECOND_SENTINEL
+from .cigar import cigar_counts, cigar_matches, cigar_runs, reversed_cigar, reversed_text, text_of
 from .errors import AlignmentError
 from .gap_affine import (
     AffineExtension,
@@ -30,7 +31,7 @@ from .gap_affine import (
     traced_extension,
 )
 from .modes import Alignment, Anchor, Band, Costs, Ties
-from .substitutions import SHUFFLED_ENTRIES, byte_lookup
+from .substitutions import SHUFFLED_ENTRIES, looked_up
 
 
 comptime ANYWHERE = 0
@@ -118,10 +119,10 @@ def swept_cells[
     # Lane `i` reads the reference's letter `i - 1`, stored one place on, and the query back to front,
     # so a diagonal's letters load contiguously; both padded past their ends by bytes no text holds, or
     # under a table by a code it holds, whose cells nothing reads.
-    var letters = List[UInt8](length=rows + 1 + width, fill=UInt8(0) if tabulated else UInt8(0xFE))
+    var letters = List[UInt8](length=rows + 1 + width, fill=UInt8(0) if tabulated else FIRST_SENTINEL)
     for index in range(rows):
         letters[index + 1] = down_letters[index]
-    var reversed = List[UInt8](length=columns + width, fill=UInt8(0) if tabulated else UInt8(0xFF))
+    var reversed = List[UInt8](length=columns + width, fill=UInt8(0) if tabulated else SECOND_SENTINEL)
     for index in range(columns):
         reversed[index] = across_letters[columns - 1 - index]
     var size = rows + 1 + width
@@ -274,7 +275,7 @@ def swept_cells[
                 # codes, and the query's its column, whichever runs down the lanes.
                 if small:
                     var cell = (theirs * UInt8(alphabet) + mine) if transposed else (mine * UInt8(alphabet) + theirs)
-                    substituted = byte_lookup[dtype, width](shuffled, cell)
+                    substituted = looked_up[dtype, width](shuffled, cell)
                 else:
                     var at = (theirs.cast[DType.int32]() * codes_a_row + mine.cast[DType.int32]()) if transposed else (
                         mine.cast[DType.int32]() * codes_a_row + theirs.cast[DType.int32]()
@@ -499,8 +500,8 @@ def latest_local(
     var end_row = found[2]
     var two = costs.pieces() == 2
     var penalties = rewarded_penalties(match_score, costs)
-    var head = String(StringSlice(unsafe_from_utf8=reference.as_bytes()[:end_column]))
-    var lead = String(StringSlice(unsafe_from_utf8=query.as_bytes()[:end_row]))
+    var head = text_of(reference.as_bytes()[:end_column])
+    var lead = text_of(query.as_bytes()[:end_row])
     # The best alignment ending at that cell, and starting wherever pays: an extension back from it,
     # which stops on earning the sweep's score, the best any alignment ending there earns.
     var traced = traced_extension[2](head, lead, penalties, eqx, found[0], limit) if two else traced_extension[1](
@@ -565,15 +566,7 @@ def local_alignment(
     )
     if mirrored.score == 0:
         return mirrored^
-    return Alignment(
-        mirrored.cost,
-        mirrored.score,
-        reversed_cigar(mirrored.cigar),
-        columns - mirrored.reference_end,
-        columns - mirrored.reference_start,
-        rows - mirrored.query_end,
-        rows - mirrored.query_start,
-    )
+    return mirrored.mirrored(columns, rows)
 
 
 def rewarded_span(
@@ -636,8 +629,8 @@ def rewarded_alignment(
     var end_row = span[4]
     if start_column == end_column and start_row == end_row:
         return Alignment(0, span[0], String(), start_column, end_column, start_row, end_row)
-    var part = String(StringSlice(unsafe_from_utf8=reference.as_bytes()[start_column:end_column]))
-    var piece = String(StringSlice(unsafe_from_utf8=query.as_bytes()[start_row:end_row]))
+    var part = text_of(reference.as_bytes()[start_column:end_column])
+    var piece = text_of(query.as_bytes()[start_row:end_row])
     var found = global_rewarded(part, piece, costs, match_score, Band(), ties, eqx, limit)
     return Alignment(found[0], span[0], found[1], start_column, end_column, start_row, end_row)
 
@@ -671,13 +664,9 @@ def costs_of_cigar(reference: String, query: String, cigar: String, costs: Costs
     """What a CIGAR of `reference` against `query` costs: its substitutions, `M` runs compared letter
     by letter, and each gap run at its direction's cheaper piece."""
     var runs = cigar_runs(cigar)
-    var aligned = 0
     var gaps = 0
     for index in range(len(runs[0])):
         var letter = runs[0][index]
-        var length = runs[1][index]
         if letter == UInt8(ord("D")) or letter == UInt8(ord("I")):
-            gaps += costs.gap(length, letter == UInt8(ord("D")))
-        else:
-            aligned += length
-    return (aligned - cigar_matches(reference, query, cigar)) * costs.mismatch + gaps
+            gaps += costs.gap(runs[1][index], letter == UInt8(ord("D")))
+    return cigar_counts(reference.as_bytes(), query.as_bytes(), cigar).mismatches * costs.mismatch + gaps

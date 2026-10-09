@@ -54,8 +54,9 @@ from std.sys import llvm_intrinsic, simd_width_of, size_of
 from std.atomic import Atomic
 
 from .cigar import reverse_bytes, reversed_text
+from .substitutions import SHUFFLED_ENTRIES, looked_up
 from .common import next_share, spread
-from .gap_affine import ALIGNED, FIRST_GAP, SECOND_GAP
+from .gap_affine import ALIGNED, ENTRY_MASK, EndsFree, FIRST_GAP, SECOND_GAP, gap_layer, layer_bit
 from .modes import Band, Costs, Mode
 
 
@@ -120,32 +121,9 @@ comptime HELD = 16000
 it stays inside 16 bits."""
 
 
-comptime TABLE_ENTRIES = 16
+comptime TABLE_ENTRIES = SHUFFLED_ENTRIES
 """Entries a table holds at most for the lanes: one 16-byte register a byte shuffle reads, a four-letter
 alphabet's, DNA's."""
-
-
-@always_inline
-def looked_up[
-    value: DType, width: Int
-](table: SIMD[DType.uint8, TABLE_ENTRIES], index: SIMD[DType.uint8, width]) -> SIMD[value, width]:
-    """Each lane's entry of `table`, `pshufb` or `tbl` a sixteen lanes, widened to `value`, signed for a
-    signed `value`."""
-    var out = SIMD[value, width]()
-    comptime if width < TABLE_ENTRIES:
-        # Fewer lanes than a shuffle takes, as NEON's eight 16-bit ones: one shuffle, its first lanes kept.
-        var part = table._dynamic_shuffle(SIMD[DType.uint8, TABLE_ENTRIES](0).insert[offset=0](index)).slice[width]()
-        comptime if value.is_signed():
-            return bitcast[DType.int8, width](part).cast[value]()
-        else:
-            return part.cast[value]()
-    comptime for chunk in range(width // TABLE_ENTRIES):
-        var part = table._dynamic_shuffle(index.slice[TABLE_ENTRIES, offset=chunk * TABLE_ENTRIES]())
-        comptime if value.is_signed():
-            out = out.insert[offset=chunk * TABLE_ENTRIES](bitcast[DType.int8, TABLE_ENTRIES](part).cast[value]())
-        else:
-            out = out.insert[offset=chunk * TABLE_ENTRIES](part.cast[value]())
-    return out
 
 
 @fieldwise_init
@@ -177,13 +155,10 @@ struct LaneEnds(ImplicitlyCopyable, TrivialRegisterPassable):
 
     @staticmethod
     def of(mode: Mode, rows: Int, columns: Int) -> Self:
-        """`mode`'s free letters for a pair of `rows` reference letters and `columns` query letters."""
-        return Self(
-            min(mode.reference_start, rows),
-            min(mode.reference_end, rows),
-            min(mode.query_start, columns),
-            min(mode.query_end, columns),
-        )
+        """`mode`'s free letters for a pair of `rows` reference letters and `columns` query letters (see
+        `EndsFree.of`)."""
+        var ends = EndsFree.of(mode, rows, columns)
+        return Self(ends.first_begin, ends.first_end, ends.second_begin, ends.second_end)
 
     @always_inline
     def start_low(self) -> Int:
@@ -531,18 +506,19 @@ def side_by_side[
             target.unsafe_offset(start * width).unsafe_bitcast[UInt64]().unsafe_store(turned.shuffle[words]())
 
 
-comptime SECOND_PIECE_DELETION = 3
-"""The layer of the second gap piece's deletions, `gap_affine.gap_layer(1, True)`."""
-comptime SECOND_PIECE_INSERTION = 4
-"""The layer of the second gap piece's insertions, `gap_affine.gap_layer(1, False)`."""
-comptime SOURCE_MASK = UInt8(7)
-"""A flag's low three bits: the source its alignment layer takes."""
+comptime SECOND_PIECE_DELETION = gap_layer(1, True)
+"""The layer of the second gap piece's deletions."""
+comptime SECOND_PIECE_INSERTION = gap_layer(1, False)
+"""The layer of the second gap piece's insertions."""
+comptime SOURCE_MASK = ENTRY_MASK
+"""A flag's low three bits: the source its alignment layer takes, as the wavefront's flags keep it."""
 
 
 @always_inline
 def extended_bit(layer: Int) -> UInt8:
-    """A flag bit: gap layer `layer` extends, not opens, into the cell."""
-    return UInt8(1) << UInt8(2 + layer)
+    """A flag bit: gap layer `layer` extends, not opens, into the cell; the wavefront's same bit says the
+    opposite (see `gap_affine.opened_bit`)."""
+    return layer_bit(layer)
 
 
 def band_costs[
@@ -736,13 +712,19 @@ def band_flags[value: DType](mut space: LaneSpace[value], low: Int, high: Int, c
             first_row[value, 2](space, low, high, costs)
         else:
             restored_row[value, 2](space, low, high, start, start // space.every, end - start)
-        swept[value, 2, True](space, low, high, costs, start, end, found)
+        if costs.letters > 0:
+            swept[value, 2, True, False, True](space, low, high, costs, start, end, found)
+        else:
+            swept[value, 2, True](space, low, high, costs, start, end, found)
     else:
         if start == 0:
             first_row[value, 1](space, low, high, costs)
         else:
             restored_row[value, 1](space, low, high, start, start // space.every, end - start)
-        swept[value, 1, True](space, low, high, costs, start, end, found)
+        if costs.letters > 0:
+            swept[value, 1, True, False, True](space, low, high, costs, start, end, found)
+        else:
+            swept[value, 1, True](space, low, high, costs, start, end, found)
 
 
 def ends_reached[

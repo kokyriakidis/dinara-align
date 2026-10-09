@@ -14,6 +14,8 @@ from std.bit import count_trailing_zeros
 from std.math import sqrt
 from std.sys import simd_width_of
 
+from .common import UNREACHED
+from .cigar import reversed_into
 from .slides import GATHERED_SLIDES, gathered_slides, slide
 from .bit_parallel import (
     advance,
@@ -26,10 +28,6 @@ from .bit_parallel import (
     SECOND_SENTINEL,
     UP,
 )
-
-
-comptime UNREACHED_OFFSET = Int32(-(1 << 28))
-"""A diagonal no path of the score reaches: far enough below zero that one more column stays negative."""
 
 
 comptime FRONT_PADDING = 2
@@ -326,7 +324,7 @@ def step_front[
         lane_diagonals[lane] = Int32(lane)
     var column_limit = Lanes(Int32(columns))
     var row_limit = Lanes(Int32(rows))
-    var unreached = Lanes(UNREACHED_OFFSET)
+    var unreached = Lanes(UNREACHED)
     var reaches = Lanes(0)
     var diagonal = low
     while diagonal <= high:
@@ -353,7 +351,7 @@ def step_front[
             current.unsafe_offset(diagonal).unsafe_store(entry)
         diagonal += FRONT_LANES
     for index in range(FRONT_PADDING):
-        current[unsafe_offset=high + 1 + index] = UNREACHED_OFFSET
+        current[unsafe_offset=high + 1 + index] = UNREACHED
     comptime if GATHERED_SLIDES:
         return Int(reaches.reduce_max())
 
@@ -419,10 +417,10 @@ def diagonal_transition(
     fronts.lows.append(0)
     fronts.highs.append(0)
     for _ in range(FRONT_PADDING):
-        fronts.offsets.append(UNREACHED_OFFSET)
+        fronts.offsets.append(UNREACHED)
     fronts.offsets.append(Int32(start))
     for _ in range(FRONT_PADDING):
-        fronts.offsets.append(UNREACHED_OFFSET)
+        fronts.offsets.append(UNREACHED)
     if target == 0 and start == columns:
         return Probe(0, 0, 0)
     var score = 0
@@ -441,7 +439,7 @@ def diagonal_transition(
         fronts.offsets.resize(unsafe_uninit_length=row_start + count + 2 * FRONT_PADDING + FRONT_LANES)
         var offsets = fronts.offsets.unsafe_ptr()
         for index in range(FRONT_PADDING):
-            offsets[unsafe_offset=row_start + index] = UNREACHED_OFFSET
+            offsets[unsafe_offset=row_start + index] = UNREACHED
         # The previous front and the new one, both indexed by diagonal.
         var previous = offsets.unsafe_origin_cast[MutUntrackedOrigin]().unsafe_offset(
             previous_start + FRONT_PADDING - previous_low
@@ -487,18 +485,8 @@ def reversed_codes(codes: List[UInt8], count: Int, sentinel: UInt8) -> List[UInt
 def reversed_codes_into(mut flipped: List[UInt8], codes: List[UInt8], count: Int, sentinel: UInt8):
     """`reversed_codes` written over `flipped`, whose memory is kept."""
     flipped.resize(unsafe_uninit_length=count + CODE_PADDING)
-    var source = codes.unsafe_ptr()
     var target = flipped.unsafe_ptr()
-    comptime CHUNK = 16
-    var index = 0
-    while index + CHUNK <= count:
-        target.unsafe_offset(index).unsafe_store(
-            source.unsafe_offset(count - CHUNK - index).unsafe_load[width=CHUNK]().reversed()
-        )
-        index += CHUNK
-    while index < count:
-        target[unsafe_offset=index] = source[unsafe_offset=count - 1 - index]
-        index += 1
+    reversed_into(target, codes.unsafe_ptr(), count)
     target.unsafe_offset(count).unsafe_store(SIMD[DType.uint8, CODE_PADDING](sentinel))
 
 
@@ -543,7 +531,7 @@ struct FrontPair(Movable):
         self.record = record
         var first = self.front_mut(0)
         for diagonal in range(-FRONT_PADDING, FRONT_PADDING + 1):
-            first[unsafe_offset=diagonal] = UNREACHED_OFFSET
+            first[unsafe_offset=diagonal] = UNREACHED
 
     def reset(mut self):
         """As new, recording nothing, the ring's memory kept for a batch's next pair."""
@@ -558,7 +546,7 @@ struct FrontPair(Movable):
         self.record = False
         var first = self.front_mut(0)
         for diagonal in range(-FRONT_PADDING, FRONT_PADDING + 1):
-            first[unsafe_offset=diagonal] = UNREACHED_OFFSET
+            first[unsafe_offset=diagonal] = UNREACHED
 
     def take_history(deinit self) -> DiagonalFronts:
         """The fronts kept, the rest given up."""
@@ -608,7 +596,7 @@ struct FrontPair(Movable):
         var low = max(-self.score, -rows)
         var high = min(self.score, columns)
         for index in range(1, FRONT_PADDING + 1):
-            current[unsafe_offset=low - index] = UNREACHED_OFFSET
+            current[unsafe_offset=low - index] = UNREACHED
         if measure:
             self.furthest = step_front[True](previous, current, low, high, columns, rows, codes, others)
         else:
@@ -910,7 +898,7 @@ def grow_to(profile: Profile, mut ahead: DiagonalFronts, behind: DiagonalFronts,
                         if live[lane]:
                             kept_low = min(kept_low, diagonal + lane)
                             kept_high = diagonal + lane
-                row.unsafe_offset(diagonal).unsafe_store(live.select(reached, Lanes(UNREACHED_OFFSET)))
+                row.unsafe_offset(diagonal).unsafe_store(live.select(reached, Lanes(UNREACHED)))
                 diagonal += FRONT_LANES
                 continue
             var column = Int(row[unsafe_offset=diagonal])
@@ -919,12 +907,12 @@ def grow_to(profile: Profile, mut ahead: DiagonalFronts, behind: DiagonalFronts,
                 kept_low = min(kept_low, diagonal)
                 kept_high = diagonal
             else:
-                row[unsafe_offset=diagonal] = UNREACHED_OFFSET
+                row[unsafe_offset=diagonal] = UNREACHED
             diagonal += 1
         for dead in range(low, min(from_diagonal, high + 1)):
-            row[unsafe_offset=dead] = UNREACHED_OFFSET
+            row[unsafe_offset=dead] = UNREACHED
         for dead in range(max(to_diagonal + 1, low), high + 1):
-            row[unsafe_offset=dead] = UNREACHED_OFFSET
+            row[unsafe_offset=dead] = UNREACHED
     else:
         kept_low = low
         kept_high = high
@@ -952,8 +940,8 @@ def grow_to(profile: Profile, mut ahead: DiagonalFronts, behind: DiagonalFronts,
         ahead.offsets.resize(unsafe_uninit_length=row_start + max(new_high - new_low + 1, 0) + 2 * FRONT_PADDING)
         var current = ahead.offsets.unsafe_ptr().unsafe_offset(row_start + FRONT_PADDING - new_low)
         for pad in range(1, FRONT_PADDING + 1):
-            current[unsafe_offset=new_low - pad] = UNREACHED_OFFSET
-            current[unsafe_offset=new_high + pad] = UNREACHED_OFFSET
+            current[unsafe_offset=new_low - pad] = UNREACHED
+            current[unsafe_offset=new_high + pad] = UNREACHED
         rest = distance - score
         # The backward front of the rest, as a row of the forward diagonals it mirrors.
         var back_low = behind.lows[rest]
@@ -965,7 +953,7 @@ def grow_to(profile: Profile, mut ahead: DiagonalFronts, behind: DiagonalFronts,
             # A diagonal the backward front of the rest does not reach meets nothing there.
             var mirrored = target - diagonal
             if mirrored < back_low or mirrored > back_high or back[unsafe_offset=mirrored] < 0:
-                current[unsafe_offset=diagonal] = UNREACHED_OFFSET
+                current[unsafe_offset=diagonal] = UNREACHED
                 continue
             # One more edit after the previous front, as `best_source` takes it; the previous row's
             # padding reads unreached either side.
@@ -985,7 +973,7 @@ def grow_to(profile: Profile, mut ahead: DiagonalFronts, behind: DiagonalFronts,
                 kept_low = min(kept_low, diagonal)
                 kept_high = diagonal
             else:
-                current[unsafe_offset=diagonal] = UNREACHED_OFFSET
+                current[unsafe_offset=diagonal] = UNREACHED
         if kept_low > kept_high:
             kept_low = new_low
             kept_high = new_low - 1

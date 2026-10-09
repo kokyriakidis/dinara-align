@@ -11,6 +11,7 @@ WFA2-lib's rule for ties (see `trace_back`), and written out as two gapped rows 
 from std.bit import count_trailing_zeros
 from std.math import ceildiv, clamp
 
+from .cigar import CigarWriter, reversed_into
 from .diagonal import best_source, DiagonalFronts, slide_forward
 from .slides import GATHERED_SLIDES, LANES, gathered_slides, slide
 from .bit_parallel import (
@@ -614,60 +615,6 @@ def diagonal_run(moves: ImmPointer[UInt8, _], start: Int, end: Int) -> Int:
     return index - start
 
 
-struct CigarWriter:
-    """A CIGAR string written a run at a time into bytes reserved once, a run of the same letter as the
-    last one joining it; each length's digits are written by hand, as formatting one through a `String`,
-    or growing the bytes a run at a time, took longer than the gapped rows' whole copy on short reads."""
-
-    var text: List[UInt8]
-    var used: Int
-    var letter: UInt8
-    """The letter of the run still being added to, zero before the first."""
-    var length: Int
-    """The length of that run so far."""
-
-    def __init__(out self, capacity: Int):
-        """Room for `capacity` bytes, which the caller bounds: nothing past it is checked."""
-        self.text = List[UInt8](capacity=capacity)
-        self.text.resize(unsafe_uninit_length=capacity)
-        self.used = 0
-        self.letter = 0
-        self.length = 0
-
-    @inline(.always)
-    def add(mut self, letter: UInt8, length: Int):
-        """`length` more of `letter`, joining the run being added to when it has the same letter."""
-        if letter != self.letter:
-            self.flush()
-            self.letter = letter
-        self.length += length
-
-    def flush(mut self):
-        """Writes the run being added to, if any, as its length's digits then its letter."""
-        if self.length == 0:
-            return
-        var digits = 1
-        var power = 10
-        while power <= self.length:
-            digits += 1
-            power *= 10
-        var at = self.used
-        self.used += digits + 1
-        var out = self.text.unsafe_ptr()
-        var rest = self.length
-        for place in range(digits - 1, -1, -1):
-            out[unsafe_offset=at + place] = UInt8(ord("0") + rest % 10)
-            rest //= 10
-        out[unsafe_offset=at + digits] = self.letter
-        self.length = 0
-
-    def finish(var self) -> String:
-        """The CIGAR string, its last run written."""
-        self.flush()
-        self.text.resize(self.used, 0)
-        return String(unsafe_from_utf8=self.text)
-
-
 @inline(.always)
 def equal_run(first: ImmPointer[UInt8, _], second: ImmPointer[UInt8, _], column: Int, row: Int, limit: Int) -> Int:
     """How many of the next `limit` bases along the diagonal from `(column, row)` are equal, eight at a time."""
@@ -686,6 +633,11 @@ def equal_run(first: ImmPointer[UInt8, _], second: ImmPointer[UInt8, _], column:
 
 
 def cigar_string(first: String, second: String, path: EditPath, eqx: Bool) -> String:
+    """`cigar_string` over the two sequences' bytes."""
+    return cigar_string(first.as_bytes(), second.as_bytes(), path, eqx)
+
+
+def cigar_string(first: ImmSpan[UInt8, _], second: ImmSpan[UInt8, _], path: EditPath, eqx: Bool) -> String:
     """`path` as a CIGAR string (see `EditCigar`): its moves put left to right, the prefix reversed, and
     each run of one move written as one entry, a diagonal run split into its matches and substitutions
     by comparing the bases eight at a time unless `M` stands for both."""
@@ -694,16 +646,7 @@ def cigar_string(first: String, second: String, path: EditPath, eqx: Bool) -> St
     var moves = List[UInt8](capacity=count)
     moves.resize(unsafe_uninit_length=count)
     var ordered = moves.unsafe_ptr()
-    var prefix = path.prefix.unsafe_ptr()
-    comptime CHUNK = 16
-    var index = 0
-    while index + CHUNK <= before:
-        var chunk = prefix.unsafe_offset(before - index - CHUNK).unsafe_load[width=CHUNK]()
-        ordered.unsafe_offset(index).unsafe_store(chunk.reversed())
-        index += CHUNK
-    while index < before:
-        ordered[unsafe_offset=index] = prefix[unsafe_offset=before - 1 - index]
-        index += 1
+    reversed_into(ordered, path.prefix.unsafe_ptr(), before)
     copy_bytes(ordered.unsafe_offset(before), path.suffix.unsafe_ptr(), len(path.suffix))
 
     var first_bytes = first.unsafe_ptr()
@@ -711,13 +654,13 @@ def cigar_string(first: String, second: String, path: EditPath, eqx: Bool) -> St
     # At most two runs an edit and one more, each its length's digits and a letter.
     var digits = 1
     var power = 10
-    while power <= max(first.byte_length(), second.byte_length()):
+    while power <= max(len(first), len(second)):
         digits += 1
         power *= 10
     var writer = CigarWriter((digits + 1) * (2 * path.distance + 2))
     var column = 0
     var row = 0
-    index = 0
+    var index = 0
     while index < count:
         var move = ordered[unsafe_offset=index]
         if move == DIAGONAL:

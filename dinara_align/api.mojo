@@ -30,7 +30,7 @@ from .device_edit import MAX_PATTERN_WORDS, device_edit_distances
 from .edit_distance import edit_cigar, edit_distance
 from .edit_search import EditHit, edit_search
 from .errors import AlignmentError, ErrorKind
-from .cigar import cigar_matches, cigar_runs, reversed_text
+from .cigar import cigar_matches, cigar_runs, reversed_text, text_of
 from .search import Hit, local_scores_by_lane
 from .scored import (
     FROM_EDGE,
@@ -42,7 +42,7 @@ from .scored import (
     rewarded_alignment,
     swept,
 )
-from .lanes import LaneCosts, StringTexts, lane_alignments, lane_distances, lane_free_alignments
+from .lanes import LaneCosts, StringTexts, Texts, lane_alignments, lane_distances, lane_free_alignments
 from .gap_affine import (
     AffineCigar,
     DEFAULT_MAX_MEMORY,
@@ -61,7 +61,7 @@ from .gap_affine import (
     penalties_of,
     wavefront_distance,
 )
-from .modes import Alignment, Anchor, Band, Costs, Mode, Ties
+from .modes import ANY_LENGTH, Alignment, Anchor, Band, Costs, Mode, Ties
 from .scoring import (
     cells_within,
     Scoring,
@@ -313,7 +313,7 @@ def score(
     if mode.kind == Mode.SMITH_WATERMAN:
         return end_of(reference.as_bytes(), query.as_bytes(), costs, mode.match_score)[0]
     return swept[FROM_EDGE](
-        reference.as_bytes(), query.as_bytes(), costs, mode.match_score, free_ends(mode, columns, rows)
+        reference.as_bytes(), query.as_bytes(), costs, mode.match_score, EndsFree.of(mode, columns, rows)
     )[0]
 
 
@@ -340,16 +340,6 @@ def cheapest_extension(costs: Costs) -> Int:
     return cheapest
 
 
-def free_ends(mode: Mode, columns: Int, rows: Int) -> EndsFree:
-    """A mode's free letters, none past its sequence's length."""
-    return EndsFree(
-        min(mode.reference_start, columns),
-        min(mode.reference_end, columns),
-        min(mode.query_start, rows),
-        min(mode.query_end, rows),
-    )
-
-
 def cost_within(
     reference: String, query: String, costs: Costs, mode: Mode, band: Band, max_cost: Int
 ) raises AlignmentError -> Optional[Int]:
@@ -369,7 +359,7 @@ def cost_within(
         )
     var columns = reference.byte_length()
     var rows = query.byte_length()
-    var ends = free_ends(mode, columns, rows)
+    var ends = EndsFree.of(mode, columns, rows)
     if swept_by_bits(costs, ends, band, max_cost, columns, rows):
         try:
             var scale = costs.unit_scale()
@@ -458,14 +448,13 @@ def bits_serve(costs: Costs, mode: Mode, band: Band, max_cost: Int) -> Bool:
     start or at the end of the reference. Such a batch's alignments take the sweep pair by pair, which beat the lanes on
     short reads and long: 1.26 against 1.44 us a 150 bp read, 21.9 against 23.5 a 1 kbp read at 10%, on
     the Skylake-X. Its distances take the lanes, which beat it on short reads, 0.23 against 0.40 us."""
-    if costs.unit_scale() == 0 or max_cost != Int.MAX or not band.covers(1 << 40, 1 << 40):
+    if costs.unit_scale() == 0 or max_cost != Int.MAX or not band.covers_any():
         return False
     if mode.is_scored() or mode.query_start != 0 or mode.query_end != 0:
         return False
-    var whole = 1 << 40
     if mode.reference_start == 0:
-        return mode.reference_end == 0 or mode.reference_end >= whole
-    return mode.reference_start >= whole and (mode.reference_end >= whole or mode.reference_end == 0)
+        return mode.reference_end == 0 or mode.reference_end >= ANY_LENGTH
+    return mode.reference_start >= ANY_LENGTH and (mode.reference_end >= ANY_LENGTH or mode.reference_end == 0)
 
 
 def least_costly(
@@ -485,7 +474,7 @@ def least_costly(
     `space`'s searches."""
     var columns = reference.byte_length()
     var rows = query.byte_length()
-    var ends = free_ends(mode, columns, rows)
+    var ends = EndsFree.of(mode, columns, rows)
     if swept_by_bits(costs, ends, band, max_cost, columns, rows):
         try:
             var scale = costs.unit_scale()
@@ -506,7 +495,7 @@ def least_costly(
                 hit = EditHit(mirrored.distance, columns - mirrored.end, columns - mirrored.start)
             else:
                 hit = edit_search(query, reference, ends.first_begin == 0, ties)
-            var part = String(StringSlice(unsafe_from_utf8=reference.as_bytes()[hit.start : hit.end]))
+            var part = text_of(reference.as_bytes()[hit.start : hit.end])
             var found = edit_cigar(part, query, eqx, ties)
             var cost = found.distance * scale
             return Alignment(cost, -cost, found.cigar, hit.start, hit.end, 0, rows)
@@ -573,7 +562,7 @@ def best_scoring(
     if mode.kind == Mode.SMITH_WATERMAN:
         return local_alignment(reference, query, costs, mode.match_score, ties, eqx, limit)
     return rewarded_alignment(
-        reference, query, costs, mode.match_score, free_ends(mode, columns, rows), ties, eqx, limit
+        reference, query, costs, mode.match_score, EndsFree.of(mode, columns, rows), ties, eqx, limit
     )
 
 
@@ -817,7 +806,7 @@ def alignments(
 # region Batches
 
 
-def longest_first(references: List[String], queries: List[String], workers: Int) -> List[Int]:
+def longest_first[T: Texts](pairs: Int, references: T, queries: T, workers: Int) -> List[Int]:
     """The pairs' indices, the longest pair first: taken in that order by whichever thread is free, the
     long pairs start first and the short ones fill in around them, so none is left alone at the end
     holding up the rest.
@@ -827,7 +816,6 @@ def longest_first(references: List[String], queries: List[String], workers: Int)
     counts its stretch of the batch's classes and then places its stretch's pairs: on one thread the
     order of short reads took as long as a fifteenth of the work ten threads did on them."""
     comptime CLASSES = 8 * 62
-    var pairs = len(references)
     # A stretch holds at least as many pairs as there are classes, so summing its counts costs no more
     # than counting them did.
     var stretches = max(min(workers, pairs // CLASSES), 1)
@@ -844,7 +832,7 @@ def longest_first(references: List[String], queries: List[String], workers: Int)
         """Each pair of stretch `stretch` its class, and the stretch's count of each."""
         var counts = start_ptr.unsafe_offset(stretch * CLASSES)
         for index in range(pairs * stretch // stretches, pairs * (stretch + 1) // stretches):
-            var length = references[index].byte_length() + queries[index].byte_length()
+            var length = references.length(index) + queries.length(index)
             # Lengths below 16 are classes of their own; past that, a power of two and its top three
             # bits under the leading one, longest the lowest class.
             var shift = max(60 - Int(count_leading_zeros(UInt64(length))), 0)
@@ -870,6 +858,159 @@ def longest_first(references: List[String], queries: List[String], workers: Int)
             placed += counted
     spread(place, stretches, stretches)
     return order^
+
+
+def each_pair[F: def(Int, mut SearchSpace) -> None](work: F, order: List[Int], workers: Int):
+    """`work` for every pair in `order` on `workers` threads, each thread taking the next pairs as soon as it is
+    free (see `next_share`), its searches kept from pair to pair."""
+    var pairs = len(order)
+    if pairs == 0:
+        return
+    var taken = Atomic[Int64](0)
+    var threads = min(workers, pairs)
+
+    def worker(slot: Int) {mut taken, imm work, imm order, imm pairs, imm threads}:
+        """Takes the next pairs in `order` until none is left."""
+        var space = SearchSpace()
+        var last = 0
+        while True:
+            var share = next_share(taken, pairs, threads, last)
+            if share[0] >= pairs:
+                return
+            for dealt in range(share[0], share[1]):
+                work(order[dealt], space)
+
+    spread(worker, threads, threads)
+
+
+def distances_in_lanes[
+    T: Texts
+](
+    pairs: Int,
+    references: T,
+    queries: T,
+    costs: Costs,
+    mode: Mode,
+    band: Band,
+    max_cost: Int,
+    workers: Int,
+    found: MutPointer[Optional[Int], _],
+    settled: MutPointer[Bool, _],
+) -> Int:
+    """A batch's distances as many pairs at once as a register holds lanes (see `lanes`), every pair `settled`
+    does not mark that they take: costs with no reward, globally or with free ends, which the searches would
+    take too. The pairs settled are counted; none for costs the searches refuse, which a pair's own search
+    then reports."""
+    var lane_costs = LaneCosts.of(costs, mode, free_ends=True)
+    if not lane_costs:
+        return 0
+    try:
+        _ = penalties_of(costs)
+    except:
+        return 0
+    return lane_distances(pairs, references, queries, lane_costs.value(), band, max_cost, workers, found, settled, mode)
+
+
+def alignments_in_lanes[
+    T: Texts
+](
+    pairs: Int,
+    references: T,
+    queries: T,
+    costs: Costs,
+    mode: Mode,
+    band: Band,
+    max_cost: Int,
+    ties: Ties,
+    workers: Int,
+    limit: Int,
+    found: MutPointer[Optional[Int], _],
+    paths: MutPointer[List[UInt8], _],
+    spans: MutPointer[Int, _],
+    settled: MutPointer[Bool, _],
+) -> Optional[Penalties]:
+    """A batch's alignments as many pairs at once as a register holds lanes, each traced from the flags its band
+    kept (see `lanes`), with free ends the span the tie rule picks first: every pair `settled` does not mark that
+    they take, its cost, its path's moves and its span, four numbers, into `found`, `paths` and `spans`. The
+    costs' penalties, for spelling each, or None where the lanes took none: unit costs the bit-parallel sweep
+    serves, which it beats the lanes on, free ends under a band, which would bound the span's search too, and
+    costs the searches refuse."""
+    var unbanded = band.covers_any()
+    if bits_serve(costs, mode, band, max_cost):
+        return None
+    var lane_costs = LaneCosts.of(costs, mode, unbanded)
+    if not lane_costs:
+        return None
+    var penalties: Penalties
+    try:
+        penalties = penalties_of(costs)
+    except:
+        return None
+    if mode.is_global():
+        for index in range(pairs):
+            spans[unsafe_offset=4 * index] = 0
+            spans[unsafe_offset=4 * index + 1] = references.length(index)
+            spans[unsafe_offset=4 * index + 2] = 0
+            spans[unsafe_offset=4 * index + 3] = queries.length(index)
+        _ = lane_alignments(
+            pairs,
+            references,
+            queries,
+            lane_costs.value(),
+            band,
+            max_cost,
+            ties == Ties.LEFT,
+            workers,
+            limit * KEPT_BYTES,
+            found,
+            paths,
+            settled,
+        )
+    else:
+        lane_free_alignments(
+            pairs,
+            references,
+            queries,
+            lane_costs.value(),
+            mode,
+            max_cost,
+            ties == Ties.RIGHT,
+            workers,
+            limit * KEPT_BYTES,
+            found,
+            paths,
+            spans,
+            settled,
+        )
+    return penalties
+
+
+def alignment_from_lanes(
+    reference: ImmSpan[UInt8, _],
+    query: ImmSpan[UInt8, _],
+    cost: Int,
+    var moves: List[UInt8],
+    span: ImmPointer[Int, _],
+    penalties: Penalties,
+    eqx: Bool,
+    limit: Int,
+) -> Optional[Alignment]:
+    """The alignment the lanes traced for a pair (see `alignments_in_lanes`), its CIGAR spelled from their moves over
+    its span, `span[0]` to `span[1]` of the reference and `span[2]` to `span[3]` of the query; None where the
+    searches might have split the span to keep their fronts within `limit` entries. The lanes follow the tie rule
+    across the whole span, as the searches do unless they split it, which they never do while both sides'
+    fronts, each at most a diagonal of the matrix at every cost, stay within it; such a pair takes them."""
+    var first_start = span[unsafe_offset=0]
+    var first_end = span[unsafe_offset=1]
+    var second_start = span[unsafe_offset=2]
+    var second_end = span[unsafe_offset=3]
+    var units = cost // penalties.scale
+    if 2 * (units + 1) * (first_end - first_start + second_end - second_start + 1) > limit:
+        return None
+    var cigar = cigar_of(
+        reference[first_start:first_end], query[second_start:second_end], moves^, units, penalties, eqx
+    )
+    return Alignment(cost, -cost, cigar^, first_start, first_end, second_start, second_end)
 
 
 def distances(
@@ -899,7 +1040,7 @@ def distances(
             raise AlignmentError(
                 ErrorKind.INVALID_ARGUMENT, "a mode with a match score maximizes a score, which `align` finds"
             )
-        if costs.unit_scale() == 0 or not mode.is_global() or not band.covers(1 << 40, 1 << 40):
+        if costs.unit_scale() == 0 or not mode.is_global() or not band.covers_any():
             raise AlignmentError(
                 ErrorKind.INVALID_ARGUMENT, "on the GPU, distances at unit costs, globally, with no band"
             )
@@ -955,8 +1096,18 @@ def gpu_distances(
         var found = device_edit_distances(DeviceScope(placement.gpu_id), patterns, texts, placement.threads)
         for slot in range(len(on_device)):
             results[on_device[slot]] = found[slot] * scale
-    for index in on_host:
-        results[index] = distance(references[index], queries[index], Costs.edit()) * scale
+    if len(on_host) > 0:
+        # Pairs too long for a thread's letters, on the host over the threads asked for.
+        var host_references = List[String](capacity=len(on_host))
+        var host_queries = List[String](capacity=len(on_host))
+        for index in on_host:
+            host_references.append(references[index])
+            host_queries.append(queries[index])
+        var found = capped_distances(
+            host_references, host_queries, Costs.edit(), Mode.GLOBAL, Band(), Int.MAX, Optional[Int](placement.threads)
+        )
+        for slot in range(len(on_host)):
+            results[on_host[slot]] = found[slot].value() * scale
     return results^
 
 
@@ -979,77 +1130,36 @@ def capped_distances(
     var out = results.unsafe_ptr()
     var failed = List[Bool](length=pairs, fill=False)
     var flags = failed.unsafe_ptr()
-    # Costs with no reward, globally or with free ends: as many pairs at once as a register holds lanes
-    # (see `lanes`); the pairs too long for its 16 bits, a pair with an empty side and free ends, and
-    # every pair of a mode with a reward, one at a time.
+    # The lanes first (see `distances_in_lanes`); the pairs too long for their 16 bits, a pair with an empty side
+    # and free ends, and every pair of a mode with a reward, one at a time.
     var settled = List[Bool](length=pairs, fill=False)
     var settled_ptr = settled.unsafe_ptr()
-    var lane_costs = LaneCosts.of(costs, mode, free_ends=True)
-    var reference_texts = StringTexts(references.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]())
-    var query_texts = StringTexts(queries.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]())
-    if lane_costs:
-        # Costs the searches would refuse raise here, as a pair's search would raise them.
-        _ = penalties_of(costs)
+    var reference_texts = StringTexts.of(references)
+    var query_texts = StringTexts.of(queries)
     if (
-        lane_costs
-        and lane_distances(
-            pairs,
-            reference_texts,
-            query_texts,
-            lane_costs.value(),
-            band,
-            max_cost,
-            workers,
-            out,
-            settled_ptr,
-            mode,
-        )
+        distances_in_lanes(pairs, reference_texts, query_texts, costs, mode, band, max_cost, workers, out, settled_ptr)
         == pairs
     ):
         for index in range(pairs):
             if not results[index] and max_cost == Int.MAX:
                 raise outside(band)
         return results^
-    var order = longest_first(references, queries, workers)
-    var taken = Atomic[Int64](0)
 
-    def distance_worker(
-        worker: Int,
-    ) {
-        mut taken,
-        imm order,
-        imm references,
-        imm queries,
-        imm out,
-        imm flags,
-        imm settled_ptr,
-        imm pairs,
-        imm costs,
-        imm mode,
-        imm band,
-        imm max_cost,
-        imm workers,
-    }:
-        """Takes the next pairs in `order` until none is left, storing each one's capped cost or flagging that
-        it raised, its searches kept from pair to pair; a pair the lanes settled it leaves."""
-        var space = SearchSpace()
-        var last = 0
-        while True:
-            var share = next_share(taken, pairs, workers, last)
-            if share[0] >= pairs:
-                return
-            for dealt in range(share[0], share[1]):
-                var index = order[dealt]
-                if settled_ptr[unsafe_offset=index]:
-                    continue
-                try:
-                    out[unsafe_offset=index] = cost_within(
-                        references[index], queries[index], costs, mode, band, max_cost, space
-                    )
-                except:
-                    flags[unsafe_offset=index] = True
+    def distance_one(
+        index: Int, mut space: SearchSpace
+    ) {imm references, imm queries, imm out, imm flags, imm settled_ptr, imm costs, imm mode, imm band, imm max_cost}:
+        """Pair `index`'s capped cost, or a flag that it raised; a pair the lanes settled it leaves."""
+        if settled_ptr[unsafe_offset=index]:
+            return
+        try:
+            out[unsafe_offset=index] = cost_within(
+                references[index], queries[index], costs, mode, band, max_cost, space
+            )
+        except:
+            flags[unsafe_offset=index] = True
 
-    spread(distance_worker, min(workers, pairs), min(workers, pairs))
+    each_pair(distance_one, longest_first(pairs, reference_texts, query_texts, workers), workers)
+
     for index in range(pairs):
         if failed[index]:
             results[index] = cost_within(references[index], queries[index], costs, mode, band, max_cost)
@@ -1125,9 +1235,8 @@ def capped_alignments(
     var out = results.unsafe_ptr()
     var failed = List[Bool](length=pairs, fill=False)
     var flags = failed.unsafe_ptr()
-    # Costs alone: as many pairs at once as a register holds lanes, each traced from the flags its band
-    # kept (see `lanes`), with free ends the span the tie rule picks first; every other pair, and every pair
-    # of a mode that scores, one at a time.
+    # The lanes first (see `alignments_in_lanes`); every other pair, and every pair of a mode that scores, one at
+    # a time.
     var settled = List[Bool](length=pairs, fill=False)
     var settled_ptr = settled.unsafe_ptr()
     var laned = List[Optional[Int]](length=pairs, fill=None)
@@ -1136,65 +1245,34 @@ def capped_alignments(
     for _ in range(pairs):
         paths.append(List[UInt8]())
     var path_ptr = paths.unsafe_ptr()
-    # Each laned pair's span: the reference's first letter and the one past its last, then the query's.
     var spans = List[Int](length=4 * pairs, fill=0)
     var span_ptr = spans.unsafe_ptr()
-    # Unit costs the bit-parallel sweep serves take it pair by pair, faster than the lanes on short reads and
-    # long alike: 1.26 against 1.44 us a 150 bp read, 21.9 against 23.5 a 1 kbp read at 10%, on the Skylake-X.
-    # Free ends take the lanes only with no band, which would bound the span's search too.
-    var unbanded = band.covers(1 << 40, 1 << 40)
-    var lane_costs = LaneCosts.of(costs, mode, unbanded) if not bits_serve(costs, mode, band, max_cost) else None
-    var penalties: Optional[Penalties] = None
-    if lane_costs and not mode.is_global():
-        penalties = penalties_of(costs)
-        lane_free_alignments(
-            pairs,
-            StringTexts.of(references),
-            StringTexts.of(queries),
-            lane_costs.value(),
-            mode,
-            max_cost,
-            ties == Ties.RIGHT,
-            workers,
-            limit * KEPT_BYTES,
-            laned_ptr,
-            path_ptr,
-            span_ptr,
-            settled_ptr,
-        )
-    elif lane_costs:
-        # Costs the searches would refuse raise here, as a pair's search would raise them.
-        penalties = penalties_of(costs)
-        for index in range(pairs):
-            span_ptr[unsafe_offset=4 * index + 1] = references[index].byte_length()
-            span_ptr[unsafe_offset=4 * index + 3] = queries[index].byte_length()
-        _ = lane_alignments(
-            pairs,
-            StringTexts(references.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
-            StringTexts(queries.unsafe_ptr().unsafe_origin_cast[ImmUntrackedOrigin]()),
-            lane_costs.value(),
-            band,
-            max_cost,
-            ties == Ties.LEFT,
-            workers,
-            limit * KEPT_BYTES,
-            laned_ptr,
-            path_ptr,
-            settled_ptr,
-        )
-    var order = longest_first(references, queries, workers)
-    var taken = Atomic[Int64](0)
+    var reference_texts = StringTexts.of(references)
+    var query_texts = StringTexts.of(queries)
+    var penalties = alignments_in_lanes(
+        pairs,
+        reference_texts,
+        query_texts,
+        costs,
+        mode,
+        band,
+        max_cost,
+        ties,
+        workers,
+        limit,
+        laned_ptr,
+        path_ptr,
+        span_ptr,
+        settled_ptr,
+    )
 
-    def alignment_worker(
-        worker: Int,
+    def alignment_one(
+        index: Int, mut space: SearchSpace
     ) {
-        mut taken,
-        imm order,
         imm references,
         imm queries,
         imm out,
         imm flags,
-        imm pairs,
         imm costs,
         imm mode,
         imm band,
@@ -1202,75 +1280,41 @@ def capped_alignments(
         imm ties,
         imm eqx,
         imm limit,
-        imm workers,
         imm settled_ptr,
         imm laned_ptr,
         imm path_ptr,
         imm span_ptr,
         imm penalties,
     }:
-        """Takes the next pairs in `order` until none is left, storing each one's capped alignment or flagging
-        that it raised; a pair the lanes settled has its CIGAR spelled from their path."""
-        var last = 0
-        var space = SearchSpace()
-        while True:
-            var share = next_share(taken, pairs, workers, last)
-            if share[0] >= pairs:
+        """Pair `index`'s capped alignment, or a flag that it raised; a pair the lanes settled has its CIGAR
+        spelled from their path, unless the searches might split it (see `alignment_from_lanes`)."""
+        if settled_ptr[unsafe_offset=index]:
+            if not laned_ptr[unsafe_offset=index]:
                 return
-            for dealt in range(share[0], share[1]):
-                var index = order[dealt]
-                if settled_ptr[unsafe_offset=index] and not laned_ptr[unsafe_offset=index]:
-                    continue
-                if settled_ptr[unsafe_offset=index]:
-                    var cost = laned_ptr[unsafe_offset=index].value()
-                    var first_start = span_ptr[unsafe_offset=4 * index]
-                    var first_end = span_ptr[unsafe_offset=4 * index + 1]
-                    var second_start = span_ptr[unsafe_offset=4 * index + 2]
-                    var second_end = span_ptr[unsafe_offset=4 * index + 3]
-                    ref scaled = penalties.value()
-                    # The lanes follow the tie rule across the whole span; the searches would too unless they
-                    # split it, which they never do while both sides' fronts, each at most a diagonal of the
-                    # matrix at every cost, stay within `limit`. A pair they might split takes them.
-                    var letters = first_end - first_start + second_end - second_start
-                    if 2 * (cost // scaled.scale + 1) * (letters + 1) <= limit:
-                        var moves = List[UInt8]()
-                        swap(moves, path_ptr[unsafe_offset=index])
-                        var whole = (
-                            first_start == 0
-                            and second_start == 0
-                            and first_end == references[index].byte_length()
-                            and second_end == queries[index].byte_length()
-                        )
-                        var cigar: String
-                        if whole:
-                            cigar = cigar_of(
-                                references[index], queries[index], moves^, cost // scaled.scale, scaled, eqx
-                            )
-                        else:
-                            cigar = cigar_of(
-                                String(
-                                    StringSlice(unsafe_from_utf8=references[index].as_bytes()[first_start:first_end])
-                                ),
-                                String(
-                                    StringSlice(unsafe_from_utf8=queries[index].as_bytes()[second_start:second_end])
-                                ),
-                                moves^,
-                                cost // scaled.scale,
-                                scaled,
-                                eqx,
-                            )
-                        out[unsafe_offset=index] = Alignment(
-                            cost, -cost, cigar^, first_start, first_end, second_start, second_end
-                        )
-                        continue
-                try:
-                    out[unsafe_offset=index] = aligned_within(
-                        references[index], queries[index], costs, mode, band, max_cost, ties, eqx, limit, space
-                    )
-                except:
-                    flags[unsafe_offset=index] = True
+            var moves = List[UInt8]()
+            swap(moves, path_ptr[unsafe_offset=index])
+            var spelled = alignment_from_lanes(
+                references[index].as_bytes(),
+                queries[index].as_bytes(),
+                laned_ptr[unsafe_offset=index].value(),
+                moves^,
+                span_ptr.unsafe_offset(4 * index),
+                penalties.value(),
+                eqx,
+                limit,
+            )
+            if spelled:
+                out[unsafe_offset=index] = spelled^
+                return
+        try:
+            out[unsafe_offset=index] = aligned_within(
+                references[index], queries[index], costs, mode, band, max_cost, ties, eqx, limit, space
+            )
+        except:
+            flags[unsafe_offset=index] = True
 
-    spread(alignment_worker, min(workers, pairs), min(workers, pairs))
+    each_pair(alignment_one, longest_first(pairs, reference_texts, query_texts, workers), workers)
+
     for index in range(pairs):
         if failed[index]:
             results[index] = aligned_within(
