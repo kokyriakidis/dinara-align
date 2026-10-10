@@ -143,6 +143,25 @@ answers held to the copies it replaces by the tests, and a hot path benchmarked 
   slides only those, and from `forward_segment`, whose substitutions stop at the tile's end; `edit_search`
   from `Band`, a free start, the last row read every column and a bound by words rather than rows.
 
+## Paper
+
+- [ ] **A controlled ablation.** The paper explains each technique and proves the two that need it
+  (the neighbour lemma, the band certificate), but shows no technique's own effect: Table S1's
+  figures were each measured against the commit before, at different times and sometimes on other
+  machines, and the history figure was dropped as confounded. A*PA2 ablates at one version, and a
+  reviewer will ask for the same. At one commit, a build switch to turn each technique off alone:
+  - the regrouped recurrence back to A*PA2's form (`bit_parallel.advance`);
+  - one eight-lane group instead of two on AVX-512;
+  - gathered extension off, the scalar slide in its place (the path AVX2 already takes);
+  - the agreement rule off, so every extrapolation aims the band;
+  - neighbours found by search and pruned, as before `ebe290f`, for the ablation build only;
+  - the batch's first band as wide as the matrix, so no pair needs the certificate.
+  For each, a measure of the mechanism beside the end-to-end time on the datasets it matters on:
+  cycles a word-column, gathers a step, seed lookups and candidates, rounds a pair, the share of
+  pairs certified and cells swept. Three or more runs a configuration, for a spread. On xaros only
+  while the owner's jobs are idle, pinned with `taskset` and under timeouts. Results become a table
+  in the paper's Results ("Effect of each technique") and replace the per-commit framing.
+
 ## From A*PA2's discussion
 
 Its limitations and future work (curiouscoding.nl/posts/astarpa2/#discussion), and where dinara-align
