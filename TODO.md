@@ -162,6 +162,44 @@ answers held to the copies it replaces by the tests, and a hot path benchmarked 
   while the owner's jobs are idle, pinned with `taskset` and under timeouts. Results become a table
   in the paper's Results ("Effect of each technique") and replace the per-commit framing.
 
+## From the paper's literature check
+
+Ideas from the work the paper cites, each checked (2026-10-10, M2 unless noted).
+
+- [-] **A batch band certified by its edges' costs** (SeedEx's check of a narrow band's boundary,
+  Fujiki et al., MICRO 2020). Of 500,000 short-read pairs 70,519 fail the band's certificate at affine
+  costs (1, 2, 1) and 49,001 at unit costs, and the second pass takes 58 of 192 ms and 43 of 174 ms;
+  25,004 and 3,335 of the failing pairs had their optimum inside the first band, so a tighter bound
+  could have spared them. Kept the least cost of a step off each edge of the band during the sweep
+  and bounded every path off it by that and a gap back to the end diagonal: no pair more was proven,
+  and the sweep took 4 to 6% longer. In costs the bound cannot beat `off_band`: the path that leaves at
+  the origin, along row zero or down column zero, is one of the edge steps and costs exactly
+  `off_band`'s opening and extensions. SeedEx's check gains in scores, where a path that leaves early
+  forgoes its matches' rewards; in costs a closer bound needs a lower bound on what remains past the
+  step, which costs about what the second pass does. Left.
+- [-] **Difference recurrences for the sweeps under a table** (Suzuki and Kasahara 2018, as KSW2
+  runs them), for 8-bit lanes regardless of length. They take global and extension alignment only: a
+  local alignment's clamp at zero has no form in differences, and local alignment is where SSW comes
+  closest (1.3 to 2.3 times slower). Global alignment under a table already runs 5.4 times parasail's
+  speed. Not built.
+- [-] **8-bit saturating lanes for the local sweep** (SSW's and parasail's first pass). Exact, since a
+  local score never goes below zero, and twice the cells a register, but only while every score stays
+  under 255: at a match score of 2, alignments under about 125 bases. A 150 bp read already scores about
+  300, and the local workloads score in the thousands, so each would saturate and sweep again in 16
+  bits. Not built.
+- [-] **A striped bit-parallel layout** (BSAlign, Shao and Ruan 2024), which might take the lane
+  rotation off each column's chain. Its edit-distance mode is described only in its supplement; it
+  reports 2.1 times Edlib's speed over 1 to 100 kbp, where dinara-align's unit-cost engine runs 6.7
+  times Edlib's speed on ont-10k and 22 times on 100 kbp pairs at 15%. A striped layout also needs a
+  correction pass for the bits crossing between segments, each column, the chain it means to shorten.
+  A*PA2 weighed it and left it too. Not built.
+- [ ] **Incremental doubling** (A*PA2, Section 3.8): a round after the first skips the rows the last
+  round fixed, from horizontal differences stored along a fixed row in each tile. A*PA2 reports it only
+  with three other methods, together 3 times faster. Its ceiling here is the work later rounds redo:
+  of the band's word-columns 16% on genvar and 7% on ont-500k go to rounds that fail (see "Band rounds
+  that fail" at the top), the band being about 65% of the time, so at most about 10% and 4.5% of a pair, less on
+  the rest. It touches the checkpoints, the retries, the seeds and the traceback's tile edges.
+
 ## From A*PA2's discussion
 
 Its limitations and future work (curiouscoding.nl/posts/astarpa2/#discussion), and where dinara-align
