@@ -68,8 +68,9 @@ def main() -> None:
     records = []
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(PACKAGE.iterdir()):
-            # The licenses go in the metadata below, where installers look for them.
-            if path.name in ("__pycache__", "LICENSE", "NOTICE"):
+            # Files alone, so a folder left by an older build stays out; the licenses go in the metadata
+            # below, where installers look for them.
+            if path.is_dir() or path.name in ("LICENSE", "NOTICE"):
                 continue
             data = path.read_bytes()
             name = f"dinara_align/{path.name}"

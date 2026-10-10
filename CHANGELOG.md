@@ -24,9 +24,11 @@ Licensed under the Mozilla Public License 2.0 (see LICENSE and NOTICE).
   bounded (`max_memory`): costs so dear that a search's fronts could pass it are refused, and under a
   `Scoring` swept instead.
 - A `Scoring`, any alphabet's substitution table with affine gap scores, in every mode on the CPU,
-  and globally or locally on the GPU: a batch's global scores there first over a band of sixteen
-  diagonals, a thread a pair, each kept where the pair's own cost proves no path off the band could
-  score as well, the rest over whole matrices, several pairs a warp.
+  and globally or locally on the GPU, scores and alignments: a batch's global scores there first over
+  a band of sixteen diagonals, a thread a pair, each kept where the pair's own cost proves no path off
+  the band could score as well, the rest over whole matrices, several pairs a warp; a pair too tall
+  for one block's carry tiled over global memory, its alignment traced in linear space.
+- Unit-cost distances on the GPU, globally, a thread a pair by Myers' bit-vectors.
 - One rule for ties (`Ties`): of equally good alignments, indels placed left by default, as minimap2
   places them, or right, WFA2-lib's CIGAR byte for byte; with free ends the span first, by the same
   rule, whichever search found the cost, under any band or cap.

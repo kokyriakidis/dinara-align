@@ -26,8 +26,9 @@ and Python, and as a command-line aligner.
 - **Every common cost model and mode.** Unit costs, linear, gap-affine and two-piece gap-affine costs,
   deletions priced apart from insertions, and substitution tables; global, infix, prefix, suffix,
   overlap, any free ends, extension with Z-drop and end bonus, and local alignment.
-- **Batches and GPUs.** Batches of short pairs are aligned many at a time in SIMD lanes; global and
-  local scores also run on NVIDIA GPUs and Apple silicon.
+- **Batches and GPUs.** Batches of short pairs are aligned many at a time in SIMD lanes. Global and
+  local scores and alignments under a substitution table, and global unit-cost distances, also run on
+  NVIDIA GPUs and Apple silicon.
 - **Bounded memory.** Every alignment keeps its traceback within a memory limit (`max_memory`, 80 MB
   by default), splitting a large problem where an optimal path crosses, as BiWFA does.
 
