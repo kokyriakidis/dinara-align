@@ -30,7 +30,7 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
   all eight, would spend about 25M cycles a pair to save about 34M: 1 to 2% on long pairs, nothing
   on short reads. Left for that.
 - [-] **Seed setup.** Still 34 to 45% of a long pair's time on the Skylake-X and 9 to 32% on the M2
-  (2026-10-06, `197656a`): on genvar 157 ms of inexact matching, 94 of local pruning and 19 of layers
+  (2026-10-06, `9c656ec`): on genvar 157 ms of inexact matching, 94 of local pruning and 19 of layers
   in 698; on 100 kbp pairs at 15% 27, 16 and 1 in 104; on ont-500k 64, 69 and 10 in 468.
   - Inexact matching: the half tables' lookups cost 5.5 ns a row, and the rest is the candidates,
     0.74 a row on genvar, 17% of them within one edit: about 15 ns a row plus 43 a candidate there,
@@ -54,8 +54,8 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
     of the seeds, at more memory.
 - [x] **Traceback (about 0.9 s).** Retracing the final round's tiles from their recorded left
   edges. Since this was profiled, each tile is traced by a forward search over one window of
-  diagonals, eight at a time, its recompute reusing its buffers (`f1e9a96`, `8f9c92f`, `7821fe8`,
-  `ce286ba`, `6dcb6fa`): on the M2 (2026-10-09) `forward_segment` is 65 of 3,900 samples aligning
+  diagonals, eight at a time, its recompute reusing its buffers (`6108666`, `5a0e514`, `38837f2`,
+  `d2492b3`, `5e76145`): on the M2 (2026-10-09) `forward_segment` is 65 of 3,900 samples aligning
   genvar and 122 of 5,600 on ont-500k, about 2%, the recompute too rare to show.
 - [ ] **The inexact seeds' neighbour windows (12% on the long reads).** An exact match's windows a base
   shorter and longer were left out of the inexact seeds, and without them the heuristic overestimated,

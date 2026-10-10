@@ -66,7 +66,7 @@ dinara-align writes its default scoring to the data directory and hyalite reads 
 
 ## Results
 
-Measured with `pixi run bench --full`, which took about five minutes, on the Intel Core i9-7900X of A\*PA2's results below (ten cores at a fixed 3.3 GHz, turbo boost and hyper-threading off, 91 GB) with an NVIDIA GeForce RTX 2070, on the otherwise idle machine, every column on one core, dinara-align's CPU column as every rival's, since a library runs on its caller's thread (see Short-Read Batches for every core), every tool built for the machine's own instruction set, AVX-512 included (`--cpu native`, the default), dinara-align at `6d11d88`, its GPU column at `ac6a69e`, the rivals as measured at `6dcb6fa`.
+Measured with `pixi run bench --full`, which took about five minutes, on the Intel Core i9-7900X of A\*PA2's results below (ten cores at a fixed 3.3 GHz, turbo boost and hyper-threading off, 91 GB) with an NVIDIA GeForce RTX 2070, on the otherwise idle machine, every column on one core, dinara-align's CPU column as every rival's, since a library runs on its caller's thread (see Short-Read Batches for every core), every tool built for the machine's own instruction set, AVX-512 included (`--cpu native`, the default), dinara-align at `16732cf`, its GPU column at `daf6d3a`, the rivals as measured at `5e76145`.
 Hyalite built with Rust 1.92, A\*PA with the nightly its repository pins, both with `-C target-cpu=native`.
 A dash marks a task the tool does not offer, or a workload it is not run on.
 
@@ -124,7 +124,7 @@ Each dataset is a fixed shuffled sample of about 2 Mbp and at least four pairs, 
 The rivals are pinned, so their results are kept and reused until `--fresh`; a second table gives each tool's peak resident memory.
 dinara-align also runs as a batch, `alignments` over the whole sample in one call on the same one thread, whose column is the call's time over its pairs, a throughput where the others are each one pair's latency: at unit costs a batch takes the bit-parallel sweep pair by pair, as single calls do.
 
-Measured on the i9-7900X of A\*PA2's results below, unpinned on the otherwise idle machine, every tool built for its own instruction set, dinara-align at `6d11d88`; a count marks a tool its budget, or WFA's 8 GiB cap, stopped partway, and more than the budget one that finished no pair:
+Measured on the i9-7900X of A\*PA2's results below, unpinned on the otherwise idle machine, every tool built for its own instruction set, dinara-align at `16732cf`; a count marks a tool its budget, or WFA's 8 GiB cap, stopped partway, and more than the budget one that finished no pair:
 
 | dataset | pairs | mean length | dinara-align (bit-parallel, 1 thread) | dinara-align (bit-parallel, batch, 1 thread) | a*pa2-full | a*pa2-simple | a*pa | edlib | biwfa | wfa | agree |
 | :-- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | :-: |
@@ -157,7 +157,7 @@ dinara-align answers with `align` under `Costs.affine`, a CIGAR as the others ha
 pixi run bench-astarpa2 --affine 4,6,2
 ```
 
-At WFA's costs (4, 6, 2) on the i9-7900X above, pinned to one core, every tool built for its own instruction set, dinara-align at `6d11d88`, each tool five seconds a sample; a count marks a tool its budget stopped partway, and more than the budget one that finished no pair:
+At WFA's costs (4, 6, 2) on the i9-7900X above, pinned to one core, every tool built for its own instruction set, dinara-align at `16732cf`, each tool five seconds a sample; a count marks a tool its budget stopped partway, and more than the budget one that finished no pair:
 
 | dataset | pairs | mean length | dinara-align | WFA | BiWFA | KSW2 | agree |
 | :-- | --: | --: | --: | --: | --: | --: | :-: |
@@ -214,7 +214,7 @@ pixi run bench-local   # builds and times SSW, parasail and abPOA the first time
 ```
 
 Every tool scores a match 2, a mismatch -4 and a gap of `k` letters `6 + 2k` (dinara-align's `Mode.local(2)` and `Mode.overlap(2)` under `Costs.affine(4, 6, 2)`), and every tool's scores must agree on every pair, or the run fails; none disagreed.
-A tool's time is the faster of two passes over a workload, its mean per pair, on one thread of the Skylake-X, pinned (see A\*PA2's results below for the machine), every tool built for its own instruction set, AVX-512 included, dinara-align at `6d11d88`.
+A tool's time is the faster of two passes over a workload, its mean per pair, on one thread of the Skylake-X, pinned (see A\*PA2's results below for the machine), every tool built for its own instruction set, AVX-512 included, dinara-align at `16732cf`.
 abPOA aligns to a graph, so its time includes adding the reference to one, as any pairwise use of it pays; SSW and abPOA have no overlap or infix mode.
 The infix row scores with a reward, `Mode.INFIX.with_match_score(2)`, as parasail's `sg_dx` and hyalite's HW do; without one, dinara-align's `Mode.INFIX` minimizes the costs, Edlib's way, on the bit-parallel sweep at unit costs or the wavefront at any others.
 
@@ -237,7 +237,7 @@ Free ends, seed extension, two-piece gaps and substitution tables of more than o
 pixi run bench-modes   # builds and times Edlib, WFA2-lib, KSW2, parasail and SSW the first time; then seconds
 ```
 
-Every tool aligns every pair with its CIGAR on one thread of the Skylake-X, pinned, every tool built for its own instruction set, AVX-512 included, dinara-align at `dc74c21`; a tool's time is the faster of two passes over a workload, its mean per pair, and every tool's costs or scores must agree on every pair, or the run fails; none disagreed.
+Every tool aligns every pair with its CIGAR on one thread of the Skylake-X, pinned, every tool built for its own instruction set, AVX-512 included, dinara-align at `2f8b935`; a tool's time is the faster of two passes over a workload, its mean per pair, and every tool's costs or scores must agree on every pair, or the run fails; none disagreed.
 WFA2-lib runs exact, keeping every front, its WF-adaptive heuristic off.
 KSW2 extends with no Z-drop: it gauges one by anti-diagonal and dinara-align as WFA2-lib does, a cost at a time, so the two would stop at different places and their times compare different work.
 Deletions priced apart from insertions are left out: no rival offers them.
@@ -254,9 +254,9 @@ Deletions priced apart from insertions are left out: no rival offers them.
 | a table, match 2, transition -2, transversion -4, global, 1 kbp at 10% | **630 µs** | — | — | — | 2.94 ms | — |
 | the same table, local, 1 kbp read at 10% in a 10 kbp window | **2.69 ms** | — | — | — | 5.16 ms | 3.27 ms |
 
-- **dinara-align is the fastest on every workload**: 1.9 and 4.2 times Edlib on infixes, 2.9 times KSW2 on extension and 7.8 times with an end bonus, 1.9 times WFA2-lib on two-piece gaps and 4.7 times parasail on a table globally; on an infix at WFA2-lib's own costs 3.93 against 4.10 ms here, and 3.00 at `6d11d88` (see below). The prefix search runs 44 against WFA2-lib's 47 µs: it gives a doomed try up once its climb projects past the bound, as the global band does, where its first try used to sweep two thirds of the way.
+- **dinara-align is the fastest on every workload**: 1.9 and 4.2 times Edlib on infixes, 2.9 times KSW2 on extension and 7.8 times with an end bonus, 1.9 times WFA2-lib on two-piece gaps and 4.7 times parasail on a table globally; on an infix at WFA2-lib's own costs 3.93 against 4.10 ms here, and 3.00 at `16732cf` (see below). The prefix search runs 44 against WFA2-lib's 47 µs: it gives a doomed try up once its climb projects past the bound, as the global band does, where its first try used to sweep two thirds of the way.
 - **An end bonus aligns a read to its end when that scores within the bonus of the best stop**, as KSW2's `end_bonus` and BWA-MEM's clipping penalty decide, and both tools choose the same alignment on every read. The extension's own search weighs it, keeping the best of its points on the read's last row as it grows and going on only while one could still win, so a read ending in a short stretch of noise costs less than a plain extension of a long one.
-- **Some rows move by up to a third between commits that do not touch them.** The infix at WFA's costs takes 3.00 ms at `6d11d88` and 3.92 at `dc74c21`, which changed only the prefix search: both run the same 15.29 billion instructions and 2.17 billion branches, but the slower takes 8.9 billion of its micro-ops from the legacy decoder against the faster's 4.8, its loop placed where the micro-op cache misses it, in 6.5 billion cycles against 5.0. The Skylake-X penalises a jump that crosses a 32-byte boundary (Intel's JCC erratum fix). `mojo build` passes no option to LLVM's assembler, and its documentation names none; assembling Mojo's own `--emit asm` output with LLVM's `-mbranches-within-32B-boundaries` and linking it as `mojo build` does runs this row in 2.95 ms at both commits, which shows the cause, but the builds here do not, as that would depend on Mojo's internal output and on the machine's own LLVM. Later x86 cores and Apple silicon are not affected. Read a difference of that size between commits as noise; the global table's 527 µs at `6d11d88` and 630 here are another.
+- **Some rows move by up to a third between commits that do not touch them.** The infix at WFA's costs takes 3.00 ms at `16732cf` and 3.92 at `2f8b935`, which changed only the prefix search: both run the same 15.29 billion instructions and 2.17 billion branches, but the slower takes 8.9 billion of its micro-ops from the legacy decoder against the faster's 4.8, its loop placed where the micro-op cache misses it, in 6.5 billion cycles against 5.0. The Skylake-X penalises a jump that crosses a 32-byte boundary (Intel's JCC erratum fix). `mojo build` passes no option to LLVM's assembler, and its documentation names none; assembling Mojo's own `--emit asm` output with LLVM's `-mbranches-within-32B-boundaries` and linking it as `mojo build` does runs this row in 2.95 ms at both commits, which shows the cause, but the builds here do not, as that would depend on Mojo's internal output and on the machine's own LLVM. Later x86 cores and Apple silicon are not affected. Read a difference of that size between commits as noise; the global table's 527 µs at `16732cf` and 630 here are another.
 - **The prefix search sweeps only the band its bound allows**, which Edlib's prefix mode does not: the band's top moves down with the diagonal, no column past the read's length plus the best end so far is swept, and a try whose band has already emptied stops. The part of the reference it finds is then aligned globally by the edit-distance traceback.
 - **A table of more than one mismatch score sweeps sixteen cells at a time**, by anti-diagonal, each pair's score read by byte shuffle from a register when the table has at most sixteen entries, as DNA's four letters do, and gathered from memory otherwise. A local alignment is found as SSW finds one: a 16-bit sweep for its end, one anchored there for the first cell that earns its score, its start, and the span between aligned globally. A global one stores only the band of diagonals its score bounds. Both used to sweep a cell at a time: 13.3 ms globally and 133 ms locally.
 
@@ -269,7 +269,7 @@ Its reads are not ours to ship, so the pairs here are drawn to the same shape fr
 pixi run bench-batch   # builds the rivals the first time; then a minute or two
 ```
 
-Every tool scores the whole batch twice: on one core, as a library runs on its caller's thread, and on all ten cores of the Skylake-X, each tool's calls spread by its own driver, the rivals' through OpenMP, one aligner a thread, and dinara-align's by the benchmark program, the batch cut before the clock starts into forty pieces, each one `distances` call, each thread taking the next piece as it finishes; the library itself starts no threads. A time is the faster of two passes; every tool's costs must agree, summed and position-weighted, or the run fails. WFA2-lib runs exact, its score alone, its WF-adaptive heuristic off. dinara-align on the GPU is `scores` on the RTX 2070, the faster of five calls once three have brought the device's clocks up, each the whole call: packing the batch, copying it over, scoring it and copying back. dinara-align at `6d11d88`, its GPU column at `c61450f`, every rival measured again beside it on one core and on ten.
+Every tool scores the whole batch twice: on one core, as a library runs on its caller's thread, and on all ten cores of the Skylake-X, each tool's calls spread by its own driver, the rivals' through OpenMP, one aligner a thread, and dinara-align's by the benchmark program, the batch cut before the clock starts into forty pieces, each one `distances` call, each thread taking the next piece as it finishes; the library itself starts no threads. A time is the faster of two passes; every tool's costs must agree, summed and position-weighted, or the run fails. WFA2-lib runs exact, its score alone, its WF-adaptive heuristic off. dinara-align on the GPU is `scores` on the RTX 2070, the faster of five calls once three have brought the device's clocks up, each the whole call: packing the batch, copying it over, scoring it and copying back. dinara-align at `16732cf`, its GPU column at `348e3a4`, every rival measured again beside it on one core and on ten.
 
 | workload | threads | dinara-align | dinara-align GPU | WFA2-lib | KSW2 | parasail | Edlib |
 | :-- | :-- | --: | --: | --: | --: | --: | --: |
@@ -297,7 +297,7 @@ pixi run results-astarpa2 tables    # the tables below, into .cache/results/asta
 As A\*PA2's evaluation runs them: one single-threaded job at a time, every pair aligned once with its traceback, which every aligner hands back as a CIGAR, the time the average wall clock per alignment, reading the data left out.
 
 The machine is an Intel Core i9-7900X under Ubuntu 26.04 (Linux 7.0), with Mojo 1.1.0, set up as A\*PA2's i7-10750H was: every core fixed at 3.3 GHz, turbo boost and hyper-threading off, and each collection pinned to one core with `taskset`.
-One thing differs: the jobs ran at normal priority, not A\*PA2's niceness −20, on an otherwise idle machine. Every tool is built for this machine's own instruction set, AVX-512 included (`--cpu native`, the default), as A\*PA2's own repository builds it; dinara-align at `b132767`.
+One thing differs: the jobs ran at normal priority, not A\*PA2's niceness −20, on an otherwise idle machine. Every tool is built for this machine's own instruction set, AVX-512 included (`--cpu native`, the default), as A\*PA2's own repository builds it; dinara-align at `1e14f62`.
 
 Each dataset is a fixed shuffled sample, the same pairs for every aligner: about 2 Mbp of sequence and at least four pairs, and 20 Mbp, fifteen reads, of the two 500 kbp read sets.
 Each aligner may spend 20 seconds on a sample; one that has not finished stops there, its numbers covering the pairs it finished, counted beside them, and one that finished none shows a dash.
@@ -385,20 +385,20 @@ A\*PA2 measures each of its methods by adding them one at a time. dinara-align's
 
 | commit | ont-500k | ont-500k-genvar |
 | :-- | --: | --: |
-| `641819a` port | 1.32 s (481 ms) | 1.19 s (854 ms) |
-| `5a6ee58` + diagonal transition | 1.24 s (872 ms) | 8.54 s (10.1 s), 7/15 |
-| `3851282` + seed heuristic | 1.04 s (713 ms) | 8.54 s (10.1 s), 7/15 |
-| `28c1241` + local pruning | 762 ms (169 ms) | 8.1 s (10.2 s), 7/15 |
-| `c53edc6` + two-ended search | 472 ms (161 ms) | 4.33 s (5.41 s), 13/15 |
-| `b60ece0` + real-read fixes | 456 ms (160 ms) | 752 ms (499 ms) |
-| `501a6bb` + retries aimed | 162 ms (94.4 ms) | 199 ms (157 ms) |
-| `ef0e73a` + inexact seeds | 181 ms (131 ms) | 244 ms (204 ms) |
+| `495017d` port | 1.32 s (481 ms) | 1.19 s (854 ms) |
+| `1907e33` + diagonal transition | 1.24 s (872 ms) | 8.54 s (10.1 s), 7/15 |
+| `3f548c4` + seed heuristic | 1.04 s (713 ms) | 8.54 s (10.1 s), 7/15 |
+| `8800593` + local pruning | 762 ms (169 ms) | 8.1 s (10.2 s), 7/15 |
+| `16af9c8` + two-ended search | 472 ms (161 ms) | 4.33 s (5.41 s), 13/15 |
+| `95d14ed` + real-read fixes | 456 ms (160 ms) | 752 ms (499 ms) |
+| `2b038c8` + retries aimed | 162 ms (94.4 ms) | 199 ms (157 ms) |
+| `117018a` + inexact seeds | 181 ms (131 ms) | 244 ms (204 ms) |
 | today | 100 ms (82.4 ms) | 136 ms (105 ms) |
 
 - **On ont-500k the time falls from 1.32 s at the port of A\*PA2-simple's band doubling to 162 ms once the retries are aimed.**
-- **On ont-500k-genvar the commits between the port and `b60ece0` were several times slower,** 4.3 to 8.5 s a read and up to eight reads past the budget: real reads gather their errors at the ends, and the projections those commits aimed by ran many times over the distance, so they swept bands far wider than needed. `b60ece0` trusted a projection only when two of them agreed and otherwise grew the band from what was known, bringing genvar back to 752 ms, and aiming the retries to 199 ms.
+- **On ont-500k-genvar the commits between the port and `95d14ed` were several times slower,** 4.3 to 8.5 s a read and up to eight reads past the budget: real reads gather their errors at the ends, and the projections those commits aimed by ran many times over the distance, so they swept bands far wider than needed. `95d14ed` trusted a projection only when two of them agreed and otherwise grew the band from what was known, bringing genvar back to 752 ms, and aiming the retries to 199 ms.
 - **Inexact seeds made these reads slower here at first,** 162 to 181 ms and 199 to 244 ms: this machine's band, on AVX-512, runs fast beside its seeds' setup, so inexact seeds paid only on more divergent pairs; the cutoff now follows the vector width, 20% of the exact seeds chained on AVX-512 against 40% on narrower vectors.
-- **A leaner seeds' setup since** (`fc0e5e4`: a branch-free one-edit test, only the seeds whose matches can reach the end, a leaner local pruning) brings both below their best before inexact seeds, and with retries aimed closer, AVX-512 sweeping two groups at a time (`697fef1`) and exact seeds' matching filtered (`bcdc7dc`) since, they take 100 ms on ont-500k and 136 ms on ont-500k-genvar, a CIGAR included (`3152d27`); the diagonal transition's slides by AVX-512 gathers (`bad5ba5`) took the short reads and low-divergence pairs down 7 to 19% since. Every CIGAR now follows a fixed rule for ties (`ea094ba`), the band's retraced a tile at a time by a forward search (`8f9c92f`).
+- **A leaner seeds' setup since** (`7435edd`: a branch-free one-edit test, only the seeds whose matches can reach the end, a leaner local pruning) brings both below their best before inexact seeds, and with retries aimed closer, AVX-512 sweeping two groups at a time (`475684c`) and exact seeds' matching filtered (`ff26cea`) since, they take 100 ms on ont-500k and 136 ms on ont-500k-genvar, a CIGAR included (`9bf5295`); the diagonal transition's slides by AVX-512 gathers (`45697e0`) took the short reads and low-divergence pairs down 7 to 19% since. Every CIGAR now follows a fixed rule for ties (`f95d819`), the band's retraced a tile at a time by a forward search (`5a0e514`).
 
 ### Memory
 

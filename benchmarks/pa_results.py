@@ -67,14 +67,14 @@ LENGTH_RATES = ["0.05", "0.15"]
 LENGTHS = [3_000, 10_000, 30_000, 100_000, 300_000, 1_000_000]
 
 HISTORY = [
-    ("641819a", "port"),
-    ("5a6ee58", "+ diagonal transition"),
-    ("3851282", "+ seed heuristic"),
-    ("28c1241", "+ local pruning"),
-    ("c53edc6", "+ two-ended search"),
-    ("b60ece0", "+ real-read fixes"),
-    ("501a6bb", "+ retries aimed"),
-    ("ef0e73a", "+ inexact seeds"),
+    ("495017d", "port"),
+    ("1907e33", "+ diagonal transition"),
+    ("3f548c4", "+ seed heuristic"),
+    ("8800593", "+ local pruning"),
+    ("16af9c8", "+ two-ended search"),
+    ("95d14ed", "+ real-read fixes"),
+    ("2b038c8", "+ retries aimed"),
+    ("117018a", "+ inexact seeds"),
 ]
 """The commits that added each method, cumulatively, from the port of A*PA2-simple's band doubling."""
 
@@ -232,7 +232,7 @@ def generated(total: int, rates: list[str], lengths: list[int]) -> list[Path]:
 def historic_runner(commit: str) -> Path:
     """The package as of `commit`, built with `DRIVER` into a runner of its own, once.
 
-    Commits before 66a0b82 name a NEON register in `opaque`'s inline assembly, which x86 cannot
+    Commits before 5d028f2 name a NEON register in `opaque`'s inline assembly, which x86 cannot
     allocate: on x86 their copy takes that commit's fix, `x` for `w`, and nothing else. A runner that
     cannot align one short pair is refused rather than timed.
     """
