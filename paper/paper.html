@@ -1,0 +1,445 @@
+<title>dinara-align paper</title>
+<style>
+/* Layout: one reading column of about 68 characters, with figures and tables allowed a wider measure;
+   a slim contents rail on wide screens. */
+:root {
+  --paper: #fbfcfc;
+  --ink: #18212b;
+  --ink-soft: #4a5866;
+  --rule: #d6dde3;
+  --tint: #eef3f6;
+  --accent: #155e86;
+  --flag: #a34a0b;
+  --c-dinara: #d55e00;
+  --c-apafull: #0072b2;
+  --c-apasimple: #3b9fd6;
+  --c-apa: #b8558f;
+  --c-edlib: #c48a00;
+  --c-biwfa: #00896a;
+  --c-wfa: #5f6b77;
+  --serif: "Literata", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --sans: "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --measure: 68ch;
+  --wide: 62rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #12171c; --ink: #e3e9ee; --ink-soft: #a5b2bd; --rule: #2c3640; --tint: #1b232b;
+    --accent: #6cb6e0; --flag: #f0a35e;
+    --c-dinara: #ff8a3d; --c-apafull: #4aa3e0; --c-apasimple: #8fcdf2; --c-apa: #e08cc0;
+    --c-edlib: #e8b730; --c-biwfa: #3ec29d; --c-wfa: #9aa6b2;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #12171c; --ink: #e3e9ee; --ink-soft: #a5b2bd; --rule: #2c3640; --tint: #1b232b;
+  --accent: #6cb6e0; --flag: #f0a35e;
+  --c-dinara: #ff8a3d; --c-apafull: #4aa3e0; --c-apasimple: #8fcdf2; --c-apa: #e08cc0;
+  --c-edlib: #e8b730; --c-biwfa: #3ec29d; --c-wfa: #9aa6b2;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--paper); color: var(--ink); font-family: var(--serif); font-size: 1.0625rem;
+  line-height: 1.62; padding-inline: 16px; padding-block: 2.5rem 4rem; }
+main { max-width: var(--wide); margin-inline: auto; }
+.col { max-width: var(--measure); margin-inline: auto; }
+h1, h2, h3, h4 { font-family: var(--sans); text-wrap: balance; line-height: 1.22; margin: 0; }
+h1 { font-size: clamp(1.75rem, 4vw, 2.45rem); font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 1.4rem; font-weight: 700; margin-block: 2.6rem 0.8rem; }
+h3 { font-size: 1.12rem; font-weight: 600; margin-block: 1.8rem 0.5rem; }
+h2 .num, h3 .num { color: var(--ink-soft); font-weight: 600; margin-right: 0.45em; font-variant-numeric: tabular-nums; }
+p { margin-block: 0 0.95rem; }
+a { color: var(--accent); text-underline-offset: 2px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.sys { font-family: var(--sans); font-weight: 600; letter-spacing: 0.005em; }
+code, .mono { font-family: var(--mono); font-size: 0.86em; }
+ul, ol { padding-left: 1.35rem; margin-block: 0 1rem; }
+li { margin-block: 0.25rem; }
+li > ul { margin-block: 0.3rem 0.2rem; }
+.draft { display: inline-block; font-family: var(--sans); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--flag); border: 1px solid var(--flag); border-radius: 3px; padding: 0.05rem 0.4rem;
+  margin-bottom: 0.9rem; }
+.todo { color: var(--flag); font-family: var(--sans); font-size: 0.9em; }
+.abstract { background: var(--tint); border-radius: 6px; padding: 1.1rem 1.25rem 0.4rem; margin-block: 1.6rem 0.5rem; }
+.abstract h4 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.09em; color: var(--ink-soft); margin-bottom: 0.25rem; }
+.abstract p { font-size: 0.98rem; }
+figure { margin: 2rem auto; max-width: var(--wide); }
+figcaption { font-size: 0.9rem; color: var(--ink-soft); max-width: var(--measure); margin: 0.6rem auto 0; }
+figcaption b { color: var(--ink); font-family: var(--sans); }
+.chart-wrap { overflow-x: auto; }
+.chart { width: 100%; min-width: 520px; height: auto; display: block; font-family: var(--sans); }
+.chart text { fill: var(--ink-soft); font-size: 11px; }
+.chart .axis-title { fill: var(--ink); font-size: 12px; font-weight: 600; }
+.chart .grid { stroke: var(--rule); stroke-width: 1; }
+.chart .axis { stroke: var(--ink-soft); stroke-width: 1; }
+.chart .hover-line { stroke: var(--ink-soft); stroke-dasharray: 3 3; }
+.legend { display: flex; flex-wrap: wrap; gap: 0.35rem 0.5rem; justify-content: center; margin-top: 0.4rem; font-family: var(--sans); font-size: 0.82rem; }
+.legend button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--rule); border-radius: 999px;
+  padding: 0.18rem 0.65rem 0.18rem 0.45rem; display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer; }
+.legend button[aria-pressed="false"] { opacity: 0.4; }
+.legend .swatch { width: 18px; height: 0; border-top: 3px solid currentColor; display: inline-block; }
+.controls { display: flex; gap: 0.4rem; justify-content: center; margin-bottom: 0.4rem; font-family: var(--sans); font-size: 0.85rem; }
+.controls button { font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--rule); border-radius: 4px; padding: 0.2rem 0.7rem; cursor: pointer; }
+.controls button[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.tip { position: absolute; pointer-events: none; background: var(--paper); border: 1px solid var(--rule); border-radius: 5px;
+  padding: 0.45rem 0.6rem; font-family: var(--sans); font-size: 0.8rem; line-height: 1.45; box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+  min-width: 11rem; z-index: 5; }
+.tip .row { display: flex; justify-content: space-between; gap: 1rem; font-variant-numeric: tabular-nums; }
+.tip .row.best { font-weight: 700; }
+.fig-box { position: relative; }
+.table-wrap { overflow-x: auto; margin-inline: auto; }
+table { border-collapse: collapse; font-family: var(--sans); font-size: 0.86rem; margin-inline: auto; font-variant-numeric: tabular-nums; }
+caption { caption-side: top; text-align: left; font-family: var(--serif); font-size: 0.9rem; color: var(--ink-soft); padding-bottom: 0.5rem; max-width: var(--measure); }
+caption b { color: var(--ink); font-family: var(--sans); }
+th, td { padding: 0.32rem 0.6rem; text-align: right; white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+td.wrap { white-space: normal; min-width: 14rem; }
+thead th { border-bottom: 1.5px solid var(--ink); font-weight: 600; }
+tbody tr:last-child td { border-bottom: 1.5px solid var(--ink); }
+tbody tr + tr td { border-top: 1px solid var(--rule); }
+td.best { font-weight: 700; color: var(--ink); }
+td .part { color: var(--ink-soft); font-size: 0.85em; }
+td.loss { color: var(--flag); font-weight: 700; }
+.math-block { overflow-x: auto; margin-block: 0.4rem 1rem; }
+.refs { font-size: 0.9rem; }
+.refs li { margin-block: 0.4rem; }
+.refs .doi { font-family: var(--mono); font-size: 0.82em; }
+.toc { display: none; }
+@media (min-width: 1300px) {
+  .toc { display: block; position: fixed; top: calc(env(safe-area-inset-top, 0px) + 3rem); left: max(16px, calc(50% - 46rem));
+    width: 11.5rem; font-family: var(--sans); font-size: 0.82rem; }
+  .toc a { display: block; color: var(--ink-soft); text-decoration: none; padding: 0.15rem 0; }
+  .toc a:hover { color: var(--accent); }
+  .toc .label { text-transform: uppercase; letter-spacing: 0.09em; font-size: 0.7rem; color: var(--ink-soft); margin-bottom: 0.4rem; }
+}
+@media (max-width: 520px) { body { font-size: 1rem; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+/* Journal page furniture. */
+.cite { color: var(--accent); text-decoration: none; }
+.cite:hover { text-decoration: underline; }
+.masthead { margin-bottom: 0.4rem; }
+.journal { font-family: var(--sans); font-size: 0.8rem; letter-spacing: 0.04em; color: var(--ink-soft); margin-bottom: 0.9rem; }
+.journal .draft { margin: 0 0 0 0.5rem; vertical-align: 1px; }
+.authors { font-family: var(--sans); font-size: 1.05rem; margin-top: 0.9rem; }
+.affil, .supp-link { font-family: var(--sans); font-size: 0.85rem; color: var(--ink-soft); margin-top: 0.25rem; }
+.abstract p b { font-family: var(--sans); }
+.panel { position: relative; margin-bottom: 1.2rem; }
+.panel-label { font-family: var(--sans); font-weight: 700; font-size: 1rem; margin-bottom: 0.2rem; }
+.back h4 { font-size: 1rem; margin-block: 1.4rem 0.4rem; }
+.back p { font-size: 0.95rem; }
+ul.refs { list-style: none; padding-left: 0; }
+ul.refs li { padding-left: 1.5rem; text-indent: -1.5rem; }
+ol li::marker { font-family: var(--sans); color: var(--ink-soft); }
+th.l, td.l { text-align: left; }
+td.wrap { vertical-align: top; }
+.table-wrap { margin-block: 1.6rem 1.8rem; }
+
+</style>
+<main>
+<header class="col masthead">
+  <div class="journal">Bioinformatics · Original Paper · Sequence analysis <span class="draft">Draft</span></div>
+  <h1><span class="sys">dinara-align</span>: hardware-aware algorithms for exact pairwise alignment</h1>
+  <div class="authors">Konstantinos Kyriakidis<sup>1</sup></div>
+  <div class="affil"><sup>1</sup><span class="todo">[affiliation]</span> · Contact: kkyriaki@ucsc.edu</div>
+  <div class="supp-link">Supplementary material: <a href="https://claude.ai/artifact/DXUYvmZnYRMz8X5jSCEsBE">companion page</a></div>
+</header>
+<section class="col abstract" id="abstract">
+<h4>Abstract</h4>
+<p><b>Motivation:</b> Exact pairwise alignment of long sequencing reads remains computationally demanding. Band doubling over bit-parallel blocks, the wavefront algorithm and A* with seed heuristics have greatly reduced the number of cells an exact aligner must compute. A large part of the remaining running time depends on how the computation maps onto the processor: loop-carried dependency chains, memory-bound table lookups, and bounds and thresholds that are poorly matched to the input or the hardware.</p>
+<p><b>Results:</b> We present dinara-align, an exact pairwise aligner built on algorithmic changes that address these bottlenecks: a regrouping of Myers' bit-parallel recurrence that shortens its loop-carried dependency chain, band bounds accepted only when independent estimates agree, diagonal transition vectorised across diagonals, a direct construction of the neighbours of exact seed matches that provably preserves local pruning, and per-pair optimality certificates for banded inter-sequence batches. On an Intel Skylake-X processor, dinara-align had the lowest mean running time among the exact aligners tested in 33 of the 34 configurations of the A*PA2 benchmark, aligning ultra-long nanopore reads in 104&nbsp;ms on average, compared with 176&nbsp;ms for A*PA2-full. It was 1.7 to 3.2 times faster than WFA at gap-affine costs and computed global scores for 500,000 short-read pairs on one core 4.5 times faster than WFA2-lib.</p>
+<p><b>Availability and implementation:</b> dinara-align is free software under the Mozilla Public License 2.0, available at <a href="https://github.com/kokyriakidis/dinara-align">https://github.com/kokyriakidis/dinara-align</a> with C, C++, Python and command-line interfaces.</p>
+<p><b>Contact:</b> kkyriaki@ucsc.edu</p>
+<p><b>Supplementary information:</b> Supplementary data are available at <em>Bioinformatics</em> online.</p>
+</section>
+<div class="col">
+<h2 id="s1"><span class="num">1</span>Introduction</h2>
+<p>Pairwise alignment determines the minimum-cost series of substitutions, insertions and deletions that transforms one sequence into another. The classical dynamic programming algorithm computes an \(n \times m\) matrix (<a class="cite" href="#ref-Gotoh1982">Gotoh, 1982</a>), which is practical for short reads but not for the hundreds of kilobases spanned by current nanopore reads. Heuristic methods restrict the computed region and lose the guarantee of optimality; exact methods instead avoid only those cells that provably cannot lie on an optimal path.</p>
+<p>Three ideas underlie current exact aligners. <em>Band doubling</em> computes only the diagonals that a path within a given cost bound can reach, and doubles the bound until the optimal cost lies within it (<a class="cite" href="#ref-Ukkonen1985">Ukkonen, 1985</a>). <em>Bit-parallelism</em> encodes a column of 64 cells in one machine word (<a class="cite" href="#ref-Myers1999">Myers, 1999</a>), and Edlib combines it with band doubling (<a class="cite" href="#ref-Sosic2017">Šošić and Šikić, 2017</a>). <em>Diagonal transition</em> extends the furthest-reaching paths one cost at a time, following runs of matches at no cost (<a class="cite" href="#ref-Ukkonen1985">Ukkonen, 1985</a>; <a class="cite" href="#ref-Myers1986">Myers, 1986</a>); WFA generalised it to gap-affine costs (<a class="cite" href="#ref-MarcoSola2021">Marco-Sola et al., 2021</a>) and BiWFA reduced its memory to linear in the distance (<a class="cite" href="#ref-MarcoSola2023">Marco-Sola et al., 2023</a>). A*PA introduced A* search with a gap-chaining seed heuristic (<a class="cite" href="#ref-GrootKoerkamp2024a">Groot Koerkamp and Ivanov, 2024</a>), and A*PA2 combined this heuristic with band doubling over SIMD blocks of bit-parallel words, aligning ultra-long reads up to 19 times faster than Edlib and BiWFA (<a class="cite" href="#ref-GrootKoerkamp2024b">Groot Koerkamp, 2024</a>). A second line of work accelerates the full dynamic program on vector hardware, using anti-diagonal (<a class="cite" href="#ref-Wozniak1997">Wozniak, 1997</a>), striped (<a class="cite" href="#ref-Farrar2007">Farrar, 2007</a>; <a class="cite" href="#ref-Zhao2013">Zhao et al., 2013</a>) and prefix-scan (<a class="cite" href="#ref-Daily2016">Daily, 2016</a>) layouts, difference recurrences (<a class="cite" href="#ref-Suzuki2018">Suzuki and Kasahara, 2018</a>; <a class="cite" href="#ref-Li2018">Li, 2018</a>), adaptive blocks (<a class="cite" href="#ref-Liu2023">Liu and Steinegger, 2023</a>) and inter-sequence parallelism (<a class="cite" href="#ref-Rognes2011">Rognes, 2011</a>; <a class="cite" href="#ref-Rahn2018">Rahn et al., 2018</a>); these methods compute the full matrix or a fixed band, so their running time grows with its size rather than with the distance.</p>
+<p>In the exact methods, a large part of the remaining running time is determined by how the computation maps onto the processor. The bit-parallel sweep carries a dependency from each column to the next, so its speed is set by the latency of that chain rather than by its number of operations. Band doubling spends whole rounds when its bound is far from the distance. The seed heuristic is built by scalar lookups in tables larger than the caches. Batches of short pairs are vectorised across pairs, but each pair's full matrix is computed. Here we present dinara-align, an exact aligner whose algorithms address these bottlenecks. Our contributions are:</p>
+<ol><li><b>A shorter critical path for Myers' recurrence.</b> Two Boolean identities remove two operations from the loop-carried dependency chain of the bit-parallel step; on AVX-512, two staggered groups of words are interleaved, extending the instruction-level parallelism of A*PA2.</li><li><b>Band bounds from agreeing estimates.</b> A band-doubling bound is extrapolated from partial progress only when two independent estimates agree.</li><li><b>Gathered diagonal transition.</b> Diagonal transition and the gap-affine wavefront extend eight diagonals per step using gather instructions.</li><li><b>Direct neighbour construction for the seed heuristic.</b> The inexact neighbours of an exact seed match are inserted without search, and we prove that this preserves the outcome of local pruning (Lemma 1).</li><li><b>Certified bands for inter-sequence batches.</b> Each short pair is aligned in one vector lane within a narrow band whose optimality is certified per lane by a lower bound on the cost of any path that leaves it (Proposition 1), adapting the speculate-and-verify approach of the SeedEx accelerator (<a class="cite" href="#ref-Fujiki2020">Fujiki et al., 2020</a>) to software batches.</li></ol>
+</div>
+<div class="col">
+<h2 id="s2"><span class="num">2</span>Methods</h2>
+<h3 id="s2.1"><span class="num">2.1</span>Problem definition and overview</h3>
+<p>Let \(A=a_1\dots a_n\) be the reference and \(B=b_1\dots b_m\) the query, and let cell \((i,j)\) lie on diagonal \(j-i\). Under gap-affine costs, a mismatch costs \(x\) and a gap of \(k\) letters costs \(g(k)=o+ke\); unit costs correspond to \(x=e=1\) and \(o=0\), and two-piece costs take the minimum of two such functions (<a class="cite" href="#ref-Li2018">Li, 2018</a>). A substitution matrix instead assigns each pair of letters a score to be maximised. We consider global, ends-free, extension and local alignment. An alignment is <em>exact</em> if it is optimal under the requested costs, mode, band and cost limit; among optimal alignments, a fixed rule places indels leftmost or rightmost, so that the result does not depend on which algorithm computed the cost.</p>
+<p>Each problem is assigned to an algorithm (<a href="#tab-engines">Table 1</a>). For unit costs we follow A*PA2 (<a class="cite" href="#ref-GrootKoerkamp2024b">Groot Koerkamp, 2024</a>): band doubling over tiles of 256 columns of bit-parallel words, pruned by the gap-chaining seed heuristic (<a class="cite" href="#ref-GrootKoerkamp2024a">Groot Koerkamp and Ivanov, 2024</a>), with a diagonal-transition traceback inside each tile; near-identical pairs are aligned by diagonal transition alone. Gap-affine costs use the bidirectional wavefront of WFA and BiWFA (<a class="cite" href="#ref-MarcoSola2021">Marco-Sola et al., 2021</a>; <a class="cite" href="#ref-MarcoSola2023">Marco-Sola et al., 2023</a>). A short diagonal-transition search estimates the distance, and the estimate, the length and the cost model select the algorithm. The thresholds were set from measurements on each instruction set and are fixed at compile time (Supplementary Section S1).</p>
+</div>
+<div class="table-wrap" id="tab-engines"><table>
+<caption><b>Table 1.</b> Algorithms in dinara-align and the changes introduced in this work.</caption>
+<thead><tr><th class="l">Problem</th><th class="l">Algorithm</th><th class="l">Changes (section)</th></tr></thead>
+<tbody>
+<tr><td class="l">Unit costs, long pairs</td><td class="l wrap">Band doubling over bit-parallel tiles with the gap-chaining seed heuristic (A*PA2)</td><td class="l wrap">Regrouped recurrence, staggered groups (2.2); agreeing bounds (2.3); neighbour construction (2.5)</td></tr>
+<tr><td class="l">Unit costs, similar pairs</td><td class="l wrap">Diagonal transition (WFA, BiWFA)</td><td class="l wrap">Gathered extension (2.4)</td></tr>
+<tr><td class="l">Gap-affine, two-piece</td><td class="l wrap">Bidirectional wavefront (WFA, BiWFA)</td><td class="l wrap">Gathered extension (2.4); score-derived band (2.7)</td></tr>
+<tr><td class="l">Substitution matrices, local</td><td class="l wrap">Anti-diagonal vector sweep; end-first local alignment (SSW)</td><td class="l wrap">Backward wavefront from the best end (2.7)</td></tr>
+<tr><td class="l">Batches of short pairs</td><td class="l wrap">Inter-sequence vectorisation (SWIPE, SeqAn, parasail)</td><td class="l wrap">Certified per-lane bands (2.6)</td></tr>
+</tbody></table></div>
+<div class="col">
+<h3 id="s2.2"><span class="num">2.2</span>A shorter critical path for Myers' recurrence</h3>
+<p>As in Edlib and A*PA2 (<a class="cite" href="#ref-Sosic2017">Šošić and Šikić, 2017</a>; <a class="cite" href="#ref-GrootKoerkamp2024b">Groot Koerkamp, 2024</a>), the query is packed 64 bases per word, and Myers' recurrence (<a class="cite" href="#ref-Myers1999">Myers, 1999</a>) advances a word by one column. With match mask \(E\), vertical difference masks \(P_v, M_v\) and the incoming negative horizontal difference folded into \(E' = E \lor M_h^{\mathrm{in}}\), A*PA2 computes</p>
+<div class="math-block">\[ c = (E' \land P_v) + P_v, \qquad X_h = (c \oplus P_v) \lor E', \qquad P_h = M_v \lor \lnot(X_h \lor P_v), \qquad M_h = P_v \land X_h. \]</div>
+<p>The horizontal masks \(P_h\) and \(M_h\) determine the vertical masks of the next column, so the path from \(c\) to them lies on the loop-carried chain. Since \((c \oplus P_v) \lor P_v = c \lor P_v\) and \(P_v \land (c \oplus P_v) = P_v \land \lnot c\), the same masks are obtained as</p>
+<div class="math-block">\[ P_h = M_v \lor \lnot\bigl(c \lor (E' \lor P_v)\bigr), \qquad M_h = (P_v \land \lnot c) \lor (P_v \land E'), \]</div>
+<p>where \(E' \lor P_v\) and \(P_v \land E'\) do not depend on \(c\) and are computed off the critical path. This removes two operations from the loop-carried chain and, for a single word, reduces the cost from 14 to 8 cycles per column on the Skylake-X. Myers (<a class="cite" href="#ref-Myers1999">Myers, 1999</a>), Edlib and A*PA2 use the original form, and we are not aware of a previous description of the regrouped one.</p>
+<p>Words occupy the lanes of a vector, staggered by one column, so that the horizontal difference leaving one word enters the next through a lane rotation (<a class="cite" href="#ref-Wozniak1997">Wozniak, 1997</a>; <a class="cite" href="#ref-GrootKoerkamp2024b">Groot Koerkamp, 2024</a>). Every column then waits for the rotation of the previous one, and A*PA2 processes two four-lane vectors together to overlap these waits. On AVX-512, where a vector holds eight words, dinara-align interleaves two eight-word groups, the lower lagging ten columns behind the upper, so that the instructions of each group fill the latency of the other; on AVX2 and NEON a single group was faster. Bands of two or three words, in which every operation lies on the critical path, are computed in general-purpose registers, whose operations have lower latency. On AVX-512 the sweep requires about 2.4 cycles per word and column.</p>
+<h3 id="s2.3"><span class="num">2.3</span>Band bounds from agreeing estimates</h3>
+<p>Band doubling returns the exact distance for any initial bound, but its running time depends on how close that bound is to the distance. A partial computation that has reached cost \(s\) at anti-diagonal \(r\) suggests the extrapolated distance \(\hat d = s(n+m)/r\). This extrapolation is reliable when edits are spread evenly along the pair and can be too high by orders of magnitude when they are concentrated, as near the ends of nanopore reads. dinara-align therefore computes two extrapolations, \(\hat d_1\) from the first eight edits of a diagonal-transition search and \(\hat d_2\) from the same search continued until its budget, and sets the first bound from them only if \(\max(\hat d_1,\hat d_2) \le \tfrac43 \min(\hat d_1,\hat d_2)\). Otherwise, as in A*PA2, the bound starts 256 above the known lower bound and doubles. Within a round, the distance is extrapolated again after one eighth, one quarter and one half of the columns; the bound is lowered if the extrapolation lies below it, and the round is abandoned if the extrapolation exceeds it. Because these rules change only the sequence of bounds, the result remains exact.</p>
+<h3 id="s2.4"><span class="num">2.4</span>Gathered diagonal transition</h3>
+<p>Diagonal transition extends each diagonal of a wavefront along its run of matches. dinara-align compares eight letters at a time by the exclusive-or of two 64-bit words and a count of trailing zeros. On AVX-512, eight diagonals are extended together: their letters are loaded with gather instructions, and the wavefront is padded with unreachable diagonals so that every step processes full vectors under branch-free masks. The gather masks are derived from the lanes of each group, which avoids a dependency between consecutive gathers that would otherwise serialise them. The same vectorised step serves near-identical pairs, computed from one or both ends (<a class="cite" href="#ref-MarcoSola2023">Marco-Sola et al., 2023</a>), the traceback inside each tile, restricted to the diagonals that can still reach the traced cell, and the three-layer gap-affine wavefront.</p>
+<h3 id="s2.5"><span class="num">2.5</span>Seed heuristic: direct neighbour construction</h3>
+<p>The reference is divided into disjoint seeds of 12 bases, matched exactly, or of 16 bases, matched with at most one edit (<a class="cite" href="#ref-GrootKoerkamp2024a">Groot Koerkamp and Ivanov, 2024</a>). A 16-base seed that matches with at most one edit matches one of its two 8-base halves exactly, so each half indexes a table. Since these tables exceed the caches, the lookups for 16 query rows are issued together, so that their memory accesses overlap, and only seeds whose matches could still chain to the end of the pair are considered.</p>
+<p>An exact match \(\mu\) of a seed at query rows \([i, i+16)\) always has four neighbouring matches with one edit: two share its start, at rows \([i, i+15)\) and \([i, i+17)\), and two share its end, at \([i+1, i+16)\) and \([i-1, i+16)\). Because chaining is all-or-nothing, a neighbour one diagonal away may chain where \(\mu\) cannot, and the neighbours are required for the heuristic to remain a lower bound. Rather than locating them by search and testing each for local pruning, dinara-align inserts them whenever \(\mu\) is retained, which is justified by the following lemma. Local pruning retains a match \(\nu\) of a seed only if \(c(\nu) + h(e(\nu)) < \tau\), where \(c(\nu)\) is its cost, \(e(\nu)\) its end cell, \(h(u)\) the least cost of a path from \(u\) across the following seeds, and \(\tau\) a threshold that depends only on the seeds.</p>
+<p><b>Lemma 1.</b> If an exact match \(\mu\) fails local pruning, so does each of its four neighbours.</p>
+<p><em>Proof.</em> A neighbour \(\nu\) that shares the end of \(\mu\) has \(e(\nu)=e(\mu)\) and \(c(\nu)=1>c(\mu)=0\). A neighbour that shares the start ends on an adjacent diagonal, and one insertion or deletion from \(e(\mu)\) reaches a cell on that diagonal at or beyond \(e(\nu)\). The least remaining cost does not increase along a diagonal (<a class="cite" href="#ref-Ukkonen1985">Ukkonen, 1985</a>), so \(h(e(\mu)) \le 1 + h(e(\nu))\) and \(c(\mu)+h(e(\mu)) \le c(\nu)+h(e(\nu))\). In both cases the pruning test value of \(\nu\) is at least that of \(\mu\). \(\square\)</p>
+<p>Neighbours sharing the start therefore raise the layer of that start by the chain length available from their ends, and neighbours sharing the end are placed one layer below it, without a search or a pruning test of their own.</p>
+<h3 id="s2.6"><span class="num">2.6</span>Certified bands for inter-sequence batches</h3>
+<p>Batches of short pairs are aligned with one pair per vector lane (<a class="cite" href="#ref-Rognes2011">Rognes, 2011</a>; <a class="cite" href="#ref-Rahn2018">Rahn et al., 2018</a>), first in saturating 8-bit lanes and, for pairs that saturate, in 16-bit lanes (<a class="cite" href="#ref-Zhao2013">Zhao et al., 2013</a>; <a class="cite" href="#ref-Daily2016">Daily, 2016</a>). Rather than computing each matrix in full, a lane computes the band of diagonals \([d_\ell, d_h]\) containing the main diagonal 0 and the end diagonal \(\delta = m - n\), together with one further diagonal on either side. Its optimality is certified with the following bound, a cost form of the out-of-band bounds of <a class="cite" href="#ref-Gibrat2018">Gibrat (2018)</a> and <a class="cite" href="#ref-Fujiki2020">Fujiki et al. (2020)</a>, stated for gap-affine and two-piece costs and with a strict form for tie-breaking.</p>
+<p><b>Proposition 1.</b> Let \(C\) be the least cost of an alignment within \([d_\ell, d_h]\), and let \(L(d) = g(|d|) + g(|d-\delta|)\). If \(C \le \min\bigl(L(d_h+1), L(d_\ell-1)\bigr)\), then \(C\) is the optimal cost; if the inequality is strict, every optimal alignment lies within the band.</p>
+<p><em>Proof.</em> An alignment that leaves the band visits diagonal \(d_h+1\) or \(d_\ell-1\). Consider \(d=d_h+1 > \max(0,\delta)\); the case below the band is symmetric. Starting on diagonal 0, the alignment contains insertions totalling at least \(d\) letters to reach \(d\), and deletions totalling at least \(d-\delta\) letters to end on \(\delta\). These form at least one gap of each kind, and since \(g\) is subadditive (for two-piece costs, with the usual convention that the longer piece has the lower extension cost), their total cost is at least \(g(d)+g(d-\delta)=L(d)\). Every alignment outside the band therefore costs at least \(\min\bigl(L(d_h+1), L(d_\ell-1)\bigr)\). \(\square\)</p>
+<p>Bounds of this kind underlie band doubling (<a class="cite" href="#ref-Ukkonen1985">Ukkonen, 1985</a>) and have been used to verify narrow-band results in software (<a class="cite" href="#ref-Gibrat2018">Gibrat, 2018</a>) and in hardware (<a class="cite" href="#ref-Fujiki2020">Fujiki et al., 2020</a>); here the certificate is evaluated independently in each vector lane of an inter-sequence batch. For alignments, the strict form guarantees that the alignment selected by the tie rule lies within the band. Pairs that fail the certificate, about one in seven in our short-read benchmark, are recomputed over every diagonal that a cheaper path could visit, grouped by the width of that band so that the lanes of a group finish together.</p>
+<h3 id="s2.7"><span class="num">2.7</span>Gap-affine and score-based alignment</h3>
+<p>A scoring scheme with match score \(a\), mismatch score \(b\) and gap scores \(-(o+ke)\) can be converted into costs for global alignment (<a class="cite" href="#ref-Eizenga2022">Eizenga and Paten, 2022</a>). Every alignment covers \(n+m\) letters, so its score \(S\) and a gap-affine cost \(C\) satisfy</p>
+<div class="math-block">\[ S = \tfrac12\bigl(a(n+m) - C\bigr), \qquad C = 2(a-b)\,X + \sum_{\text{gaps}} \bigl(2o + k(2e+a)\bigr), \]</div>
+<p>where \(X\) is the number of mismatches, so the wavefront computes score-maximising alignments. The cost also bounds the band in which the alignment must be stored. Each gapped letter contributes at least \(2e+a\) to \(C\), and an alignment that deviates by \(t\) diagonals from both the main and the end diagonal contains at least \(2t\) gapped letters; hence only diagonals within \(C/(2(2e+a))\) of them can contain an optimal alignment. For a 1&nbsp;kbp pair at 5% divergence, this stores 137 diagonals instead of 1,000. Under a general substitution matrix, anti-diagonals are computed in 16-bit vector lanes while the scores provably fit (<a class="cite" href="#ref-Wozniak1997">Wozniak, 1997</a>). Local alignment first locates the end of the optimal alignment with a forward sweep, as in SSW (<a class="cite" href="#ref-Zhao2013">Zhao et al., 2013</a>), and then extends a wavefront backwards from that end, stopping at the first cell that attains the maximal score; this avoids the correction pass that striped layouts may need when long alignments score highly (<a class="cite" href="#ref-Farrar2007">Farrar, 2007</a>).</p>
+<h3 id="s2.8"><span class="num">2.8</span>Validation</h3>
+<p>A differential fuzzer compares results for random pairs, cost models, modes, bands, cost limits and tie-breaking rules with a full-matrix reference implementation that shares no code with the library, checking validity, optimality, the symmetry of the two tie-breaking rules and agreement between batched and single calls. The WFA2-lib regression set is reproduced exactly, including all CIGAR strings under the rightmost tie-breaking rule. The seed heuristic is compared with the true remaining cost at every cell of random pairs; this check found and confirmed the correction of an implementation error that caused occasional overestimates (Supplementary Section S1).</p>
+</div>
+<div class="col">
+<h2 id="s3"><span class="num">3</span>Results</h2>
+<h3 id="s3.1"><span class="num">3.1</span>Experimental setup</h3>
+<p>All measurements were taken on an Intel Core i9-7900X (Skylake-X, AVX-512) with ten cores fixed at 3.3&nbsp;GHz, turbo boost and hyper-threading disabled, and 91&nbsp;GB of memory, running Ubuntu 26.04. dinara-align is implemented in Mojo (<a class="cite" href="#ref-Modular">Modular Inc., 2026</a>) and was compiled with Mojo 1.1.0 at commit <code>ebe290f</code>; all tools were compiled for the native instruction set. The exact aligners compared are A*PA2-full and A*PA2-simple (<a class="cite" href="#ref-GrootKoerkamp2024b">Groot Koerkamp, 2024</a>), A*PA (<a class="cite" href="#ref-GrootKoerkamp2024a">Groot Koerkamp and Ivanov, 2024</a>), Edlib (<a class="cite" href="#ref-Sosic2017">Šošić and Šikić, 2017</a>), WFA and BiWFA (<a class="cite" href="#ref-MarcoSola2021">Marco-Sola et al., 2021</a>; <a class="cite" href="#ref-MarcoSola2023">Marco-Sola et al., 2023</a>), KSW2 (<a class="cite" href="#ref-Li2018">Li, 2018</a>; <a class="cite" href="#ref-Suzuki2018">Suzuki and Kasahara, 2018</a>), parasail (<a class="cite" href="#ref-Daily2016">Daily, 2016</a>), SSW (<a class="cite" href="#ref-Zhao2013">Zhao et al., 2013</a>), abPOA (<a class="cite" href="#ref-Gao2021">Gao et al., 2021</a>) and hyalite (<a class="cite" href="#ref-hyalite">Ferguson, 2026</a>). Every cost was compared with those of every other tool and with the costs recorded in the published A*PA2 results; no discrepancies occurred.</p>
+<p>For unit costs we followed the A*PA2 protocol (<a class="cite" href="#ref-GrootKoerkamp2024b">Groot Koerkamp, 2024</a>): one single-threaded job at a time, pinned to one core, each pair aligned once with traceback, and a time limit of 20&nbsp;s per sample, after which only the completed pairs are reported. The datasets are those of A*PA2: nanopore reads of about 1, 10 and 50&nbsp;kbp, ultra-long reads over 500&nbsp;kbp with and without genetic variation, SARS-CoV-2 genomes, and uniform-error pairs regenerated from the original random seed. We report the mean wall-clock time per alignment, excluding input, and the increase in peak resident memory during an alignment, measured with <code>getrusage</code>. As in A*PA2, each sample was run once; the one configuration in which dinara-align was not the fastest was repeated five times. Other workloads were timed in-process after a warm-up, as the fastest of twenty batches of about 10&nbsp;ms, or once for calls of 0.1&nbsp;s or longer; short-read batches as the faster of two passes.</p>
+<h3 id="s3.2"><span class="num">3.2</span>Edit distance</h3>
+<p>On the real datasets, dinara-align had the lowest mean and median time among the exact aligners (<a href="#tab-real">Table 2</a>; Supplementary Table S4). It aligned the 1&nbsp;kbp reads in 23&nbsp;µs, compared with 31&nbsp;µs for WFA, required about two thirds of the time of A*PA2-simple on the 10 and 50&nbsp;kbp reads, and aligned the ultra-long reads in 104 and 144&nbsp;ms, compared with 176 and 210&nbsp;ms for A*PA2-full. The approximate aligners WFA-adaptive (<a class="cite" href="#ref-MarcoSola2021">Marco-Sola et al., 2021</a>) and Block Aligner (<a class="cite" href="#ref-Liu2023">Liu and Steinegger, 2023</a>) were slower than dinara-align on every dataset.</p>
+</div>
+<div class="table-wrap" id="tab-real"><table>
+<caption><b>Table 2.</b> Unit-cost alignment of the A*PA2 real datasets: mean time per alignment, traceback included. Superscripts give the number of pairs completed within 20&nbsp;s where not all were; a dash marks a tool that completed none.</caption>
+<thead><tr><th class="l">Dataset</th><th>dinara-align</th><th>A*PA2-full</th><th>A*PA2-simple</th><th>A*PA</th><th>Edlib</th><th>BiWFA</th><th>WFA</th></tr></thead>
+<tbody>
+<tr><td class="l">ont-1k (0.8&nbsp;kbp)</td><td class="best"><b>23&nbsp;µs</b></td><td>81&nbsp;µs</td><td>48&nbsp;µs</td><td>612&nbsp;µs</td><td>126&nbsp;µs</td><td>44&nbsp;µs</td><td>31&nbsp;µs</td></tr>
+<tr><td class="l">ont-10k (3.6&nbsp;kbp)</td><td class="best"><b>163&nbsp;µs</b></td><td>391&nbsp;µs</td><td>247&nbsp;µs</td><td>15.3&nbsp;ms</td><td>1.1&nbsp;ms</td><td>753&nbsp;µs</td><td>595&nbsp;µs</td></tr>
+<tr><td class="l">ont-50k (9.5&nbsp;kbp)</td><td class="best"><b>587&nbsp;µs</b></td><td>1.27&nbsp;ms</td><td>944&nbsp;µs</td><td>190&nbsp;ms<sup>81/104</sup></td><td>6.1&nbsp;ms</td><td>7.43&nbsp;ms</td><td>6.37&nbsp;ms</td></tr>
+<tr><td class="l">ont-500k (638&nbsp;kbp)</td><td class="best"><b>104&nbsp;ms</b></td><td>176&nbsp;ms</td><td>537&nbsp;ms</td><td>–</td><td>4.99&nbsp;s<sup>4/15</sup></td><td>19.8&nbsp;s<sup>1/15</sup></td><td>–</td></tr>
+<tr><td class="l">genvar (651&nbsp;kbp)</td><td class="best"><b>144&nbsp;ms</b></td><td>210&nbsp;ms</td><td>624&nbsp;ms</td><td>–</td><td>5.23&nbsp;s<sup>4/15</sup></td><td>6.36&nbsp;s<sup>3/15</sup></td><td>–</td></tr>
+<tr><td class="l">SARS-CoV-2 (30&nbsp;kbp)</td><td class="best"><b>279&nbsp;µs</b></td><td>2.00&nbsp;ms</td><td>728&nbsp;µs</td><td>6.49&nbsp;ms</td><td>8.15&nbsp;ms</td><td>895&nbsp;µs</td><td>983&nbsp;µs</td></tr>
+</tbody></table></div>
+<div class="col">
+<p>On uniform 100&nbsp;kbp pairs (<a href="#fig-sweeps">Fig. 1</a>a), dinara-align required 4.4 to 6.8&nbsp;ms between 2 and 8% divergence and 10.4 to 12.3&nbsp;ms from 9 to 15%, where A*PA2-full required up to 18&nbsp;ms. A*PA2-full was faster only at 10% divergence (10.5 versus 11.0&nbsp;ms; in five repeated runs, 10.43–10.49 versus 11.02–11.06&nbsp;ms). With increasing length (<a href="#fig-sweeps">Fig. 1</a>b), dinara-align aligned 1&nbsp;Mbp pairs at 15% divergence in 265&nbsp;ms, compared with 1.33&nbsp;s for A*PA2-full and 2.07&nbsp;s for A*PA.</p>
+</div>
+<figure id="fig-sweeps">
+  <div class="panel"><div class="panel-label">a</div>
+    <div class="fig-box chart-wrap"><svg class="chart" id="chart-divergence" viewBox="0 0 760 360" role="img" aria-label="Time per alignment by divergence"></svg></div>
+    <div class="legend" id="legend-divergence"></div></div>
+  <div class="panel"><div class="panel-label">b</div>
+    <div class="controls" role="group" aria-label="Divergence">
+      <button type="button" id="len-5" aria-pressed="false">5% divergence</button>
+      <button type="button" id="len-15" aria-pressed="true">15% divergence</button></div>
+    <div class="fig-box chart-wrap"><svg class="chart" id="chart-length" viewBox="0 0 760 360" role="img" aria-label="Time per alignment by length"></svg></div>
+    <div class="legend" id="legend-length"></div></div>
+  <figcaption><b>Fig. 1.</b> Unit-cost alignment of uniform pairs, mean time per alignment on a logarithmic scale. (a) 100&nbsp;kbp pairs by divergence; dinara-align had the lowest mean time at every divergence except 10%. (b) Pairs at 15% divergence by length; lines end where a tool completed no pair within 20&nbsp;s, and hollow points mark tools that completed only some pairs.</figcaption>
+</figure>
+<div class="col">
+<p>On the ultra-long reads, an alignment increased peak memory by 51&nbsp;MB without and 37&nbsp;MB with genetic variation, compared with 81 and 48&nbsp;MB for A*PA2-full and 82 and 32&nbsp;MB for A*PA2-simple; on 1&nbsp;Mbp pairs at 15% divergence, by 55&nbsp;MB, compared with 86 to 149&nbsp;MB for A*PA and A*PA2. On shorter inputs dinara-align generally used more memory than the most economical tool, for example 13&nbsp;MB against 2.3&nbsp;MB for Edlib on 300&nbsp;kbp pairs at 5% divergence, and its runtime occupies about 13&nbsp;MB, compared with 3 to 5&nbsp;MB for the other tools.</p>
+<h3 id="s3.3"><span class="num">3.3</span>Gap-affine costs, other modes and batches</h3>
+<p>At the WFA costs (4, 6, 2), dinara-align was 1.7 to 3.2 times faster than WFA on every dataset that any tool completed, and was the only aligner to complete all 104 reads of the 50&nbsp;kbp dataset within the time limit (<a href="#tab-affine">Table 3</a>). In each of the 14 workloads covering local, overlap, infix, prefix, extension, two-piece and substitution-matrix alignment, it was faster than the fastest alternative, by factors from 1.1 to 10.6 (Supplementary Table S2).</p>
+</div>
+<div class="table-wrap" id="tab-affine"><table>
+<caption><b>Table 3.</b> Gap-affine alignment at costs (4, 6, 2): mean time per alignment with a 5&nbsp;s budget per sample. Superscripts give the number of pairs completed where not all were.</caption>
+<thead><tr><th class="l">Dataset</th><th>dinara-align</th><th>WFA</th><th>BiWFA</th><th>KSW2</th></tr></thead>
+<tbody>
+<tr><td class="l">ont-1k</td><td class="best"><b>112&nbsp;µs</b></td><td>186&nbsp;µs</td><td>304&nbsp;µs</td><td>1.1&nbsp;ms</td></tr>
+<tr><td class="l">ont-10k</td><td class="best"><b>1.68&nbsp;ms</b></td><td>4.8&nbsp;ms</td><td>5.84&nbsp;ms</td><td>30.8&nbsp;ms<sup>163/277</sup></td></tr>
+<tr><td class="l">ont-50k</td><td class="best"><b>21.2&nbsp;ms</b></td><td>68.4&nbsp;ms<sup>82/104</sup></td><td>57.3&nbsp;ms<sup>90/104</sup></td><td>367&nbsp;ms<sup>16/104</sup></td></tr>
+<tr><td class="l">SARS-CoV-2</td><td class="best"><b>755&nbsp;µs</b></td><td>2.06&nbsp;ms</td><td>1.79&nbsp;ms</td><td>88.4&nbsp;ms</td></tr>
+<tr><td class="l">10&nbsp;kbp, 5%</td><td class="best"><b>2.17&nbsp;ms</b></td><td>6.36&nbsp;ms</td><td>8.02&nbsp;ms</td><td>97.1&nbsp;ms<sup>52/99</sup></td></tr>
+<tr><td class="l">10&nbsp;kbp, 15%</td><td class="best"><b>12.2&nbsp;ms</b></td><td>38.5&nbsp;ms</td><td>44.8&nbsp;ms</td><td>203&nbsp;ms<sup>25/99</sup></td></tr>
+</tbody></table></div>
+<div class="col">
+<p>Following the short-read case study of Accelign (<a class="cite" href="#ref-Kallenborn2026">Kallenborn et al., 2026</a>), we computed global scores for 500,000 pairs of 148&nbsp;bp reads with 1% error against reference segments of similar length (<a href="#tab-batch">Table 4</a>). Under gap-affine costs (mismatch 1, gap \(2+k\)), dinara-align required 0.47&nbsp;µs per pair on one core, compared with 2.12&nbsp;µs for WFA2-lib, and 26&nbsp;ms for the whole batch on ten cores, compared with 115&nbsp;ms.</p>
+</div>
+<div class="table-wrap" id="tab-batch"><table>
+<caption><b>Table 4.</b> Global scores of 500,000 short-read pairs; each time is the whole call.</caption>
+<thead><tr><th class="l">Costs</th><th class="l">Threads</th><th>dinara-align</th><th>WFA2-lib</th><th>KSW2</th><th>parasail</th><th>Edlib</th></tr></thead>
+<tbody>
+<tr><td class="l">Affine (1, 2, 1)</td><td class="l">1</td><td class="best"><b>233&nbsp;ms</b></td><td>1.06&nbsp;s</td><td>10.9&nbsp;s</td><td>21.7&nbsp;s</td><td>–</td></tr>
+<tr><td class="l">Unit</td><td class="l">1</td><td class="best"><b>212&nbsp;ms</b></td><td>450&nbsp;ms</td><td>–</td><td>–</td><td>2.0&nbsp;s</td></tr>
+<tr><td class="l">Affine (1, 2, 1)</td><td class="l">10</td><td class="best"><b>26&nbsp;ms</b></td><td>115&nbsp;ms</td><td>1.18&nbsp;s</td><td>2.34&nbsp;s</td><td>–</td></tr>
+<tr><td class="l">Unit</td><td class="l">10</td><td class="best"><b>26&nbsp;ms</b></td><td>48&nbsp;ms</td><td>–</td><td>–</td><td>223&nbsp;ms</td></tr>
+</tbody></table></div>
+<div class="col">
+<h3 id="s3.4"><span class="num">3.4</span>Effect of each technique</h3>
+<p>To measure what each technique contributes, dinara-align was built with one technique switched off at a time, everything else unchanged, and every build aligned the A*PA2 samples with traceback and scored the short-read batch. The builds alternated within each of three rounds, pinned to one core, and we report the median against the build with every technique on; the baseline varied by at most 1.4% between rounds, and every build returned the same costs on every dataset (<a href="#tab-ablation">Table 5</a>). Constructing the neighbours of exact seed matches directly contributed most on long, divergent pairs: without it, the ultra-long reads took 11% and 19% longer and the 100&nbsp;kbp pairs at 10 and 15% divergence 13% longer. Interleaving two groups of bit-parallel words and the regrouped recurrence each contributed 4 to 6% on the ultra-long reads and on the most divergent uniform pairs. Gathered diagonal transition contributed most where diagonal transition does most of the work, on the 1&nbsp;kbp reads, the SARS-CoV-2 genomes and near-identical 100&nbsp;kbp pairs (16 to 25%). The agreement rule for extrapolated bounds mattered on the 10&nbsp;kbp reads (17%) and the SARS-CoV-2 genomes (5%), and not on the ultra-long reads, where the seed heuristic sets the first bound. Without the certified band, the batch took 2.9 and 3.1 times as long at affine and unit costs. Effects below about 6% are of the order of the variation between builds that we attribute to code alignment (Section 4): a second, independent set of builds reproduced every effect above 15% but gave 1% for the regrouped recurrence and 3% for the paired groups on the ultra-long reads, and 6 to 8% for the seed neighbours on the 100&nbsp;kbp pairs.</p>
+</div>
+<div class="table-wrap" id="tab-ablation"><table>
+<caption><b>Table 5.</b> Effect of each technique: median time with all techniques on (ms per alignment; per batch of 500,000 pairs for the short reads), and the change when one technique is switched off, over three alternating rounds on the Skylake-X. Every configuration returned the same costs.</caption>
+<thead><tr><th class="l">Dataset</th><th>All on</th><th>Regrouped recurrence</th><th>Paired groups</th><th>Gathers</th><th>Agreement rule</th><th>Seed neighbours</th><th>Certified band</th></tr></thead>
+<tbody>
+<tr><td class="l">ont-500k</td><td>97.8</td><td>+4.2%</td><td>+6.1%</td><td>+2.5%</td><td>−0.4%</td><td class="best"><b>+11.4%</b></td><td></td></tr>
+<tr><td class="l">ont-500k-genvar</td><td>135.7</td><td>+4.3%</td><td>+6.5%</td><td>+2.3%</td><td>−0.3%</td><td class="best"><b>+19.0%</b></td><td></td></tr>
+<tr><td class="l">ont-1k</td><td>0.021</td><td>+1.0%</td><td>+0.2%</td><td class="best"><b>+17.2%</b></td><td>−0.1%</td><td>+0.4%</td><td></td></tr>
+<tr><td class="l">ont-10k</td><td>0.152</td><td>0.0%</td><td>+1.4%</td><td>+7.0%</td><td class="best"><b>+17.3%</b></td><td>+1.0%</td><td></td></tr>
+<tr><td class="l">SARS-CoV-2</td><td>0.198</td><td>−0.7%</td><td>−0.5%</td><td class="best"><b>+15.9%</b></td><td>+4.5%</td><td>−0.9%</td><td></td></tr>
+<tr><td class="l">100&nbsp;kbp, 1%</td><td>0.978</td><td>−0.1%</td><td>+0.1%</td><td class="best"><b>+24.5%</b></td><td>−0.9%</td><td>+0.7%</td><td></td></tr>
+<tr><td class="l">100&nbsp;kbp, 5%</td><td>4.52</td><td>+0.3%</td><td>+0.4%</td><td>+2.2%</td><td>0.0%</td><td>−0.1%</td><td></td></tr>
+<tr><td class="l">100&nbsp;kbp, 10%</td><td>10.3</td><td>+1.9%</td><td>+2.6%</td><td>+3.9%</td><td>+0.1%</td><td class="best"><b>+13.0%</b></td><td></td></tr>
+<tr><td class="l">100&nbsp;kbp, 15%</td><td>10.85</td><td>+3.6%</td><td>+4.5%</td><td>+6.8%</td><td>0.0%</td><td class="best"><b>+13.3%</b></td><td></td></tr>
+<tr><td class="l">Short reads, affine</td><td>232</td><td></td><td></td><td></td><td></td><td></td><td class="best"><b>+187%</b></td></tr>
+<tr><td class="l">Short reads, unit</td><td>212</td><td></td><td></td><td></td><td></td><td></td><td class="best"><b>+214%</b></td></tr>
+</tbody></table></div>
+<div class="col">
+<h2 id="s4"><span class="num">4</span>Discussion</h2>
+<p>The algorithms in dinara-align build on those of earlier exact aligners; the gains come from changes to how these algorithms use the processor. Two observations stand out. First, on long pairs the techniques that reduce work outside the inner loop contributed more than those that speed it up: constructing seed neighbours directly saved up to 19%, against 4 to 6% each for the two changes to the bit-parallel sweep (<a href="#tab-ablation">Table 5</a>). Second, as the inner loops become faster, the scalar, memory-bound construction of the seed heuristic dominates: on 100&nbsp;kbp pairs at 10% divergence it accounts for 58% of the running time and is the main cost in the one configuration in which A*PA2-full remained faster. Neither the regrouped recurrence nor the per-lane band certificate depends on the implementation, and both apply directly to other bit-parallel and inter-sequence aligners.</p>
+<p>The study has several limitations. First, all reported measurements were taken on a single processor; the NEON configuration was measured only during development, on an Apple M2, and the AVX2 threshold for inexact seeds was interpolated rather than measured. Second, some thresholds were chosen using workloads that also appear in the evaluation; in particular, the AVX-512 threshold for inexact seeds was lowered from 40 to 20% after measurements on the uniform 100&nbsp;kbp pairs of <a href="#fig-sweeps">Fig. 1</a>a, so results on those pairs may overstate performance on unseen data. Third, as in the A*PA2 protocol, most configurations were run once, and on the Skylake-X some running times varied by up to one third between builds that did not change the code involved, which we attribute to code alignment effects in the instruction decoder. Fourth, the ablation switches off one technique at a time against the full configuration, so it does not separate interactions between techniques. Finally, release builds target the baseline processor of each platform, so the AVX-512 code paths require a build for the host processor.</p>
+<p>Future work includes speeding up seed construction, reusing computation across band-doubling rounds as in the incremental doubling of A*PA2, measurements on further processors, and GPU implementations of the same algorithms.</p>
+</div>
+<section class="col back">
+<h4>Acknowledgements</h4><p>[acknowledgements]</p>
+<h4>Funding</h4><p>[funding]</p>
+<h4>Conflict of interest</h4><p>None declared.</p>
+<h4>Data availability</h4><p>The software, benchmark harness and the commits of every compared tool are available at <a href="https://github.com/kokyriakidis/dinara-align">https://github.com/kokyriakidis/dinara-align</a>. The benchmarks are reproduced by <code>pixi run bench-astarpa2</code>, <code>results-astarpa2</code>, <code>bench</code>, <code>bench-local</code>, <code>bench-modes</code>, <code>bench-batch</code> and <code>bench-ablation</code>.</p>
+</section>
+<section class="col" id="references">
+<h2>References</h2>
+<ul class="refs">
+<li id="ref-Daily2016">Daily,J. (2016) Parasail: SIMD C library for global, semi-global, and local pairwise sequence alignments. <i>BMC Bioinformatics, 17, 81.</i> <a class="doi" href="https://doi.org/10.1186/s12859-016-0930-z">doi:10.1186/s12859-016-0930-z</a></li>
+<li id="ref-Eizenga2022">Eizenga,J.M. and Paten,B. (2022) Improving the time and space complexity of the WFA algorithm and generalizing its scoring. <i>bioRxiv.</i> <a class="doi" href="https://doi.org/10.1101/2022.01.12.476087">doi:10.1101/2022.01.12.476087</a></li>
+<li id="ref-Farrar2007">Farrar,M. (2007) Striped Smith–Waterman speeds database searches six times over other SIMD implementations. <i>Bioinformatics, 23, 156–161.</i> <a class="doi" href="https://doi.org/10.1093/bioinformatics/btl582">doi:10.1093/bioinformatics/btl582</a></li>
+<li id="ref-hyalite">Ferguson,J. (2026) hyalite: exact, SIMD-accelerated pairwise and database sequence alignment in pure Rust, version 0.4.0. <i><a href="https://github.com/Psy-Fer/hyalite">https://github.com/Psy-Fer/hyalite</a></i></li>
+<li id="ref-Fujiki2020">Fujiki,D., Wu,S., Ozog,N., Goliya,K., Blaauw,D., Narayanasamy,S. and Das,R. (2020) SeedEx: a genome sequencing accelerator for optimal alignments in subminimal space. <i>In 2020 53rd Annual IEEE/ACM International Symposium on Microarchitecture (MICRO), pp. 937–950.</i> <a class="doi" href="https://doi.org/10.1109/MICRO50266.2020.00080">doi:10.1109/MICRO50266.2020.00080</a></li>
+<li id="ref-Gao2021">Gao,Y., Liu,Y., Ma,Y., Liu,B., Wang,Y. and Xing,Y. (2021) abPOA: an SIMD-based C library for fast partial order alignment using adaptive band. <i>Bioinformatics, 37, 2209–2211.</i> <a class="doi" href="https://doi.org/10.1093/bioinformatics/btaa963">doi:10.1093/bioinformatics/btaa963</a></li>
+<li id="ref-Gibrat2018">Gibrat,J.-F. (2018) A short note on dynamic programming in a band. <i>BMC Bioinformatics, 19, 226.</i> <a class="doi" href="https://doi.org/10.1186/s12859-018-2228-9">doi:10.1186/s12859-018-2228-9</a></li>
+<li id="ref-Gotoh1982">Gotoh,O. (1982) An improved algorithm for matching biological sequences. <i>J. Mol. Biol., 162, 705–708.</i> <a class="doi" href="https://doi.org/10.1016/0022-2836(82)90398-9">doi:10.1016/0022-2836(82)90398-9</a></li>
+<li id="ref-GrootKoerkamp2024b">Groot Koerkamp,R. (2024) A*PA2: up to 19× faster exact global alignment. <i>In 24th International Workshop on Algorithms in Bioinformatics (WABI 2024), LIPIcs 312, 17:1–17:25.</i> <a class="doi" href="https://doi.org/10.4230/LIPIcs.WABI.2024.17">doi:10.4230/LIPIcs.WABI.2024.17</a></li>
+<li id="ref-GrootKoerkamp2024a">Groot Koerkamp,R. and Ivanov,P. (2024) Exact global alignment using A* with chaining seed heuristic and match pruning. <i>Bioinformatics, 40, btae032.</i> <a class="doi" href="https://doi.org/10.1093/bioinformatics/btae032">doi:10.1093/bioinformatics/btae032</a></li>
+<li id="ref-Kallenborn2026">Kallenborn,F., Dabbaghie,F., Steinegger,M. and Schmidt,B. (2026) Accelign: a GPU-based library for accelerating pairwise sequence alignment. <i>BMC Bioinformatics, 27, 137.</i> <a class="doi" href="https://doi.org/10.1186/s12859-026-06521-0">doi:10.1186/s12859-026-06521-0</a></li>
+<li id="ref-Li2018">Li,H. (2018) Minimap2: pairwise alignment for nucleotide sequences. <i>Bioinformatics, 34, 3094–3100.</i> <a class="doi" href="https://doi.org/10.1093/bioinformatics/bty191">doi:10.1093/bioinformatics/bty191</a></li>
+<li id="ref-Liu2023">Liu,D. and Steinegger,M. (2023) Block Aligner: an adaptive SIMD-accelerated aligner for sequences and position-specific scoring matrices. <i>Bioinformatics, 39, btad487.</i> <a class="doi" href="https://doi.org/10.1093/bioinformatics/btad487">doi:10.1093/bioinformatics/btad487</a></li>
+<li id="ref-MarcoSola2023">Marco-Sola,S., Eizenga,J.M., Guarracino,A., Paten,B., Garrison,E. and Moreto,M. (2023) Optimal gap-affine alignment in O(s) space. <i>Bioinformatics, 39, btad074.</i> <a class="doi" href="https://doi.org/10.1093/bioinformatics/btad074">doi:10.1093/bioinformatics/btad074</a></li>
+<li id="ref-MarcoSola2021">Marco-Sola,S., Moure,J.C., Moreto,M. and Espinosa,A. (2021) Fast gap-affine pairwise alignment using the wavefront algorithm. <i>Bioinformatics, 37, 456–463.</i> <a class="doi" href="https://doi.org/10.1093/bioinformatics/btaa777">doi:10.1093/bioinformatics/btaa777</a></li>
+<li id="ref-Modular">Modular Inc. (2026) Mojo programming language. <i><a href="https://docs.modular.com/mojo/">https://docs.modular.com/mojo/</a></i></li>
+<li id="ref-Myers1986">Myers,E.W. (1986) An O(ND) difference algorithm and its variations. <i>Algorithmica, 1, 251–266.</i> <a class="doi" href="https://doi.org/10.1007/BF01840446">doi:10.1007/BF01840446</a></li>
+<li id="ref-Myers1999">Myers,G. (1999) A fast bit-vector algorithm for approximate string matching based on dynamic programming. <i>J. ACM, 46, 395–415.</i> <a class="doi" href="https://doi.org/10.1145/316542.316550">doi:10.1145/316542.316550</a></li>
+<li id="ref-Rahn2018">Rahn,R., Budach,S., Costanza,P., Ehrhardt,M., Hancox,J. and Reinert,K. (2018) Generic accelerated sequence alignment in SeqAn using vectorization and multi-threading. <i>Bioinformatics, 34, 3437–3445.</i> <a class="doi" href="https://doi.org/10.1093/bioinformatics/bty380">doi:10.1093/bioinformatics/bty380</a></li>
+<li id="ref-Rognes2011">Rognes,T. (2011) Faster Smith–Waterman database searches with inter-sequence SIMD parallelisation. <i>BMC Bioinformatics, 12, 221.</i> <a class="doi" href="https://doi.org/10.1186/1471-2105-12-221">doi:10.1186/1471-2105-12-221</a></li>
+<li id="ref-Suzuki2018">Suzuki,H. and Kasahara,M. (2018) Introducing difference recurrence relations for faster semi-global alignment of long sequences. <i>BMC Bioinformatics, 19, 45.</i> <a class="doi" href="https://doi.org/10.1186/s12859-018-2014-8">doi:10.1186/s12859-018-2014-8</a></li>
+<li id="ref-Ukkonen1985">Ukkonen,E. (1985) Algorithms for approximate string matching. <i>Information and Control, 64, 100–118.</i> <a class="doi" href="https://doi.org/10.1016/S0019-9958(85)80046-2">doi:10.1016/S0019-9958(85)80046-2</a></li>
+<li id="ref-Wozniak1997">Wozniak,A. (1997) Using video-oriented instructions to speed up sequence comparison. <i>Comput. Appl. Biosci., 13, 145–150.</i> <a class="doi" href="https://doi.org/10.1093/bioinformatics/13.2.145">doi:10.1093/bioinformatics/13.2.145</a></li>
+<li id="ref-Zhao2013">Zhao,M., Lee,W.-P., Garrison,E.P. and Marth,G.T. (2013) SSW library: an SIMD Smith–Waterman C/C++ library for use in genomic applications. <i>PLoS One, 8, e82138.</i> <a class="doi" href="https://doi.org/10.1371/journal.pone.0082138">doi:10.1371/journal.pone.0082138</a></li>
+<li id="ref-Sosic2017">Šošić,M. and Šikić,M. (2017) Edlib: a C/C++ library for fast, exact sequence alignment using edit distance. <i>Bioinformatics, 33, 1394–1395.</i> <a class="doi" href="https://doi.org/10.1093/bioinformatics/btw753">doi:10.1093/bioinformatics/btw753</a></li>
+</ul>
+</section>
+</main>
+<script>
+/* Charts: one log-scale line chart, drawn to scale from the published tables (benchmarks/README.md, ebe290f). */
+const TOOLS = [
+  ["dinara-align", "--c-dinara", 3.2, ""], ["A*PA2-full", "--c-apafull", 1.8, ""], ["A*PA2-simple", "--c-apasimple", 1.8, "6 4"],
+  ["A*PA", "--c-apa", 1.8, "2 3"], ["Edlib", "--c-edlib", 1.8, ""], ["BiWFA", "--c-biwfa", 1.8, "6 4"], ["WFA", "--c-wfa", 1.8, ""],
+];
+const DIVERGENCE = { x: [...Array(16).keys()], unit: "%", series: {"dinara-align": [0.075, 1.33, 4.41, 4.68, 4.75, 4.89, 6.3, 6.53, 6.79, 10.4, 11, 11.5, 11.3, 11.2, 12.3, 11.8], "A*PA2-full": [6.58, 7.46, 7.52, 7.71, 7.92, 8.11, 8.76, 8.8, 11.7, 11.9, 10.5, 13.6, 11.8, 17.9, 16.7, 15.6], "A*PA2-simple": [1.54, 3.38, 4.84, 8.37, 7.39, 15.5, 14.1, 13.2, 12.3, 11.5, 28.4, 27.2, 26.4, 25.5, 25, 24.4], "A*PA": [6.58, 7.75, 8.37, 8.08, 9.74, 12.1, 17.5, 34.8, 40.4, 40.5, 44.4, 47.7, 53.4, 60.2, 71, 99.1], "Edlib": [41.7, 57, 71.3, 96, 98.9, 145, 147, 150, 153, 159, 244, 247, 249, 253, 256, 259], "BiWFA": [0.63, 3.3, 10.2, 21.1, 35.8, 54.1, 74, 97.4, 124, 153, 186, 220, 254, 292, 332, 374], "WFA": [0.33, 3.38, 9.72, 19.1, 31.4, 46.9, 64.1, 84, 107, 129, 156, 184, 212, 239, 273, 304]} };
+const LENGTH_X = [3, 10, 30, 100, 300, 1000];
+const LENGTH = {"5": {"dinara-align": [[0.042], [0.284], [0.941], [4.85], [19.4], [63.3]], "A*PA2-full": [[0.174], [0.788], [2.45], [8.22], [27.6], [125]], "A*PA2-simple": [[0.06], [0.292], [1.71], [15.5], [65], [861]], "A*PA": [[0.266], [0.937], [3.1], [12.1], [36.9], [152]], "Edlib": [[0.813], [3.8], [14.4], [145], [749], [8490, 1]], "BiWFA": [[0.082], [0.557], [4.98], [54.5], [471], [5390, 1]], "WFA": [[0.057], [0.44], [4.27], [45.8], [450], [5210]]}, "15": {"dinara-align": [[0.114], [0.405], [1.68], [11.5], [46], [265]], "A*PA2-full": [[0.202], [0.914], [4.07], [16.3], [125], [1330]], "A*PA2-simple": [[0.152], [0.785], [2.62], [24.4], [293], [1340]], "A*PA": [[1.55], [6.47], [23.4], [96.4], [464], [2070]], "Edlib": [[0.873], [5.73], [24], [260], [2520], [18800, 1]], "BiWFA": [[0.376], [3.98], [34.1], [375], [3370], null], "WFA": [[0.289], [2.94], [26.7], [307], [3040], null]}};
+
+
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const fmt = ms => ms >= 1000 ? (ms / 1000).toPrecision(3).replace(/\.?0+$/, "") + " s" : ms >= 1 ? (+ms.toPrecision(3)) + " ms" : (+(ms * 1000).toPrecision(3)) + " µs";
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, parent) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
+
+function lineChart(svg, cfg) {
+  // cfg: xs (numbers), xLog, xLabel, xTick(x) label, series {name: [[ms, partial?] | null]}, styles {name: [token, width, dash]},
+  // hidden Set, yMin, yMax (ms, powers of ten), tooltipTitle(x)
+  const W = 760, H = +svg.getAttribute("viewBox").split(" ")[3], m = { l: 64, r: 34, t: 16, b: 52 };
+  svg.replaceChildren();
+  const xv = x => cfg.xLog ? Math.log10(x) : x;
+  const x0 = xv(cfg.xs[0]), x1 = xv(cfg.xs[cfg.xs.length - 1]);
+  const X = x => m.l + (xv(x) - x0) / (x1 - x0) * (W - m.l - m.r);
+  const ly0 = Math.log10(cfg.yMin), ly1 = Math.log10(cfg.yMax);
+  const Y = v => H - m.b - (Math.log10(v) - ly0) / (ly1 - ly0) * (H - m.t - m.b);
+  for (let p = Math.ceil(ly0); p <= Math.floor(ly1); p++) {
+    const v = Math.pow(10, p), y = Y(v);
+    el("line", { x1: m.l, x2: W - m.r, y1: y, y2: y, class: "grid" }, svg);
+    el("text", { x: m.l - 8, y: y + 4, "text-anchor": "end" }, svg).textContent = fmt(v);
+  }
+  cfg.xs.forEach((x, i) => {
+    if (cfg.xTickEvery && i % cfg.xTickEvery) return;
+    el("line", { x1: X(x), x2: X(x), y1: H - m.b, y2: H - m.b + 5, class: "axis" }, svg);
+    el("text", { x: X(x), y: H - m.b + 18, "text-anchor": "middle" }, svg).textContent = cfg.xTick(x, i);
+  });
+  el("line", { x1: m.l, x2: W - m.r, y1: H - m.b, y2: H - m.b, class: "axis" }, svg);
+  el("line", { x1: m.l, x2: m.l, y1: m.t, y2: H - m.b, class: "axis" }, svg);
+  el("text", { x: (m.l + W - m.r) / 2, y: H - 10, "text-anchor": "middle", class: "axis-title" }, svg).textContent = cfg.xLabel;
+  el("text", { x: 14, y: (m.t + H - m.b) / 2, "text-anchor": "middle", class: "axis-title", transform: `rotate(-90 14 ${(m.t + H - m.b) / 2})` }, svg).textContent = "time per alignment";
+  // Draw the highlighted series last, so it sits on top.
+  const names = Object.keys(cfg.series).sort((a, b) => (a === cfg.top) - (b === cfg.top));
+  for (const name of names) {
+    if (cfg.hidden.has(name)) continue;
+    const [token, width, dash] = cfg.styles[name], color = css(token);
+    const pts = cfg.series[name].map((v, i) => v ? [X(cfg.xs[i]), Y(v[0]), v[1]] : null).filter(Boolean);
+    el("polyline", { points: pts.map(p => p[0] + "," + p[1]).join(" "), fill: "none", stroke: color, "stroke-width": width,
+      "stroke-dasharray": dash || "none", "stroke-linejoin": "round" }, svg);
+    pts.forEach(p => el("circle", { cx: p[0], cy: p[1], r: name === cfg.top ? 3.6 : 2.8, fill: p[2] ? css("--paper") : color, stroke: color, "stroke-width": 1.5 }, svg));
+  }
+  // Hover: a crosshair at the nearest x and a tooltip with every shown tool's value, the fastest in bold.
+  const box = svg.parentElement; let tip = box.querySelector(".tip");
+  if (!tip) { tip = document.createElement("div"); tip.className = "tip"; tip.hidden = true; box.appendChild(tip); }
+  const hover = el("line", { y1: m.t, y2: H - m.b, class: "hover-line", visibility: "hidden" }, svg);
+  const hit = el("rect", { x: m.l, y: m.t, width: W - m.l - m.r, height: H - m.t - m.b, fill: "transparent" }, svg);
+  function show(evt) {
+    const r = svg.getBoundingClientRect(), sx = (evt.clientX - r.left) / r.width * W;
+    let best = 0; cfg.xs.forEach((x, i) => { if (Math.abs(X(x) - sx) < Math.abs(X(cfg.xs[best]) - sx)) best = i; });
+    const xp = X(cfg.xs[best]); hover.setAttribute("x1", xp); hover.setAttribute("x2", xp); hover.setAttribute("visibility", "visible");
+    const rows = Object.keys(cfg.series).filter(n => !cfg.hidden.has(n) && cfg.series[n][best]).map(n => [n, cfg.series[n][best]]);
+    rows.sort((a, b) => a[1][0] - b[1][0]);
+    tip.replaceChildren();
+    const head = document.createElement("div"); head.style.fontWeight = "700"; head.style.marginBottom = "0.2rem"; head.textContent = cfg.tooltipTitle(cfg.xs[best], best); tip.appendChild(head);
+    rows.forEach(([n, v], k) => { const row = document.createElement("div"); row.className = "row" + (k === 0 ? " best" : "");
+      const a = document.createElement("span"); a.textContent = n; a.style.color = css(cfg.styles[n][0]);
+      const b = document.createElement("span"); b.textContent = fmt(v[0]) + (v[1] ? " (some)" : ""); row.append(a, b); tip.appendChild(row); });
+    tip.hidden = false;
+    const bx = box.getBoundingClientRect(), left = evt.clientX - bx.left + box.scrollLeft + 14;
+    tip.style.left = Math.min(left, box.scrollWidth - tip.offsetWidth - 4) + "px"; tip.style.top = (evt.clientY - bx.top + 12) + "px";
+  }
+  hit.addEventListener("pointermove", show);
+  hit.addEventListener("pointerleave", () => { tip.hidden = true; hover.setAttribute("visibility", "hidden"); });
+}
+
+function legend(container, names, styles, hidden, redraw) {
+  container.replaceChildren();
+  names.forEach(n => { const b = document.createElement("button"); b.type = "button"; b.setAttribute("aria-pressed", String(!hidden.has(n)));
+    const s = document.createElement("span"); s.className = "swatch"; s.style.color = css(styles[n][0]);
+    if (styles[n][2]) s.style.borderTopStyle = "dashed";
+    b.append(s, n); b.addEventListener("click", () => { hidden.has(n) ? hidden.delete(n) : hidden.add(n); b.setAttribute("aria-pressed", String(!hidden.has(n))); redraw(); });
+    container.appendChild(b); });
+}
+
+const STYLES = Object.fromEntries(TOOLS.map(([n, t, w, d]) => [n, [t, w, d]]));
+const toPairs = s => Object.fromEntries(Object.entries(s).map(([k, v]) => [k, v.map(x => x == null ? null : Array.isArray(x) ? x : [x])]));
+const divHidden = new Set(), lenHidden = new Set();
+let lenRate = 15;
+function drawAll() {
+  lineChart(document.getElementById("chart-divergence"), { xs: DIVERGENCE.x, xLog: false, xLabel: "divergence (%)", xTickEvery: 1,
+    xTick: x => x + "%", series: toPairs(DIVERGENCE.series), styles: STYLES, hidden: divHidden, yMin: 0.01, yMax: 1000, top: "dinara-align",
+    tooltipTitle: x => "100 kbp at " + x + "%" });
+  lineChart(document.getElementById("chart-length"), { xs: LENGTH_X, xLog: true, xLabel: "length (kbp), " + lenRate + "% divergence",
+    xTick: x => x >= 1000 ? "1 Mbp" : x + " kbp", series: LENGTH[lenRate], styles: STYLES, hidden: lenHidden, yMin: 0.01, yMax: 100000, top: "dinara-align",
+    tooltipTitle: x => (x >= 1000 ? "1 Mbp" : x + " kbp") + " at " + lenRate + "%" });
+}
+function drawLegends() {
+  legend(document.getElementById("legend-divergence"), Object.keys(DIVERGENCE.series), STYLES, divHidden, drawAll);
+  legend(document.getElementById("legend-length"), Object.keys(LENGTH[15]), STYLES, lenHidden, drawAll);
+}
+document.getElementById("len-5").addEventListener("click", () => { lenRate = 5; setRate(); });
+document.getElementById("len-15").addEventListener("click", () => { lenRate = 15; setRate(); });
+function setRate() { document.getElementById("len-5").setAttribute("aria-pressed", String(lenRate === 5));
+  document.getElementById("len-15").setAttribute("aria-pressed", String(lenRate === 15)); drawAll(); }
+drawLegends(); drawAll();
+// Theme changes swap the token colours the charts read.
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawLegends(); drawAll(); });
+new MutationObserver(() => { drawLegends(); drawAll(); }).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+
+</script>
+<script>
+window.MathJax = { tex: { inlineMath: [["\\(", "\\)"]], displayMath: [["\\[", "\\]"]] }, svg: { fontCache: "global" } };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg.js"></script>

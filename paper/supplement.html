@@ -1,0 +1,302 @@
+<title>dinara-align supplement</title>
+<style>
+/* Layout: one reading column of about 68 characters, with figures and tables allowed a wider measure;
+   a slim contents rail on wide screens. */
+:root {
+  --paper: #fbfcfc;
+  --ink: #18212b;
+  --ink-soft: #4a5866;
+  --rule: #d6dde3;
+  --tint: #eef3f6;
+  --accent: #155e86;
+  --flag: #a34a0b;
+  --c-dinara: #d55e00;
+  --c-apafull: #0072b2;
+  --c-apasimple: #3b9fd6;
+  --c-apa: #b8558f;
+  --c-edlib: #c48a00;
+  --c-biwfa: #00896a;
+  --c-wfa: #5f6b77;
+  --serif: "Literata", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+  --sans: "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --measure: 68ch;
+  --wide: 62rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #12171c; --ink: #e3e9ee; --ink-soft: #a5b2bd; --rule: #2c3640; --tint: #1b232b;
+    --accent: #6cb6e0; --flag: #f0a35e;
+    --c-dinara: #ff8a3d; --c-apafull: #4aa3e0; --c-apasimple: #8fcdf2; --c-apa: #e08cc0;
+    --c-edlib: #e8b730; --c-biwfa: #3ec29d; --c-wfa: #9aa6b2;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #12171c; --ink: #e3e9ee; --ink-soft: #a5b2bd; --rule: #2c3640; --tint: #1b232b;
+  --accent: #6cb6e0; --flag: #f0a35e;
+  --c-dinara: #ff8a3d; --c-apafull: #4aa3e0; --c-apasimple: #8fcdf2; --c-apa: #e08cc0;
+  --c-edlib: #e8b730; --c-biwfa: #3ec29d; --c-wfa: #9aa6b2;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--paper); color: var(--ink); font-family: var(--serif); font-size: 1.0625rem;
+  line-height: 1.62; padding-inline: 16px; padding-block: 2.5rem 4rem; }
+main { max-width: var(--wide); margin-inline: auto; }
+.col { max-width: var(--measure); margin-inline: auto; }
+h1, h2, h3, h4 { font-family: var(--sans); text-wrap: balance; line-height: 1.22; margin: 0; }
+h1 { font-size: clamp(1.75rem, 4vw, 2.45rem); font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 1.4rem; font-weight: 700; margin-block: 2.6rem 0.8rem; }
+h3 { font-size: 1.12rem; font-weight: 600; margin-block: 1.8rem 0.5rem; }
+h2 .num, h3 .num { color: var(--ink-soft); font-weight: 600; margin-right: 0.45em; font-variant-numeric: tabular-nums; }
+p { margin-block: 0 0.95rem; }
+a { color: var(--accent); text-underline-offset: 2px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.sys { font-family: var(--sans); font-weight: 600; letter-spacing: 0.005em; }
+code, .mono { font-family: var(--mono); font-size: 0.86em; }
+ul, ol { padding-left: 1.35rem; margin-block: 0 1rem; }
+li { margin-block: 0.25rem; }
+li > ul { margin-block: 0.3rem 0.2rem; }
+.draft { display: inline-block; font-family: var(--sans); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--flag); border: 1px solid var(--flag); border-radius: 3px; padding: 0.05rem 0.4rem;
+  margin-bottom: 0.9rem; }
+.todo { color: var(--flag); font-family: var(--sans); font-size: 0.9em; }
+.abstract { background: var(--tint); border-radius: 6px; padding: 1.1rem 1.25rem 0.4rem; margin-block: 1.6rem 0.5rem; }
+.abstract h4 { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.09em; color: var(--ink-soft); margin-bottom: 0.25rem; }
+.abstract p { font-size: 0.98rem; }
+figure { margin: 2rem auto; max-width: var(--wide); }
+figcaption { font-size: 0.9rem; color: var(--ink-soft); max-width: var(--measure); margin: 0.6rem auto 0; }
+figcaption b { color: var(--ink); font-family: var(--sans); }
+.chart-wrap { overflow-x: auto; }
+.chart { width: 100%; min-width: 520px; height: auto; display: block; font-family: var(--sans); }
+.chart text { fill: var(--ink-soft); font-size: 11px; }
+.chart .axis-title { fill: var(--ink); font-size: 12px; font-weight: 600; }
+.chart .grid { stroke: var(--rule); stroke-width: 1; }
+.chart .axis { stroke: var(--ink-soft); stroke-width: 1; }
+.chart .hover-line { stroke: var(--ink-soft); stroke-dasharray: 3 3; }
+.legend { display: flex; flex-wrap: wrap; gap: 0.35rem 0.5rem; justify-content: center; margin-top: 0.4rem; font-family: var(--sans); font-size: 0.82rem; }
+.legend button { font: inherit; color: var(--ink); background: transparent; border: 1px solid var(--rule); border-radius: 999px;
+  padding: 0.18rem 0.65rem 0.18rem 0.45rem; display: inline-flex; align-items: center; gap: 0.4rem; cursor: pointer; }
+.legend button[aria-pressed="false"] { opacity: 0.4; }
+.legend .swatch { width: 18px; height: 0; border-top: 3px solid currentColor; display: inline-block; }
+.controls { display: flex; gap: 0.4rem; justify-content: center; margin-bottom: 0.4rem; font-family: var(--sans); font-size: 0.85rem; }
+.controls button { font: inherit; color: var(--ink); background: var(--paper); border: 1px solid var(--rule); border-radius: 4px; padding: 0.2rem 0.7rem; cursor: pointer; }
+.controls button[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.tip { position: absolute; pointer-events: none; background: var(--paper); border: 1px solid var(--rule); border-radius: 5px;
+  padding: 0.45rem 0.6rem; font-family: var(--sans); font-size: 0.8rem; line-height: 1.45; box-shadow: 0 4px 14px rgba(0,0,0,0.12);
+  min-width: 11rem; z-index: 5; }
+.tip .row { display: flex; justify-content: space-between; gap: 1rem; font-variant-numeric: tabular-nums; }
+.tip .row.best { font-weight: 700; }
+.fig-box { position: relative; }
+.table-wrap { overflow-x: auto; margin-inline: auto; }
+table { border-collapse: collapse; font-family: var(--sans); font-size: 0.86rem; margin-inline: auto; font-variant-numeric: tabular-nums; }
+caption { caption-side: top; text-align: left; font-family: var(--serif); font-size: 0.9rem; color: var(--ink-soft); padding-bottom: 0.5rem; max-width: var(--measure); }
+caption b { color: var(--ink); font-family: var(--sans); }
+th, td { padding: 0.32rem 0.6rem; text-align: right; white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+td.wrap { white-space: normal; min-width: 14rem; }
+thead th { border-bottom: 1.5px solid var(--ink); font-weight: 600; }
+tbody tr:last-child td { border-bottom: 1.5px solid var(--ink); }
+tbody tr + tr td { border-top: 1px solid var(--rule); }
+td.best { font-weight: 700; color: var(--ink); }
+td .part { color: var(--ink-soft); font-size: 0.85em; }
+td.loss { color: var(--flag); font-weight: 700; }
+.math-block { overflow-x: auto; margin-block: 0.4rem 1rem; }
+.refs { font-size: 0.9rem; }
+.refs li { margin-block: 0.4rem; }
+.refs .doi { font-family: var(--mono); font-size: 0.82em; }
+.toc { display: none; }
+@media (min-width: 1300px) {
+  .toc { display: block; position: fixed; top: calc(env(safe-area-inset-top, 0px) + 3rem); left: max(16px, calc(50% - 46rem));
+    width: 11.5rem; font-family: var(--sans); font-size: 0.82rem; }
+  .toc a { display: block; color: var(--ink-soft); text-decoration: none; padding: 0.15rem 0; }
+  .toc a:hover { color: var(--accent); }
+  .toc .label { text-transform: uppercase; letter-spacing: 0.09em; font-size: 0.7rem; color: var(--ink-soft); margin-bottom: 0.4rem; }
+}
+@media (max-width: 520px) { body { font-size: 1rem; } }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+/* Journal page furniture. */
+.cite { color: var(--accent); text-decoration: none; }
+.cite:hover { text-decoration: underline; }
+.masthead { margin-bottom: 0.4rem; }
+.journal { font-family: var(--sans); font-size: 0.8rem; letter-spacing: 0.04em; color: var(--ink-soft); margin-bottom: 0.9rem; }
+.journal .draft { margin: 0 0 0 0.5rem; vertical-align: 1px; }
+.authors { font-family: var(--sans); font-size: 1.05rem; margin-top: 0.9rem; }
+.affil, .supp-link { font-family: var(--sans); font-size: 0.85rem; color: var(--ink-soft); margin-top: 0.25rem; }
+.abstract p b { font-family: var(--sans); }
+.panel { position: relative; margin-bottom: 1.2rem; }
+.panel-label { font-family: var(--sans); font-weight: 700; font-size: 1rem; margin-bottom: 0.2rem; }
+.back h4 { font-size: 1rem; margin-block: 1.4rem 0.4rem; }
+.back p { font-size: 0.95rem; }
+ul.refs { list-style: none; padding-left: 0; }
+ul.refs li { padding-left: 1.5rem; text-indent: -1.5rem; }
+ol li::marker { font-family: var(--sans); color: var(--ink-soft); }
+th.l, td.l { text-align: left; }
+td.wrap { vertical-align: top; }
+.table-wrap { margin-block: 1.6rem 1.8rem; }
+
+</style>
+<main>
+<header class="col masthead">
+  <div class="journal">Bioinformatics · Supplementary material <span class="draft">Draft</span></div>
+  <h1>Supplementary material for “dinara-align: exact pairwise alignment specialised to the target processor”</h1>
+  <div class="authors">Konstantinos Kyriakidis</div>
+</header>
+<div class="col">
+<p>This supplement provides implementation details, per-change measurements and additional results that the main text summarises. Section S1 describes techniques not covered in the main text, Section S2 lists the measured effect of each change, Section S3 gives the complete results for gap-affine costs and the other alignment modes, and Sections S4 and S5 describe robustness measures and approaches that were evaluated and not adopted. Unless stated otherwise, the measurements in Sections S1, S2, S4 and S5 were taken when each change was introduced, on the machine indicated, and compare the change with the preceding version; the results in the main text and in Section S3 were obtained at commit <code>ebe290f</code>. Two machines were used: an Intel Core i9-7900X (Skylake-X, AVX-512) and an Apple M2 (NEON).</p>
+</div>
+<div class="col">
+<h2 id="sS1"><span class="num">S1</span>Implementation details</h2>
+<h3 id="sS1.1"><span class="num">S1.1</span>Unit costs</h3>
+<p><b>Engine selection.</b> The diagonal transition receives a step budget proportional to the cost of the band it would replace; on the Skylake-X a step costs about 1.3&nbsp;ns and a band column about 6&nbsp;ns. Inexact seeds replace exact seeds when fewer than 20, 30 or 40% of exact seeds chain on AVX-512, AVX2 and NEON, respectively: the wider the vector unit, the cheaper the bit-parallel band relative to the scalar construction of inexact seeds. In the gap-affine engine, a pair whose wavefront is expected to cover more than a quarter of its matrix is assigned to the anti-diagonal sweep, a wavefront step costing about 1.5&nbsp;ns and a sweep cell about 0.4&nbsp;ns. All thresholds are fixed at compile time for each instruction set, so that no dispatch occurs at run time.</p>
+<p><b>Register and memory layout of the sweep.</b> An empty inline-assembly barrier prevents the compiler from reassociating the regrouped recurrence back to its original form. Vertical differences remain in registers across a word's columns, and the horizontal differences of successive columns are stored at distinct addresses, so that no load waits on a preceding store. Bands of five to seven words combine a four-lane vector with scalar words.</p>
+<p><b>Symbols other than ACGT.</b> <code>N</code> and other non-ACGT symbols are encoded in a third bit plane. Each tile uses only the planes its symbols require: two when neither its columns nor any row contains such a symbol, the third plane of the rows as a mask when only rows contain one, and all three otherwise. Sequences are encoded 16 bytes or eight rows at a time, and only chunks that contain such a symbol are processed byte by byte. This made reads containing <code>N</code> 7 to 9% faster on both machines. A seed that contains <code>N</code> is not counted, so that pairs containing <code>N</code> can still use seeds; this made the ultra-long reads 2.5 to 3 times faster on the M2 and 1.4 to 1.7 times faster on the Skylake-X.</p>
+<p><b>Tile width.</b> Tiles are 256 columns wide, as in A*PA2, or 64 columns wide in bands of fewer than 1,024 rows.</p>
+<p><b>Accepting an extrapolation.</b> The diagonal-transition estimate is abandoned once it has spent one twenty-fourth of the cost of the cheapest band. An extrapolation sets the band only when the single-wavefront extrapolation from the first edits and the extrapolation of the longer search agree to within one third; otherwise the first bound is set 256 above the known lower bound, and each retry at most doubles it. A later checkpoint never lowers the bound below the previous bound plus one quarter, and a failed round continues from the bound at which it ended rather than the one at which it started. Before these rules, a 30&nbsp;kbp SARS-CoV-2 pair at distance 49 had been extrapolated to 14,448 and computed over the full matrix.</p>
+<p>When they were introduced, these rules reduced the mean time on the ultra-long reads with genetic variation from 4.33&nbsp;s, with 13 of 15 reads completed within the time limit, to 754&nbsp;ms. At the evaluated commit the seed heuristic sets the first bound on long reads, and switching the agreement test off changes the ultra-long reads by less than 1% but slows the 10&nbsp;kbp reads by 17% (main text, Effect of each technique).</p>
+<p><b>Retries with seeds.</b> When seeds are used, a retry sets the bound one quarter of the extrapolated increase beyond the estimate; with one half, a round had failed after 90% of the columns of a 527&nbsp;kbp read. A seeded round that fails within the first eighth of its columns does not extrapolate; instead, its margin over the heuristic bound at the origin increases fourfold, as in A*PA2. Previously, an 884&nbsp;kbp read had failed at column 1,280 and been extrapolated to 125,000 for a distance of 75,000. Only the first round revises its bound at the checkpoints; when later rounds also lowered their bounds, they failed late, four times on one 897&nbsp;kbp read.</p>
+<p><b>Traceback.</b> A tile on which the forward search exceeds its limit is recomputed over a window of rows above the traced cell, starting at four words and doubling. The top boundary of the window is initialised to +1, so that its scores correspond to real paths. A 600&nbsp;kbp nanopore pair at 13% divergence was aligned in 617&nbsp;ms instead of 1.38&nbsp;s, of which 840&nbsp;ms had been spent recomputing tiles of 900 words. Recomputation buffers are reused without initialisation, and tile boundaries are allocated once and written through pointers; loading the boundaries had accounted for a quarter of the traceback time. The CIGAR string is produced by reversing moves 16 at a time and splitting diagonal runs eight bases at a time, which costs 1 to 3% of the alignment time.</p>
+<p><b>Diagonal transition.</b> Wavefronts are padded with unreached diagonals and advanced eight diagonals at a time with branch-free validity masks, in a separate function; a step costs about 1.3&nbsp;ns, compared with 5&nbsp;ns before. The two-ended search tests the overlap of the two wavefronts with vector comparisons and requires about half as many steps. Since a step costs about 1.3&nbsp;ns and a band column about 6&nbsp;ns, the diagonal transition is given a step budget proportional to the band it would replace; reducing this budget from 12 to 5 steps per column reduced the time for 10&nbsp;kbp pairs at 5% divergence from 241 to 144&nbsp;µs. The choice between one and two wavefronts was fitted on 1,300 pairs of 1 to 30&nbsp;kbp. For pairs of up to 2,048 columns, the band had been set wide across the whole matrix, and 42% of such pairs were assigned to a band although the diagonal transition would have been faster; such a band is now charged an additional 30,000 steps, which made the 1&nbsp;kbp reads 25% faster on the Skylake-X. A short noisy pair abandons the diagonal search in favour of the full matrix (a 1&nbsp;kbp pair at 15% divergence, 19.2 to 11.8&nbsp;µs), and the first bound of a short pair is 1.7 times its extrapolation, at most 128 above it.</p>
+<p><b>Gather masks.</b> A gather consumes its mask register, and compilers generate the required all-ones mask with <code>kxnor</code>, which depends on the previous value of that register; consecutive gathers were therefore serialised at about 21 cycles per group. Deriving the mask from the group's own lanes removes this dependency. Gathered extension made the 1&nbsp;kbp reads, the SARS-CoV-2 genomes and 100&nbsp;kbp pairs at 1 to 2% divergence 7 to 19% faster (Table S1, commit 45697e0).</p>
+<p><b>Measured thresholds.</b> A full bit-parallel sweep of a 64-row word costs 35%, 45% and 77% of a diagonal-transition step on AVX-512, AVX2 and NEON, respectively, measured on 1&nbsp;kbp pairs at 15% divergence (the AVX2 value on the Skylake-X with code compiled for Haswell). On AVX-512, seeds reduce the running time only from about 86&nbsp;kbp: below that length, the Skylake-X aligned real reads of 16 to 64&nbsp;kbp 14% faster without seeds, and uniform 30&nbsp;kbp pairs at 5% divergence 30% faster, whereas at 100&nbsp;kbp seeds reduced the time by 7 to 24%. With AVX2 and NEON, seeds are used from 16&nbsp;kbp. For pairs whose two extrapolations agree, as with uniform errors, the inexact-seed threshold is 20% on every platform, and from 64&nbsp;kbp an extrapolated error rate of at least one edit in ten bases selects inexact seeds directly.</p>
+<p><b>Interleaving.</b> llvm-mca estimates the interleaved AVX-512 loop at 24 cycles per column, against a throughput bound of 11, so the loop remains limited by the lane rotation. A third group still fits in the 32 AVX-512 registers, and llvm-mca predicted 15% fewer cycles per group, but the measured time changed by less than 1.5%.</p>
+<h3 id="sS1.2"><span class="num">S1.2</span>Seed heuristic</h3>
+<p><b>Batched lookups.</b> Query rows are processed in batches of 16: the bucket bounds of all rows are loaded first, so that the loads overlap, and their entries are prefetched; each entry stores a seed together with its code, so that a single load provides both. A lookup tests each candidate window with a branch-free expression. Together with considering only seeds that can still chain to the end, these steps reduced the inexact setup on the ultra-long reads with genetic variation from 5.02 to 2.90&nbsp;s in total. On 100&nbsp;kbp pairs at 10% divergence, seed construction still accounts for 58% of the running time on the Skylake-X.</p>
+<p><b>Admissibility check and correction.</b> Comparing the heuristic with the true remaining cost at every cell of random pairs showed that an earlier version of our implementation overestimated the remaining cost by one on optimal paths in 1 to 2% of pairs. The cause was a filter that discarded matches whose gap to the end of the pair exceeded the potential of the intervening seeds: a match ending one diagonal beyond this limit was discarded, although a path through it costs only one more than the potential, and the neighbour that would otherwise bound such paths could be removed by local pruning. Such a match now chains to the end at the cost of its excess, entering layer \(2-1=1\); no further match can follow it. After the correction, no cell exceeded the true cost in 2,200 random pairs, compared with 34,450 cells in 400 pairs before. The reported distances agreed with those of the other aligners in all benchmarks, both before and after the correction. The overestimate arose from our filter; we do not claim that it applies to A*PA or A*PA2.</p>
+<p><b>Exact-seed filter.</b> A 32-bit filter per seed, placed before a half-full open-addressing hash table, resolves most lookups with a single predictable test. On the M2, matching the 320 mid-length reads took 32&nbsp;ms instead of 87&nbsp;ms, and 30&nbsp;kbp pairs at 5% divergence became 15% faster.</p>
+<p><b>Local pruning.</b> The diagonal-transition search used for local pruning updates its wavefronts in place, with an unreachable diagonal on either side replacing three bounds checks per diagonal.</p>
+<h3 id="sS1.3"><span class="num">S1.3</span>Gap-affine costs</h3>
+<p><b>Compact traceback.</b> For the traceback of the bidirectional wavefront, dinara-align stores, for every cost and diagonal, the furthest-reaching column and one byte recording the predecessor of each layer: five bytes per diagonal, compared with twelve in the high-memory mode of WFA. When the stored wavefronts would exceed the memory limit (80&nbsp;MB by default), the pair is split at a cell through which an optimal path passes. Under a general substitution matrix, substitution scores are obtained by byte shuffles (<code>pshufb</code>, <code>tbl</code>) for matrices of up to 16 entries and by gathers otherwise.</p>
+<p><b>Gathers.</b> In the gap-affine wavefront, AVX-512 gathers reduced the time for 1&nbsp;kbp reads from 149 to 129&nbsp;µs. Deriving each gather's mask from the group's own lanes, with one reduction after the loop rather than one per group, reduced it further to 111&nbsp;µs, and the time for 10&nbsp;kbp reads from 2.34 to 1.84&nbsp;ms. Extension along matches was moved into the wavefront step, with columns stored through scalar loads and stores rather than reinserted into a vector, and retained wavefronts are held in fixed blocks that are never moved; memory moves had accounted for 7.5% of profiling samples (Table S1).</p>
+<p><b>Memory layout.</b> The wavefront updates the bounds and furthest reaches of its slots at every cost. When these were separate arrays of a few words, the allocator placed them next to another thread's data, so that the cache line moved between cores at every write; ten threads on the Skylake-X then required twice the cycles per pair of one thread, with 40 cache lines fetched from another core per pair. Each such array now occupies cache lines that no other allocation shares. A worker retains its profile, reversed sequences and search buffers between pairs, so that a warm worker performs no allocation; per-pair allocations had accounted for one third of the time of a short read, and caused contention in the allocator with many threads. Padding each row of a wavefront buffer by one cache line, to avoid 4&nbsp;KB aliasing between loads and earlier stores, removed 1.5 billion blocked loads over ten 100&nbsp;kbp pairs. Separating the working memory of threads by two cache lines rather than one reduced the cache lines fetched from other cores from 3.4 million to 0.3 million over 2 million reads on ten threads.</p>
+<h3 id="sS1.4"><span class="num">S1.4</span>Other modes</h3>
+<p><b>Extension.</b> Extension alignment uses a single wavefront search from the anchor, with the match score folded into the costs, and records the best end point on the furthest anti-diagonal of each wavefront. The search stops once a proven bound shows that no higher cost can yield a better score, and the prefix up to the best end point is then aligned globally. With an end bonus, the search also records the best point on the last row of the query and continues only while such an alignment can still come within the bonus; this reduced the time for an extension with an end bonus from 1.02&nbsp;ms to 186&nbsp;µs.</p>
+<p><b>Ends-free alignment.</b> Under gap costs with free ends, the forward search starts at cost zero on every diagonal on which a free start lies. The span is determined first: one search from the free side finds the end on the highest diagonal, and a narrow search backwards finds the start; the span is then aligned globally. On x86, this aligns a read at the start of a reference, an overlap or a suffix 1.4 to 3.5 times faster, and a read anywhere within the reference 0 to 14% slower, than the previous approach. Keeping the search state outside an optional wrapper while the search runs, so that its fields remain in registers, reduced the time for an infix alignment at (4, 6, 2) from 3.92 to 3.00&nbsp;ms.</p>
+<p><b>Infix and prefix alignment at unit costs.</b> Infix alignment uses the bit-parallel sweep with the cut-off of Edlib, with a bound doubling from 64; words entering the band are initialised to +1, and the last word advances one column at a time. Prefix alignment sweeps only the band permitted by its bound: the top of the band moves down with the diagonal, no column beyond the read length plus the best end so far is computed, an attempt whose band becomes empty stops, and at one eighth, one quarter and one half of the columns an attempt that can no longer succeed is abandoned. This reduced the time for a prefix distance from 23.7 to 20.5&nbsp;µs on the Skylake-X.</p>
+<p><b>A band derived from the score.</b> A global alignment under a single match score and a single mismatch score stores only the diagonals permitted by its score. In the converted costs, every gapped letter contributes at least \(2e+a\) to the total \(C=a(n+m)-2S\), and a path that deviates by \(t\) diagonals from both the main and the end diagonal contains at least \(2t\) gapped letters, so only diagonals within \(C/(2(2e+a))\) of these can contain an optimal path. For a 1&nbsp;kbp pair at 5% divergence, 137 diagonals are stored instead of 1,000. Under any other substitution matrix, the score of the sweep bounds the band in the same way. The backward sweep from the end of a local alignment and each half of a linear-space alignment also use 16-bit lanes while the scores fit, which made 1&nbsp;kbp local alignments 1.2 times and linear-space global alignments 1.4 times faster on the M2.</p>
+<h3 id="sS1.5"><span class="num">S1.5</span>Batches</h3>
+<p><b>Letter layout.</b> The pairs of a group are interleaved so that one 64-bit load reads eight letters of a lane, and eight lanes are transposed in registers by two shuffles.</p>
+<p><b>Alignment in 8-bit lanes.</b> Batch alignments remain in 8-bit lanes, 64 pairs per AVX-512 register, and a pair whose cost exceeds the 8-bit range is passed to a single call. With 16-bit lanes, half as many lanes would sweep the wide band that such a pair requires, which on the Skylake-X took as long as the searches on 1&nbsp;kbp reads at 10% divergence, and twice as long on NEON.</p>
+<p><b>Cache-efficient traceback.</b> Storing the traceback flags of a group's whole band would exceed the caches on long pairs and touch new memory pages for every group; with ten threads, this doubled the time for 1&nbsp;kbp pairs relative to the searches alone. The sweep therefore stores one row of every layer every \(s\) rows and recomputes a segment to obtain its flags during the traceback. With \(R\) rows, \(s\) is the square root of \(R\) times the bytes per cell of a stored row divided by those of a flag, which balances the stored rows against the flags of one segment and minimises memory use.</p>
+<p><b>Lane groups.</b> A group of 64 bytes occupies one register on AVX-512 and several on narrower vector units; with the 128-bit registers of the M2, 1&nbsp;kbp pairs at 10% divergence required 73&nbsp;µs per pair under affine costs with four registers, compared with 132&nbsp;µs with one. Local scores use 32 lanes of 16 bits or 16 lanes of 32 bits, four independent registers' worth of work; on the M2, this scored 20,000 references against a read in 83&nbsp;ms, compared with 160&nbsp;ms with one register. Pairs whose first band does not satisfy the bound are grouped by the exact width of their second band, and a group stops once every lane has exceeded its cost limit.</p>
+<h3 id="sS1.6"><span class="num">S1.6</span>Code generation</h3>
+<p><b>Avoiding division by a variable.</b> A 64-bit division by a variable takes tens of cycles on x86. The potential of the heuristic, required at every row that the band prunes, involves a division by the seed length, so each seed length has its own code path with a constant divisor, which compiles to a multiplication; batches likewise avoid a division per pair.</p>
+<p><b>Kernels compiled separately.</b> When inlined next to each other, or selected per band round, the bit-parallel kernels for plain bases and for additional symbols slowed the plain kernel by 1 to 4%; when inlined into the seed construction, the local-pruning search slowed the construction loop by a few percent. Separate seeded and unseeded versions of the band keep the code of the heuristic out of unseeded pairs, which it had slowed by 3 to 7%.</p>
+<p><b>Operand order.</b> Under a substitution matrix, the recurrence first takes the maximum of the two gap layers, so that the substitution score, the operand that arrives last, waits on only one maximum; a score obtained by comparison is available early and is used first. This was measured on the M2.</p>
+<p><b>Branches.</b> On a 1&nbsp;Mbp pair at 15% divergence, branch mispredictions account for about 7% of the cycles, mostly at short loop exits, compared with 2 to 3% in the bit-parallel sweep. A fully branch-free seed scan would spend about 25 million cycles per pair to save about 34 million, a gain of 1 to 2%, and was not adopted.</p>
+</div>
+<div class="col">
+<h2 id="sS2"><span class="num">S2</span>Measured effect of each change</h2>
+</div>
+<div class="table-wrap" id="tab-changes"><table>
+<caption><b>Table S1.</b> Changes behind the results and their measured effects, as recorded when each was made. Machines: the i9-7900X (Skylake-X, AVX-512) and the Apple M2 (NEON); “not recorded” where the commit does not say.</caption>
+<thead><tr><th class="l">Commit</th><th class="l">Change</th><th class="l">Measured effect</th><th class="l">Machine</th></tr></thead>
+<tbody>
+<tr><td class="l">a6101e5</td><td class="l wrap">Inexact seeds (r = 2), matched by halves</td><td class="l wrap">100&nbsp;kbp 15.6 → 9.5&nbsp;ms; 300&nbsp;kbp 105 → 47&nbsp;ms; 1&nbsp;Mbp 1.36 → 0.41&nbsp;s</td><td class="l">M2</td></tr>
+<tr><td class="l">7435edd</td><td class="l wrap">Leaner seed setup: branch-free test, reachable seeds only, fronts in place</td><td class="l wrap">inexact setup on genvar 5.02 → 2.90&nbsp;s; genvar 11.77 → 10.21&nbsp;s; ont-500k 8.04 → 7.11&nbsp;s</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">28b9e67</td><td class="l wrap">Inexact-seed cut-off by vector width (20% on AVX-512)</td><td class="l wrap">ont-500k (50 reads) 8.73 → 8.03&nbsp;s; genvar (48) 12.03 → 11.73&nbsp;s; 100&nbsp;kbp at 6% 114 → 64&nbsp;ms</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">708f151</td><td class="l wrap">Seeded retry a quarter of the climb past the estimate</td><td class="l wrap">genvar 9.86 → 9.66&nbsp;s; ont-500k 6.81 → 6.30&nbsp;s; 100&nbsp;kbp at 15% 4% faster</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">ff26cea</td><td class="l wrap">Seed gate at 86&nbsp;kbp on AVX-512; exact-seed filter</td><td class="l wrap">30&nbsp;kbp at 5% 1.48&nbsp;ms → 898&nbsp;µs; SARS-CoV-2 373 → 283&nbsp;µs; ont-50k 897 → 800&nbsp;µs</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">ff26cea</td><td class="l wrap">Exact-seed filter alone</td><td class="l wrap">matching on 320 mid-length reads 87 → 32&nbsp;ms; 30&nbsp;kbp at 5% 15% faster</td><td class="l">M2</td></tr>
+<tr><td class="l">45697e0</td><td class="l wrap">AVX-512 gathers in the diagonal transition</td><td class="l wrap">ont-1k 26.8 → 25.0&nbsp;µs; SARS-CoV-2 335 → 306&nbsp;µs; 100&nbsp;kbp at 1% 1.70 → 1.45&nbsp;ms, at 2% 5.60 → 4.54&nbsp;ms</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">2c7c46e</td><td class="l wrap">Short pairs stay in the diagonal transition</td><td class="l wrap">ont-1k 42.3 → 31.8&nbsp;ms over 1,221 reads</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">e0ea104</td><td class="l wrap">Alignment step budget 12 → 5 a column</td><td class="l wrap">10&nbsp;kbp at 5% 241 → 144&nbsp;µs</td><td class="l">not recorded</td></tr>
+<tr><td class="l">a593ade</td><td class="l wrap">Short noisy pairs give up the diagonal search</td><td class="l wrap">1&nbsp;kbp at 15% 19.2 → 11.8&nbsp;µs</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">beb7a8c</td><td class="l wrap">Tiles traced by a forward search</td><td class="l wrap">ont-50k 3% and ont-500k 8% faster</td><td class="l">M2</td></tr>
+<tr><td class="l">5a0e514</td><td class="l wrap">Tile search eight diagonals at a time, gathered</td><td class="l wrap">100&nbsp;kbp at 15% tile searches 3.55 → 1.4&nbsp;ms a pair</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">7f1a813</td><td class="l wrap">Windowed recompute of a failed tile</td><td class="l wrap">600&nbsp;kbp at 13% 1.38&nbsp;s → 617&nbsp;ms</td><td class="l">not recorded</td></tr>
+<tr><td class="l">3becb4b</td><td class="l wrap">Recompute buffers reused, uninitialised</td><td class="l wrap">ont-1k 23.4 → 22.6&nbsp;µs; ont-10k 151 → 142&nbsp;µs</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">e2125b0</td><td class="l wrap">Tile edges sized once, written through pointers</td><td class="l wrap">ont-500k 2 to 3%, ont-10k about 2% faster</td><td class="l">both</td></tr>
+<tr><td class="l">38837f2</td><td class="l wrap">Fronts sixteen offsets a store; unchecked reads</td><td class="l wrap">ont-1k 21.4 → 20.7&nbsp;µs; SARS-CoV-2 213 → 199&nbsp;µs</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">34cb623</td><td class="l wrap">Pointers in hot lookups</td><td class="l wrap">genvar 10.16 → 9.90&nbsp;s; ont-500k 7.04 → 6.82&nbsp;s</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">f29a945</td><td class="l wrap">Separate seeded and unseeded band copies</td><td class="l wrap">unseeded pairs back within 2% (had slowed 3 to 7%)</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">aca56c7</td><td class="l wrap">AVX-512 gathers in the gap-affine step</td><td class="l wrap">ont-1k 149 → 129&nbsp;µs; ont-10k 3.52 → 2.94&nbsp;ms; 10&nbsp;kbp at 15% 36.4 → 24.5&nbsp;ms</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">53e15d4</td><td class="l wrap">Gather mask from the group's own lanes; one reduction after the loop</td><td class="l wrap">ont-1k 129 → 111&nbsp;µs; ont-10k 2.34 → 1.84&nbsp;ms; 10&nbsp;kbp at 15% 17.9 → 14.0&nbsp;ms</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">ced0b8d</td><td class="l wrap">Ring rows padded against 4&nbsp;KB aliasing</td><td class="l wrap">ont-10k 1.86 → 1.68&nbsp;ms; 100&nbsp;kbp at 5% 349 → 305&nbsp;ms</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">17fd781</td><td class="l wrap">Slides straight from the step</td><td class="l wrap">100&nbsp;kbp at 5% 315 → 287&nbsp;ms; ont-10k 1.80 → 1.67&nbsp;ms</td><td class="l">M2</td></tr>
+<tr><td class="l">01c1e9b</td><td class="l wrap">Slide columns through scalar loads and stores</td><td class="l wrap">100&nbsp;kbp at 5% 287 → 271&nbsp;ms; ont-1k 91 → 86&nbsp;µs</td><td class="l">M2</td></tr>
+<tr><td class="l">72c3696</td><td class="l wrap">Kept fronts in fixed blocks, never moved</td><td class="l wrap">ont-10k 1.48 → 1.37&nbsp;ms (memmove had been 7.5% of samples)</td><td class="l">M2</td></tr>
+<tr><td class="l">b7e5232</td><td class="l wrap">Gap-affine traceback through the wavefront's own fronts</td><td class="l wrap">SARS-CoV-2 1.34&nbsp;ms → 638&nbsp;µs; ont-10k 14.6 → 4.05&nbsp;ms</td><td class="l">M2</td></tr>
+<tr><td class="l">e6a435f</td><td class="l wrap">End bonus weighed in the extension's own search</td><td class="l wrap">with an end bonus 1.02&nbsp;ms → 186&nbsp;µs (KSW2 1.23&nbsp;ms)</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">8ba2a6a</td><td class="l wrap">Free ends: span first, start at cost zero on free diagonals</td><td class="l wrap">start, overlap, suffix 1.4 to 3.5× faster; anywhere 0 to 14% slower</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">f0bb161</td><td class="l wrap">Unit-cost infix: Ukkonen cutoff, restarted words</td><td class="l wrap">10&nbsp;kbp in 100&nbsp;kbp 21 → 13&nbsp;ms; 100&nbsp;kbp in 1&nbsp;Mbp 2 → 0.75&nbsp;s</td><td class="l">M2</td></tr>
+<tr><td class="l">2f8b935</td><td class="l wrap">Prefix search abandons a try that cannot succeed</td><td class="l wrap">distance 23.7 → 20.5&nbsp;µs; alignment 45.8 → 42.9&nbsp;µs</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">2b038c8</td><td class="l wrap">Global band bounded by the score (one match, one mismatch score)</td><td class="l wrap">1&nbsp;kbp at 5%: 137 of 1,000 diagonals; 0.36 → 0.21&nbsp;ms</td><td class="l">not recorded</td></tr>
+<tr><td class="l">756f3e1</td><td class="l wrap">Table sweeps vectorised, any table</td><td class="l wrap">1&nbsp;kbp global 13.3&nbsp;ms → 550&nbsp;µs; local 133 → 2.89&nbsp;ms</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">433a8b5</td><td class="l wrap">Local under gap costs: lanes along the shorter sequence, extension back</td><td class="l wrap">47 vs 55&nbsp;µs short pairs; 1.93 vs 3.22&nbsp;ms 1&nbsp;kbp in 10&nbsp;kbp (SSW)</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">cf87b2b</td><td class="l wrap">Local sweep in 16-bit lanes</td><td class="l wrap">3.4&nbsp;ms, from 4.6</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">a8355aa</td><td class="l wrap">Batch letters transposed in registers</td><td class="l wrap">affine 0.59 → 0.43&nbsp;µs a pair; unit 0.55 → 0.40&nbsp;µs</td><td class="l">not recorded</td></tr>
+<tr><td class="l">20425a7</td><td class="l wrap">Batch first pass in saturating bytes</td><td class="l wrap">affine 0.43 → 0.40&nbsp;µs a pair</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">64f0cc3</td><td class="l wrap">Second-pass bands grouped by exact width</td><td class="l wrap">1&nbsp;kbp at 10% scores 18 → 15&nbsp;µs; 46 → 38&nbsp;µs at (4, 6, 2)</td><td class="l">not recorded</td></tr>
+<tr><td class="l">0f7b5af</td><td class="l wrap">A lane group stops once every lane has passed its cap</td><td class="l wrap">1&nbsp;kbp at 10% aligns 33 → 22&nbsp;µs, scores 18 → 12&nbsp;µs</td><td class="l">Skylake-X</td></tr>
+<tr><td class="l">792ba9f</td><td class="l wrap">Pairs with N take seeds; a seed with N goes uncounted</td><td class="l wrap">500&nbsp;kbp reads 2.5 to 3× faster (M2), 1.4 to 1.7× (Skylake-X)</td><td class="l">both</td></tr>
+</tbody></table></div>
+<div class="col">
+<h2 id="sS3"><span class="num">S3</span>Additional results</h2>
+<p>Table S2 gives the results for the other alignment modes, each compared on one pinned thread of the Skylake-X with the aligners that support the same mode. Table S3 gives the complete gap-affine comparison at costs (4, 6, 2). At 5% divergence, dinara-align aligned uniform pairs of 3&nbsp;kbp to 1&nbsp;Mbp in 42&nbsp;µs, 284&nbsp;µs, 941&nbsp;µs, 4.85&nbsp;ms, 19.4&nbsp;ms and 63.3&nbsp;ms, compared with 174&nbsp;µs, 788&nbsp;µs, 2.45&nbsp;ms, 8.22&nbsp;ms, 27.6&nbsp;ms and 125&nbsp;ms for A*PA2-full.</p>
+</div>
+<div class="table-wrap" id="tab-modes"><table>
+<caption><b>Table S2.</b> Other modes: mean time per pair on one thread. Every tool's scores agree on every pair.</caption>
+<thead><tr><th class="l">Workload</th><th>dinara-align</th><th class="l">Next fastest</th></tr></thead>
+<tbody>
+<tr><td class="l wrap">Local, 600 short noisy pairs (20–700&nbsp;bp)</td><td class="best"><b>32&nbsp;µs</b></td><td class="l">SSW 52&nbsp;µs</td></tr>
+<tr><td class="l wrap">Local, 1&nbsp;kbp read at 10% in a 10&nbsp;kbp window</td><td class="best"><b>1.40&nbsp;ms</b></td><td class="l">SSW 3.19&nbsp;ms</td></tr>
+<tr><td class="l wrap">Local, 10&nbsp;kbp at 5% against 12&nbsp;kbp</td><td class="best"><b>50.5&nbsp;ms</b></td><td class="l">SSW 85.0&nbsp;ms</td></tr>
+<tr><td class="l wrap">Overlap of 2&nbsp;kbp reads by 0.5–1.5&nbsp;kbp</td><td class="best"><b>2.15&nbsp;ms</b></td><td class="l">parasail 15.3&nbsp;ms</td></tr>
+<tr><td class="l wrap">Infix with a reward, 1&nbsp;kbp read in a 3&nbsp;kbp window</td><td class="best"><b>1.40&nbsp;ms</b></td><td class="l">parasail 14.8&nbsp;ms</td></tr>
+<tr><td class="l wrap">Infix at unit costs, 1&nbsp;kbp read in a 3&nbsp;kbp window</td><td class="best"><b>135&nbsp;µs</b></td><td class="l">Edlib 270&nbsp;µs</td></tr>
+<tr><td class="l wrap">Infix at unit costs, 10&nbsp;kbp read in a 30&nbsp;kbp window</td><td class="best"><b>3.14&nbsp;ms</b></td><td class="l">Edlib 13.4&nbsp;ms</td></tr>
+<tr><td class="l wrap">Prefix at unit costs, 1&nbsp;kbp read against 2&nbsp;kbp</td><td class="best"><b>43&nbsp;µs</b></td><td class="l">WFA2-lib 47&nbsp;µs</td></tr>
+<tr><td class="l wrap">Infix at (4, 6, 2), 1&nbsp;kbp read in a 3&nbsp;kbp window</td><td class="best"><b>3.00&nbsp;ms</b></td><td class="l">WFA2-lib 4.10&nbsp;ms</td></tr>
+<tr><td class="l wrap">Extension, match 2 at (4, 6, 2)</td><td class="best"><b>726&nbsp;µs</b></td><td class="l">KSW2 2.07&nbsp;ms</td></tr>
+<tr><td class="l wrap">Extension with an end bonus of 50</td><td class="best"><b>158&nbsp;µs</b></td><td class="l">KSW2 1.23&nbsp;ms</td></tr>
+<tr><td class="l wrap">Two-piece gaps (4, 6, 2, 24, 1), 5&nbsp;kbp</td><td class="best"><b>8.44&nbsp;ms</b></td><td class="l">WFA2-lib 15.9&nbsp;ms</td></tr>
+<tr><td class="l wrap">Table, global, 1&nbsp;kbp at 10%</td><td class="best"><b>542&nbsp;µs</b></td><td class="l">parasail 2.94&nbsp;ms</td></tr>
+<tr><td class="l wrap">Table, local, 1&nbsp;kbp read in a 10&nbsp;kbp window</td><td class="best"><b>2.45&nbsp;ms</b></td><td class="l">SSW 3.27&nbsp;ms</td></tr>
+</tbody></table></div>
+<div class="table-wrap" id="tab-affine_full"><table>
+<caption><b>Table S3.</b> Gap-affine alignment at costs (4, 6, 2), all datasets: mean time per alignment with a 5&nbsp;s budget per sample. Superscripts give the pairs finished where not all were; no tool finished any pair of the ultra-long reads or of 1&nbsp;Mbp pairs, nor of 300&nbsp;kbp at 15%.</caption>
+<thead><tr><th class="l">Dataset</th><th>dinara-align</th><th>WFA</th><th>BiWFA</th><th>KSW2</th></tr></thead>
+<tbody>
+<tr><td class="l">ont-1k</td><td class="best"><b>112&nbsp;µs</b></td><td>186&nbsp;µs</td><td>304&nbsp;µs</td><td>1.1&nbsp;ms</td></tr>
+<tr><td class="l">ont-10k</td><td class="best"><b>1.68&nbsp;ms</b></td><td>4.8&nbsp;ms</td><td>5.84&nbsp;ms</td><td>30.8&nbsp;ms<sup>163/277</sup></td></tr>
+<tr><td class="l">ont-50k</td><td class="best"><b>21.2&nbsp;ms</b></td><td>68.4&nbsp;ms<sup>82/104</sup></td><td>57.3&nbsp;ms<sup>90/104</sup></td><td>367&nbsp;ms<sup>16/104</sup></td></tr>
+<tr><td class="l">SARS-CoV-2</td><td class="best"><b>755&nbsp;µs</b></td><td>2.06&nbsp;ms</td><td>1.79&nbsp;ms</td><td>88.4&nbsp;ms</td></tr>
+<tr><td class="l">3&nbsp;kbp, 5%</td><td class="best"><b>283&nbsp;µs</b></td><td>579&nbsp;µs</td><td>913&nbsp;µs</td><td>6.12&nbsp;ms</td></tr>
+<tr><td class="l">10&nbsp;kbp, 5%</td><td class="best"><b>2.17&nbsp;ms</b></td><td>6.36&nbsp;ms</td><td>8.02&nbsp;ms</td><td>97.1&nbsp;ms<sup>52/99</sup></td></tr>
+<tr><td class="l">30&nbsp;kbp, 5%</td><td class="best"><b>18.1&nbsp;ms</b></td><td>56&nbsp;ms</td><td>62.7&nbsp;ms</td><td>1.35&nbsp;s<sup>4/33</sup></td></tr>
+<tr><td class="l">100&nbsp;kbp, 5%</td><td class="best"><b>304&nbsp;ms</b></td><td>754&nbsp;ms<sup>7/10</sup></td><td>643&nbsp;ms<sup>8/10</sup></td><td>–</td></tr>
+<tr><td class="l">300&nbsp;kbp, 5%</td><td class="best"><b>3.07&nbsp;s<sup>1/4</sup></b></td><td>–</td><td>–</td><td>–</td></tr>
+<tr><td class="l">3&nbsp;kbp, 15%</td><td class="best"><b>1.26&nbsp;ms</b></td><td>3.6&nbsp;ms</td><td>5.08&nbsp;ms</td><td>18.7&nbsp;ms<sup>268/333</sup></td></tr>
+<tr><td class="l">10&nbsp;kbp, 15%</td><td class="best"><b>12.2&nbsp;ms</b></td><td>38.5&nbsp;ms</td><td>44.8&nbsp;ms</td><td>203&nbsp;ms<sup>25/99</sup></td></tr>
+<tr><td class="l">30&nbsp;kbp, 15%</td><td class="best"><b>151&nbsp;ms</b></td><td>385&nbsp;ms<sup>13/33</sup></td><td>372&nbsp;ms<sup>14/33</sup></td><td>2.48&nbsp;s<sup>2/33</sup></td></tr>
+<tr><td class="l">100&nbsp;kbp, 15%</td><td class="best"><b>2.02&nbsp;s<sup>2/9</sup></b></td><td>–</td><td>4.19&nbsp;s<sup>1/9</sup></td><td>–</td></tr>
+</tbody></table></div>
+<div class="col">
+<p>Table S4 gives the mean and median time per alignment on the real datasets of the A*PA2 benchmark, including the two approximate aligners of that benchmark, WFA-adaptive and Block Aligner, run with its parameters. For each approximate aligner, the percentage of optimal alignments is given beside its time, computed against an exact alignment at the same costs.</p>
+</div>
+<div class="table-wrap" id="tab-real_full"><table>
+<caption><b>Table S4.</b> Real datasets of the A*PA2 benchmark: mean time per alignment, with the median in parentheses. Superscripts give the number of pairs completed within 20&nbsp;s where not all were; a dash marks a tool that completed none. For the approximate aligners (*), the percentage of optimal alignments is given.</caption>
+<thead><tr><th class="l">Dataset</th><th>dinara-align</th><th>A*PA2-full</th><th>A*PA2-simple</th><th>A*PA</th><th>Edlib</th><th>BiWFA</th><th>WFA</th><th>WFA-adaptive*</th><th>Block Aligner*</th></tr></thead>
+<tbody>
+<tr><td class="l">ont-1k</td><td class="best"><b>23&nbsp;µs (23&nbsp;µs)</b></td><td>81&nbsp;µs (89&nbsp;µs)</td><td>48&nbsp;µs (54&nbsp;µs)</td><td>612&nbsp;µs (556&nbsp;µs)</td><td>126&nbsp;µs (120&nbsp;µs)</td><td>44&nbsp;µs (46&nbsp;µs)</td><td>31&nbsp;µs (32&nbsp;µs)</td><td>41&nbsp;µs (42&nbsp;µs), 93%</td><td>41&nbsp;µs (47&nbsp;µs), 85%</td></tr>
+<tr><td class="l">ont-10k</td><td class="best"><b>163&nbsp;µs (111&nbsp;µs)</b></td><td>391&nbsp;µs (264&nbsp;µs)</td><td>247&nbsp;µs (177&nbsp;µs)</td><td>15.3&nbsp;ms (3.29&nbsp;ms)</td><td>1.1&nbsp;ms (579&nbsp;µs)</td><td>753&nbsp;µs (284&nbsp;µs)</td><td>595&nbsp;µs (223&nbsp;µs)</td><td>385&nbsp;µs (172&nbsp;µs), 61%</td><td>198&nbsp;µs (141&nbsp;µs), 61%</td></tr>
+<tr><td class="l">ont-50k</td><td class="best"><b>587&nbsp;µs (242&nbsp;µs)</b></td><td>1.27&nbsp;ms (513&nbsp;µs)</td><td>944&nbsp;µs (307&nbsp;µs)</td><td>190&nbsp;ms (10.5&nbsp;ms)<sup>81/104</sup></td><td>6.1&nbsp;ms (2.02&nbsp;ms)</td><td>7.43&nbsp;ms (875&nbsp;µs)</td><td>6.37&nbsp;ms (722&nbsp;µs)</td><td>2.32&nbsp;ms (459&nbsp;µs), 52%</td><td>657&nbsp;µs (319&nbsp;µs), 61%</td></tr>
+<tr><td class="l">ont-500k</td><td class="best"><b>104&nbsp;ms (83.8&nbsp;ms)</b></td><td>176&nbsp;ms (113&nbsp;ms)</td><td>537&nbsp;ms (371&nbsp;ms)</td><td>–</td><td>4.99&nbsp;s (3.04&nbsp;s)<sup>4/15</sup></td><td>19.8&nbsp;s (19.8&nbsp;s)<sup>1/15</sup></td><td>–</td><td>989&nbsp;ms (629&nbsp;ms), 53%</td><td>728&nbsp;ms (714&nbsp;ms)</td></tr>
+<tr><td class="l">ont-500k-genvar</td><td class="best"><b>144&nbsp;ms (114&nbsp;ms)</b></td><td>210&nbsp;ms (177&nbsp;ms)</td><td>624&nbsp;ms (506&nbsp;ms)</td><td>–</td><td>5.23&nbsp;s (5.2&nbsp;s)<sup>4/15</sup></td><td>6.36&nbsp;s (7.57&nbsp;s)<sup>3/15</sup></td><td>–</td><td>533&nbsp;ms (273&nbsp;ms), 7%</td><td>836&nbsp;ms (647&nbsp;ms), 0% of 1</td></tr>
+<tr><td class="l">SARS-CoV-2</td><td class="best"><b>279&nbsp;µs (188&nbsp;µs)</b></td><td>2.00&nbsp;ms (2.07&nbsp;ms)</td><td>728&nbsp;µs (662&nbsp;µs)</td><td>6.49&nbsp;ms (2.07&nbsp;ms)</td><td>8.15&nbsp;ms (7.72&nbsp;ms)</td><td>895&nbsp;µs (446&nbsp;µs)</td><td>983&nbsp;µs (359&nbsp;µs)</td><td>611&nbsp;µs (353&nbsp;µs), 97%</td><td>2.51&nbsp;ms (2.3&nbsp;ms), 30%</td></tr>
+</tbody></table></div>
+<div class="col">
+<h2 id="sS4"><span class="num">S4</span>Robustness</h2>
+<p>Three changes address inputs on which the running time had been disproportionate:</p>
+<ul><li><b>Low-complexity sequence.</b> Wavefront layers that spread into a staircase pattern are handled explicitly, and the pruning search is bounded; a poly-A sequence of 32,000 bases aligned against one of 16,000 bases took 0.15&nbsp;s instead of 17&nbsp;s.</li><li><b>Repetitive seeds.</b> Seeds are abandoned when they exceed 64 matches per seed on average; setting up a 200&nbsp;kbp tandem repeat took 0.045&nbsp;s and 34&nbsp;MB instead of 73&nbsp;s and 760&nbsp;MB.</li><li><b>Unreachable wavefronts.</b> A wavefront that reaches no cell is not tested further; one such case took 13&nbsp;ms instead of 1.5&nbsp;s.</li></ul>
+</div>
+<div class="col">
+<h2 id="sS5"><span class="num">S5</span>Approaches evaluated and not adopted</h2>
+<ul><li><b>Multi-threading within a pair.</b> Striped bands over eight threads aligned 1&nbsp;Mbp pairs at 15% divergence in 575&nbsp;ms, compared with 1,122&nbsp;ms on one thread. The implementation was removed because the library runs on the calling thread and distributing pairs over threads yields a larger gain.</li><li><b>A third bit-parallel group on AVX-512.</b> The measured time changed by less than 1.5%.</li><li><b>One sixteen-lane group instead of two eight-lane groups.</b> Equal on long reads, and up to 2% slower on short divergent pairs.</li><li><b>A fully branch-free seed scan.</b> It would save 1 to 2% at a cost of about 25 million cycles per pair.</li><li><b>A Bloom filter for inexact keys.</b> It halved the number of candidates, but reduced the alignment time by only 1.5 to 2%.</li><li><b>Shorter look-ahead, or no local pruning.</b> Without pruning, the ultra-long reads with and without genetic variation were 21% and 72% slower, respectively.</li><li><b>A* search within the diagonal transition, and an upper bound from beam search.</b> Each required several tuned parameters for small gains.</li><li><b>Traceback during the sweep.</b> The stored tile boundaries occupy 0.6 to 13&nbsp;MB, compared with 10 to 17&nbsp;MB for the sequences and bit planes, so little memory could be saved.</li></ul>
+</div>
+</main>
+<script>
+window.MathJax = { tex: { inlineMath: [["\\(", "\\)"]], displayMath: [["\\[", "\\]"]] }, svg: { fontCache: "global" } };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/tex-svg.js"></script>
