@@ -193,12 +193,17 @@ Ideas from the work the paper cites, each checked (2026-10-10, M2 unless noted).
   times Edlib's speed on ont-10k and 22 times on 100 kbp pairs at 15%. A striped layout also needs a
   correction pass for the bits crossing between segments, each column, the chain it means to shorten.
   A*PA2 weighed it and left it too. Not built.
-- [ ] **Incremental doubling** (A*PA2, Section 3.8): a round after the first skips the rows the last
+- [-] **Incremental doubling** (A*PA2, Section 3.8): a round after the first skips the rows the last
   round fixed, from horizontal differences stored along a fixed row in each tile. A*PA2 reports it only
-  with three other methods, together 3 times faster. Its ceiling here is the work later rounds redo:
-  of the band's word-columns 16% on genvar and 7% on ont-500k go to rounds that fail (see "Band rounds
-  that fail" at the top), the band being about 65% of the time, so at most about 10% and 4.5% of a pair, less on
-  the rest. It touches the checkpoints, the retries, the seeds and the traceback's tile edges.
+  with three other methods, together 3 times faster. Measured what it could skip (2026-10-10, M2): the
+  word-columns a retried round sweeps inside the last round's kept rows at both edges of a tile are 8.8%
+  of the band's on genvar (58 of 126 rounds reuse any), 11.0% on ont-500k, 0.6% on 100 kbp pairs at 15%
+  and none at 10%: with the band about 65% of a long pair's time, at most 6 to 7% there before the cost
+  of storing every tile's edge and a row inside it, nothing elsewhere. Left, for robustness first: the
+  skipped block's bottom row must be exact at every column of the tile, not only at the edges where
+  pruning reads the scores, and A*PA2 asserts it without a proof that carries over to these tiles; were
+  it wrong, a round could accept a distance too high. It would also change every bit-parallel kernel's
+  top word, which reads `+1` from above. Worth taking up only with that proof in hand.
 
 ## From A*PA2's discussion
 
