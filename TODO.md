@@ -57,10 +57,12 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
   diagonals, eight at a time, its recompute reusing its buffers (`6108666`, `5a0e514`, `38837f2`,
   `d2492b3`, `5e76145`): on the M2 (2026-10-09) `forward_segment` is 65 of 3,900 samples aligning
   genvar and 122 of 5,600 on ont-500k, about 2%, the recompute too rare to show.
-- [ ] **The inexact seeds' neighbour windows (12% on the long reads).** An exact match's windows a base
+- [ ] **The inexact seeds' neighbour windows (12 to 21% on the long reads).** An exact match's windows a base
   shorter and longer were left out of the inexact seeds, and without them the heuristic overestimated,
   by an edit a seed on crafted pairs, though no distance came out wrong; keeping them (2026-10-09) made
-  genvar and ont-500k 12% slower on the M2, and 100 kbp pairs at 15% 8%, every cost the same. A
+  genvar and ont-500k 12% slower on the M2, and 100 kbp pairs at 15% 8%, every cost the same; on
+  the i9-7900X (2026-10-09) ont-500k 12% and genvar 21% (100 and 136 ms to 112 and 165), and the
+  100 kbp pairs at 9 to 15% 10 to 20%, A\*PA2-full now ahead at 10 and 12%. A
   neighbour only matters where it chains on and the exact match cannot, a diagonal off, so most could
   be dropped again by a test that keeps the bound exact.
 - [x] **The M2's two lost rows.** 100 kbp pairs at 6 and 7% divergence lost to A*PA2-full there, the
