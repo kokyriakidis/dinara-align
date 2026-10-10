@@ -14,6 +14,7 @@ from std.bit import count_trailing_zeros
 from std.math import sqrt
 from std.sys import simd_width_of
 
+from .ablation import ABLATE_AGREEMENT
 from .common import UNREACHED
 from .cigar import reversed_into
 from .slides import GATHERED_SLIDES, gathered_slides, slide
@@ -823,6 +824,8 @@ def trusted_projection(search: Probe, projected: Probe) -> Bool:
     errors at their ends, a primer or a tail, and there the two disagree several times over; neither
     is then worth aiming at.
     """
+    comptime if ABLATE_AGREEMENT:
+        return True
     if search.floor < 2 * PROBE_START or search.estimate <= search.floor:
         return True
     var first = projected.estimate

@@ -53,6 +53,7 @@ from std.utils import IndexList
 from std.sys import llvm_intrinsic, simd_width_of, size_of
 from std.atomic import Atomic
 
+from .ablation import ABLATE_CERTIFIED
 from .cigar import reverse_bytes, reversed_text
 from .substitutions import SHUFFLED_ENTRIES, looked_up
 from .common import next_share, spread
@@ -1203,6 +1204,11 @@ def lane_stage[
                     var ends = LaneEnds.of(mode, rows, columns)
                     low = min(low, min(ends.start_low(), ends.end_low(end)) - 1)
                     high = max(high, max(ends.start_high(), ends.end_high(end)) + 1)
+                comptime if ABLATE_CERTIFIED:
+                    # The ablation: every lane's whole matrix, which proves itself.
+                    for lane in range(len(space.members)):
+                        low = min(low, -references.length(space.members[lane]))
+                        high = max(high, queries.length(space.members[lane]))
                 low = max(low, band.low)
                 high = min(high, band.high)
                 # A band holding none of the group's diagonals leaves its pairs to their own searches.

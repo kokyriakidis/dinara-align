@@ -45,6 +45,8 @@ bench-local = "python3 benchmarks/local_bench.py"
 bench-modes = "python3 benchmarks/mode_bench.py"
 # Times batches of short-read global scores on every thread against WFA2-lib, KSW2, parasail and Edlib; see `benchmarks/batch_bench.py`.
 bench-batch = "python3 benchmarks/batch_bench.py"
+# Builds dinara-align with each technique switched off in turn and times every build alike; see `benchmarks/ablation.py`.
+bench-ablation = "python3 benchmarks/ablation.py"
 # Builds a program on dinara-align into a folder that runs without pixi or Mojo, for a baseline CPU:
 # `pixi run bundle <program.mojo> [out-dir] [target-cpu]`; see `scripts/bundle.sh`.
 bundle = "bash scripts/bundle.sh"

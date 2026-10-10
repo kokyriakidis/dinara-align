@@ -153,22 +153,19 @@ answers held to the copies it replaces by the tests, and a hot path benchmarked 
 
 ## Paper
 
-- [ ] **A controlled ablation.** The paper explains each technique and proves the two that need it
-  (the neighbour lemma, the band certificate), but shows no technique's own effect: Table S1's
-  figures were each measured against the commit before, at different times and sometimes on other
-  machines, and the history figure was dropped as confounded. A*PA2 ablates at one version, and a
-  reviewer will ask for the same. At one commit, a build switch to turn each technique off alone:
-  - the regrouped recurrence back to A*PA2's form (`bit_parallel.advance`);
-  - one eight-lane group instead of two on AVX-512;
-  - gathered extension off, the scalar slide in its place (the path AVX2 already takes);
-  - the agreement rule off, so every extrapolation aims the band;
-  - neighbours found by search and pruned, as before `ebe290f`, for the ablation build only;
-  - the batch's first band as wide as the matrix, so no pair needs the certificate.
-  For each, a measure of the mechanism beside the end-to-end time on the datasets it matters on:
-  cycles a word-column, gathers a step, seed lookups and candidates, rounds a pair, the share of
-  pairs certified and cells swept. Three or more runs a configuration, for a spread. On xaros only
-  while the owner's jobs are idle, pinned with `taskset` and under timeouts. Results become a table
-  in the paper's Results ("Effect of each technique") and replace the per-commit framing.
+- [x] **A controlled ablation.** Build switches turn each technique off alone (`dinara_align/ablation.mojo`,
+  `-D ABLATE_...=1`): the regrouped recurrence, the second AVX-512 group, gathered slides, the agreement
+  rule, neighbours put in from their exact match, and the batch's certified band. Every switched build
+  passes the test suite and returns the same costs on every dataset. `pixi run bench-ablation` builds all
+  seven and times them alternately, pinned. On the Skylake-X (2026-10-10, three rounds, the baseline
+  within 1.4% between rounds) switching off the neighbours cost the long reads 11 and 19% and 100 kbp
+  pairs at 10 to 15% 13%; the gathers 16 to 25% on the 1 kbp reads, SARS-CoV-2 and pairs at 1%; the
+  agreement rule 17% on ont-10k and 5% on SARS-CoV-2, nothing on the long reads, where the seeds set the
+  first bound; the certified band 2.9 and 3.1 times on the short-read batch; the regrouped recurrence and
+  the paired groups 4 and 6% on the long reads. A second, independent set of builds (the runner's own,
+  one round) reproduced every effect over 15% but gave 1 and 3% for the recurrence and the pairing on the
+  long reads and 6 to 8% for the neighbours on 100 kbp pairs: under about 6%, an effect is within the
+  builds' code-alignment swings. In the paper's Results ("Effect of each technique").
 
 ## From the paper's literature check
 

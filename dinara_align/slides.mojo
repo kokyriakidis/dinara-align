@@ -15,6 +15,8 @@ from std.bit import count_trailing_zeros
 from std.sys import llvm_intrinsic
 from std.sys.info import CompilationTarget
 
+from .ablation import ABLATE_GATHER
+
 comptime LANES = 8
 """Diagonals a gathered slide takes at once: one AVX-512 vector of eight 64-bit words."""
 
@@ -37,7 +39,7 @@ def slide(first: ImmPointer[UInt8, _], second: ImmPointer[UInt8, _], start: Int,
     return column + (Int(count_trailing_zeros(mismatches)) >> 3)
 
 
-comptime GATHERED_SLIDES = CompilationTarget.has_avx512f()
+comptime GATHERED_SLIDES = CompilationTarget.has_avx512f() and not ABLATE_GATHER
 """Whether a lane group's slides start with one gather of each sequence's next eight letters per lane,
 AVX-512's `vpgatherqq` at byte offsets, rather than a scalar compare per lane."""
 

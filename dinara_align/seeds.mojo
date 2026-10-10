@@ -13,6 +13,7 @@ from std.math import ceildiv
 from std.sys import simd_width_of
 from std.sys.intrinsics import likely, prefetch, PrefetchOptions
 
+from .ablation import ABLATE_NEIGHBOURS
 from .bit_parallel import folded, PAIRED_GROUPS, Profile
 from .diagonal import extend
 
@@ -219,7 +220,10 @@ def within_one_edit(
     var substituted = (whole & (whole - 1)) == 0
     var deleted = covers(differing(shorter, code >> 2), differing(shorter, code & SHORTER))
     var inserted = covers(differing(head, code), differing(tail, code))
-    return (substituted & level_open) | (((deleted & shorter_open) | (inserted & longer_open)) & (whole != 0))
+    # Under the ablation the scan finds an exact match's neighbours itself, as before `ebe290f`.
+    return (substituted & level_open) | (
+        ((deleted & shorter_open) | (inserted & longer_open)) & ((whole != 0) | ABLATE_NEIGHBOURS)
+    )
 
 
 @always_inline
@@ -435,7 +439,7 @@ struct SeedHeuristic(Movable):
                 var score = self.cost - match_cost
                 var layer = self.chained_layer(end_x, end_y, score)
                 self.insert(layer, min(score, layer), x, y)
-                if inexact and match_cost == 0:
+                if inexact and match_cost == 0 and not ABLATE_NEIGHBOURS:
                     self.add_neighbours(column, start_row, potential, end_potential, layer, leftmost)
 
     @always_inline
@@ -809,7 +813,7 @@ struct SeedHeuristic(Movable):
         for step in range(3):
             # As long as the seed first, so an exact match is known before its neighbours.
             var extra = 0 if step == 0 else (-1 if step == 1 else 1)
-            if exact and extra != 0:
+            if exact and extra != 0 and not ABLATE_NEIGHBOURS:
                 return
             var size = K + extra
             var low = start if start >= 0 else end - size

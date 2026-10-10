@@ -27,6 +27,7 @@ from std.math import ceildiv
 from std.sys import inlined_assembly, simd_width_of
 from std.sys.info import CompilationTarget
 
+from .ablation import ABLATE_PAIRED, ABLATE_REGROUP
 from .common import FIRST_SENTINEL, SECOND_SENTINEL
 from .cigar import reverse_bytes
 from .errors import AlignmentError, ErrorKind
@@ -52,6 +53,11 @@ Whether a sweep runs its groups two at a time, one under the other in one loop (
 On AVX-512 the pair took 5 to 7% off the long reads and left the rest within noise; sixteen lanes in one
 vector did about as well but cost up to 2% on short divergent pairs. On an M2 both were slower.
 """
+
+
+comptime PAIRED_SWEEP = PAIRED_GROUPS and not ABLATE_PAIRED
+"""Whether the sweep itself runs its groups two at a time: `PAIRED_GROUPS`, unless the ablation turns the
+pairing off while every threshold tuned on it stays (see `ablation`)."""
 
 
 comptime NARROW_LANES = 4
@@ -167,6 +173,22 @@ def advance[
     takes, so the step is regrouped to shorten that wait, and `opaque` keeps the compiler from
     folding the regrouping back: a single word went from fourteen cycles a column to eight.
     """
+    comptime if ABLATE_REGROUP:
+        # A*PA2's step as its paper gives it (Groot Koerkamp 2024, Figure 10a), for the ablation.
+        var vx = matches | vertical_minus
+        var eq = matches | horizontal_minus
+        var hx = (((eq & vertical_plus) + vertical_plus) ^ vertical_plus) | eq
+        var hp = vertical_minus | ~(hx | vertical_plus)
+        var hm = vertical_plus & hx
+        var hp_out = hp >> (WORD_BITS - 1)
+        var hm_out = hm >> (WORD_BITS - 1)
+        hp = (hp << 1) | horizontal_plus
+        hm = (hm << 1) | horizontal_minus
+        horizontal_plus = hp_out
+        horizontal_minus = hm_out
+        vertical_plus = hm | ~(vx | hp)
+        vertical_minus = hp & vx
+        return
     var crossing = matches | vertical_minus
     # Myers assumes the incoming horizontal difference is never -1; A*PA folds it into the matches.
     var equal = matches | horizontal_minus
@@ -323,7 +345,7 @@ struct Sweep(ImplicitlyCopyable, TrivialRegisterPassable):
         """
         var word = first_word
         if end_column - first_column >= 2 * LANES:
-            comptime if PAIRED_GROUPS:
+            comptime if PAIRED_SWEEP:
                 while word + 2 * LANES <= end_word:
                     self.pair_block[symbols](word, first_column, end_column)
                     word += 2 * LANES
