@@ -69,6 +69,8 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
   dropped the neighbour that stood in for it. Such a match now chains to the end for its one edit of
   excess (`chained_layer`), and 2,200 random pairs, both seed kinds, read under the cost at every cell.
   No distance had come out wrong: an overestimate of one costs the band a round, not the answer.
+  On the i9-7900X (`ebe290f`) ont-500k and genvar align in 104 and 144 ms where they took 112 and 165,
+  and 100 kbp pairs at 9 to 15% 8 to 10% faster, A\*PA2-full now ahead at 10% alone (10.5 against 11 ms).
 - [x] **The M2's two lost rows.** 100 kbp pairs at 6 and 7% divergence lost to A*PA2-full there, the
   M2's 40% cutoff rebuilding inexact seeds that did not pay on spread errors. A pair whose two
   projections agree, as spread errors' do, now rebuilds only below 20%: 3.75 and 3.92 ms against

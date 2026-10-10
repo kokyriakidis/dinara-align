@@ -14,9 +14,9 @@ and Python, and as a command-line aligner.
 
 ## Highlights
 
-- **Fast.** In our benchmarks it is the fastest exact aligner on every workload measured but two,
+- **Fast.** In our benchmarks it is the fastest exact aligner on every workload measured but one,
   against A\*PA2, A\*PA, Edlib, WFA2-lib (WFA and BiWFA), KSW2, parasail, SSW, abPOA and hyalite;
-  A\*PA2-full is faster on 100 kbp pairs at 10% and 12% divergence ([results](benchmarks/README.md)).
+  A\*PA2-full is faster on 100 kbp pairs at 10% divergence ([results](benchmarks/README.md)).
 - **Exact.** Bands, cost caps and memory limits restrict *which* alignments count, never whether the
   best of them is found. The test suite and a fuzzer hold the results to a full dynamic-programming
   matrix, and to WFA2-lib's own regression set, scores and CIGARs alike.
@@ -53,9 +53,9 @@ and how to reproduce them.
 | :-- | --: | :-- |
 | ONT reads, mean 0.8 kbp (ont-1k), edit distance | **23 µs** | WFA2-lib, 31 µs |
 | ONT reads, mean 3.6 kbp (ont-10k), edit distance | **163 µs** | A\*PA2-simple, 247 µs |
-| ONT reads, mean 9.5 kbp (ont-50k), edit distance | **586 µs** | A\*PA2-simple, 944 µs |
-| SARS-CoV-2 genomes, 30 kbp, edit distance | **280 µs** | A\*PA2-simple, 728 µs |
-| 100 kbp pairs at 1% divergence, edit distance | **1.26 ms** | WFA2-lib (BiWFA), 3.3 ms |
+| ONT reads, mean 9.5 kbp (ont-50k), edit distance | **587 µs** | A\*PA2-simple, 944 µs |
+| SARS-CoV-2 genomes, 30 kbp, edit distance | **279 µs** | A\*PA2-simple, 728 µs |
+| 100 kbp pairs at 1% divergence, edit distance | **1.33 ms** | WFA2-lib (BiWFA), 3.3 ms |
 | ONT reads, mean 3.6 kbp (ont-10k), gap-affine (4, 6, 2) | **1.68 ms** | WFA2-lib, 4.8 ms |
 | local alignment, 1 kbp read in a 10 kbp window | **1.40 ms** | SSW, 3.19 ms |
 | overlap of two 2 kbp reads | **2.15 ms** | parasail, 15.3 ms |
