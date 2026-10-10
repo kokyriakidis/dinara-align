@@ -52,6 +52,14 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
     M2's mid-length reads); exact pruning, 600 thousand matches of which 174 thousand are kept, is
     now the larger half there. Going further than this means indexing the second sequence instead
     of the seeds, at more memory.
+  - Profiled again on the Skylake-X at `2b52c06` (2026-10-10): 70.9 ms a genvar read, inexact
+    matching 47%, local pruning 26%, the layer loop 10%, inserting and querying the layers 10%, bounds
+    checks about 4% across them. A quarter of inexact matching sits in `first_reachable`'s short skip
+    loops, their samples on the instruction past the exit: the exit mispredicted, 0 to 2 steps a
+    lookup, as the branch profile above found. Fetching the bucket bounds' lines a batch ahead and
+    the entries a batch ahead of their tests, a two-stage pipeline, found the same matches and was
+    1 to 2% slower there and neutral on the M2: the entries were not late. Local pruning has no hot
+    spot, its time spread over the fronts' steps and `leftmost`'s lookups. Left.
 - [x] **Traceback (about 0.9 s).** Retracing the final round's tiles from their recorded left
   edges. Since this was profiled, each tile is traced by a forward search over one window of
   diagonals, eight at a time, its recompute reusing its buffers (`6108666`, `5a0e514`, `38837f2`,
