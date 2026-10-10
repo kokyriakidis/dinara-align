@@ -3687,28 +3687,61 @@ def test_device_matches_host() raises:
 # endregion Device
 
 
-def test_inexact_seeds_never_overestimate() raises:
-    """With inexact seeds the heuristic is a lower bound on the cost to the end at every cell: an exact
-    match's windows a base shorter and longer are kept, a path along one, a diagonal off, chaining on
-    where the exact match cannot. Without them it read 2 where one insertion was enough."""
-    var text = String("TGTCGAGAAGCTCCTGAGCGCCTGTTCCGTGGTCGCCGAGTAGCCGCCTCAGGGGAATCGCGGCTGGC")
-    var size = text.byte_length()
-    var heuristic = SeedHeuristic(Profile(text, text), inexact=True)
-    assert_equal(heuristic.h(48, 47), 1)
-    # Every cell's true cost to the end, the suffixes' edit distance, a row at a time from the last.
-    var letters = text.as_bytes()
-    var below = List[Int](length=size + 1, fill=0)
-    for column in range(size + 1):
-        below[column] = size - column
-    for row in range(size - 1, -1, -1):
-        var here = List[Int](length=size + 1, fill=0)
-        here[size] = size - row
-        for column in range(size - 1, -1, -1):
-            var diagonal = below[column + 1] + (0 if letters[column] == letters[row] else 1)
+def assert_lower_bound(first: String, second: String, inexact: Bool) raises:
+    """The seed heuristic of `first` against `second` at most the true cost to the end at every cell, the
+    suffixes' edit distance, filled a row at a time from the last."""
+    var heuristic = SeedHeuristic(Profile(first, second), inexact=inexact)
+    var columns = first.byte_length()
+    var rows = second.byte_length()
+    var a = first.as_bytes()
+    var b = second.as_bytes()
+    var below = List[Int](length=columns + 1, fill=0)
+    for column in range(columns + 1):
+        below[column] = columns - column
+        assert_true(heuristic.h(column, rows) <= below[column])
+    for row in range(rows - 1, -1, -1):
+        var here = List[Int](length=columns + 1, fill=0)
+        here[columns] = rows - row
+        for column in range(columns - 1, -1, -1):
+            var diagonal = below[column + 1] + (0 if a[column] == b[row] else 1)
             here[column] = min(diagonal, min(below[column], here[column + 1]) + 1)
-        for column in range(size + 1):
-            assert_true(heuristic.h(column, row) <= here[column])
+        for column in range(columns + 1):
+            assert_true(heuristic.h(column, row) <= here[column], String("h over the cost at ", column, ", ", row))
         below = here^
+
+
+def test_inexact_seeds_never_overestimate() raises:
+    """The seed heuristic is a lower bound on the cost to the end at every cell, exact seeds and inexact.
+
+    With inexact seeds an exact match's windows a base shorter and longer are kept, a path along one, a
+    diagonal off, chaining on where the exact match cannot: without them it read 2 where one insertion
+    was enough. And an exact match whose end lies a diagonal past the pair's end chains to it for its
+    one edit of excess: left out, with the neighbour that stood in for it pruned, it read 61 at the
+    origin of a pair whose distance is 60, and over the cost on optimal paths of 5 pairs in 400."""
+    var text = String("TGTCGAGAAGCTCCTGAGCGCCTGTTCCGTGGTCGCCGAGTAGCCGCCTCAGGGGAATCGCGGCTGGC")
+    var crafted = SeedHeuristic(Profile(text, text), inexact=True)
+    assert_equal(crafted.h(48, 47), 1)
+    assert_lower_bound(text, text, True)
+    # The shortest pair of 4,000 drawn of 150 to 400 bases on which the heuristic read over the cost on an
+    # optimal path, at 49 cells: an exact match a diagonal past the end, its neighbour pruned.
+    var reference = String(
+        "ACTTCGTCTTGAACCTGGAAATAAGCAGGCGCATTTCAAAGGAAGTGTTATAAGTTTTATGAGTCAGGTTAGTGGGGTTATCGTTGTAGCTTATTC"
+        "TCGACATTACGCAGGTCCCCAGAGGGGTTCATTGCGCTGGCGCGTCATGCGCAGGAAACACAAATACGGTCGGGAATGCTAACCCTTTTGAGCCGA"
+        "GAC"
+    )
+    var query = String(
+        "ACTTCGTCCTGAACCTGGAAATAAGCAGGTATTTCAAGGAAGGTAAAGTTAGCGAAGGTCAGGATTAGTGGGGCTTTTATCGTTGTGGCTAATTCT"
+        "TCTAACGACTTTACGCAGAGTCCCCAGAGGGGTTCATTGCCGCTGGGCGTCATGCGCGGAAAACACAAATACGGTCGGGAATGCTAACCCTTTTGA"
+        "GCCAC"
+    )
+    assert_lower_bound(reference, query, True)
+    seed(71)
+    for trial in range(12):
+        var first = random_sequence(300, 1000, DNA_ALPHABET)
+        var second = mutated(first, 0.02 + 0.18 * random_float64(), 3)
+        if second.byte_length() < 40:
+            continue
+        assert_lower_bound(first, second, trial % 3 != 2)
 
 
 def test_tandem_repeats_set_up_quickly() raises:

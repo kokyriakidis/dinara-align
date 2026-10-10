@@ -210,8 +210,8 @@ def within_one_edit(
     The three tests folded together, with no branch to mispredict: an equal-length window within
     one substitution differs on at most one base, a shorter one is the seed less a base when the
     seed's first and last bases but one cover it between them, and a longer one the seed plus a base
-    when its first and last `INEXACT_LENGTH` bases cover the seed. An exact match keeps the shorter
-    and longer windows too, as `try_windows` does.
+    when its first and last `INEXACT_LENGTH` bases cover the seed. An exact match leaves out the
+    shorter and longer windows, as `try_windows` does.
     """
     comptime K = INEXACT_LENGTH
     comptime SHORTER = (UInt64(1) << UInt64(2 * K - 2)) - 1
@@ -219,7 +219,7 @@ def within_one_edit(
     var substituted = (whole & (whole - 1)) == 0
     var deleted = covers(differing(shorter, code >> 2), differing(shorter, code & SHORTER))
     var inserted = covers(differing(head, code), differing(tail, code))
-    return (substituted & level_open) | (deleted & shorter_open) | (inserted & longer_open)
+    return (substituted & level_open) | (((deleted & shorter_open) | (inserted & longer_open)) & (whole != 0))
 
 
 @always_inline
@@ -433,16 +433,89 @@ struct SeedHeuristic(Movable):
                 var end_x = column + self.length - end_row - end_potential
                 var end_y = end_row - column - self.length - end_potential
                 var score = self.cost - match_cost
-                var layer = self.score(end_x, end_y) + score
-                while layer >= len(self.counts):
-                    self.add_layer()
-                for below in range(score):
-                    # A start some start of the layer already dominates answers no query differently. In a
-                    # repeat, the next seed's match a few rows on dominates nearly every match, and kept,
-                    # they made each layer a long chain every query walked: poly-A of 16,384 bases
-                    # against 8,192 took two seconds, 32,000 against 16,000 seventeen.
-                    if not self.contains(layer - below, x, y):
-                        self.add_point(layer - below, x, y)
+                var layer = self.chained_layer(end_x, end_y, score)
+                self.insert(layer, min(score, layer), x, y)
+                if inexact and match_cost == 0:
+                    self.add_neighbours(column, start_row, potential, end_potential, layer, leftmost)
+
+    @always_inline
+    def excess(self, x: Int, y: Int) -> Int:
+        """How far the transformed point `(x, y)` lies past the pair's end, at or below zero when it can
+        chain on to it: the diagonals between them less the potential left."""
+        return max(x - (self.columns - self.rows), y - (self.rows - self.columns))
+
+    def chained_layer(mut self, end_x: Int, end_y: Int, score: Int) -> Int:
+        """The layer a match scoring `score` starts in, its end at transformed `(end_x, end_y)`: `score`
+        above the best chain its end can take on, or with none, `score` less what the gap to the pair's
+        end costs past the potential left, at most `score`.
+
+        Chaining forbids a gap dearer than the seeds it spans, where a path pays the gap, so dropping a
+        match from such a chain charges a path its two edits and the potential, while the path paid at
+        least the potential and one: an exact inexact match a diagonal too far from the end, so left out,
+        set the heuristic an edit over the cost on a path that took it and paid the gap. Charged its one
+        edit of excess instead, it chains to the end for one; a match chained after it would put it
+        within reach of the end, so its end chains on to nothing else."""
+        var chained = self.score(end_x, end_y)
+        if chained > 0:
+            return chained + score
+        return score - max(self.excess(end_x, end_y), 0)
+
+    def insert(mut self, layer: Int, score: Int, x: Int, y: Int):
+        """A match's transformed start `(x, y)` into the `score` layers from `layer` down, which keeps the
+        layers nested: the layer below holds a start above and right of its end, and so of its start."""
+        while layer >= len(self.counts):
+            self.add_layer()
+        for below in range(score):
+            # A start some start of the layer already dominates answers no query differently. In a
+            # repeat, the next seed's match a few rows on dominates nearly every match, and kept, they
+            # made each layer a long chain every query walked: poly-A of 16,384 bases against 8,192 took
+            # two seconds, 32,000 against 16,000 seventeen.
+            if not self.contains(layer - below, x, y):
+                self.add_point(layer - below, x, y)
+
+    def add_neighbours(
+        mut self,
+        column: Int,
+        start_row: Int,
+        potential: Int,
+        end_potential: Int,
+        layer: Int,
+        mut leftmost: List[Int32],
+    ):
+        """The four matches an exact inexact-seed match at `start_row` always has, each costing one edit:
+        the windows one base shorter and one longer that share its start, and the two that share its end.
+
+        Chaining is all or nothing, so a path along one of them, a diagonal off the exact match, may chain
+        on where the exact match cannot; left out, the heuristic overestimated, on crafted pairs by an
+        edit a seed. They need no search of their own. Each is a window within one edit of the seed
+        whatever the bases, so a real match. A start shared with the exact match only raises that start's
+        layer, by what a chain from its own end scores; an end shared with it chains as the exact match
+        does, one layer lower. And none would pass local pruning where the exact match fails it: those
+        sharing its end grow the same search from one edit more, and those sharing its start end where
+        the exact match's search stands after one edit (see `worth_keeping`). The scan leaves them out
+        (see `try_windows`), and the exact match, once kept, brings them here.
+        """
+        var x = column - start_row - potential
+        var y = start_row - column - potential
+        var end_column = column + self.length
+        for side in range(2):
+            # Sharing the start: the window ends a row short of the exact match's end, or one past it.
+            var extra = 2 * side - 1
+            var end_row = start_row + self.length + extra
+            if end_row > self.rows:
+                continue
+            var start_layer = self.chained_layer(
+                end_column - end_row - end_potential, end_row - end_column - end_potential, 1
+            )
+            if start_layer > 0:
+                self.insert(start_layer, 1, x, y)
+        for side in range(2):
+            # Sharing the end: the window starts a row after the exact match's start, or one before it.
+            var row = start_row + 1 - 2 * side
+            if row < 0 or layer < 2:
+                continue
+            leftmost[column - row + self.rows] = Int32(column)
+            self.insert(layer - 1, 1, column - row - potential, row - column - potential)
 
     def count_seeds(mut self, symbols: List[UInt8]):
         """`remaining` and `counted`, a seed uncounted when it holds a code past `ACGT`."""
@@ -728,14 +801,16 @@ struct SeedHeuristic(Movable):
         window one base shorter is the seed less one base when the two cover it between them, and
         one longer is the seed plus one base when they cover the seed.
 
-        An exact match's windows one base shorter or longer, sharing its start or its end, are kept
-        too: chaining is all or nothing, so a path along one of them, a diagonal off the exact match,
-        may chain on where the exact match cannot, and without them the heuristic overestimated, on
-        crafted pairs by an edit a seed.
+        An exact match's windows one base shorter or longer, sharing its start or its end, are left
+        to `add_neighbours`, which puts them in the layers from the exact match alone, once it is kept.
         """
         comptime K = INEXACT_LENGTH
+        var exact = False
         for step in range(3):
+            # As long as the seed first, so an exact match is known before its neighbours.
             var extra = 0 if step == 0 else (-1 if step == 1 else 1)
+            if exact and extra != 0:
+                return
             var size = K + extra
             var low = start if start >= 0 else end - size
             var high = low + size
@@ -746,6 +821,7 @@ struct SeedHeuristic(Movable):
             var cost = 1
             if extra == 0:
                 var bases = Int(pop_count(differing(window[unsafe_offset=low], code)))
+                exact = bases == 0
                 if bases > 1 or taken:
                     continue
                 cost = bases
@@ -813,13 +889,13 @@ struct SeedHeuristic(Movable):
         mut found_end: List[Int32],
         mut found_cost: List[Int32],
     ):
-        """Keeps an inexact match whose end can still reach the end: in transformed coordinates, its
-        end lies at or below and left of the end's."""
+        """Keeps an inexact match whose end can still chain on to the pair's end for less than the match
+        scores (see `chained_layer`): an exact match one diagonal past it too."""
         var column = seed * self.length
         var end_potential = self.potential(column) - self.cost
         var end_x = column + self.length - end_row - end_potential
         var end_y = end_row - column - self.length - end_potential
-        if end_x <= self.columns - self.rows and end_y <= self.rows - self.columns:
+        if self.excess(end_x, end_y) < self.cost - cost:
             found_seed.append(Int32(seed))
             found_row.append(Int32(start_row))
             found_end.append(Int32(end_row))
