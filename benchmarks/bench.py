@@ -15,6 +15,8 @@ The datasets:
 - A*PA2's real ones (Groot Koerkamp, Bioinformatics 2025), as pa-bench releases them: ONT reads of about
   1, 10, 50 and 500 kbp, the 500 kbp ones also against a reference with genetic variation, and SARS-CoV-2
   genomes. QuickEd's MiniION-a and MiniION-b are `ont-500k` and `ont-500k-genvar`.
+- Real Illumina and PacBio HiFi reads, the two technologies QuickEd adds: HG002's reads from Genome in a
+  Bottle, each against the stretch of HG002's own assembly, T2T Q100 v1.1, it maps to (see `giab`).
 - QuickEd's simulated ones (Doblas et al., Bioinformatics 2025), from Zenodo: random sequences of 10 kbp,
   100 kbp, 500 kbp and 1 Mbp with 1, 5, 10 and 20% uniformly spread errors, 100 Mbp a file, 3.2 GB in all,
   downloaded the first time. They cover the lengths and divergences A*PA2's synthetic sets did.
@@ -52,6 +54,7 @@ import zipfile
 from pathlib import Path
 from urllib.request import urlretrieve
 
+import giab
 import harness
 from harness import (
     CACHE,
@@ -114,6 +117,7 @@ def download() -> list[tuple[str, list[Path]]]:
                 opened.extractall(directory)
             archive.unlink()
         found.append((name, sorted(directory.glob("*.seq"))))
+    found.extend(giab.build(DATA / "giab"))
     if not (PUBLISHED / "results").exists():
         PUBLISHED.mkdir(parents=True, exist_ok=True)
         archive = PUBLISHED / "results.zip"
@@ -216,7 +220,8 @@ def astarpa_settings(dataset: str) -> str:
     its synthetic settings for QuickEd's simulated sets by their error rate."""
     if dataset.startswith("ont"):
         return "a*pa r=2 prune=start"
-    if dataset == "sars-cov-2":
+    if dataset in ("sars-cov-2", "illumina-250", "pacbio-hifi"):
+        # Real data under 1% divergence, A*PA2's settings for the SARS-CoV-2 genomes.
         return "a*pa r=1 prune=start"
     rate = int(dataset.rsplit(".e", 1)[1])
     return "a*pa r=1 prune=both" if rate <= 5 else "a*pa r=2 prune=both"

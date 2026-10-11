@@ -493,13 +493,16 @@ def measure(binary: Path, tool: str, path: Path, budget: float, kept: dict | Non
     """`run_tool`, or for a rival what an earlier run of it on the same file already says.
 
     The rivals are pinned, so each one is run on a file once, at the largest budget anyone has asked for,
-    and kept for good (see `identity`): a smaller budget replays that run (see `replay`), and a larger one
-    reuses it if it aligned every pair, running again only if it did not. A rival's peak memory is that of
+    and kept for good under the file's content and the rival's build (see `identity`): a smaller budget
+    replays that run (see `replay`), and a larger one reuses it if it aligned every pair, running again
+    only if it did not. A rival's peak memory is that of
     the run kept. dinara-align, `kept` None, runs every time.
     """
     if kept is None:
         return run_tool(binary, tool, path, budget)
-    key = "\t".join([tool, path.name, identity(binary)])
+    # By the sample's content, not its name alone: a dataset built again under the same name, as the GIAB
+    # pairs were from a later assembly, would otherwise replay a rival's rows from the pairs it replaced.
+    key = "\t".join([tool, path.name, fingerprint(path), identity(binary)])
     entry = kept.get(key)
     pairs = path.read_bytes().count(b"\n") // 2
     if entry is not None and not REMEASURE:

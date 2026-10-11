@@ -13,7 +13,7 @@ from std.os.path import getsize
 from std.sys.info import CompilationTarget
 from std.time import perf_counter_ns
 
-from dinara_align import Costs, align, alignments, distance
+from dinara_align import Aligner, Costs, alignments
 
 
 struct SeqFile:
@@ -81,7 +81,8 @@ def seq_mode() raises:
     """A*PA2's evaluation datasets: `seq <tool> <budget seconds> <file>...`, every pair aligned once.
 
     pa-bench's `.seq` files hold pairs as a `>` line and a `<` line. Each pair is aligned with its
-    traceback, once, as pa-bench times every aligner, until the budget is spent; one row per pair,
+    traceback, once, as pa-bench times every aligner, until the budget is spent, through one `Aligner`
+    a file as every rival's runner builds one aligner a file and keeps it; one row per pair,
     flushed as it finishes, gives its file, its time and its cost, so a run stopped mid-pair still
     reports the pairs before it.
 
@@ -140,6 +141,7 @@ def seq_mode() raises:
             break
         var path = String(argv()[argument])
         var pairs = SeqFile(path)
+        var aligner = Aligner()
         var first = String()
         var second = String()
         while spent < budget and pairs.next(first, second):
@@ -147,12 +149,12 @@ def seq_mode() raises:
             var started = perf_counter_ns()
             var cost: Int
             if affine:
-                cost = align(first, second, Costs.affine(mismatch, opening, extension)).cost
+                cost = aligner.align(first, second, Costs.affine(mismatch, opening, extension)).cost
             elif "distance" in tool:
-                cost = distance(first, second)
+                cost = aligner.distance(first, second)
             else:
                 # A CIGAR, as every rival's traceback hands back, rather than the two gapped rows.
-                cost = align(first, second).cost
+                cost = aligner.align(first, second).cost
             var seconds = Float64(perf_counter_ns() - started) / 1e9
             var growth = peak_resident() - before
             spent += seconds
