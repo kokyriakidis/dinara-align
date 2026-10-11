@@ -135,12 +135,20 @@ ol li::marker { font-family: var(--sans); color: var(--ink-soft); }
 th.l, td.l { text-align: left; }
 td.wrap { vertical-align: top; }
 .table-wrap { margin-block: 1.6rem 1.8rem; }
+/* The overview figure: boxes and flows drawn in the theme's tokens. */
+.chart.overview { min-width: 640px; }
+.overview .box { fill: var(--tint); stroke: var(--rule); stroke-width: 1.2; }
+.overview .box-title { fill: var(--ink); font-size: 12.5px; font-weight: 600; }
+.overview .box-note { fill: var(--ink-soft); font-size: 11px; }
+.overview .flow { stroke: var(--ink-soft); stroke-width: 1.4; }
+.overview .flow-label { fill: var(--ink-soft); font-size: 10.5px; }
+.overview .lane { fill: var(--ink-soft); font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; }
 
 </style>
 <main>
 <header class="col masthead">
   <div class="journal">Bioinformatics · Supplementary material <span class="draft">Draft</span></div>
-  <h1>Supplementary material for “dinara-align: exact pairwise alignment specialised to the target processor”</h1>
+  <h1>Supplementary material for “dinara-align: hardware-aware algorithms for exact pairwise alignment”</h1>
   <div class="authors">Konstantinos Kyriakidis and Benedict Paten</div>
 </header>
 <div class="col">

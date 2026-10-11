@@ -1,7 +1,7 @@
 """The supplementary material, in the same markup as main_text.py."""
 from change_record import SUPPLEMENT as _OLD
 
-TITLE = "Supplementary material for “dinara-align: exact pairwise alignment specialised to the target processor”"
+TITLE = "Supplementary material for “dinara-align: hardware-aware algorithms for exact pairwise alignment”"
 
 # Table S1's rows are kept with the change record they came from; only labels that read informally are reworded.
 _changes = next(b for b in _OLD if b[0] == "table")
