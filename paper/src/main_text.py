@@ -24,8 +24,8 @@ ABSTRACT = [('Motivation',
   'optimal alignment; searches abandon a projection only after spending a fixed share of the alternative\'s cost; '
   'short pairs are batched in narrow bands certified per vector lane; and inexact seed neighbours are inserted '
   'without search, provably leaving pruning unchanged. Every engine returns the same alignment among equally '
-  'optimal ones. On an Intel Skylake-X processor, dinara-align was the fastest exact aligner tested on all 24 '
-  'datasets of the A*PA2 and QuickEd benchmarks, including Illumina and PacBio HiFi reads of HG002: up to 2.4 '
+  'optimal ones. On an Intel Skylake-X processor, dinara-align was the fastest of the exact aligners compared on '
+  'every dataset, from 250 bp reads to 1 Mbp pairs and from 0 to 20% divergence: up to 2.4 '
   'times faster than A*PA2 on ultra-long nanopore reads, 2.0 and 5.2 times faster than WFA on Illumina and HiFi '
   'reads, and 1.1 to 3.8 times faster than WFA and BiWFA at gap-affine costs.'),
  ('Availability and implementation',
