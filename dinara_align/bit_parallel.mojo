@@ -1246,14 +1246,14 @@ struct Trail(Movable):
         self.edge_minus.extend(Span(frontier.vertical_minus)[top:end])
 
     def make_room(mut self, count: Int):
-        """Room for `count` more edge words, grown as a list grows, doubling, until the edges pass a quarter
-        of the budget, and then to the whole budget at once: doubling past that, the buffer and the copy
-        the list grows through would hold up to twice the budget at once."""
+        """Room for `count` more edge words, grown as a list grows, doubling, until that would pass half the
+        budget, and then to the whole budget at once: doubling past half, the old buffer and the new one
+        it is copied into would hold up to twice the budget at once, where this copy holds at most half."""
         var needed = len(self.edge_plus) + count
         if needed <= self.edge_plus.capacity():
             return
         var room = max(needed, 2 * self.edge_plus.capacity())
-        if room > self.budget // 4:
+        if room > self.budget // 2:
             room = max(needed, self.budget)
         self.edge_plus.reserve(room)
         self.edge_minus.reserve(room)

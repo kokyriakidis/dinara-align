@@ -313,8 +313,9 @@ the difference sweep's case (2026-10-10, Skylake-X).
   QuickEd splits Hirschberg's way past 16 MB, which breaks ties per piece. Now the round keeps every
   edge while they fit, then every K-th, K doubling, with room for one stretch of the widest; the
   traceback sweeps a stretch again from the last kept edge, every step the round's own, so the CIGAR is
-  the same byte for byte (`band.retrace`). The edge buffers grow by doubling to a quarter of the budget
-  and then to all of it at once, as a list's doubling held both buffers at once, up to twice the budget.
+  the same byte for byte (`band.retrace`). The edge buffers grow by doubling to half the budget and
+  then to all of it at once: doubling on, the copy held the old buffer beside the new, up to twice the
+  budget (145 MB on the first pair below); jumping already at a quarter cost pairs that fit 6 MB and 3%.
   One pair to a process on the Skylake-X, the four 1 Mbp pairs at 20%: 175, 99, 143 and 146 MB to 133,
   99, 124 and 113 MB, 3.35 to 3.64 s; at 10% they fit, unchanged. 600 CIGARs under caps from 0 to 1 GB
   equal the uncapped ones; with no memory at all the pairs take about twice the time. The rest of the
