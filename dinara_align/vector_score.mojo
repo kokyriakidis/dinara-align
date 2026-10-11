@@ -5,28 +5,27 @@ The host's affine-gap sweeps under any substitution table that find more than a 
 
 The same Gotoh recurrence and borders as `gotoh.serial_align`, so the same scores, swept by anti-diagonal
 a vector of cells a step (see `anti_diagonals`): the cell, swept back from a local alignment's end, where
-it earns its score, which is where it starts (`reach_back`); and a global alignment's three layers, stored
-in the band of diagonals its score bounds, to be traced (`vector_align`). A score alone is the tabled
+it earns its score, which is where it starts (`reach_back`); and a global alignment's decisions, stored in
+the band of diagonals its score bounds, to be traced (`vector_align`). A score alone is the tabled
 sweep's (see `scoring.swept_score`).
 """
 
-from .common import UNREACHED
-from .anti_diagonals import AntiDiagonals, GapLanes, column_letters, gotoh_lanes, row_letters
-from .gotoh import (
-    AffineGapCosts,
-    AlignmentMode,
-    AntiDiagonalMajor,
-    BAND_PADDING,
-    GappedAlignment,
-    reconstruct,
-    serial_align,
+from .common import GAP_BYTE
+from .anti_diagonals import (
+    AntiDiagonals,
+    GapLanes,
+    best_move,
+    column_letters,
+    fits_16_bits,
+    gap_layer,
+    row_letters,
+    straight_deficit,
 )
-from .substitutions import SubstitutionLookup
+from .gotoh import AffineGapCosts, AlignmentMode, Decision, GapRun, GappedAlignment, Layer, advance, serial_align
+from .substitutions import SubstitutionLookup, table_extremes
 
 comptime WIDTH = 16
 """Cells a step computes at once."""
-
-comptime Lanes = SIMD[DType.int32, WIDTH]
 
 
 def reach_back(
@@ -117,12 +116,12 @@ def reached_from[
     return (0, 0)
 
 
-def vector_cells(rows: Int, columns: Int, band_cells: Int) -> Int:
-    """What `vector_align` holds for a `rows` by `columns` pair whose band has `band_cells` cells, in cells of
-    its three 32-bit layers: every anti-diagonal's cells and their padding, a step's spare lanes, and the
-    three indexes of the diagonals, two cells' bytes a diagonal."""
+def vector_bytes(rows: Int, columns: Int, band_cells: Int) -> Int:
+    """What `vector_align` holds for a `rows` by `columns` pair whose band has `band_cells` cells, in bytes: a
+    decision a cell and a step's spare lanes, the three indexes of every diagonal, and three diagonals of
+    each of its three layers, at 32 bits."""
     var diagonals = rows + columns + 1
-    return band_cells + diagonals * (2 * BAND_PADDING + 2) + WIDTH
+    return band_cells + 2 * 2 * WIDTH + diagonals * 3 * 8 + 9 * (rows + 2 + 4 * WIDTH) * 4
 
 
 def vector_align(
@@ -136,31 +135,53 @@ def vector_align(
     low_diagonal: Int = Int.MIN,
     high_diagonal: Int = Int.MAX,
 ) -> GappedAlignment:
-    """`serial_align`'s global alignment, its three layers swept sixteen cells at a time.
+    """`serial_align`'s global alignment, swept by anti-diagonal a vector of cells a step, in lanes of 16 bits
+    while the scores fit (see `anti_diagonals.fits_16_bits`), else 32.
 
-    Only the cells on diagonals `low_diagonal ..= high_diagonal`, column minus row, are computed and
-    stored, the rest reading as unreachable; given a band holding every optimal path (see
-    `optimal_band`), those cells hold the same values as `serial_align`'s, so `reconstruct` walks the
-    same path, in memory that grows with the band rather than the matrix. They are stored
-    anti-diagonal by anti-diagonal, each diagonal's band contiguous by row, so a step loads its
-    neighbours from the two diagonals before as vectors (see `AntiDiagonalMajor`).
+    Only the cells on diagonals `low_diagonal ..= high_diagonal`, column minus row, are computed, the rest
+    reading as unreachable; given a band holding every optimal path (see `optimal_band`), those cells hold
+    the same values as `serial_align`'s. Each keeps only its decision, the byte `gotoh.decide` would give it
+    from those values, stored anti-diagonal by anti-diagonal, each diagonal's band contiguous by row; the
+    scores keep three diagonals. The walk back reads the decisions as `gotoh.walk` reads the scores, so it
+    takes the same path, in a byte a cell where the scores took twelve.
     """
     var rows = len(first)
     var columns = len(second)
     if rows == 0 or columns == 0:
         return serial_align[AlignmentMode.GLOBAL](first, second, substitutions, alphabet_size, gaps, alphabet)
-    var open = gaps.open
-    var extend = gaps.extend
+    var extremes = table_extremes(substitutions, alphabet_size)
+    var substitution = -min(extremes[1], 0)
+    var deficit = straight_deficit(substitution, -Int(gaps.open), -Int(gaps.extend), rows, columns)
+    if fits_16_bits[False](max(extremes[0], 0), max(substitution, -Int(gaps.open)), deficit, rows, columns):
+        return traced_band[DType.int16, 2 * WIDTH](first, second, lookup, gaps, alphabet, low_diagonal, high_diagonal)
+    return traced_band[DType.int32, WIDTH](first, second, lookup, gaps, alphabet, low_diagonal, high_diagonal)
+
+
+def traced_band[
+    dtype: DType, width: Int
+](
+    first: List[UInt8],
+    second: List[UInt8],
+    lookup: SubstitutionLookup,
+    gaps: AffineGapCosts,
+    alphabet: String,
+    low_diagonal: Int,
+    high_diagonal: Int,
+) -> GappedAlignment:
+    """`vector_align` in `width` lanes of `dtype`, which hold every score of the band."""
+    comptime Lanes = SIMD[dtype, width]
+    comptime Value = Scalar[dtype]
+    # Unreachable: below every score the lanes hold, with a move to spare (see `fits_16_bits`).
+    comptime LOW = Value.MIN // 4
+    var rows = len(first)
+    var columns = len(second)
+    var open = Int(gaps.open)
+    var extend = Int(gaps.extend)
     var low_band = max(low_diagonal, -rows)
     var high_band = min(high_diagonal, columns)
 
-    @inline(.always)
-    def border(length: Int) {imm gaps} -> Int32:
-        """The score of a gap run of `length` along the global border."""
-        return gaps.run(length)
-
-    # Diagonal `d`'s cells lie on rows `lows[d] ..= highs[d]`: inside the matrix, and with
-    # `column - row` inside the band, column being `d - row`.
+    # Diagonal `d`'s cells lie on rows `lows[d] ..= highs[d]`: inside the matrix, and with `column - row`
+    # inside the band, column being `d - row`. Its decisions start at `starts[d]`.
     var diagonals = rows + columns + 1
     var lows = List[Int](length=diagonals, fill=0)
     var highs = List[Int](length=diagonals, fill=0)
@@ -170,107 +191,122 @@ def vector_align(
         var high = min(rows, diagonal, (diagonal - low_band) // 2)
         lows[diagonal] = low
         highs[diagonal] = high
-        starts[diagonal + 1] = starts[diagonal] + max(high - low + 1, 0) + 2 * BAND_PADDING
-    var cells = starts[diagonals]
-    var scores = List[Int32](unsafe_uninit_length=cells + WIDTH)
-    var deletes = List[Int32](unsafe_uninit_length=cells + WIDTH)
-    var inserts = List[Int32](unsafe_uninit_length=cells + WIDTH)
-    var letters = row_letters[WIDTH](Span(first))
-    var reversed = column_letters[WIDTH](Span(second))
+        starts[diagonal + 1] = starts[diagonal] + max(high - low + 1, 0)
+    # A step's spare lanes run past a diagonal's last decision, the last diagonal's past the end.
+    var decisions = List[UInt8](unsafe_uninit_length=starts[diagonals] + 2 * width)
+    var letters = row_letters[width](Span(first))
+    var reversed = column_letters[width](Span(second))
 
+    # Three diagonals of each layer, a cell on row `i` at `i` within its diagonal's slot; the slots turn as
+    # the sweep moves on.
+    var span = rows + 2 + 2 * width
+    var scores = List[Value](length=3 * span, fill=LOW)
+    var deletes = List[Value](length=3 * span, fill=LOW)
+    var inserts = List[Value](length=3 * span, fill=LOW)
     var score_cells = scores.unsafe_ptr()
     var delete_cells = deletes.unsafe_ptr()
     var insert_cells = inserts.unsafe_ptr()
-
-    @inline(.always)
-    def unreachable(index: Int) {imm score_cells, imm delete_cells, imm insert_cells}:
-        """Marks stored cell `index` unreachable in all three layers, as band padding reads."""
-        score_cells[unsafe_offset=index] = UNREACHED
-        delete_cells[unsafe_offset=index] = UNREACHED
-        insert_cells[unsafe_offset=index] = UNREACHED
+    var decision_cells = decisions.unsafe_ptr()
 
     # Diagonal zero: the origin, which every band holds.
-    for index in range(BAND_PADDING):
-        unreachable(index)
-        unreachable(BAND_PADDING + 1 + index)
-    score_cells[unsafe_offset=BAND_PADDING] = 0
-    delete_cells[unsafe_offset=BAND_PADDING] = 0
-    insert_cells[unsafe_offset=BAND_PADDING] = 0
-    var substitute = lookup.lanes[WIDTH]()
-    var steps = GapLanes[DType.int32, WIDTH].symmetric(Int(open), Int(extend))
+    score_cells[unsafe_offset=0] = 0
+    delete_cells[unsafe_offset=0] = 0
+    insert_cells[unsafe_offset=0] = 0
+    var substitute = lookup.lanes[width, dtype]()
+    var steps = GapLanes[dtype, width].symmetric(open, extend)
+    var source_deleting = Lanes(Value(Int(Layer.DELETING.kind)))
+    var source_inserting = Lanes(Value(Int(Layer.INSERTING.kind)))
+    var deletion_extends = Lanes(Value(Int(GapRun.EXTENDS.kind) << 2))
+    var insertion_extends = Lanes(Value(Int(GapRun.EXTENDS.kind) << 3))
+    var aligning = Lanes(Value(Int(Layer.ALIGNING.kind)))
+    var nothing = Lanes(0)
+    var final_score = Value(0)
     for diagonal in range(1, diagonals):
         var first_row = lows[diagonal]
         var last_row = highs[diagonal]
-        # Diagonal `d`'s cell on row `i` sits at `here + i`; its neighbours on the two before likewise.
-        var here = starts[diagonal] + BAND_PADDING - first_row
-        var one_back = starts[diagonal - 1] + BAND_PADDING - lows[diagonal - 1]
-        var two_back = starts[diagonal - 2] + BAND_PADDING - lows[diagonal - 2] if diagonal >= 2 else 0
-        for index in range(BAND_PADDING):
-            unreachable(starts[diagonal] + index)
+        var here = (diagonal % 3) * span
+        var one_back = ((diagonal - 1) % 3) * span
+        var two_back = ((diagonal - 2) % 3) * span if diagonal >= 2 else 0
         var low = max(1, first_row)
         var high = min(last_row, diagonal - 1)
         var lag = columns - diagonal
+        var decided = starts[diagonal] - first_row
         var row = low
         while row <= high:
-            var above = score_cells.unsafe_offset(one_back + row - 1).unsafe_load[width=WIDTH]()
-            var above_delete = delete_cells.unsafe_offset(one_back + row - 1).unsafe_load[width=WIDTH]()
-            var left = score_cells.unsafe_offset(one_back + row).unsafe_load[width=WIDTH]()
-            var left_insert = insert_cells.unsafe_offset(one_back + row).unsafe_load[width=WIDTH]()
-            var above_left = score_cells.unsafe_offset(two_back + row - 1).unsafe_load[width=WIDTH]()
-            var mine = letters.unsafe_ptr().unsafe_offset(row).unsafe_load[width=WIDTH]()
-            var theirs = reversed.unsafe_ptr().unsafe_offset(lag + row).unsafe_load[width=WIDTH]()
-            var cell = gotoh_lanes[DType.int32, WIDTH](
-                above_left,
-                above,
-                above_delete,
-                left,
-                left_insert,
-                substitute(mine, theirs),
-                steps.down_first,
-                steps.down_further,
-                steps.across_first,
-                steps.across_further,
+            var above = score_cells.unsafe_offset(one_back + row - 1).unsafe_load[width=width]()
+            var above_delete = delete_cells.unsafe_offset(one_back + row - 1).unsafe_load[width=width]()
+            var left = score_cells.unsafe_offset(one_back + row).unsafe_load[width=width]()
+            var left_insert = insert_cells.unsafe_offset(one_back + row).unsafe_load[width=width]()
+            var above_left = score_cells.unsafe_offset(two_back + row - 1).unsafe_load[width=width]()
+            var mine = letters.unsafe_ptr().unsafe_offset(row).unsafe_load[width=width]()
+            var theirs = reversed.unsafe_ptr().unsafe_offset(lag + row).unsafe_load[width=width]()
+            var aligned = above_left + substitute(mine, theirs)
+            var deletion = gap_layer(above, above_delete, steps.down_first, steps.down_further)
+            var insertion = gap_layer(left, left_insert, steps.across_first, steps.across_further)
+            var score = best_move[False](aligned, deletion, insertion)
+            # `gotoh.decide`'s byte: the source, the aligned move before a deletion before an insertion, and
+            # each run extending only where extending scores strictly more than opening.
+            var source = aligned.eq(score).select(
+                aligning, deletion.eq(score).select(source_deleting, source_inserting)
             )
-            score_cells.unsafe_offset(here + row).unsafe_store(cell[0])
-            delete_cells.unsafe_offset(here + row).unsafe_store(cell[1])
-            insert_cells.unsafe_offset(here + row).unsafe_store(cell[2])
-            row += WIDTH
-        # The border cells inside the band, then the padding after it, which the lanes may have run over.
+            var deleting = (above_delete + steps.down_further).gt(above + steps.down_first)
+            var inserting = (left_insert + steps.across_further).gt(left + steps.across_first)
+            var code = (
+                source | deleting.select(deletion_extends, nothing) | inserting.select(insertion_extends, nothing)
+            )
+            score_cells.unsafe_offset(here + row).unsafe_store(score)
+            delete_cells.unsafe_offset(here + row).unsafe_store(deletion)
+            insert_cells.unsafe_offset(here + row).unsafe_store(insertion)
+            decision_cells.unsafe_offset(decided + row).unsafe_store(code.cast[DType.uint8]())
+            row += width
+        # The border cells inside the band, then the cells either side of it, which the lanes may have run
+        # over and the next two diagonals read as unreachable.
         if first_row == 0:
-            score_cells[unsafe_offset=here] = border(diagonal)
-            delete_cells[unsafe_offset=here] = score_cells[unsafe_offset=here] + open + extend
+            var border = Value(Int(gaps.run(diagonal)))
+            score_cells[unsafe_offset=here] = border
+            delete_cells[unsafe_offset=here] = border + Value(open + extend)
             insert_cells[unsafe_offset=here] = 0
+        else:
+            score_cells[unsafe_offset=here + first_row - 1] = LOW
+            delete_cells[unsafe_offset=here + first_row - 1] = LOW
+            insert_cells[unsafe_offset=here + first_row - 1] = LOW
         if last_row == diagonal:
-            score_cells[unsafe_offset=here + diagonal] = border(diagonal)
+            var border = Value(Int(gaps.run(diagonal)))
+            score_cells[unsafe_offset=here + diagonal] = border
             delete_cells[unsafe_offset=here + diagonal] = 0
-            insert_cells[unsafe_offset=here + diagonal] = score_cells[unsafe_offset=here + diagonal] + open + extend
-        for index in range(BAND_PADDING):
-            unreachable(here + last_row + 1 + index)
+            insert_cells[unsafe_offset=here + diagonal] = border + Value(open + extend)
+        score_cells[unsafe_offset=here + last_row + 1] = LOW
+        delete_cells[unsafe_offset=here + last_row + 1] = LOW
+        insert_cells[unsafe_offset=here + last_row + 1] = LOW
+        if diagonal == diagonals - 1:
+            final_score = score_cells[unsafe_offset=here + rows]
 
-    var layout = AntiDiagonalMajor(
-        starts.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
-        lows.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin](),
-    )
-    var reconstruction = reconstruct[AlignmentMode.GLOBAL](
-        scores,
-        deletes,
-        inserts,
-        layout,
-        first,
-        second,
-        substitutions,
-        alphabet_size,
-        rows,
-        columns,
-        alphabet,
-        gaps,
-    )
-    var final_score = scores[layout.index(rows, columns)]
-    # The layout reads `starts` and `lows` through pointers, so both must outlive every use of it.
-    _ = len(starts)
-    _ = len(lows)
-    _ = len(lookup.cells)
-    return GappedAlignment(final_score, reconstruction[0], reconstruction[1])
+    # The walk back, `gotoh.walk`'s over the decisions, to the first row or column; a global alignment's rest
+    # gaps against the letters left.
+    var symbols = alphabet.as_bytes()
+    var top = List[UInt8]()
+    var bottom = List[UInt8]()
+    var row = rows
+    var column = columns
+    var layer = Layer.ALIGNING
+    while row > 0 and column > 0:
+        var diagonal = row + column
+        var decision = Decision(decisions[starts[diagonal] + row - lows[diagonal]])
+        var step = advance(layer, decision)
+        top.append(symbols[Int(first[row - 1])] if step.row_advance != 0 else GAP_BYTE)
+        bottom.append(symbols[Int(second[column - 1])] if step.column_advance != 0 else GAP_BYTE)
+        row += step.row_advance
+        column += step.column_advance
+        layer = step.lands_in
+    for letter in range(row, 0, -1):
+        top.append(symbols[Int(first[letter - 1])])
+        bottom.append(GAP_BYTE)
+    for letter in range(column, 0, -1):
+        top.append(GAP_BYTE)
+        bottom.append(symbols[Int(second[letter - 1])])
+    top.reverse()
+    bottom.reverse()
+    return GappedAlignment(Int32(final_score), String(unsafe_from_utf8=top), String(unsafe_from_utf8=bottom))
 
 
 def optimal_band(rows: Int, columns: Int, reward: Int, gaps: AffineGapCosts, score: Int) -> Tuple[Int, Int]:

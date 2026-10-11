@@ -79,12 +79,14 @@ from .modes import Alignment, Anchor, Band, Costs, Mode
 from .score_groups import grouped_scores
 from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, costs_deficit, started_span, sweep
 from .substitutions import SubstitutionLookup, shuffled_table, table_extremes, uniform_pair
-from .vector_score import optimal_band, reach_back, vector_align, vector_cells
+from .vector_score import optimal_band, reach_back, vector_align, vector_bytes
 
 # region Memory
 
 comptime STORED_CELL_BYTES = 12
-"""What one stored cell of the host's traceback takes: a score in each of its three layers, 32 bits each."""
+"""The unit `max_memory` is counted in for the host's tracebacks: a score in each of three layers, 32 bits
+each, as the linear-space path's leaves store them. The banded traceback keeps a byte a cell (see
+`vector_score.vector_bytes`)."""
 
 
 def cells_bytes(cells: Int) -> Int:
@@ -422,8 +424,8 @@ def global_on_host(
     Under a table of one match and one mismatch score whose costs a wavefront can grow by, the wavefront
     from both ends traces it through its own fronts, split where they would outgrow `stored_cells` (see
     `gap_affine.wavefront_align`). Under any other table the score bounds a band of diagonals every optimal
-    path stays inside, swept sixteen cells at a time (see `optimal_band`, `vector_align`), and a band past
-    `stored_cells` takes the linear-space path. A score `known` beforehand, as a local alignment's span
+    path stays inside, swept by anti-diagonal with each cell's decision kept (see `optimal_band`,
+    `vector_align`), and a band whose decisions would pass `stored_cells`' bytes takes the linear-space path. A score `known` beforehand, as a local alignment's span
     knows it, spares the sweep that would find it.
     """
     if len(first) == 0 or len(second) == 0:
@@ -447,8 +449,8 @@ def global_on_host(
     var lookup = SubstitutionLookup(scoring.substitutions, scoring.alphabet_size())
     var band = optimal_band(len(first), len(second), lookup.best, scoring.gaps, best)
     var width = min(band[1], len(second)) - max(band[0], -len(first)) + 1
-    # Counted with its padding and indexes: a band one diagonal wide held some thirteen times its cells.
-    if vector_cells(len(first), len(second), (len(first) + 1) * width) > stored_cells:
+    # Counted with its indexes and its three diagonals of scores, which a narrow band's decisions are fewer than.
+    if vector_bytes(len(first), len(second), (len(first) + 1) * width) > cells_bytes(stored_cells):
         return linear_global(first, second, scoring)
     return vector_align(
         first_codes,
