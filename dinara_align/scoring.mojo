@@ -77,7 +77,7 @@ from .lanes import (
 )
 from .modes import Alignment, Anchor, Band, Costs, Mode
 from .score_groups import grouped_scores
-from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, started_span, sweep
+from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, costs_deficit, started_span, sweep
 from .substitutions import SubstitutionLookup, shuffled_table, table_extremes, uniform_pair
 from .vector_score import optimal_band, reach_back, vector_align, vector_cells
 
@@ -579,10 +579,14 @@ def gap_costs(scoring: Scoring) -> Costs:
 
 def table_bits[kind: Int](scoring: Scoring, rows: Int, columns: Int) -> Int:
     """The narrowest lanes that hold every score of a sweep under `scoring` (see `anti_diagonals.lane_bits`),
-    bounded by the table's best pair and its dearest step, a mismatch or a gap's first letter."""
+    bounded by the table's best pair, its dearest step, a mismatch or a gap's first letter, and how far a
+    cell falls below zero (see `scored.costs_deficit`)."""
     var extremes = table_extremes(scoring.substitutions, scoring.alphabet_size())
-    var dearest = max(-min(extremes[1], 0), -Int(scoring.gaps.open))
-    return lane_bits[kind == ANYWHERE](max(extremes[0], 0), dearest, rows, columns)
+    var substitution = -min(extremes[1], 0)
+    var costs = gap_costs(scoring)
+    var dearest = max(substitution, costs.opening + costs.extension)
+    var deficit = costs_deficit(costs, substitution, rows, columns)
+    return lane_bits[kind == ANYWHERE](max(extremes[0], 0), dearest, deficit, rows, columns)
 
 
 def tabulated_end[

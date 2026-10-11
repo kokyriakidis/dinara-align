@@ -31,7 +31,7 @@ from .gap_affine import (
     traced_extension,
 )
 from .modes import Alignment, Anchor, Band, Costs, Ties
-from .anti_diagonals import AntiDiagonals, GapLanes, lane_bits
+from .anti_diagonals import AntiDiagonals, GapLanes, lane_bits, straight_deficit
 from .substitutions import SubstitutionLookup
 
 
@@ -301,7 +301,17 @@ def swept_cells[
 
 def sweep_bits[kind: Int](costs: Costs, match_score: Int, rows: Int, columns: Int) -> Int:
     """The narrowest lanes every score of the sweep under `costs` fits (see `anti_diagonals.lane_bits`)."""
-    return lane_bits[kind == ANYWHERE](match_score, costs.dearest_step(), rows, columns)
+    return lane_bits[kind == ANYWHERE](
+        match_score, costs.dearest_step(), costs_deficit(costs, costs.mismatch, rows, columns), rows, columns
+    )
+
+
+def costs_deficit(costs: Costs, substitution: Int, rows: Int, columns: Int) -> Int:
+    """`anti_diagonals.straight_deficit` under `costs`, a pair costing at most `substitution`: its gaps at their
+    first piece, which the cheaper piece never passes, the dearer way, a deletion or an insertion."""
+    var first_letter = max(costs.opening + costs.extension, costs.deletion_opening + costs.deletion_extension)
+    var further_letter = max(costs.extension, costs.deletion_extension)
+    return straight_deficit(substitution, first_letter, further_letter, rows, columns)
 
 
 def swept[

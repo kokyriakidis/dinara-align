@@ -17,7 +17,7 @@ opening before one extending: every walk here, and the device's, decides a cell 
 `advance`, so they agree. A path walks all three layers, so the score it reports is the one it realizes.
 """
 
-from .anti_diagonals import AntiDiagonals, GapLanes, fits_16_bits, gotoh_lanes
+from .anti_diagonals import AntiDiagonals, GapLanes, fits_16_bits, gotoh_lanes, straight_deficit
 from .cigar import CigarWriter
 from .common import GAP_BYTE, NEGATIVE_INFINITY, SubstitutionDType, SymbolDType
 from .errors import AlignmentError, ErrorKind
@@ -921,7 +921,8 @@ def linear_path(
     # Whether a half's scores fit 16 bits follows from what a pair earns and what a move costs at most.
     var extremes = table_extremes(substitutions, alphabet_size)
     var reward = max(extremes[0], 0)
-    var dearest = max(-min(extremes[1], 0), -Int(gaps.open))
+    var substitution = -min(extremes[1], 0)
+    var dearest = max(substitution, -Int(gaps.open))
 
     var pending: List[Frame] = [Frame(window, GapRun.OPENS, GapRun.OPENS)]
     while len(pending) > 0:
@@ -935,7 +936,9 @@ def linear_path(
         var middle = area.middle()
         # Both halves by the lower, the taller: its lanes are not idle, and its fit holds for both.
         var in_lanes = area.row_to - middle >= VECTOR_SWEEP_ROWS
-        var fits_16 = fits_16_bits[False](reward, dearest, area.row_to - middle, area.width())
+        var half_rows = area.row_to - middle
+        var deficit = straight_deficit(substitution, -Int(gaps.open), -Int(gaps.extend), half_rows, area.width())
+        var fits_16 = fits_16_bits[False](reward, dearest, deficit, half_rows, area.width())
         var upper = Rectangle(area.row_from, middle, area.column_from, area.column_to)
         var lower = Rectangle(middle, area.row_to, area.column_from, area.column_to)
         sweep_half[SweepHalf.FORWARD](

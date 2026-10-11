@@ -71,27 +71,41 @@ def best_move[
     return score
 
 
-def fits_16_bits[floored: Bool](reward: Int, dearest: Int, rows: Int, columns: Int) -> Bool:
-    """Whether every score of a sweep fits 16 bits, a pair earning at most `reward` and a move costing at
-    most `dearest`. None passes the reward of the shorter sequence matched throughout. A `floored` sweep's,
-    a local alignment's, none falls further below zero than the dearest single move, as each cell takes the
-    best of its moves from cells of zero or more; any other's none falls below every letter of both paying
-    the dearest move. Nor does a gap's sentinel, a quarter of the way down, fall further than one extension
-    below it."""
+def straight_deficit(substitution: Int, first_letter: Int, further_letter: Int, rows: Int, columns: Int) -> Int:
+    """How far below zero a sweep's cells can fall from an origin of `rows` and `columns` letters, a pair
+    costing at most `substitution`, a gap's first letter `first_letter` and each further one
+    `further_letter`: each cell scores at least the path to it of as many substitutions as its shorter side
+    and one gap for the rest, which is a gap's first letter and a step along the longer side for each other
+    letter, none dearer than the dearer of a substitution and a gap's further letter. A sweep with free
+    starts has more paths to each cell, so none falls further."""
+    return first_letter + max(substitution, further_letter) * max(rows, columns)
+
+
+def fits_16_bits[floored: Bool](reward: Int, dearest: Int, deficit: Int, rows: Int, columns: Int) -> Bool:
+    """Whether every score of a sweep fits 16 bits, a pair earning at most `reward`, a move costing at most
+    `dearest`, and no cell's best falling more than `deficit` below zero (see `straight_deficit`). None
+    passes the reward of the shorter sequence matched throughout. A `floored` sweep's, a local alignment's,
+    none falls further below zero than the dearest single move, as each cell takes the best of its moves
+    from cells of zero or more; any other's no gap layer falls more than a move below its cell's deficit,
+    nor a cell plus its pair's score. A gap's sentinel, a quarter of the way down, stays below them all
+    with a move to spare.
+
+    The deficit once charged every letter of both the dearest move, which sent a global sweep of two 1 kbp
+    sequences to 32 bits."""
     var fits = reward * (min(rows, columns) + 1) < 32000 and dearest < 4000
     comptime if not floored:
-        fits = fits and dearest * (rows + columns + 1) < 8000
+        fits = fits and deficit + 2 * dearest < 8000
     return fits
 
 
-def lane_bits[floored: Bool](reward: Int, dearest: Int, rows: Int, columns: Int) -> Int:
+def lane_bits[floored: Bool](reward: Int, dearest: Int, deficit: Int, rows: Int, columns: Int) -> Int:
     """The narrowest lanes, 16, 32 or 64 bits, every score of a sweep fits (see `fits_16_bits`): 32 bits'
     bounds are 16 bits' scaled to them, a sentinel a quarter of the way down."""
-    if fits_16_bits[floored](reward, dearest, rows, columns):
+    if fits_16_bits[floored](reward, dearest, deficit, rows, columns):
         return 16
     var fits = reward * (min(rows, columns) + 1) < 1 << 30 and dearest < 1 << 27
     comptime if not floored:
-        fits = fits and dearest * (rows + columns + 1) < 1 << 28
+        fits = fits and deficit + 2 * dearest < 1 << 28
     return 32 if fits else 64
 
 
