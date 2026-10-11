@@ -1,12 +1,12 @@
 # This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
 # MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """
-The side of `mode_bench.py` dinara-align runs: each workload's mode, with its CIGAR, one pair at a time on one
+The side of `modes_bench.py` dinara-align runs: each workload's mode, with its CIGAR, one pair at a time on one
 thread.
 
     mojo build -I . benchmarks/modes.mojo -o <binary> && <binary> <workload file>
 
-The workload's name picks the call (see `mode_bench.py`); the time is the faster of two passes over the
+The workload's name picks the call (see `modes_bench.py`); the time is the faster of two passes over the
 file, its mean per pair, and the answer the sum and position-weighted sum of each pair's cost, or of its
 score where the mode rewards matches, as `modes/rivals.cpp` prints them.
 """
@@ -35,6 +35,12 @@ def dna_table() raises -> Scoring:
 
 def answer(reference: String, query: String, workload: String, scoring: Scoring) raises -> Int:
     """The pair's cost, or its score where the workload's mode rewards matches."""
+    if workload.startswith("local"):
+        return align(reference, query, Costs.affine(4, 6, 2), Mode.local(2)).score
+    if workload == "overlap-reads":
+        return align(reference, query, Costs.affine(4, 6, 2), Mode.overlap(2)).score
+    if workload == "infix-reads":
+        return align(reference, query, Costs.affine(4, 6, 2), Mode.INFIX.with_match_score(2)).score
     if workload.startswith("infix-edit"):
         return align(reference, query, Costs.edit(), Mode.INFIX).cost
     if workload == "prefix-edit":

@@ -169,6 +169,20 @@ answers held to the copies it replaces by the tests, and a hot path benchmarked 
   the regrouped recurrence 1 to 2% (the runner's own builds, one round, agreed within a point), its 14 to 8 cycles a word mattering only to the few narrow bands; the
   certified band 2.9 and 3.1 times on the short-read batch (its harness, carrying GPU kernels, built as
   usual). In the paper's Results ("Effect of each technique").
+- [ ] **The paper's results on the new protocol.** `bench.py` now runs A*PA2's real datasets and QuickEd's
+  simulated ones with a 30 s budget, and `bench-modes` merges the local workloads into the modes; the paper's
+  tables, figure and supplement still give the `ebe290f` run of the harness they replaced (A*PA2's uniform
+  sets swept over divergence and length, medians, the approximate aligners), and its data-availability line
+  already names the new tasks. Re-measure and rewrite them together: the main text's real, affine, batch and
+  ablation tables, the figure over QuickEd's lengths and error rates, the supplement's tables S2 to S4, and
+  the prose quoting them (benchmarks/README.md has the 2026-10-10 numbers at `289bcf0`).
+- [ ] **Affine memory past the kept fronts' cap.** At (4, 6, 2) an alignment's peak grew by 144 MB on an
+  ont-500k-genvar read and 112 MB on 100 kbp pairs at 20%, past the 80 MB the kept fronts stay within;
+  find what else grows with the pair (rings, the moves, the difference sweep's stretches) before claiming
+  the bound for the whole alignment.
+- [ ] **A*PA2-simple on QuickEd's 10 kbp pairs at 5%**: 288 against 329 µs a pair, the one dataset of the
+  22 where a rival is faster. Profile which part of the band or the diagonal transition loses it before
+  changing anything.
 
 ## From the paper's literature check
 

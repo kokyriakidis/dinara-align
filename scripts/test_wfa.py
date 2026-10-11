@@ -5,7 +5,7 @@
 
     pixi run test-wfa
 
-Clones WFA2-lib at the commit pinned in `benchmarks/run.py` into the benchmarks' cache, the first time
+Clones WFA2-lib at the commit pinned in `benchmarks/harness.py` into the benchmarks' cache, the first time
 only, builds `tests/wfa_utest.mojo` and runs it on the clone's `tests` directory. Nothing of WFA2-lib
 is built: only its data files are read.
 """
@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "benchmarks"))
 
-from run import fetch  # noqa: E402
+from harness import fetch  # noqa: E402
 
 
 def main() -> None:

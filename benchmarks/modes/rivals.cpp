@@ -1,13 +1,14 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
  * MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-// The rivals of `mode_bench.py`, each in the mode dinara-align runs on the same workload (see there), each
+// The rivals of `modes_bench.py`, each in the mode dinara-align runs on the same workload (see there), each
 // with its CIGAR:
 //
 //     rivals <workload file>
 //
 // Edlib (HW, SHW) and WFA2-lib (ends-free) for free ends, KSW2 for the extension and two-piece gaps, WFA2-lib
-// for two-piece gaps, parasail and SSW for a DNA substitution table. Each pair of the file,
+// for two-piece gaps, parasail and SSW for a DNA substitution table and for local alignment, parasail for
+// overlap alignment and for a read placed whole in a window scored with a reward. Each pair of the file,
 // `name<TAB>reference<TAB>query`, is aligned by each tool that offers the workload's mode; a tool's time is
 // the faster of two passes over the file, its mean per pair, and its answer the sum and position-weighted sum
 // of each pair's cost, or score where the mode rewards matches. Prints
@@ -165,12 +166,19 @@ long ksw2_two_piece(const Pair &pair, const std::vector<int8_t> &table) {
 }
 #endif
 
-// parasail's score of the query against the reference, globally or locally, its CIGAR read back.
-long parasail(const Pair &pair, const parasail_matrix_t *matrix, int open, int extend, bool local) {
+// parasail's alignments: global, local, overlap (both sequences' ends free) and the query placed whole in the
+// reference (the reference's ends free).
+enum class Span { global, local, overlap, placed };
+
+// parasail's score of the query against the reference in `span`, its CIGAR read back.
+long parasail(const Pair &pair, const parasail_matrix_t *matrix, int open, int extend, Span span) {
     const char *query = pair.query.data(), *reference = pair.reference.data();
     int qlen = static_cast<int>(pair.query.size()), rlen = static_cast<int>(pair.reference.size());
-    parasail_result_t *result = local ? parasail_sw_trace_striped_sat(query, qlen, reference, rlen, open, extend, matrix)
-                                      : parasail_nw_trace_striped_sat(query, qlen, reference, rlen, open, extend, matrix);
+    parasail_result_t *result =
+        span == Span::local     ? parasail_sw_trace_striped_sat(query, qlen, reference, rlen, open, extend, matrix)
+        : span == Span::overlap ? parasail_sg_trace_striped_sat(query, qlen, reference, rlen, open, extend, matrix)
+        : span == Span::placed  ? parasail_sg_dx_trace_striped_sat(query, qlen, reference, rlen, open, extend, matrix)
+                                : parasail_nw_trace_striped_sat(query, qlen, reference, rlen, open, extend, matrix);
     parasail_cigar_t *cigar = parasail_result_get_cigar(result, query, qlen, reference, rlen, matrix);
     long score = parasail_result_get_score(result);
     parasail_cigar_free(cigar);
@@ -225,6 +233,23 @@ int main(int argc, char **argv) {
         int bonus = workload == "extension-bonus" ? 50 : 0;
         time_tool("KSW2", workload, pairs, [&](const Pair &pair) { return ksw2_extension(pair, table, bonus); });
 #endif
+    } else if (workload.rfind("local", 0) == 0 || workload == "overlap-reads" || workload == "infix-reads") {
+        // Costs.affine(4, 6, 2) with a match 2: a mismatch -4, a gap of `k` letters `6 + 2k`, an opening of 8 and
+        // an extension of 2 as parasail and SSW count them.
+        parasail_matrix_t *matrix = parasail_matrix_create("ACGT", 2, -4);
+        if (workload == "overlap-reads") {
+            time_tool("parasail", workload, pairs, [&](const Pair &pair) { return parasail(pair, matrix, 8, 2, Span::overlap); });
+        } else if (workload == "infix-reads") {
+            time_tool("parasail", workload, pairs, [&](const Pair &pair) { return parasail(pair, matrix, 8, 2, Span::placed); });
+        } else {
+            std::vector<int8_t> table(25, 0);
+            for (int row = 0; row < 4; ++row)
+                for (int column = 0; column < 4; ++column) table[row * 5 + column] = row == column ? 2 : -4;
+            auto code_of = [](char c) -> int8_t { return c == 'A' ? 0 : c == 'C' ? 1 : c == 'G' ? 2 : c == 'T' ? 3 : 4; };
+            time_tool("SSW", workload, pairs, [&](const Pair &pair) { return ssw(pair, table, 5, code_of, 8, 2); });
+            time_tool("parasail", workload, pairs, [&](const Pair &pair) { return parasail(pair, matrix, 8, 2, Span::local); });
+        }
+        parasail_matrix_free(matrix);
     } else if (workload.rfind("table", 0) == 0) {
         // A match 2, a transition -2, a transversion -4, a gap of `k` letters `4 + 2k`: an opening of 6 and an
         // extension of 2 as parasail and SSW count them.
@@ -238,7 +263,8 @@ int main(int argc, char **argv) {
             }
         }
         bool local = workload == "table-local";
-        time_tool("parasail", workload, pairs, [&](const Pair &pair) { return parasail(pair, matrix, 6, 2, local); });
+        time_tool("parasail", workload, pairs,
+                  [&](const Pair &pair) { return parasail(pair, matrix, 6, 2, local ? Span::local : Span::global); });
         if (local) {
             auto code_of = [](char c) -> int8_t { return c == 'A' ? 0 : c == 'C' ? 1 : c == 'G' ? 2 : c == 'T' ? 3 : 4; };
             time_tool("SSW", workload, pairs, [&](const Pair &pair) { return ssw(pair, table, 5, code_of, 6, 2); });

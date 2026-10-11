@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0. If a copy of the
 # MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
-"""Times dinara-align's other modes against the aligners that offer the same one: free ends at unit and
-gap-affine costs, seed extension, two-piece gaps, and substitution tables with more than one mismatch
-score.
+"""Times dinara-align's modes beyond global alignment against the aligners that offer the same one: free
+ends at unit and gap-affine costs, seed extension, two-piece gaps, substitution tables, and local, overlap
+and scored infix alignment.
 
-    pixi run bench-modes     # builds and times the rivals the first time, a few minutes; then seconds
-    pixi run bench-modes --remeasure   # times the rivals again rather than replaying their kept rows
+    pixi run bench-modes                # builds and times the rivals the first time, a few minutes; then seconds
+    pixi run bench-modes --only local-long table-local
+    pixi run bench-modes --remeasure    # times the rivals again rather than replaying their kept rows
 
 | workload | dinara-align | rivals |
 | :-- | :-- | :-- |
@@ -17,27 +18,28 @@ score.
 | extension-bonus | the same with `end_bonus=50` | KSW2's `extz2` with an end bonus of 50 |
 | two-piece | `Costs.two_piece(4, 6, 2, 24, 1)`, global | KSW2's `extd2`, WFA2-lib's two-piece gap-affine |
 | table-global, table-local | a `Scoring` with transitions apart from transversions | parasail, and SSW locally |
+| local-short, local-window, local-long | `Costs.affine(4, 6, 2)`, `Mode.local(2)` | SSW, parasail's `sw` |
+| overlap-reads | `Costs.affine(4, 6, 2)`, `Mode.overlap(2)` | parasail's `sg` |
+| infix-reads | `Costs.affine(4, 6, 2)`, `Mode.INFIX.with_match_score(2)` | parasail's `sg_dx` |
 
 Every tool aligns every pair with its CIGAR, on one thread, and its time is the faster of two passes over
 a workload, its mean per pair. Its answer, the sum and position-weighted sum of its costs or scores, must
-equal every other tool's on the same workload, or the run fails. Each rival is cloned at a pinned commit
-(see `run.RIVALS`) and built in `benchmarks/.cache/` for the same CPU as everything else. KSW2's kernels are
-SSE only, so it runs on x86 alone. Z-drop is left out: KSW2 gauges it by anti-diagonal and dinara-align
-as WFA2-lib does, a cost at a time, so the two stop at different places and their times compare different
-work. Deletions priced apart from insertions are left out too: no rival here offers them.
+equal every other tool's on the same workload, or the run fails. KSW2's kernels are SSE only, so it runs on
+x86 alone. Z-drop is left out: KSW2 gauges it by anti-diagonal and dinara-align as WFA2-lib does, a cost at
+a time, so the two stop at different places and their times compare different work.
 """
 
+import argparse
 import random
 import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
 
-import run
-from run import CACHE, DATA, HERE, RESULTS, ROOT, build_note, c_cpu_flag, fetch, kept_rows, mojo_cpu_args, mutate
+import harness
+from harness import DATA, HERE, RESULTS, build_note, c_driver, kept_rows, mojo_binary, mutate, set_cpu
 
 MODES = DATA / "modes"
-BUILD = CACHE / "modes"
 WORKLOADS = [
     "infix-edit",
     "infix-edit-long",
@@ -48,17 +50,23 @@ WORKLOADS = [
     "two-piece",
     "table-global",
     "table-local",
+    "local-short",
+    "local-window",
+    "local-long",
+    "overlap-reads",
+    "infix-reads",
 ]
+TOOLS = ["dinara-align", "Edlib", "WFA2-lib", "KSW2", "parasail", "SSW"]
 
 
 def generate() -> None:
-    """Writes each workload's pairs, `name, reference, query` a row, from a fixed seed."""
+    """Writes each workload's pairs, `name, reference, query` a row, from fixed seeds."""
     MODES.mkdir(parents=True, exist_ok=True)
     rng = random.Random(11)
 
-    def sequence(length: int, alphabet: str = "ACGT") -> str:
-        """`length` random letters of `alphabet`."""
-        return "".join(rng.choice(alphabet) for _ in range(length))
+    def sequence(length: int) -> str:
+        """`length` random bases."""
+        return "".join(rng.choice("ACGT") for _ in range(length))
 
     def write(name: str, pairs: list) -> None:
         """One workload's file."""
@@ -80,11 +88,7 @@ def generate() -> None:
     write("infix-affine", infix)
     write("infix-edit-long", placed(20, 10_000, 30_000, 0.05))
     # A read's start against a reference running on past its end.
-    prefix = []
-    for _ in range(100):
-        reference = sequence(2_000)
-        prefix.append((reference, mutate(reference[:1_000], 0.1, "ACGT", rng)))
-    write("prefix-edit", prefix)
+    write("prefix-edit", [(reference, mutate(reference[:1_000], 0.1, "ACGT", rng)) for reference in (sequence(2_000) for _ in range(100))])
     # A seed's extension: the read follows the reference for a while at 5%, then turns to noise.
     extension = []
     for _ in range(200):
@@ -105,9 +109,8 @@ def generate() -> None:
     write("two-piece", two_piece)
     write("table-global", [(reference, mutate(reference, 0.1, "ACGT", rng)) for reference in (sequence(1_000) for _ in range(100))])
     write("table-local", placed(20, 1_000, 10_000, 0.1))
-
-    # Reads that follow the reference at 5% and end in a short stretch of noise, which an end bonus may
-    # or may not align through: last, so every earlier workload's pairs stay as they were.
+    # Reads that follow the reference at 5% and end in a short stretch of noise, which an end bonus may or
+    # may not align through.
     bonus = []
     for _ in range(200):
         reference = sequence(2_000)
@@ -115,82 +118,60 @@ def generate() -> None:
         bonus.append((reference, mutate(reference[:follows], 0.05, "ACGT", rng) + sequence(rng.randint(0, 80))))
     write("extension-bonus", bonus)
 
-
-def build_rivals(driver: Path = HERE / "modes" / "rivals.cpp", name: str = "rivals", extra: list = []) -> Path:
-    """A C++ driver, `driver`, over Edlib, WFA2-lib, parasail and SSW, and on x86 KSW2, built as `name` for the
-    chosen CPU with `extra` flags besides: by default this benchmark's own."""
-    edlib = fetch("edlib")
-    wfa = fetch("WFA2-lib")
-    parasail = fetch("parasail")
-    ssw = fetch("SSW")
-    # The same per-CPU parasail build `local_bench.py` makes, built here if that has not run.
-    parasail_build = parasail / f"build-{run.CPU}"
-    if not (parasail_build / "libparasail.a").exists():
-        parasail_build.mkdir(exist_ok=True)
-        subprocess.run(
-            ["cmake", "-DCMAKE_POLICY_VERSION_MINIMUM=3.5", "-DCMAKE_BUILD_TYPE=Release", "-DBUILD_SHARED_LIBS=OFF",
-             f"-DCMAKE_C_FLAGS={c_cpu_flag()}", ".."],
-            cwd=parasail_build, check=True, capture_output=True,
-        )
-        subprocess.run(["make", "-j4", "parasail"], cwd=parasail_build, check=True, capture_output=True)
-    # WFA2-lib's Makefile builds for the host's own CPU; given the chosen one instead, kept per CPU.
-    wfa_library = wfa / "lib" / f"libwfa-{run.CPU}.a"
-    if not wfa_library.exists():
-        subprocess.run(["make", "clean"], cwd=wfa, check=True, capture_output=True)
-        subprocess.run(["make", "setup", "lib_wfa", f"CC_FLAGS=-Wall -fPIE -O3 {c_cpu_flag()}"], cwd=wfa, check=True, capture_output=True)
-        (wfa / "lib" / "libwfa.a").rename(wfa_library)
-    BUILD.mkdir(parents=True, exist_ok=True)
-    binary = BUILD / f"{name}-{run.CPU}"
-    flags = ["-O3", c_cpu_flag(), *extra]
-    sources = [str(ssw / "src" / "ssw.c")]
-    defines = []
-    if not run.arm():
-        ksw2 = fetch("ksw2")
-        sources += [str(ksw2 / "ksw2_extz2_sse.c"), str(ksw2 / "ksw2_extd2_sse.c"), str(ksw2 / "kalloc.c")]
-        defines += ["-DWITH_KSW2", f"-I{ksw2}"]
-    objects = []
-    for source in sources:
-        target = BUILD / (Path(source).stem + f"-{run.CPU}.o")
-        subprocess.run(["cc", "-c", *flags, *defines, f"-I{ssw / 'src'}", source, "-o", str(target)], check=True)
-        objects.append(str(target))
-    subprocess.run(
-        [
-            "c++", "-std=c++17", *flags, *defines,
-            str(driver), str(edlib / "edlib" / "src" / "edlib.cpp"), *objects,
-            f"-I{edlib / 'edlib' / 'include'}", f"-I{wfa}", f"-I{ssw / 'src'}", f"-I{parasail}", f"-I{parasail_build}",
-            str(wfa_library), str(parasail_build / "libparasail.a"),
-            "-lz", "-lm", "-lpthread", "-o", str(binary),
-        ],
-        check=True,
-    )
-    return binary
-
-
-def build_ours() -> Path:
-    """dinara-align's runner, `modes.mojo`, built for the chosen CPU."""
-    binary = BUILD / f"dinara-align-modes-{run.CPU}"
-    BUILD.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        ["mojo", "build", "-I", str(ROOT), str(HERE / "modes.mojo"), "-o", str(binary), *mojo_cpu_args()], check=True
-    )
-    return binary
+    # The local workloads, from a seed of their own: short noisy pairs with planted cores, a 1 kbp read in a
+    # 10 kbp window, 10 kbp against 12 kbp, two 2 kbp reads overlapping by 0.5 to 1.5 kbp, and a 1 kbp read
+    # placed whole in a 3 kbp window.
+    rng = random.Random(9)
+    short = []
+    for trial in range(600):
+        core = sequence(rng.randint(20, 300))
+        reference = sequence(rng.randint(0, 200)) + core + sequence(rng.randint(0, 200))
+        query = sequence(rng.randint(0, 50)) + mutate(core, [0.02, 0.08, 0.2, 0.35][trial % 4], "ACGT", rng)
+        query += sequence(rng.randint(0, 50))
+        if trial % 10 == 0:
+            query = sequence(rng.randint(5, 100))
+        short.append((reference, query))
+    write("local-short", short)
+    window = []
+    for _ in range(20):
+        reference = sequence(10_000)
+        start = rng.randint(0, 9_000)
+        window.append((reference, mutate(reference[start : start + 1000], 0.1, "ACGT", rng)))
+    write("local-window", window)
+    long = []
+    for _ in range(5):
+        core = sequence(10_000)
+        long.append((sequence(1000) + core + sequence(1000), mutate(core, 0.05, "ACGT", rng)))
+    write("local-long", long)
+    overlap = []
+    for _ in range(100):
+        genome = sequence(3_500)
+        shift = rng.randint(500, 1_500)
+        first = mutate(genome[shift : shift + 2_000], 0.05, "ACGT", rng)
+        second = mutate(genome[shift + 2_000 - rng.randint(500, 1_500) :][:2_000], 0.05, "ACGT", rng)
+        overlap.append((first, second))
+    write("overlap-reads", overlap)
+    placed_reads = []
+    for _ in range(100):
+        reference = sequence(3_000)
+        start = rng.randint(0, 2_000)
+        placed_reads.append((reference, mutate(reference[start : start + 1000], 0.1, "ACGT", rng)))
+    write("infix-reads", placed_reads)
 
 
 def main() -> None:
     """Generates the workloads, runs every tool on each, fails unless their answers agree, and writes the
-    table of times to `results/mode-results.md`."""
-    import argparse
-
+    table of times to `results/modes.md`."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--cpu", default="native", help="the CPU every tool is built for (default: the host's)")
     parser.add_argument("--only", nargs="*", help="run these workloads alone")
     parser.add_argument("--remeasure", action="store_true", help="run the rivals again, not their kept rows")
-    arguments = parser.parse_args()
-    run.set_cpu(arguments.cpu)
-    run.REMEASURE = arguments.remeasure
+    options = parser.parse_args()
+    set_cpu(options.cpu)
+    harness.REMEASURE = options.remeasure
     generate()
-    ours = build_ours()
-    # The rivals' driver is built only when some workload has no kept rows for it (see `run.kept_rows`).
+    ours = mojo_binary(HERE / "modes.mojo", "dinara-align-modes")
+    # The rivals' driver is built only when some workload has no kept rows for it (see `harness.kept_rows`).
     built = {}
 
     def rows_of(command: list) -> list:
@@ -202,11 +183,11 @@ def main() -> None:
     def rivals() -> Path:
         """The driver over Edlib, WFA2-lib, KSW2, parasail and SSW, built once."""
         if "rivals" not in built:
-            built["rivals"] = build_rivals()
+            built["rivals"] = c_driver(HERE / "modes" / "rivals.cpp", "mode-rivals")
         return built["rivals"]
 
     rows = []
-    for workload in arguments.only or WORKLOADS:
+    for workload in options.only or WORKLOADS:
         path = MODES / f"{workload}.tsv"
         rows.extend(rows_of([ours, path]))
         rows.extend(
@@ -225,22 +206,21 @@ def main() -> None:
     disagreeing = {workload: found for workload, found in answers.items() if len(set(found.values())) > 1}
     if disagreeing:
         sys.exit(f"the tools' answers disagree: {disagreeing}")
-    tools = ["dinara-align", "Edlib", "WFA2-lib", "KSW2", "parasail", "SSW"]
-    lines = ["| workload | " + " | ".join(tools) + " |", "| :-- | " + " | ".join("--:" for _ in tools) + " |"]
+    lines = ["| workload | " + " | ".join(TOOLS) + " |", "| :-- | " + " | ".join("--:" for _ in TOOLS) + " |"]
     for workload, measured in times.items():
         fastest = min(measured.values())
         cells = []
-        for tool in tools:
+        for tool in TOOLS:
             seconds = measured.get(tool)
             if seconds is None:
                 cells.append("—")
                 continue
-            text = f"{seconds * 1e6:.0f} µs" if seconds < 1e-3 else f"{seconds * 1e3:.2f} ms"
+            text = harness.duration(seconds)
             cells.append(f"**{text}**" if seconds == fastest else text)
         lines.append(f"| {workload} | " + " | ".join(cells) + " |")
     table = build_note() + "\n".join(lines)
     RESULTS.mkdir(parents=True, exist_ok=True)
-    (RESULTS / "mode-results.md").write_text(table + "\n")
+    (RESULTS / "modes.md").write_text(table + "\n")
     print(table)
 
 

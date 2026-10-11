@@ -340,8 +340,8 @@ BACK = [
     ("Funding", "This work received no specific funding."),
     ("Conflict of interest", "None declared."),
     ("Data availability", "The software, benchmark harness and the commits of every compared tool are available at "
-     "https://github.com/kokyriakidis/dinara-align. The benchmarks are reproduced by `pixi run bench-astarpa2`, "
-     "`results-astarpa2`, `bench`, `bench-local`, `bench-modes`, `bench-batch` and `bench-ablation`."),
+     "https://github.com/kokyriakidis/dinara-align. The benchmarks are reproduced by `pixi run bench` (unit and "
+     "`--affine` costs), `bench-modes`, `bench-batch` and `bench-ablation`."),
 ]
 
 TABLES = {

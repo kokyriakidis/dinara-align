@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
-# `run.py` clones pa-bench here at a pinned commit; its `pa-wrapper` crate builds every aligner A*PA2's
+# `bench.py` clones pa-bench here at a pinned commit; its `pa-wrapper` crate builds every aligner A*PA2's
 # evaluation compared against, with the parameters it used. Nothing of it is vendored.
 [dependencies]
 libc = "0.2"

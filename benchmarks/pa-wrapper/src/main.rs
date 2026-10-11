@@ -55,7 +55,7 @@ fn measure(mut run: impl FnMut() -> i64) -> (f64, i64) {
 /// flushed as it finishes, gives its file, its time and its cost, so a run stopped mid-pair still
 /// reports the pairs before it. `biwfa` is the evaluation's WFA2-lib, its lowest-memory mode, and
 /// `wfa` its keep-every-front mode, whose memory grows with the square of the distance; the harness
-/// caps it (see `pa_bench.py`).
+/// caps it (see `bench.py`).
 ///
 /// `wfa-adaptive` and `block-aligner` are the evaluation's two approximate aligners, with its
 /// parameters: WFA-adaptive's defaults (10, 50, 10), and Block Aligner's blocks from 0.1 to 1% of the

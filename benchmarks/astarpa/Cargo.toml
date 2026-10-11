@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# `run.py` clones A*PA here at a pinned commit; nothing of it is vendored into this repository.
+# `bench.py` clones A*PA here at a pinned commit; nothing of it is vendored into this repository.
 # It needs the nightly named in `rust-toolchain.toml`, which `rustup` selects automatically.
 [dependencies]
 libc = "0.2"

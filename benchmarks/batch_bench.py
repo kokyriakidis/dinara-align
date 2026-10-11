@@ -22,8 +22,8 @@ Every tool runs twice: on one core, each library as a library runs, and on every
 calls spread by its own driver, the rivals' through OpenMP, one aligner a thread, dinara-align's by
 `batches.mojo`, a piece of the batch a call; the library itself starts no threads. A time is the faster
 of two passes over the whole batch. The costs, summed and position-weighted, must agree between
-every tool on a workload, or the run fails. Each rival is pinned (see `run.RIVALS`), built for the same
-CPU as everything else, and timed once (see `run.kept_rows`).
+every tool on a workload, or the run fails. Each rival is pinned (see `harness.RIVALS`), built for the same
+CPU as everything else, and timed once (see `harness.kept_rows`).
 """
 
 import os
@@ -33,9 +33,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-import mode_bench
-import run
-from run import CACHE, DATA, HERE, RESULTS, ROOT, build_note, kept_rows, mojo_cpu_args, mutate
+import harness
+from harness import CACHE, DATA, HERE, RESULTS, ROOT, build_note, c_driver, kept_rows, mojo_cpu_args, mutate
 
 BATCHES = DATA / "batches"
 BUILD = CACHE / "batches"
@@ -62,7 +61,7 @@ def generate() -> None:
 
 def build_ours() -> Path:
     """dinara-align's runner, `batches.mojo`, built for the chosen CPU."""
-    binary = BUILD / f"dinara-align-batches-{run.CPU}"
+    binary = BUILD / f"dinara-align-batches-{harness.CPU}"
     BUILD.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["mojo", "build", "-I", str(ROOT), str(HERE / "batches.mojo"), "-o", str(binary), *mojo_cpu_args()], check=True
@@ -79,8 +78,8 @@ def main() -> None:
     parser.add_argument("--cpu", default="native", help="the CPU every tool is built for (default: the host's)")
     parser.add_argument("--remeasure", action="store_true", help="run the rivals again, not their kept rows")
     arguments = parser.parse_args()
-    run.set_cpu(arguments.cpu)
-    run.REMEASURE = arguments.remeasure
+    harness.set_cpu(arguments.cpu)
+    harness.REMEASURE = arguments.remeasure
     generate()
     path = BATCHES / "illumina.tsv"
     ours = build_ours()
@@ -95,7 +94,7 @@ def main() -> None:
     def rivals() -> Path:
         """The OpenMP driver over WFA2-lib, KSW2, parasail and Edlib, built once."""
         if "rivals" not in built:
-            built["rivals"] = mode_bench.build_rivals(HERE / "batches" / "rivals.cpp", "batch-rivals", ["-fopenmp"])
+            built["rivals"] = c_driver(HERE / "batches" / "rivals.cpp", "batch-rivals", ["-fopenmp"])
         return built["rivals"]
 
     # One core, each library as a library runs, then every core, each tool's calls spread by its driver.

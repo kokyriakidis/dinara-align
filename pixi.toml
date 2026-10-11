@@ -33,22 +33,16 @@ format = "mojo format -l 120 dinara_align tests c python cli"
 api-docs = "python3 scripts/api_docs.py"
 # Pulls the latest Mojo skills from github.com/modular/skills into .claude/skills for coding agents.
 sync-skills = "bash .claude/sync-skills.sh"
-# Times dinara-align against other exact global aligners; see `benchmarks/run.py` for the flags.
-bench = "python3 benchmarks/run.py"
-# Times dinara-align head to head with A*PA2's evaluation, on its datasets; see `benchmarks/pa_bench.py`.
-bench-astarpa2 = "python3 benchmarks/pa_bench.py"
-# Measures the results tables of benchmarks/README.md: `collect`, then `tables`.
-results-astarpa2 = "python3 benchmarks/pa_results.py"
-# Times local and overlap alignment against SSW, parasail, abPOA and hyalite; see `benchmarks/local_bench.py`.
-bench-local = "python3 benchmarks/local_bench.py"
-# Times dinara-align's free ends, extension, two-piece gaps and tables against Edlib, WFA2-lib, KSW2, parasail and SSW; see `benchmarks/mode_bench.py`.
-bench-modes = "python3 benchmarks/mode_bench.py"
+# Times dinara-align against every exact global aligner on A*PA2's real datasets and QuickEd's simulated ones,
+# unit costs or `--affine x,o,e`; see `benchmarks/bench.py` for the flags.
+bench = "python3 benchmarks/bench.py"
+# Times dinara-align's free ends, extension, two-piece gaps, tables, local and overlap alignment against Edlib,
+# WFA2-lib, KSW2, parasail and SSW; see `benchmarks/modes_bench.py`.
+bench-modes = "python3 benchmarks/modes_bench.py"
 # Times batches of short-read global scores on every thread against WFA2-lib, KSW2, parasail and Edlib; see `benchmarks/batch_bench.py`.
 bench-batch = "python3 benchmarks/batch_bench.py"
 # Builds dinara-align with each technique switched off in turn and times every build alike; see `benchmarks/ablation.py`.
 bench-ablation = "python3 benchmarks/ablation.py"
-# Times dinara-align on QuickEd's simulated datasets and A*PA2's ONT MiniIONs whole, total time and memory as QuickEd's paper reports them; see `benchmarks/quicked_bench.py`.
-bench-quicked = "python3 benchmarks/quicked_bench.py"
 # Builds a program on dinara-align into a folder that runs without pixi or Mojo, for a baseline CPU:
 # `pixi run bundle <program.mojo> [out-dir] [target-cpu]`; see `scripts/bundle.sh`.
 bundle = "bash scripts/bundle.sh"

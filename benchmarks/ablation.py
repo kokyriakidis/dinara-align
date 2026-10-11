@@ -7,9 +7,9 @@
     pixi run bench-ablation                 # three rounds, every configuration in turn each round
     pixi run bench-ablation --rounds 5
 
-Each configuration aligns the A*PA2 benchmark's samples with traceback (`ablation.mojo`; the samples
-come from `pixi run bench-astarpa2`), and the batch switch scores the short-read batch of
-`batch_bench.py`. The configurations alternate within each round, so a drift in the machine falls on
+Each configuration aligns samples of the main benchmark's datasets with traceback (`ablation.mojo`, the
+samples drawn as `bench.py` draws them, larger for the 500 kbp reads), and the batch switch scores the
+short-read batch of `batch_bench.py`. The configurations alternate within each round, so a drift in the machine falls on
 all of them, and the table gives each one's median against the baseline's. Every configuration's costs
 must equal the baseline's, or the run fails: a switch may change the time and nothing else. On Linux
 each run is pinned to core 2 by `taskset`.
@@ -35,30 +35,32 @@ from collections import defaultdict
 from pathlib import Path
 
 import batch_bench
-import run
-from run import CACHE, DATA, HERE, ROOT, mojo_cpu_args
+import bench
+import harness
+from harness import CACHE, DATA, HERE, ROOT, mojo_cpu_args
 
 SWITCHES = ["ABLATE_REGROUP", "ABLATE_PAIRED", "ABLATE_GATHER", "ABLATE_AGREEMENT", "ABLATE_NEIGHBOURS"]
 BATCH_SWITCHES = ["ABLATE_CERTIFIED"]
-SAMPLES = DATA / "pa-bench" / "samples"
-SETS = [
-    "ont-500k-b20000000-p4",
-    "ont-500k-genvar-b20000000-p4",
-    "ont-1k-b2000000-p4",
-    "ont-10k-b2000000-p4",
-    "sars-cov-2-b2000000-p4",
-    "Uniform-t1000000-n100000-e0.01-b2000000-p4",
-    "Uniform-t1000000-n100000-e0.05-b2000000-p4",
-    "Uniform-t1000000-n100000-e0.1-b2000000-p4",
-    "Uniform-t1000000-n100000-e0.15-b2000000-p4",
-]
+DATASETS = {
+    "ont-500k": 20_000_000,
+    "ont-500k-genvar": 20_000_000,
+    "ont-1k": 2_000_000,
+    "ont-10k": 2_000_000,
+    "sars-cov-2": 2_000_000,
+    "l100000.n1000.e1": 2_000_000,
+    "l100000.n1000.e5": 2_000_000,
+    "l100000.n1000.e10": 2_000_000,
+    "l100000.n1000.e20": 2_000_000,
+}
+"""Each dataset the ablation samples, and the sequence its sample holds: the long reads take ten times the
+default, which holds four of them, so their time is not one read's."""
 BUILD = CACHE / "ablation"
 
 
 def build(source: Path, switch: str, mitigated: bool = False) -> Path:
     """`source` built with `switch` defined, or with none for `NONE`; with `mitigated`, its jumps kept
     clear of 32-byte boundaries where the machine and its tools allow (see `mitigated_build`)."""
-    binary = BUILD / f"{source.stem}-{switch}-{run.CPU}"
+    binary = BUILD / f"{source.stem}-{switch}-{harness.CPU}"
     defines = [] if switch == "NONE" else ["-D", f"{switch}=1"]
     if mitigated and platform.machine() in ("x86_64", "AMD64") and shutil.which("clang") and shutil.which("cc"):
         mitigated_build(source, binary, defines)
@@ -100,9 +102,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--rounds", type=int, default=3)
     arguments = parser.parse_args()
-    missing = [name for name in SETS if not (SAMPLES / f"{name}.seq").exists()]
-    if missing:
-        sys.exit(f"missing samples {missing}: run `pixi run bench-astarpa2` first")
+    datasets = dict(bench.download())
+    published = bench.published_costs()
+    samples = [bench.sample(name, datasets[name], bases, published)[0] for name, bases in DATASETS.items()]
+    names = [path.stem for path in samples]
     batch_bench.generate()
     pairs = DATA / "batches" / "illumina.tsv"
     BUILD.mkdir(parents=True, exist_ok=True)
@@ -110,7 +113,7 @@ def main() -> None:
     batchers = {switch: build(HERE / "batches.mojo", switch) for switch in ["NONE", *BATCH_SWITCHES]}
     times = defaultdict(list)
     answers = defaultdict(set)
-    files = [str(SAMPLES / f"{name}.seq") for name in SETS]
+    files = [str(path) for path in samples]
     for _ in range(arguments.rounds):
         for switch, binary in aligners.items():
             output = subprocess.run(pinned([str(binary), *files]), check=True, capture_output=True, text=True).stdout
@@ -130,11 +133,11 @@ def main() -> None:
     disagreeing = [name for name, found in answers.items() if len(found) != 1]
     if disagreeing:
         sys.exit(f"the configurations' costs differ on {disagreeing}")
-    print(f"Median time, ms, and each switch's change against it, over {arguments.rounds} rounds ({run.build_note()}):")
+    print(f"Median time, ms, and each switch's change against it, over {arguments.rounds} rounds ({harness.build_note()}):")
     columns = SWITCHES + BATCH_SWITCHES
     print(f"| dataset | baseline | {' | '.join(switch.removeprefix('ABLATE_').lower() for switch in columns)} |")
     print("| :-- | --: |" + " --: |" * len(columns))
-    for name in SETS + batch_bench.WORKLOADS:
+    for name in names + batch_bench.WORKLOADS:
         base = statistics.median(times[("NONE", name)])
         cells = []
         for switch in columns:
