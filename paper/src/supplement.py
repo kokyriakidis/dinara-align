@@ -30,7 +30,7 @@ _changes[3].extend([
 BODY = [
 ("p", "This supplement provides implementation details, per-change measurements and additional results that the main "
  "text summarises. Section S1 describes techniques not covered in the main text, Section S2 lists the measured "
- "effect of each change, Section S3 gives the complete results for gap-affine costs and the other alignment modes, "
+ "effect of each change and of each technique switched off in turn, Section S3 gives the complete results for gap-affine costs and the other alignment modes, "
  "and Sections S4 and S5 describe robustness measures and approaches that were evaluated and not adopted. Unless "
  "stated otherwise, the measurements in Sections S1, S2, S4 and S5 were taken when each change was introduced, on "
  "the machine indicated, and compare the change with the preceding version; the results in the main text and in "
@@ -56,7 +56,8 @@ BODY = [
  "0.87 and 4.8 ms instead of 1.50, 5.3 and 32.9 ms. The projection extrapolates the cost from how far the two "
  "wavefronts have advanced, which on nanopore reads, whose errors gather at the ends, ran up to 2.8 times too high "
  "in cost and 8 times in work, and handed reads to sweeps that took up to eight times longer than their wavefront: "
- "the 10 kbp reads took 2.33 ms instead of 1.55. As for the diagonal transition, the projection is now trusted only "
+ "the 10 kbp reads took 2.33 ms instead of 1.55. As for the diagonal transition (main text, Section 3.10), the "
+ "projection is now trusted only "
  "once the wavefront's work has reached one twenty-fourth of the sweep's."),
 ("p", "**Register and memory layout of the sweep.** An empty inline-assembly barrier prevents the compiler from "
  "reassociating the regrouped recurrence back to its original form. Vertical differences remain in registers across "
@@ -90,7 +91,7 @@ BODY = [
  "in 3.64 s instead of 3.35 s for the four, and pairs whose boundaries fit were unchanged. With no memory at all, "
  "alignments took about twice the time."),
 ("p", "**Accepting an extrapolation.** The diagonal-transition estimate is abandoned once it has spent one "
- "twenty-fourth of the cost of the cheapest band. An extrapolation sets the band only when the single-wavefront "
+ "twenty-fourth of the cost of the cheapest band (main text, Section 3.10). An extrapolation sets the band only when the single-wavefront "
  "extrapolation from the first edits and the extrapolation of the longer search agree to within one third; "
  "otherwise the first bound is set 256 above the known lower bound, and each retry at most doubles it. A later "
  "checkpoint never lowers the bound below the previous bound plus one quarter, and a failed round continues from the "
@@ -296,12 +297,26 @@ BODY = [
 
 ("sec", "Measured effect of each change"),
 ("table", "changes"),
+("sub", "Effect of each technique"),
+("p", "To measure what each technique contributes to the final code, dinara-align was built with one technique "
+ "switched off at a time, and every build aligned samples of the A*PA2 real datasets and of the 100 kbp simulated "
+ "pairs and scored the short-read batch, the builds alternating within three rounds on one pinned core and "
+ "assembled with branches kept clear of 32-byte boundaries, which the Skylake-X penalises (Table S2); every build "
+ "returned the same costs. Constructing seed neighbours directly (main text, Section 3.5) contributed most on the "
+ "ultra-long reads, 9% and 16%; 100 kbp pairs, which take exact seeds on AVX-512, do not use it. Interleaving two "
+ "groups of bit-parallel words (Section 3.2) contributed 4.5 to 5% on the ultra-long reads and 11.5% on 100 kbp "
+ "pairs at 20% errors, whose bands are widest; the regrouped recurrence contributed 1 to 4%, as bands narrow enough "
+ "to be bound by a single word's step are a small part of the work. Gathered diagonal transition (Section 3.4) "
+ "contributed 13 to 27% where diagonal transition does most of the work, and the agreement rule (Section 3.3) 22% "
+ "on the 10 kbp reads. Without the certified band (Section 3.6), the short-read batch took 2.9 and 3.2 times as "
+ "long."),
+("table", "ablation"),
 
 ("sec", "Additional results"),
-("p", "Table S2 gives the results for the other alignment modes, each compared on one pinned thread of the Skylake-X "
- "with the aligners that support the same mode. Table S3 gives the complete gap-affine comparison at costs "
- "(4, 6, 2). Table S4 gives the mean and median time per alignment at unit costs on every dataset, Table S5 the "
- "samples, Table S6 the memory and Table S7 the short-read batch. The approximate aligners of the A*PA2 benchmark, WFA-adaptive and Block Aligner, are no longer "
+("p", "Table S3 gives the results for the other alignment modes, each compared on one pinned thread of the Skylake-X "
+ "with the aligners that support the same mode. Table S4 gives the complete gap-affine comparison at costs "
+ "(4, 6, 2). Table S5 gives the mean and median time per alignment at unit costs on every dataset, Table S6 the "
+ "samples, Table S7 the memory and Table S8 the short-read batch. The approximate aligners of the A*PA2 benchmark, WFA-adaptive and Block Aligner, are no longer "
  "run. KSW2 and BSAlign, which ran out of time or memory on most datasets of 500 kbp and more, are in the "
  "benchmark's own tables (benchmarks/README.md in the repository)."),
 ("table", "modes"),
@@ -344,8 +359,27 @@ BODY = [
 ]
 
 TABLES = {
-"modes": {
+"ablation": {
   "label": "S2",
+  "fit": True,
+  "caption": "Effect of each technique: median time with all techniques on (ms per alignment; per batch of 500,000 pairs for the short reads), and the change when one technique is switched off, over three alternating rounds on the Skylake-X at commit `dc980d7`, with branches kept clear of 32-byte boundaries. Every configuration returned the same costs.",
+  "header": ["Dataset", "All on", "Regrouped recurrence", "Paired groups", "Gathers", "Agreement rule", "Seed neighbours", "Certified band"],
+  "align": "lrrrrrrr",
+  "rows": [
+    ["ont-500k", "98.8", "+1.1%", "**+4.5%**", "+0.5%", "−0.2%", "**+8.9%**", ""],
+    ["ont-500k-genvar", "136.0", "+1.9%", "**+5.0%**", "+0.4%", "0.0%", "**+16.4%**", ""],
+    ["ont-1k", "0.021", "+0.2%", "+0.3%", "**+14.9%**", "0.0%", "+0.7%", ""],
+    ["ont-10k", "0.145", "−0.6%", "+1.2%", "**+6.4%**", "**+22.2%**", "+0.1%", ""],
+    ["SARS-CoV-2", "0.197", "−0.9%", "+0.2%", "**+13.4%**", "**+4.9%**", "−0.5%", ""],
+    ["100 kbp, 1%", "1.10", "−1.4%", "+0.4%", "**+26.5%**", "−0.1%", "−1.0%", ""],
+    ["100 kbp, 5%", "4.61", "−0.6%", "−0.2%", "+0.1%", "0.0%", "+0.2%", ""],
+    ["100 kbp, 10%", "6.72", "+0.3%", "+3.4%", "+1.9%", "+0.5%", "−0.2%", ""],
+    ["100 kbp, 20%", "15.0", "**+4.1%**", "**+11.5%**", "+3.9%", "−2.9%", "0.0%", ""],
+    ["Short reads, affine", "232", "", "", "", "", "", "**+188%**"],
+    ["Short reads, unit", "213", "", "", "", "", "", "**+215%**"],
+  ]},
+"modes": {
+  "label": "S3",
   "caption": "Other modes: mean time per pair in ms on one pinned thread, the faster of two passes. Every tool's costs or scores agree on every pair.",
   "header": ["Workload", "dinara-align", "Next fastest"],
   "align": "lrl",
@@ -367,7 +401,7 @@ TABLES = {
     ["Infix with a reward, 1 kbp read in a 3 kbp window", "**0.693**", "parasail 15.2"],
   ]},
 "affine_full": {
-  "label": "S3",
+  "label": "S4",
   "fit": True,
   "caption": "Gap-affine alignment at costs (4, 6, 2), all datasets: mean time per alignment in ms, with a 30 s budget per sample. Superscripts give the pairs completed where not all were; a dash marks a tool that completed none within 30 s, o.o.m. one the 8 GB limit stopped.",
   "header": ["Dataset", "dinara-align", "WFA", "BiWFA", "KSW2", "BSAlign"],
@@ -399,7 +433,7 @@ TABLES = {
     ["1 Mbp, 20%", "–", "o.o.m.", "–", "o.o.m.", "o.o.m."],
   ]},
 "unit_full": {
-  "label": "S4",
+  "label": "S5",
   "fit": True,
   "caption": "Unit costs, all datasets: mean time per alignment in ms, with the median in parentheses, traceback included, a 30 s budget per sample. Superscripts give the pairs completed where not all were, the median over those; a dash marks a tool that completed none, o.o.m. one the 8 GB limit stopped.",
   "header": ["Dataset", "dinara-align", "A*PA2-full", "A*PA2-simple", "A*PA", "Edlib", "BiWFA", "WFA", "QuickEd"],
@@ -431,7 +465,7 @@ TABLES = {
     ["1 Mbp, 20%", "**892 (688)**", "2,020 (2,010)", "3,520 (3,500)", "–", "–", "–", "o.o.m.", "4,800 (4,800)"],
   ]},
 "datasets": {
-  "label": "S5",
+  "label": "S6",
   "caption": "The samples: pairs in each sample of the dataset, their lengths and their divergence, the edit distance over the longer sequence, as QuickEd's Table S1 describes its datasets.",
   "header": ["Dataset", "Pairs", "Length, min / mean / max (bp)", "Divergence, min / mean / max (%)"],
   "align": "lrrr",
@@ -462,7 +496,7 @@ TABLES = {
     ["1 Mbp, 20%", "4 of 100", "1,000,000 / 1,000,166 / 1,000,355", "17 / 17 / 17"],
   ]},
 "memory": {
-  "label": "S6",
+  "label": "S7",
   "caption": "Memory at unit costs: the largest growth of peak resident memory aligning one pair of the sample, in MB, as in A*PA2, and the peak resident memory of the whole run in parentheses, as in QuickEd, runtime and input included. A dash marks a tool that completed no pair within 30 s.",
   "header": ["Dataset", "dinara-align", "A*PA2-full", "A*PA2-simple", "Edlib", "BiWFA", "QuickEd"],
   "align": "lrrrrrr",
@@ -474,7 +508,7 @@ TABLES = {
     ["1 Mbp, 20%", "123 (178)", "184 (196)", "192 (205)", "–", "–", "26 (31)"],
   ]},
 "batch": {
-  "label": "S7",
+  "label": "S8",
   "caption": "Global scores of 500,000 short-read pairs: each time is the whole call, in ms.",
   "header": ["Costs", "Threads", "dinara-align", "WFA2-lib", "KSW2", "parasail", "Edlib"],
   "align": "llrrrrr",
