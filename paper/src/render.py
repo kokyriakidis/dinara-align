@@ -141,7 +141,7 @@ def inline_tex(text, bibkeys):
             keys = [k.strip()[1:] for k in r[1:-1].split(";")]
             return "\\citep{" + ",".join(bibkeys[k] for k in keys) + "}"
         t = re.sub(r"\x01(\d+)\x01", put_ref, t)
-        t = re.sub(r"\x00(\d+)\x00", lambda m: "\\texttt{" + tex_escape(codes[int(m.group(1))]) + "}", t)
+        t = re.sub(r"\x00(\d+)\x00", lambda m: "\\texttt{" + tex_escape(codes[int(m.group(1))]).replace("--", "-{}-") + "}", t)
         t = re.sub(r"\x02(\d+)\x02", lambda m: "\\url{" + urls[int(m.group(1))] + "}", t)
         out.append(t)
     return "".join(out)

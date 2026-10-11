@@ -13,20 +13,20 @@ AFFILIATION = "UC Santa Cruz Genomics Institute, Santa Cruz, CA, USA"
 ABSTRACT = [('Motivation',
   'Pairwise alignment underlies read mapping, genome assembly and variant calling. Heuristic aligners can '
   'misplace alignments with large indels or clustered errors, whereas exact aligners return an optimal '
-  'alignment that no parameter can change and serve as the reference for evaluating heuristics. Yet no exact '
-  'algorithm is fastest across workloads: diagonal transition wins on near-identical pairs, bit-parallel band '
-  'doubling on long divergent reads, while batches of short pairs suit inter-sequence vectorisation.'),
+  'alignment that no heuristic cut-off can change and serve as the reference for evaluating heuristics. Yet no '
+  'exact algorithm is fastest across workloads: diagonal transition wins on near-identical pairs, bit-parallel '
+  'band doubling on long divergent reads, while batches of short pairs suit inter-sequence vectorisation.'),
  ('Results',
-  'We present dinara-align, an exact aligner that chooses its algorithm for each pair, every hand-over that '
-  'rests on a projection provably bounding the work it can waste. A gap-affine alignment starts with one '
+  'We present dinara-align, an exact aligner that chooses its algorithm for each pair; every hand-over that '
+  'rests on a projection provably bounds the work it can waste. A gap-affine alignment starts with one '
   'wavefront search and adds a second only when its measured work exceeds what two would need, which we prove '
   'still finds an optimal alignment; short pairs are aligned in narrow bands that each vector lane certifies '
   'optimal; and inexact seed neighbours are inserted without search, provably losing none that local pruning '
-  'keeps. At unit and gap-affine costs every engine breaks ties the same way. On one Intel Skylake-X core, '
-  'dinara-align was the fastest exact aligner compared on every dataset at unit costs, from 250 bp reads to 1 '
-  'Mbp pairs: up to 2.4 times faster than A*PA2 on ultra-long nanopore reads, and 1.95 and 5.2 times faster '
-  'than WFA on Illumina and HiFi reads. At gap-affine costs it was the fastest on every dataset any tool '
-  'completed, 1.07 to 3.3 times faster than the faster of WFA and BiWFA.'),
+  'keeps. At unit and gap-affine costs every engine breaks ties the same way within the memory limit. On one '
+  'Intel Skylake-X core, dinara-align was the fastest exact aligner compared on every dataset at unit costs, '
+  'from 250 bp reads to 1 Mbp pairs: up to 2.4 times faster than A*PA2 on ultra-long nanopore reads, and 1.95 '
+  'and 5.2 times faster than WFA on Illumina and HiFi reads. At gap-affine costs it was the fastest on every '
+  'dataset any tool completed, 1.07 to 3.3 times faster than the faster of WFA and BiWFA.'),
  ('Availability and implementation',
   'dinara-align is free software under the Mozilla Public License 2.0, available at '
   'https://github.com/kokyriakidis/dinara-align with C, C++, Python and command-line interfaces.'),
@@ -37,72 +37,62 @@ BODY = [
 ('sec', 'Introduction'),
 ('p',
  'Pairwise alignment finds the least costly series of substitutions, insertions and deletions that transforms '
- 'one sequence into another. It is a core component of genome analysis, applied to read mapping, variant '
- 'detection, de novo genome assembly and multiple sequence alignment [@Prjibelski2019]: read mappers align each '
- 'read to the reference window its seeds select and extend alignments from seed matches, assemblers compare '
- 'reads with one another to find their overlaps [@Li2018], and assemblies, haplotypes and viral genomes are '
- 'compared base by base.'),
+ 'one sequence into another. It underlies read mapping, variant detection, genome assembly and multiple sequence '
+ 'alignment [@Prjibelski2019]: read mappers align each read to the reference window its seeds select, assemblers '
+ 'compare reads with one another to find their overlaps [@Li2018], and assemblies, haplotypes and viral genomes '
+ 'are compared base by base.'),
 ('p',
- 'Read lengths have grown from hundreds of bases to hundreds of kilobases, and long reads can differ from the '
- 'reference by several per cent. The gap-affine dynamic program computes an optimal alignment over an \\(n \\times '
- 'm\\) matrix [@Gotoh1982], practical for short reads but not for long ones: one pair of 500 kbp reads fills '
- '\\(2.5 \\times 10^{11}\\) cells, and the work grows with the square of the read length.'),
-('p',
- 'Heuristic aligners therefore compute only part of the matrix: a fixed band, an adaptive band [@Liu2023], a '
- 'series of windows, or the cells before the score drops by more than a threshold (X-drop, or Z-drop in minimap2 '
- '[@Li2018]). They lose the guarantee of optimality: their result depends on these cut-offs, and alignments with '
- 'large indels or clustered errors can be missed or misplaced. Distance-sensitive exact aligners instead skip '
- 'only cells that provably cannot lie on an optimal path, so that their running time grows with the distance as '
- 'well as the length, rather than with the product of the lengths.'),
+ 'Read lengths have grown from hundreds of bases to hundreds of kilobases. The gap-affine dynamic program '
+ '[@Gotoh1982] fills an \\(n \\times m\\) matrix, \\(2.5 \\times 10^{11}\\) cells for one pair of 500 kbp reads, so '
+ 'heuristic aligners compute only part of it: a fixed or adaptive band [@Liu2023], a series of windows, or the '
+ 'cells before the score drops by more than a threshold (X-drop, or Z-drop in minimap2 [@Li2018]). Their result '
+ 'then depends on these cut-offs, and alignments with large indels or clustered errors can be missed or '
+ 'misplaced. Exact aligners instead skip only cells that provably cannot lie on an optimal path, so that their '
+ 'running time grows with the distance as well as the length, rather than with the product of the lengths.'),
 ('p',
  'Three ideas underlie current exact aligners. *Band doubling* computes only the diagonals a path within a cost '
  'bound can reach, doubling the bound until the optimum lies within it [@Ukkonen1985]; *bit-parallelism* encodes '
- 'the score differences of 64 cells of a column in a pair of machine words [@Myers1999], and Edlib combines the '
- 'two [@Sosic2017]. *Diagonal transition* extends the furthest-reaching paths one cost at a time, following '
- 'matches at no cost [@Ukkonen1985; @Myers1986]; WFA extended it to gap-affine costs [@MarcoSola2021] and BiWFA '
- 'made its memory linear in the distance [@MarcoSola2023]. A*PA guided an A* search by a gap-chaining seed '
- 'heuristic with match pruning [@GrootKoerkamp2024a], and A*PA2 combined this heuristic with band doubling over '
- 'SIMD blocks, aligning ultra-long reads up to 19 times faster than Edlib and BiWFA [@GrootKoerkamp2024b]; '
- 'QuickEd bounds the distance heuristically and then aligns within the bound [@Doblas2025]. A second line of '
- 'work vectorises the full dynamic program, with anti-diagonal [@Wozniak1997], striped [@Farrar2007; @Zhao2013] '
- 'and prefix-scan [@Daily2016] layouts, difference recurrences [@Suzuki2018; @Li2018] and inter-sequence '
- 'parallelism [@Rognes2011; @Rahn2018], at a cost that grows with the matrix or the band rather than with the '
- 'distance.'),
+ 'the score differences of 64 cells of a column in two machine words [@Myers1999], and Edlib combines the two '
+ '[@Sosic2017]. *Diagonal transition* extends the furthest-reaching paths one cost at a time [@Ukkonen1985; '
+ '@Myers1986]; WFA extended it to gap-affine costs [@MarcoSola2021] and BiWFA made its memory linear in the '
+ 'distance [@MarcoSola2023]. A*PA guided an A* search by a gap-chaining seed heuristic [@GrootKoerkamp2024a]; '
+ 'A*PA2 combined that heuristic with band doubling over SIMD blocks, aligning ultra-long reads up to 19 times '
+ 'faster than Edlib and BiWFA [@GrootKoerkamp2024b]; and QuickEd aligns within a bound it finds heuristically '
+ '[@Doblas2025]. Full-matrix vectorisation, in anti-diagonal [@Wozniak1997], striped [@Farrar2007; @Zhao2013], '
+ 'prefix-scan [@Daily2016], difference-recurrence [@Suzuki2018; @Li2018] and inter-sequence [@Rognes2011; '
+ '@Rahn2018] layouts, takes time in proportion to the matrix or the band instead.'),
 ('p',
  'Each of these methods is fastest on part of the range of workloads: diagonal transition, whose expected work '
  'grows with the square of the distance, on short and near-identical pairs; bit-parallel band doubling, whose '
  'work grows with the length times the distance, on long divergent reads, with the seed heuristic on ultra-long '
  'ones; and inter-sequence vectorisation on batches of short pairs. An aligner that is fastest across workloads '
  'must therefore choose among them for each pair, and an exact aligner must make every such choice (which '
- 'algorithm, which bound, and when to abandon a search) without giving up optimality. In dinara-align every '
- 'engine is exact, so no choice changes the optimal cost, and every hand-over that rests on a projection '
- 'provably bounds the work it can waste; each algorithm is implemented for the latency and memory behaviour of '
- 'current processors. Our contributions are:'),
+ 'algorithm, which bound, when to abandon a search) without giving up optimality. In dinara-align every engine '
+ 'is exact, so no choice changes the optimal cost, and every hand-over that rests on a projection provably '
+ 'bounds the work it can waste. Our contributions are:'),
 ('list',
- ['**One wavefront search or two, chosen by measured work** (Section 3.9). A gap-affine alignment starts with one '
-  'search and adds a second only when its measured work exceeds what two would need, and still returns an optimal '
-  'alignment (Proposition 2).',
- "**Projections with bounded waste** (Sections 3.3 and 3.10). A projected distance sets a band's first bound "
-  'only when the projections of two diagonal-transition searches agree, and a search hands over to an algorithm '
-  "projected to be cheaper only after spending one twenty-fourth of that algorithm's least possible work.",
- '**Certified bands for inter-sequence batches** (Section 3.6). Each short pair is aligned in a vector lane '
-  'within a narrow band that the lane certifies optimal under gap-affine and two-piece costs (Proposition 1), so '
-  'that the speculate-and-verify approach of narrow-band aligners [@Gibrat2018; @Fujiki2020] runs independently '
-  'in every lane of an inter-sequence batch.',
- '**Direct neighbour construction for the seed heuristic** (Section 3.5). Inexact neighbours of exact seed '
-  'matches are inserted without search, and every neighbour that local pruning would keep is provably among them '
-  '(Lemma 1). We also prove that local pruning before the alignment, as in A*PA2, keeps the heuristic a lower '
-  'bound (Lemma S1).',
- '**One alignment whichever engine computes it** (Sections 3.1 and 3.7). At unit, gap-affine and two-piece '
-  'costs, every engine breaks ties between optimal alignments by the same rule, and a unit-cost band past the '
-  'memory limit recomputes stretches of its traceback from recorded state rather than splitting the pair, so its '
+ ['**One wavefront search or two, chosen by measured work** (Section 3.9): a gap-affine alignment adds a second '
+  'search only when its measured work exceeds what two would need, and still returns an optimal alignment '
+  '(Proposition 2).',
+ "**Projections with bounded waste** (Sections 3.3 and 3.10): a projected distance sets a band's first bound "
+  'only when two projections agree, and a search hands over to an algorithm projected to be cheaper only after '
+  "spending one twenty-fourth of that algorithm's least possible work.",
+ '**Certified bands for inter-sequence batches** (Section 3.6): each pair is aligned in a vector lane within a '
+  'narrow band that the lane certifies optimal under gap-affine and two-piece costs (Proposition 1), bringing the '
+  'speculate-and-verify approach of narrow-band aligners [@Gibrat2018; @Fujiki2020] to every lane of a batch.',
+ '**Direct neighbour construction for the seed heuristic** (Section 3.5): inexact neighbours of exact seed '
+  'matches are inserted without search, provably including every one that local pruning keeps (Lemma 1); we also '
+  "prove that A*PA2's pruning keeps the heuristic a lower bound (Lemma S1).",
+ '**One alignment whichever engine computes it** (Sections 3.1 and 3.7): at unit, gap-affine and two-piece costs '
+  'every engine breaks ties by the same rule, unless a gap-affine pair must be split to fit the memory limit, and '
+  'a unit-cost band recomputes its traceback from recorded state rather than splitting the pair, so that its '
   'alignment is the same under any memory limit.',
  '**Engines arranged for the processor** (Sections 3.2, 3.4 and 3.11): diagonal transition with gathered AVX-512 '
   'loads, interleaved bit-parallel groups with a shorter dependency chain, and lower per-pair overhead on short '
   'reads.',
- '**One library for the common modes and cost models** ([#tab:engines]; Supplementary Table S3): global, '
-  'ends-free, extension and local alignment under unit, gap-affine, two-piece and substitution-matrix costs, for '
-  'single pairs and batches, through C, C++, Python and command-line interfaces.']),
+ '**One library** ([#tab:engines]; Supplementary Table S3) for global, ends-free, extension and local alignment '
+  'under unit, gap-affine, two-piece and substitution-matrix costs, for single pairs and batches, through C, C++, '
+  'Python and command-line interfaces.']),
 ('p',
  "We evaluate dinara-align on the datasets of the A*PA2 and QuickEd benchmarks, with QuickEd's Illumina and HiFi "
  "sets replaced by HG002 reads, each paired with the stretch of HG002's own assembly it covers."),
@@ -113,14 +103,13 @@ BODY = [
  'diagonal \\(j-i\\). Under gap-affine costs \\((x, o, e)\\), for example (4, 6, 2), a match costs 0, a mismatch '
  '\\(x\\) and a gap of \\(k\\) letters \\(g(k)=o+ke\\); unit costs have \\(x=e=1\\) and \\(o=0\\), two-piece costs take '
  'the minimum of two such functions [@Li2018], and a substitution matrix instead scores each pair of letters. '
- 'Extension and local alignment maximise a score that rewards each match (Section 3.8). Global alignment '
- 'compares two whole sequences, such as two assemblies or a read and the reference stretch it maps to; ends-free '
- 'alignment places a read inside a longer window or finds the overlap of two reads; extension grows an alignment '
- 'from a seed match, as read mappers do [@Li2018]; and local alignment finds the best-matching parts of two '
- 'sequences. An alignment is *optimal* if no alignment has lower cost under the requested costs and mode; a '
- 'caller may further restrict alignments to a band of diagonals or a maximum cost, and an exact aligner then '
- 'returns an optimal alignment among those or reports that none exists. At unit costs the distance \\(D(i,j)\\) '
- 'between the prefixes \\(a_1\\dots a_i\\) and \\(b_1\\dots b_j\\) satisfies'),
+ 'Global alignment compares two whole sequences; ends-free alignment places a read inside a longer window or '
+ 'finds the overlap of two reads; extension grows an alignment from a seed match [@Li2018]; and local alignment '
+ 'finds the best-matching parts of two sequences. Extension and local alignment maximise a score that rewards '
+ 'each match (Section 3.8). An alignment is *optimal* if no alignment has lower cost under the requested costs '
+ 'and mode; a caller may further restrict alignments to a band of diagonals or a maximum cost, and an exact '
+ 'aligner then returns an optimal alignment among those or reports that none exists. At unit costs the distance '
+ '\\(D(i,j)\\) between the prefixes \\(a_1\\dots a_i\\) and \\(b_1\\dots b_j\\) satisfies'),
 ('p',
  '\\[ D(i,j) = \\min\\bigl(D(i-1,j)+1,\\; D(i,j-1)+1, \\qquad D(i-1,j-1)+[a_i \\ne b_j]\\bigr), \\]'),
 ('p',
@@ -151,8 +140,8 @@ BODY = [
  'remaining cost, and A*PA keeps the match starts in layers by the value of the best chain each begins '
  "[@GrootKoerkamp2024a]. A*PA2 prunes matches before the alignment, in place of A*PA's pruning during the "
  'search: a match \\(\\nu\\) with cost \\(c(\\nu)\\) and end cell \\(\\mathrm{end}(\\nu)\\) is kept only if a path from '
- '\\(\\mathrm{end}(\\nu)\\), starting at cost \\(c(\\nu)\\), crosses the next \\(p = 14\\) seeds, that of \\(\\nu\\) '
- 'included, while its cost stays below the potential of the seeds it has crossed [@GrootKoerkamp2024b]. A '
+ '\\(\\mathrm{end}(\\nu)\\), starting at cost \\(c(\\nu)\\), crosses the next \\(p = 14\\) seeds, counting that of '
+ '\\(\\nu\\), while its cost stays below the potential of the seeds it has crossed [@GrootKoerkamp2024b]. A '
  'diagonal transition from \\(\\mathrm{end}(\\nu)\\) tests this, dropping each furthest-reaching point whose cost '
  'reaches that potential; a further point on a diagonal has crossed at least as much potential, so no such path '
  'is missed. A*PA2 uses the heuristic to drop the rows of each band whose score plus the heuristic exceeds the '
@@ -163,21 +152,21 @@ BODY = [
  'Each problem is assigned to an algorithm ([#tab:engines]; [#fig:overview]). Unit costs follow A*PA2 '
  '[@GrootKoerkamp2024b]: band doubling over 256-column tiles of bit-parallel words, pruned on long pairs by the '
  'gap-chaining seed heuristic [@GrootKoerkamp2024a], with near-identical pairs aligned by diagonal transition '
- 'alone. Gap-affine costs use the wavefront of WFA and BiWFA [@MarcoSola2021; @MarcoSola2023]. Diagonal '
- 'transition runs first and continues while its projected remaining work is below that of the alternative; when '
- 'it hands over, its projection, the length and the cost model choose the next algorithm and its parameters.'),
+ 'alone. Gap-affine costs use the wavefront of WFA and BiWFA [@MarcoSola2021; @MarcoSola2023]. At unit costs, '
+ "diagonal transition runs first and hands over once its projected remaining work exceeds the alternative's and "
+ 'it has spent a twenty-fourth of it (Section 3.10); its projection, the length and the cost model then choose '
+ 'the next algorithm and its parameters.'),
 ('p',
  'At unit, gap-affine and two-piece costs, every engine selects the same alignment among equally good ones, by '
  'the backtrace order of WFA2-lib: from the end, an edit into a cell is preferred to a match whenever one is '
  'optimal, a substitution before a deletion (a letter of \\(A\\) alone) before an insertion (a letter of \\(B\\) '
  'alone), the second gap piece before the first, and a gap extended before it is opened. This rule gives '
  "WFA2-lib's CIGARs exactly; the default applies it to both sequences reversed, which places every edit as far "
- 'left as possible, as variant callers normalise indels. The tile traceback runs a diagonal transition inside '
- 'each tile from its recorded boundary and takes the furthest-reaching source (Section 3.4), the batches and the '
- 'difference sweep store per-cell flags under the rule, and the wavefronts take the furthest-reaching source, '
- 'which makes the same choice. Two exceptions remain: a gap-affine pair whose wavefronts would exceed the memory '
- 'limit is split and follows the rule within each piece, and alignments under a substitution matrix follow the '
- "traceback order of Gotoh's recurrence."),
+ 'left as possible, as variant callers normalise indels. The wavefronts and the tile traceback (Section 3.4) '
+ 'take the furthest-reaching source, which makes the same choice, and the batches and the difference sweep store '
+ 'per-cell flags under the rule. Two exceptions remain: a gap-affine pair whose wavefronts would exceed the '
+ 'memory limit is split and follows the rule within each piece, and alignments under a substitution matrix '
+ "follow the traceback order of Gotoh's recurrence."),
 ('figure', 'overview'),
 ('table', 'engines'),
 ('sub', "A shorter critical path for Myers' recurrence"),
@@ -207,8 +196,8 @@ BODY = [
  'word enters the next through a lane rotation [@Wozniak1997; @GrootKoerkamp2024b], and each column waits for '
  'the rotation of the previous one. A*PA2 overlaps these waits with two four-lane vectors; on AVX-512, where a '
  'vector holds eight words, dinara-align interleaves two eight-word groups, the lower ten columns behind the '
- 'upper, so that each group fills the latency of the other, and bands of two or three words run in '
- 'general-purpose registers, whose operations have lower latency.'),
+ 'upper, so that each fills the latency of the other. Bands of two or three words run in general-purpose '
+ 'registers, whose operations have lower latency.'),
 ('sub', 'Band bounds from agreeing estimates'),
 ('p',
  'Band doubling is exact for any initial bound, but its running time depends on how close that bound is to the '
@@ -219,44 +208,36 @@ BODY = [
  'where it handed over. Without seeds that chain well, the first bound is aimed just above \\(\\hat D_1\\) when '
  '\\(\\max(\\hat D_1,\\hat D_2) \\le \\tfrac43 \\min(\\hat D_1,\\hat D_2)\\), or when the search stopped within 16 edits; '
  'otherwise, as in A*PA2, it starts at most 256 above the known lower bound and each retry at most doubles it. A '
- 'failed round aims the next bound from where it stopped, its progress extrapolated to the whole width, and '
- 'within the first round the distance is estimated again after one eighth, one quarter and one half of the '
- 'columns, lowering the bound or abandoning the round. A distance is accepted only within the bound its round '
- 'ended on, and these rules change only the sequence of bounds, so the result stays exact.'),
+ 'failed round aims the next bound from where it stopped, and the first round estimates the distance again after '
+ 'one eighth, one quarter and one half of the columns, lowering its bound or abandoning the round. A distance is '
+ 'accepted only within the bound its round ended on, and these rules change only the sequence of bounds, so the '
+ 'result stays exact.'),
 ('p',
- 'Within a round, the band reads the scores down the right edge of each tile and drops the rows at its top and '
- 'bottom whose score plus the heuristic exceeds the bound, as A*PA2 does. A score changes by at most one per '
- 'row, and the heuristic by at most its climb \\(\\gamma\\), one without seeds or with exact seeds and two with '
- 'inexact ones, so a row that exceeds the bound by \\(y\\) rules out itself and the next \\(\\lceil y/(1+\\gamma) '
- '\\rceil - 1\\) rows, and the scan advances \\(\\lceil y/(1+\\gamma) \\rceil\\) rows without reading them. The bottom '
- 'of the next tile is bounded by the deepest row kept, since going \\(j\\) rows below the diagonal through it '
- 'costs at least \\(j\\) more than its score. With seeds, when at least one seed in 32 chains from the origin, the '
- 'first bound starts 64 above the heuristic at the origin, which on long reads lies within a few per cent of the '
- 'distance.'),
+ 'Within a round, the band drops the rows at the top and bottom of each tile whose score plus the heuristic '
+ 'exceeds the bound, as A*PA2 does. A score changes by at most one per row, and the heuristic by at most its '
+ 'climb \\(\\gamma\\) (one without seeds or with exact seeds, two with inexact ones), so a row that exceeds the '
+ 'bound by \\(y\\) rules out itself and the next \\(\\lceil y/(1+\\gamma) \\rceil - 1\\) rows, which are skipped '
+ 'unread. With seeds, when at least one seed in 32 chains from the origin, the first bound starts 64 above the '
+ 'heuristic at the origin, which on long reads lies within a few per cent of the distance.'),
 ('sub', 'Diagonal transition for near-identical pairs'),
 ('p',
  'Diagonal transition extends each diagonal of a wavefront along its run of matches. dinara-align compares eight '
- 'letters at a time by the exclusive-or of two 64-bit words and a count of trailing zeros. On AVX-512, eight '
- 'diagonals are extended together: their letters are loaded with gather instructions, and the wavefront is '
- 'padded with unreachable diagonals so that every step processes full vectors under branch-free masks. The '
- 'gather masks are derived from the lanes of each group, which avoids a dependency between consecutive gathers '
- 'that would otherwise serialise them. The same vectorised step serves three uses: near-identical pairs, from '
- 'one or both ends [@MarcoSola2023]; the traceback inside each tile, restricted to the diagonals that can still '
- 'reach the traced cell; and the three-layer gap-affine front.'),
+ 'letters at a time by the exclusive-or of two 64-bit words and a count of trailing zeros, and on AVX-512 '
+ 'extends eight diagonals together, their letters loaded by gather instructions under branch-free masks '
+ '(Supplementary Section S1.1). The same vectorised step serves three uses: near-identical pairs, from one or '
+ 'both ends [@MarcoSola2023]; the traceback inside each tile, restricted to the diagonals that can still reach '
+ 'the traced cell; and the three-layer gap-affine front.'),
 ('p',
- 'A pair whose diagonal transition finishes within its budget is aligned from its wavefronts alone. From one end '
- 'the wavefronts are kept whole. From both ends, as in BiWFA, the forward wavefronts are grown on to the proven '
- 'distance, each cost kept only on the diagonals on which the backward wavefronts show that an optimal path '
- 'passes, so that the extra costs grow few diagonals. The backtrace then takes, at each cost, the '
- 'furthest-reaching source, which is the order of Section 3.1, and the CIGAR is written run by run from the '
- 'wavefronts.'),
+ 'A pair whose diagonal transition finishes within its budget is aligned from its wavefronts alone. From both '
+ 'ends, as in BiWFA, the forward wavefronts are grown on to the proven distance, each cost kept only on the '
+ 'diagonals on which the backward wavefronts show that an optimal path passes. The backtrace takes the '
+ 'furthest-reaching source at each cost (Section 3.1) and writes the CIGAR run by run.'),
 ('sub', 'Seed heuristic: direct neighbour construction'),
 ('p',
  'The reference is divided into disjoint seeds of 12 bases, matched exactly, or of 16 bases, matched with at '
- 'most one edit [@GrootKoerkamp2024a]. A 16-base seed that matches with at most one edit matches one of its two '
- '8-base halves exactly, so each half indexes a table. Since these tables do not fit in the private caches, the '
- 'lookups for 16 query rows are issued together, so that their memory accesses overlap, and only seeds whose '
- 'matches could still chain to the end of the pair are considered.'),
+ 'most one edit [@GrootKoerkamp2024a]; a 16-base seed matched with one edit matches one of its 8-base halves '
+ 'exactly, so each half indexes a table. The lookups for 16 query rows are issued together, so that their cache '
+ 'misses overlap, and only seeds whose matches could still chain to the end of the pair are considered.'),
 ('p',
  'An exact match \\(\\mu\\) of a 16-base seed at query rows \\([j, j+16)\\) has four neighbouring matches with one '
  'edit, fewer at the ends of the query: two share its start, at rows \\([j, j+15)\\) and \\([j, j+17)\\), and two '
@@ -285,19 +266,16 @@ BODY = [
  'and drops none. A match is thus dropped only if its search would find no path: either the search ran and found '
  'none, or the match neighbours an exact match whose search found none (Lemma 1). Dropping such matches keeps '
  'the heuristic a lower bound (Lemma S1), and each further match kept can only lower it, so the alignment stays '
- 'exact. A neighbour sharing the start can raise the layer of that start to one above the best chain from the '
- "neighbour's end, and a neighbour sharing the end places its own start one layer below that of \\(\\mu\\), without "
- 'a search or a pruning test of its own.'),
+ "exact. Each neighbour is placed in its layer from its own end's chain, without a search of its own."),
 ('sub', 'Certified bands for inter-sequence batches'),
 ('p',
- 'Batches of short pairs are aligned with one pair per vector lane [@Rognes2011; @Rahn2018], first in saturating '
- '8-bit lanes and, for the scores of pairs that saturate, in 16-bit lanes [@Zhao2013; @Daily2016]; alignments '
- 'stay in 8-bit lanes. Rather than computing each matrix in full, the lanes of a group compute the band of '
- 'diagonals \\([d_\\ell, d_h]\\) containing the main diagonal 0 and the end diagonal \\(\\delta = m - n\\) of each '
- 'pair, together with one further diagonal on either side; pairs are grouped by end diagonal, so the band stays '
- 'narrow. Its optimality is certified with the following bound, a cost form of the out-of-band bounds of '
- '[@!Gibrat2018] and [@!Fujiki2020], stated for gap-affine and two-piece costs and with a strict form for '
- 'tie-breaking.'),
+ 'Batches of short pairs are aligned with one pair per vector lane [@Rognes2011; @Rahn2018] in saturating 8-bit '
+ 'lanes [@Zhao2013; @Daily2016]; a score that saturates is computed again in 16-bit lanes, and an alignment that '
+ 'saturates goes to the single-pair engines. Rather than computing each matrix in full, the lanes of a group '
+ "compute the band of diagonals \\([d_\\ell, d_h]\\) containing the main diagonal 0 and each pair's end diagonal "
+ '\\(\\delta\\), with one further diagonal on either side; pairs are grouped by end diagonal, so the band stays '
+ 'narrow. Its optimality is certified by the following bound, a cost form of the out-of-band bounds of '
+ '[@!Gibrat2018] and [@!Fujiki2020] for gap-affine and two-piece costs, with a strict form for tie-breaking.'),
 ('p',
  '**Proposition 1.** Let \\(C\\) be the least cost of an alignment within \\([d_\\ell, d_h]\\), and let \\(L(d) = '
  'g(|d|) + g(|d-\\delta|)\\), or \\(\\infty\\) for a diagonal outside the matrix. If \\(C \\le \\min\\bigl(L(d_h+1), '
@@ -320,17 +298,15 @@ BODY = [
  "classes of that band's width so that the lanes of a group finish together."),
 ('sub', 'Traceback within a memory limit'),
 ('p',
- 'The traceback of a band traces each tile from the boundary recorded on its left, the vertical differences down '
- 'that boundary. On a 1 Mbp pair at 20% errors these boundaries take up to 175 MiB, so they are held within the '
- "alignment's memory limit, 80 MiB by default (a reallocation briefly holds 1.5 times it): beyond it only one "
- 'boundary in two is kept, then one in four, and so on as the round proceeds. Each tile also records the state '
- "the band carries into it (the band's first and last 64-bit words, the score at its top, the deepest row kept "
- 'with its score, the bound and the checkpoints passed), from which the traceback recomputes a stretch of tiles '
- 'starting at the last kept boundary. Every step of a band depends only on this state and on the scores it '
- 'computes, so each boundary is recovered as the round left it and the alignment is the same byte for byte; '
- 'splitting the pair instead, as QuickEd does [@Doblas2025], resolves ties within each part. On the 1 Mbp pairs '
- 'at 20% errors, the growth of peak memory fell from 175 to 133 MiB on the worst pair, for 9% more time; pairs '
- 'whose boundaries fit were unchanged.'),
+ 'The traceback of a band traces each tile from the boundary recorded on its left. On 1 Mbp pairs at 20% errors, '
+ 'keeping every boundary made an alignment grow peak memory by up to 175 MiB, so the boundaries are held within '
+ "the alignment's memory limit, 80 MiB by default: beyond it only one boundary in two is kept, then one in four, "
+ 'and so on. Each tile also records the state the band carries into it, from which the traceback recomputes a '
+ 'stretch of tiles starting at the last kept boundary (Supplementary Section S1.1). Every step of a band depends '
+ 'only on this state and on the scores it computes, so each boundary is recovered as the round left it and the '
+ 'alignment is the same byte for byte; splitting the pair instead, as QuickEd does [@Doblas2025], resolves ties '
+ 'within each part. On the 1 Mbp pairs at 20% errors, the growth of peak memory fell from 175 to 133 MiB on the '
+ "worst pair when this was introduced, for 9% more time (Section 4.2 gives the reported commit's)."),
 ('sub', 'Gap-affine and score-based alignment'),
 ('p',
  'A scoring scheme with match score \\(\\alpha\\), mismatch score \\(\\beta\\) and gap scores \\(-(o+ke)\\) can be '
@@ -345,50 +321,43 @@ BODY = [
  'wavefront back from it to the first cell attaining the maximal score, which avoids the correction pass that '
  'striped layouts may need [@Farrar2007].'),
 ('p',
- 'The wavefront keeps five bytes per diagonal for the traceback, the furthest column in four bytes and one byte '
- "of flags naming every layer's source, and a pair whose fronts would exceed the memory limit is split where an "
- 'optimal path crosses, as in BiWFA, following the tie rule within each piece (Section 3.1). Whether one search '
- 'or two align a pair is decided while it is aligned (Section 3.9); a score-only computation stops once its best '
- "cost is at most one more than the highest cost through which either search has met the other's start; and a "
- 'global pair projected to take more work than a full sweep in 8-bit difference recurrences [@Suzuki2018] is '
- 'handed to that sweep (Section 3.10), which keeps the predecessor flags of Section 3.1, so that unrelated 5 kbp '
- 'pairs aligned in 4.8 ms instead of 32.9 ms.'),
+ 'The wavefront keeps five bytes per diagonal for the traceback, and a pair whose fronts would exceed the memory '
+ 'limit is split where an optimal path crosses, as in BiWFA, following the tie rule within each piece (Section '
+ '3.1). A global pair projected to take more work than a full sweep in 8-bit difference recurrences '
+ '[@Suzuki2018] is handed to that sweep (Section 3.10), which keeps the predecessor flags of Section 3.1; '
+ 'unrelated 5 kbp pairs then aligned in 4.8 ms instead of 32.9 ms.'),
 ('p',
  'Under a substitution matrix, anti-diagonals [@Wozniak1997] are computed in 16-bit lanes while the scores '
- 'provably fit, in strips of rows of at most 16 KiB that stay in the first-level cache, which took local '
- 'alignment of 10 kbp against 12 kbp from 50.0 to 17.4 ms. A global alignment is traced in a band of diagonals '
- 'that grows at most fourfold per step until its score proves that every optimal path lies inside it: under a '
- 'table whose largest score is \\(\\alpha\\), each gapped letter adds at least \\(2e+\\alpha\\) to \\(C = \\alpha(n+m) - '
- '2S\\), and a path that strays \\(t\\) diagonals beyond those between the main and the end diagonal has at least '
- '\\(|\\delta| + 2t\\) gapped letters, so the score of any alignment confines every optimal path to \\(t \\le '
- '(C/(2e+\\alpha) - |\\delta|)/2\\). A pair close to its diagonal thus costs about its own cells; with 16-bit '
- 'sweeps and one-byte traceback decisions, 1 kbp pairs at 10% divergence under a transition-transversion table '
- 'aligned in about 200 µs instead of 544 µs.'),
+ 'provably fit, in strips of rows that stay in the first-level cache, and a global alignment is traced in a band '
+ 'of diagonals that grows until its own score proves that every optimal path lies inside it (Supplementary '
+ 'Section S1.4).'),
 ('sub', 'One search or two at gap-affine costs'),
 ('p',
  'WFA grows the wavefront from one end of the pair and keeps every front for the traceback [@MarcoSola2021]; '
- 'BiWFA grows it from both ends and keeps only the latest fronts [@MarcoSola2023]. For an alignment, two '
- 'searches must also prove where an optimal path crosses between them, so they stop only once twice the lesser '
- 'of their costs \\(s_1, s_2\\) reaches the cheapest meeting found, \\(C^*\\), less one, plus a margin \\(\\theta = o '
- '+ w\\): \\(2\\min(s_1, s_2) \\ge C^* - 1 + \\theta\\), where \\(o\\) is the largest gap-open cost and \\(w = \\max(x, '
- 'o+e)\\) the largest cost of a single edit, over both pieces for two-piece costs. Every optimal path has a cell '
- 'whose costs from the two ends differ by at most \\(w\\), and a meeting inside a gap pays its opening once for '
- 'both halves; BiWFA stops by the same margin. With \\(W(s)\\) the number of diagonals a search steps to reach '
- 'cost \\(s\\), two searches need about \\(2W((D+\\theta)/2)\\) diagonal steps for a pair of cost \\(D\\), plus the '
- 'setup of the second, and one search \\(W(D)\\). Where the fronts widen with the cost, \\(W(s)\\) grows with '
- '\\(s^2\\) and one search is cheaper while \\(D < (1+\\sqrt2)\\,\\theta\\); where the ends of the sequences bound the '
- 'fronts, it is always cheaper. On 250 bp Illumina reads most pairs cost less than \\(\\theta\\) (\\(\\theta = 14\\) '
- 'at (4, 6, 2)), and two searches took 2.82 µs per read in the benchmark runner, against 1.55 µs for WFA.'),
+ 'BiWFA grows it from both ends and keeps only the latest fronts [@MarcoSola2023]. Two searches must also prove '
+ 'where an optimal path crosses between them, so they stop only once \\(2\\min(s_1, s_2) \\ge C^* - 1 + \\theta\\), '
+ 'where \\(s_1, s_2\\) are their costs, \\(C^*\\) the cheapest meeting found and \\(\\theta = o + w\\) a margin: \\(o\\) '
+ 'is the largest gap-open cost and \\(w = \\max(x, o+e)\\) the largest cost of a single edit, over both pieces for '
+ 'two-piece costs. Every optimal path has a cell whose costs from the two ends differ by at most \\(w\\), and a '
+ 'meeting inside a gap pays its opening once for both halves; BiWFA stops by the same margin. A score-only '
+ 'computation, which needs no meeting cell, stops sooner: once its best is at most one more than the highest '
+ "cost to which either search has checked the other's start. With \\(W(s)\\) the number of diagonals a search "
+ 'steps to reach cost \\(s\\), two searches need about \\(2W((C_{\\mathrm{opt}}+\\theta)/2)\\) steps for a pair of '
+ 'cost \\(C_{\\mathrm{opt}}\\), plus the setup of the second, and one search \\(W(C_{\\mathrm{opt}})\\). Where the '
+ 'fronts widen with the cost, \\(W(s)\\) grows with \\(s^2\\) and one search is cheaper while \\(C_{\\mathrm{opt}} < '
+ '(1+\\sqrt2)\\,\\theta\\); where the ends of the sequences bound the fronts, it is always cheaper. Most 250 bp '
+ 'Illumina reads cost less than \\(\\theta\\) (14 at (4, 6, 2)), and on them two searches took 2.82 µs per read in '
+ 'the benchmark runner, against 1.55 µs for WFA.'),
 ('p',
  'dinara-align therefore starts with a single search, the one whose fronts the traceback reads (the backward '
- 'search under the default tie rule), keeps all its fronts and traces the alignment back as soon as the search '
- 'reaches the far corner. Every cost \\(s\\) passed without reaching it shows that \\(D > s\\), and the search '
- 'measures \\(W\\) as it grows: it continues alone while \\(s < \\theta\\), costs the second search would pass in any '
- 'case, and then while \\(W(s) \\le 2W(\\lfloor (s+\\theta)/2 \\rfloor)\\), that is, while it has stepped no more '
- 'diagonals than two searches would need for the cheapest cost still possible. It also hands over at half the '
- 'memory limit or when a band leaves it no reachable cell. The rule has no tuned constant: the search hands over '
- 'at about \\(2.4\\theta\\) where the fronts widen with the cost, and never where the sequences bound the fronts '
- 'from early costs on, in which case it aligns exactly as WFA does.'),
+ 'search under the default tie rule), keeps its fronts and traces the alignment as soon as the search reaches '
+ 'the far corner. Every cost \\(s\\) passed without reaching it shows that \\(C_{\\mathrm{opt}} > s\\), and the '
+ 'search measures \\(W\\) as it grows: it continues alone while \\(s < \\theta\\), costs the second search would pass '
+ 'in any case, and then while \\(W(s) \\le 2W(\\lfloor (s+\\theta)/2 \\rfloor)\\), that is, while it has stepped no '
+ 'more diagonals than two searches would need for the cheapest cost still possible. It also hands over at half '
+ 'the memory limit or when a band leaves it no reachable cell. The rule has no tuned constant: it hands over at '
+ 'about \\(2.4\\theta\\) where the fronts widen with the cost, and never where the sequences bound the fronts from '
+ 'early costs on, where it aligns exactly as WFA does.'),
 ('p',
  '**Proposition 2.** Suppose the first search stops at cost \\(\\sigma\\) without reaching the far corner, and the '
  'second search, growing from cost 0, checks each new front against the last \\(w+1\\) fronts of the first, costs '
@@ -396,72 +365,71 @@ BODY = [
  "BiWFA, each new front checked against the other side's last \\(w+1\\). When they stop, \\(C^*\\) is the optimal "
  'cost and its meeting lies on an optimal path.'),
 ('p',
- '*Proof.* Let \\(P\\) be an optimal path, of cost \\(D\\), and suppose the searches stop with \\(C^* > D\\). As costs '
- 'are integers, \\(C^* - 1 \\ge D\\), so both searches have passed \\((D+\\theta)/2\\) when they stop. Write \\(s_1\\) '
- "and \\(s_2\\) for a cell's costs from the starts of the first and the second search. Along \\(P\\), \\(s_1\\) never "
- 'decreases and \\(s_2\\) never increases, \\(s_1 + s_2 = D\\) between moves and \\(s_1 + s_2 \\le D + o\\) inside a '
- 'gap, and one move changes each by at most \\(w\\). Having checked at each cost up to \\(\\sigma\\) that it had not '
- "reached the far corner, which is meeting the second search's front of cost 0, the first search shows that \\(D "
- '> \\sigma\\), so \\(P\\) has a cell with \\(\\sigma - w < s_1 \\le \\sigma\\). (i) If \\(s_2 < s_1 - w\\) there, then '
- '\\(s_2 < \\sigma - w\\) and \\(2s_2 < D + o - w < D + \\theta\\), so the second search reaches the cell in its first '
- 'phase and checks it against cost \\(s_1\\), which the first search holds. (ii) Otherwise, since \\(s_2 - s_1\\) '
- 'falls to \\(-D\\) at the far corner in steps of at most \\(2w\\), \\(P\\) has a cell at or after this one with '
- '\\(|s_1 - s_2| \\le w\\) and \\(s_1 > \\sigma - w\\). Both of its costs are at most \\((D + o + w)/2 = (D + '
- '\\theta)/2\\), so both searches reach it; it is checked in the first phase if both costs are at most \\(\\sigma\\), '
- "and otherwise in the alternation, where each new front meets the other side's last \\(w + 1\\). Either way a "
- 'meeting of cost \\(D\\) is found, contradicting \\(C^* > D\\). \\(\\square\\)'),
+ '*Proof.* Let \\(P\\) be an optimal path, of cost \\(C_{\\mathrm{opt}}\\), and suppose the searches stop with \\(C^* '
+ '> C_{\\mathrm{opt}}\\). As costs are integers, \\(C^* - 1 \\ge C_{\\mathrm{opt}}\\), so both searches have passed '
+ "\\((C_{\\mathrm{opt}}+\\theta)/2\\) when they stop. Write \\(u_1\\) and \\(u_2\\) for a cell's costs from the starts "
+ 'of the first and the second search. Along \\(P\\), \\(u_1\\) never decreases and \\(u_2\\) never increases, \\(u_1 + '
+ 'u_2 = C_{\\mathrm{opt}}\\) between moves and \\(u_1 + u_2 \\le C_{\\mathrm{opt}} + o\\) inside a gap, and one move '
+ 'changes each by at most \\(w\\). Having checked at each cost up to \\(\\sigma\\) that it had not reached the far '
+ "corner, which is meeting the second search's front of cost 0, the first search shows that \\(C_{\\mathrm{opt}} > "
+ '\\sigma\\), so \\(P\\) has a cell with \\(\\sigma - w < u_1 \\le \\sigma\\). (i) If \\(u_2 < u_1 - w\\) there, then \\(u_2 '
+ '< \\sigma - w\\) and \\(2u_2 < C_{\\mathrm{opt}} + o - w < C_{\\mathrm{opt}} + \\theta\\), so the second search '
+ 'reaches the cell in its first phase and checks it against cost \\(u_1\\), which the first search holds. (ii) '
+ 'Otherwise, since \\(u_2 - u_1\\) falls to \\(-C_{\\mathrm{opt}}\\) at the far corner in steps of at most \\(2w\\), '
+ '\\(P\\) has a cell at or after this one with \\(|u_1 - u_2| \\le w\\) and \\(u_1 > \\sigma - w\\). Both of its costs '
+ 'are at most \\((C_{\\mathrm{opt}} + o + w)/2 = (C_{\\mathrm{opt}} + \\theta)/2\\), so both searches reach it; it is '
+ 'checked in the first phase if both costs are at most \\(\\sigma\\), and otherwise in the alternation, where each '
+ "new front meets the other side's last \\(w + 1\\). Either way a meeting of cost \\(C_{\\mathrm{opt}}\\) is found, "
+ 'contradicting \\(C^* > C_{\\mathrm{opt}}\\). \\(\\square\\)'),
 ('p',
  'An alignment traced from the unpruned fronts of the single search is the one the two searches would have '
- 'traced after meeting: the traceback steps only from a cell to a predecessor on an optimal path, and the fronts '
- 'that the two-search path prunes away hold no such cell, so the tie rule is unchanged. A distance, which needs '
- 'no traceback, grows the forward search alone through its first \\(w\\) costs, which its circular buffer of '
- 'recent fronts holds. Starting with one search took a 250 bp Illumina read at (4, 6, 2), through one aligner, '
- 'from 2.41 to 1.52 µs, and the measured rule saved a further 5%, a third on the pairs costing 9 to 32; nanopore '
- 'and HiFi reads were unchanged.'),
+ 'traced: the traceback steps only from a cell to a predecessor on an optimal path, and the fronts that two '
+ 'searches prune hold no such cell, so the tie rule is unchanged. Starting with one search took a 250 bp '
+ 'Illumina read at (4, 6, 2), through one aligner, from 2.41 to 1.52 µs, and the measured-work rule, in place of '
+ 'a single search that grew alone only through its first \\(w\\) costs, saved a further 5%, a third on the pairs '
+ 'costing 9 to 32; nanopore and HiFi reads were unchanged.'),
 ('sub', 'Handing over on a projection, with bounded waste'),
 ('p',
  'Two hand-overs rest on projections: diagonal transition hands over to band doubling once its remaining work is '
  "projected to exceed a band's, and the gap-affine wavefront to the difference sweep once its projected total "
- "exceeds the sweep's. Extrapolated from the edits seen so far, a projection is reliable when edits are spread "
- 'evenly and can exceed the distance a hundredfold when they gather at the ends, as on nanopore reads with '
- 'adapters or poly-A tails, handing a pair that the search would finish in microseconds to a band over the whole '
- 'matrix. dinara-align hands over on a projection only once the work already spent has reached one twenty-fourth '
- 'of the cheapest alternative that could still be needed. For diagonal transition this is the band whose bound '
- 'equals the cost already reached; since the distance is at least that cost, no band can be cheaper. For the '
- 'wavefront it is the full sweep. Waiting thus adds to a search that hands over in the end at most about 4% '
- '(1/24, in the units of the cost model) of the work the alternative needs in any case, while a search that '
- 'would have finished is no longer abandoned on a projection from a handful of edits. At gap-affine costs, the '
- 'rule took the ont-10k reads from 2.33 to 1.56 ms and the ont-50k reads from 30.5 to 21.0 ms (Supplementary '
- 'Table S1). For an alignment, the one-ended diagonal transition also hands over only once the projected work '
- "exceeds the band's by a factor \\(1 + 1.5/\\sqrt{q}\\) after \\(q\\) edits, 1.5 times the relative error of a "
- 'projection from \\(q\\) edits.'),
+ "exceeds the sweep's. A projection from the edits seen so far is reliable when edits are spread evenly, but can "
+ 'exceed the distance a hundredfold when they gather at the ends, as on nanopore reads with adapters or poly-A '
+ 'tails, and so hand a pair that the search would finish in microseconds to a band over the whole matrix. '
+ 'dinara-align hands over on a projection only once the work already spent has reached one twenty-fourth of the '
+ 'cheapest alternative that could still be needed: for diagonal transition, the band whose bound equals the cost '
+ 'already reached, than which no band is cheaper since the distance is at least that cost; for the wavefront, '
+ 'the full sweep. Once the projection favours the alternative, the rule thus delays the hand-over by at most '
+ 'about 4% (1/24, in the units of the cost model) of the work the alternative needs in any case, while a search '
+ 'that would have finished is no longer abandoned on a projection from a handful of edits. At gap-affine costs, '
+ 'the rule took the ont-10k reads from 2.33 to 1.56 ms and the ont-50k reads from 30.5 to 21.0 ms (Supplementary '
+ 'Table S1). For an alignment, the one-ended diagonal transition also waits until the projected work exceeds the '
+ "band's by a factor \\(1 + 1.5/\\sqrt{q}\\) after \\(q\\) edits, 1.5 times the relative error of a projection from "
+ '\\(q\\) edits.'),
 ('sub', 'Per-pair overhead on short reads'),
 ('p',
  'A 250 bp read aligns in well under a microsecond, so work that does not depend on the pair dominates. An '
- 'aligner object keeps every buffer its searches use, the encoded sequences, the circular buffers of recent '
- "fronts and the fronts traced back, from pair to pair, one aligner per thread, as each competitor's benchmark "
- 'runner keeps its own. Both sequences are encoded, and reversed for the leftmost tie rule, in one vectorised '
- 'pass of 32 bytes with an overlapping tail, and results pass between internal calls as plain values rather than '
- 'as optionals, which the compiler copied a byte at a time. Together these took a unit-cost alignment of a 250 '
- 'bp Illumina read through one aligner from 0.97 to about 0.40 µs, as timed when each change was made '
- '(Supplementary Table S1).'),
+ 'aligner object keeps every buffer its searches use from pair to pair, one aligner per thread, as each '
+ "competitor's benchmark runner keeps its own; both sequences are encoded, and reversed for the leftmost tie "
+ 'rule, in one vectorised pass; and results pass between internal calls as plain values rather than as '
+ 'optionals, which the compiler copied a byte at a time. Together these took a unit-cost alignment of a 250 bp '
+ 'Illumina read, timed in-process through one aligner, from 0.97 to about 0.40 µs (Supplementary Table S1); the '
+ 'benchmark runner, which reads and checks each pair, adds to this (Section 4).'),
 ('sub', 'Thresholds measured against the code'),
 ('p',
  'The choice of algorithm and the bounds of each search rest on 41 thresholds, each set from measurements on the '
  'code of its time. We built dinara-align with each halved and with each doubled and timed the 82 builds against '
  'the unchanged one (Supplementary Section S1.1): about thirty moved no sample by more than 3%, and most others '
- 'traded one dataset against another. One had become outdated: the length from which seeds match with one edit, '
- 'which had cost 100 kbp pairs at 10% errors a third of their running time (10.3 against 6.8 ms). Two more were '
- 'found by examining the slowest results: 64-column tiles for narrow bands, and the projection that handed '
- 'nanopore reads to the full sweep (Section 3.10).'),
+ 'traded one dataset against another. One had become outdated, the length from which seeds match with one edit, '
+ 'which had cost 100 kbp pairs at 10% errors a third of their running time; examining the slowest results found '
+ 'two more (Supplementary Section S1.1).'),
 ('sub', 'Validation'),
 ('p',
  'A differential fuzzer checks every mode, cost model, band, cost limit and memory limit on random pairs against '
  'a full-matrix implementation that shares no code with the library, for validity and optimality, and checks the '
  'tie rule: an alignment under a cost limit against the same pair without one, and the default rule against '
  "WFA2-lib's over both sequences reversed. A unit test shows that a unit-cost alignment is the same byte for "
- "byte under any memory limit. All 305 pairs of WFA2-lib's regression set give its scores in every mode it "
- 'tests, and its CIGARs under its tie rule (Supplementary Section S1.7).'),
+ "byte under any memory limit, and all 305 pairs of WFA2-lib's regression set give its scores in every mode it "
+ 'tests and its CIGARs under its tie rule (Supplementary Section S1.7).'),
 ('sec', 'Results'),
 ('sub', 'Experimental setup'),
 ('p',
@@ -526,22 +494,21 @@ BODY = [
 ('sec', 'Discussion'),
 ('p',
  'dinara-align was the fastest exact aligner on every dataset at unit costs, and on every dataset that any tool '
- 'completed at gap-affine costs. We attribute this to choosing an algorithm for each pair: no single engine was '
- 'fastest across these workloads, and since every engine is exact, choosing never forfeits the guarantee or '
+ 'completed at gap-affine costs. This is consistent with choosing an algorithm for each pair: no single engine '
+ 'was fastest across these workloads, and since every engine is exact, choosing never forfeits the guarantee or '
  'changes the alignment. Three observations stand out. First, each technique paid where its engine does the work '
  '(Supplementary Table S2): on the ultra-long reads, switching off direct neighbour construction, which reduces '
  'work outside the inner loop, slowed alignment by 9 and 16%, more than either change to the loop itself (at '
- 'most 5%); the interleaved groups paid most on the widest bands, 11.5% on 100 kbp pairs at 20% errors, and '
- 'gathered extension 13 to 27% where diagonal transition does most of the work. Second, on short reads the work '
- 'that does not depend on the pair dominates: before the changes of Section 3.11, a 250 bp alignment at '
- 'gap-affine costs took 5.2 µs through a fresh call and 2.4 µs through a reused aligner, so a benchmark should '
- 'call every tool as its own runner does. Third, thresholds that encode a cost model become outdated as the code '
- 'changes, and measuring them again belongs in the evaluation of any aligner that selects its algorithm by '
- 'thresholds (Section 3.12). Gap-affine alignment of ultra-long reads remains open: no tool completed an '
- "ont-500k read within 30 s, and where memory matters more than time, QuickEd's 25 MiB on ultra-long reads is "
- "below dinara-align's 64 MiB. The measured-work rule, the regrouped recurrence and the per-lane certificate do "
- 'not depend on this implementation and apply directly to other wavefront, bit-parallel and inter-sequence '
- 'aligners.'),
+ 'most 5%), while the interleaved groups paid most on the widest bands and gathered extension where diagonal '
+ 'transition does most of the work. Second, on short reads the work that does not depend on the pair dominates: '
+ 'a 250 bp alignment at gap-affine costs once took 5.2 µs through a fresh call and 2.4 µs through a reused '
+ 'aligner (Supplementary Table S1), so a benchmark should call every tool as its own runner does. Third, '
+ 'thresholds that encode a cost model become outdated as the code changes, and measuring them again belongs in '
+ 'the evaluation of any aligner that selects its algorithm by thresholds. Gap-affine alignment of ultra-long '
+ 'reads remains open: no tool completed an ont-500k read within 30 s. Where memory matters more than time, '
+ "Edlib, QuickEd and BiWFA (15 to 29 MiB on ultra-long reads) use less than dinara-align's 64 MiB. The "
+ 'measured-work rule, the regrouped recurrence and the per-lane certificate do not depend on this implementation '
+ 'and apply to other wavefront, bit-parallel and inter-sequence aligners.'),
 ('p',
  'The study has several limitations:'),
 ('list',
@@ -565,14 +532,14 @@ BODY = [
 ('list',
  ['a cheap upper bound on the distance: with the true distance supplied by an oracle, starting band doubling at '
   'it saves up to 27% on 100 kbp pairs at 20% errors, but starting 15% above it loses up to 23% on ultra-long '
-  'reads; used as a cap, a bound within 5% of the distance saves up to 27% on 1 Mbp pairs at 20%, and one 15% too '
-  'high about half that or nothing;',
+  'reads, whereas capping the bound at an upper bound within 5% of the distance saves up to 27% on 1 Mbp pairs at '
+  '20% (Supplementary Section S5);',
  'reusing computation across band-doubling rounds, as in the incremental doubling of A*PA2, once its exactness '
   'for these tiles is proven;',
  'faster construction of the seed heuristic, whose scalar lookups dominate on long divergent pairs, and a seed '
   'heuristic for gap-affine costs, at which no tool completed a 1 Mbp pair beyond 1% errors;',
- 'measurements on further processors, and an evaluation of the GPU kernels the library provides for batch scores '
-  'and alignments (Supplementary Section S1.5).']),
+ 'measurements on further processors, and an evaluation of the GPU kernels the library provides for batches '
+  '(Supplementary Section S1.5).']),
 ]
 
 BACK = [
@@ -657,7 +624,7 @@ TABLES = {
 }
 
 FIGURES = {
-"overview": "How dinara-align assigns a pair to an algorithm, and the rule behind each hand-over. At unit costs, diagonal transition from one end and then from both aligns near-identical pairs, handing over to band doubling over bit-parallel tiles only once its projected work exceeds the band's and it has spent one twenty-fourth of the cheapest band (Section 3.10); the tiles are traced back within the memory limit. At gap-affine costs one search grows alone, its fronts kept, and is traced back at once if it reaches the end; a second search joins once one would step more diagonals than two would need (Section 3.9), and a pair projected to take more work than a full sweep in difference recurrences is handed to that sweep after one twenty-fourth of its work, the alignment the same either way. Batches of short pairs are aligned one pair per vector lane within a band whose optimality each lane certifies (Section 3.6). The figure shows alignments; a unit-cost distance skips the one-ended search.",
+"overview": "How dinara-align assigns a pair to an algorithm, and the rule behind each hand-over. At unit costs, diagonal transition from one end and then from both aligns near-identical pairs, handing over to band doubling over bit-parallel tiles only once its projected work exceeds the band's and it has spent one twenty-fourth of the cheapest band (Section 3.10); the tiles are traced back within the memory limit. At gap-affine costs one search grows alone, its fronts kept, and is traced back at once if it reaches the end; a second search joins once one would step more diagonals than two would need (Section 3.9), and a global pair projected to take more work than a full sweep in difference recurrences is handed to that sweep after one twenty-fourth of its work, the alignment the same either way. Batches of short pairs are aligned one pair per vector lane within a band whose optimality each lane certifies (Section 3.6). The figure shows alignments; a unit-cost distance skips the one-ended search.",
 
 "sweeps": "Unit-cost alignment of QuickEd's simulated pairs, mean time per alignment on a logarithmic scale. (a) 100 kbp pairs by error rate. (b) Pairs at 20% errors by length; lines end where a tool completed no pair within 30 s or the 8 GiB limit stopped it, and hollow points mark tools that completed only some pairs. BSAlign and KSW2 are left out for legibility; their times are in the repository's benchmark tables. dinara-align had the lowest mean time at every length and error rate.",
 }

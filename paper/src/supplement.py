@@ -22,7 +22,7 @@ _changes[3].extend([
     ["dc980d7", "Inexact seeds from 128 kbp on AVX-512", "100 kbp at 10% 10.3 → 6.8 ms", "Skylake-X"],
     ["7aab823", "A space holds its profile directly, not in an Optional, and an aligner's traceback reuses it", "250 bp Illumina, through one aligner 0.97 → 0.80 µs; distance 1.21 → 0.68 µs", "Skylake-X"],
     ["90e0040", "An aligner keeps the fronts it traces back", "250 bp Illumina 0.82 → 0.65 µs", "Skylake-X"],
-    ["32e78aa", "A gap-affine alignment begins with the one search it traces", "250 bp Illumina at (4, 6, 2) 2.41 → 1.52 µs", "Skylake-X"],
+    ["32e78aa", "A gap-affine alignment begins with the one search it traces", "250 bp Illumina at (4, 6, 2) through one aligner 2.41 → 1.52 µs (a fresh call 5.16 µs before)", "Skylake-X"],
     ["7d38a99", "A reversed pair coded back to front in the coding pass", "250 bp Illumina 0.649 → 0.583 µs", "Skylake-X"],
     ["4558186", "Alignments pass between internal calls without an Optional", "250 bp Illumina 0.585 → 0.420 µs; at gap-affine costs 0.995 → 0.840 µs", "Skylake-X"],
     ["036e12b", "A profile coded 32 bytes at a time", "250 bp Illumina 0.421 → 0.400 µs; PacBio HiFi 5.7 → 4.95 µs", "Skylake-X"],
@@ -39,10 +39,10 @@ BODY = [
  'measures and approaches that were evaluated and not adopted. Unless stated otherwise, the measurements in '
  'Sections S1, S4 and S5 and in Table S1 were taken when each change was introduced, on the machine indicated, '
  'and compare the change with the preceding version; Table S2 was measured at commit `dc980d7`. The results in '
- 'the main text and in Section S3 were obtained on the Skylake-X at commit `036e12b`, gap-affine costs at '
- '`a6d9166`, and the other alignment modes and batches at `289bcf0`. Timings were taken on an Intel Core '
- 'i9-7900X (Skylake-X, AVX-512) and an Apple M2 (NEON); Section S1.5 also reports an NVIDIA GeForce RTX 2070. '
- 'Memory is given in MiB, and references are listed in the main text.'),
+ 'Section 4 of the main text and in Section S3 were obtained on the Skylake-X at commit `036e12b`, gap-affine '
+ 'costs at `a6d9166`, and the other alignment modes and batches at `289bcf0`. Timings were taken on an Intel '
+ 'Core i9-7900X (Skylake-X, AVX-512) and an Apple M2 (NEON); Section S1.5 also reports an NVIDIA GeForce RTX '
+ '2070. Memory is given in MiB, and references are listed in the main text.'),
 ('sec', 'Implementation details'),
 ('sub', 'Unit costs'),
 ('p',
@@ -52,22 +52,7 @@ BODY = [
  'wider the vector unit, the cheaper the bit-parallel band relative to the scalar construction of inexact seeds. '
  'All thresholds are fixed at compile time for each instruction set, so that no dispatch occurs at run time.'),
 ('p',
- "**Divergent pairs at gap-affine costs.** The wavefront's work grows with the cost times the length, so on "
- "unrelated pairs it is slower than an 8-bit difference sweep such as BSAlign's. A global pair with the whole "
- 'matrix open is therefore handed to a full sweep in difference recurrences (Suzuki and Kasahara, 2018), in '
- "8-bit lanes at any length, once its projected work exceeds the sweep's, at seven sweep cells per wavefront "
- "step, the rate measured at 10 kbp. The sweep keeps each cell's predecessor flag under the tie rule of the "
- 'wavefront, so the alignment is identical byte for byte, and for the traceback it keeps every \\(k\\)-th '
- 'anti-diagonal, \\(k\\) the square root of the anti-diagonals times the bytes a cell takes, and sweeps each '
- 'stretch again. Each anti-diagonal is swept in place from the last row up. On unrelated pairs of 1, 2 and 5 kbp '
- 'at (4, 6, 2) alignment took 0.28, 0.87 and 4.8 ms instead of 1.50, 5.3 and 32.9 ms. The projection '
- 'extrapolates the cost from how far the two wavefronts have advanced, which on nanopore reads, whose errors '
- 'gather at the ends, ran up to 2.8 times too high in cost and 8 times in work, and handed reads to sweeps that '
- 'took up to eight times longer than their wavefront: the ont-10k reads took 2.33 ms instead of 1.56. As for the '
- "diagonal transition (main text, Section 3.10), the projection is now trusted only once the wavefront's work "
- "has reached one twenty-fourth of the sweep's."),
-('p',
- '**Register and memory layout of the sweep.** An empty inline-assembly barrier prevents the compiler from '
+ '**Register and memory layout of the band.** An empty inline-assembly barrier prevents the compiler from '
  'reassociating the regrouped recurrence back to its original form. Vertical differences remain in registers '
  "across a word's columns, and the horizontal differences of successive columns are stored at distinct "
  'addresses, so that no load waits on a preceding store. Bands of five to seven words combine a four-lane vector '
@@ -89,32 +74,39 @@ BODY = [
  'faster; 10 kbp pairs at 1%, settled mostly by the diagonal transition, were within 3%.'),
 ('p',
  '**Traceback within a memory limit.** The traceback reads the left boundary of every tile, which the band '
- 'records: on 1 Mbp pairs at 20% errors, up to 175 MiB. The band keeps every boundary while they fit within the '
- 'memory limit of the alignment, 80 MiB by default, and otherwise only every \\(k\\)-th, \\(k\\) doubling as the '
- 'round proceeds, leaving room for one stretch of the widest boundaries. Each tile also records the state the '
- 'band carries into it: its words, the score at its top, the deepest kept row and its score, the bound and the '
- 'checkpoints passed. The traceback, from the last tile back, sweeps a stretch again from the last kept boundary '
- 'before a tile it lacks; every step of the sweep depends only on that state and the scores it computes, so each '
- 'boundary is recovered exactly and the alignment is the same byte for byte, unlike the Hirschberg split of '
- 'QuickEd (Doblas et al., 2025), which breaks ties within each half. Kept boundaries form a stack in tile order '
- 'and are released as they are traced. The boundary buffers grow by doubling up to half the limit and then to '
- 'the whole of it at once, since doubling further would hold the old buffer and its copy together, up to twice '
- 'the limit. On the four 1 Mbp pairs at 20% errors, measured one per process, an alignment grew the peak memory '
- 'by 133, 98, 124 and 113 MiB instead of 175, 99, 143 and 146 MiB, in 3.64 s instead of 3.35 s for the four, and '
- 'pairs whose boundaries fit were unchanged. With no memory at all, alignments took about twice the time.'),
+ 'records; on 1 Mbp pairs at 20% errors, keeping every boundary made an alignment grow peak memory by up to 175 '
+ 'MiB. The band keeps every boundary while they fit within the memory limit of the alignment, 80 MiB by default, '
+ 'and otherwise only every \\(k\\)-th, \\(k\\) doubling as the round proceeds, leaving room for one stretch of the '
+ 'widest boundaries. Each tile also records the state the band carries into it: its words, the score at its top, '
+ 'the deepest kept row and its score, the bound and the checkpoints passed. The traceback, from the last tile '
+ 'back, sweeps a stretch again from the last kept boundary before a tile it lacks; every step of the sweep '
+ 'depends only on that state and the scores it computes, so each boundary is recovered exactly and the alignment '
+ 'is the same byte for byte, unlike the Hirschberg split of QuickEd (Doblas et al., 2025), which breaks ties '
+ 'within each half. Kept boundaries form a stack in tile order and are released as they are traced. The boundary '
+ 'buffers grow by doubling up to half the limit and then to the whole of it at once, since doubling further '
+ 'would hold the old buffer and its copy together, up to twice the limit. On the four 1 Mbp pairs at 20% errors, '
+ 'measured one per process, an alignment grew the peak memory by 133, 98, 124 and 113 MiB instead of 175, 99, '
+ '143 and 146 MiB, in 3.64 s instead of 3.35 s for the four, and pairs whose boundaries fit were unchanged. With '
+ 'no memory at all, alignments took about twice the time.'),
 ('p',
- '**Accepting an extrapolation.** The diagonal-transition estimate is abandoned once it has spent one '
- 'twenty-fourth of the cost of the cheapest band (main text, Section 3.10). An extrapolation sets the band only '
- 'when the single-wavefront extrapolation from the first edits and the extrapolation of the longer search agree '
- 'to within one third; otherwise the first bound is set 256 above the known lower bound, and each retry at most '
- 'doubles it. A later checkpoint never lowers the bound below the previous bound plus one quarter, and a failed '
- 'round continues from the bound at which it ended rather than the one at which it started. Before these rules, '
- 'a 30 kbp SARS-CoV-2 pair at distance 49 had been extrapolated to 14,448 and computed over the full matrix.'),
+ '**Accepting an extrapolation.** Diagonal transition hands over to the band only once its projected work '
+ "exceeds the band's and it has spent one twenty-fourth of the cheapest band (main text, Section 3.10). An "
+ 'extrapolation sets the band only when the single-wavefront extrapolation from the first edits and the '
+ 'extrapolation of the longer search agree to within one third; otherwise the first bound is set 256 above the '
+ 'known lower bound, and each retry at most doubles it. A later checkpoint never lowers the bound below the '
+ 'previous bound plus one quarter, and a failed round continues from the bound at which it ended rather than the '
+ 'one at which it started. Before these rules, a 30 kbp SARS-CoV-2 pair at distance 49 had been extrapolated to '
+ '14,448 and computed over the full matrix.'),
 ('p',
  'When they were introduced, these rules reduced the mean time on the ont-500k-genvar reads from 4.33 s, with 13 '
  'of 15 reads completed within the time limit, to 754 ms. At commit `dc980d7`, where Table S2 was measured, the '
  'seed heuristic sets the first bound on long reads, and switching the agreement test off changes the ultra-long '
  'reads by less than 1% but slows the ont-10k reads by 22% (Section S2.1).'),
+('p',
+ "**The bottom of the next tile.** A tile's rows below the deepest row kept in the previous one can be bounded "
+ 'before the tile is swept: a cell \\(j\\) rows below the diagonal through the deepest kept cell costs at least '
+ "\\(j\\) more than that cell's score, so the band stops where that plus the heuristic exceeds the bound, as A*PA2 "
+ 'bounds a block.'),
 ('p',
  '**Retries with seeds.** When seeds are used, a retry sets the bound one quarter of the extrapolated increase '
  'beyond the estimate; with one half, a round had failed after 90% of the columns of a 527 kbp read. A seeded '
@@ -172,7 +164,7 @@ BODY = [
  'extrapolations, and were left as they were. One had become outdated: the length from which inexact seeds are '
  'used (Measured thresholds, above). Two more outdated choices were found by examining the slowest results: '
  '64-column tiles for narrow bands (Tile width, above) and the projection that handed nanopore reads to the full '
- 'sweep (Divergent pairs at gap-affine costs, above).'),
+ 'sweep (Divergent pairs at gap-affine costs, Section S1.3).'),
 ('p',
  '**Interleaving.** llvm-mca estimates the interleaved AVX-512 loop at 24 cycles per column, against a '
  'throughput bound of 11, so the loop remains limited by the lane rotation. A third group still fits in the 32 '
@@ -194,11 +186,11 @@ BODY = [
  'pair exceeded the potential of the intervening seeds: a match ending one diagonal beyond this limit was '
  'discarded, although a path through it costs only one more than the potential, and the neighbour that would '
  'otherwise bound such paths could be removed by local pruning. Such a match now chains to the end at the cost '
- 'of its excess, so an inexact match, which saves 2, starts in layer 1; no further match can follow it. After '
- 'the correction, no cell exceeded the true cost in 2,200 random pairs, compared with 34,450 cells in 400 pairs '
- 'before. The reported distances agreed with those of the other aligners in all benchmarks, both before and '
- 'after the correction. The overestimate arose from our filter; we do not claim that it applies to A*PA or '
- 'A*PA2.'),
+ 'of its excess, so an exact match of an inexact seed, which saves 2, starts in layer 1; no further match can '
+ 'follow it. After the correction, no cell exceeded the true cost in 2,200 random pairs, compared with 34,450 '
+ 'cells in 400 pairs before. The reported distances agreed with those of the other aligners in all benchmarks, '
+ 'both before and after the correction. The overestimate arose from our filter; we do not claim that it applies '
+ 'to A*PA or A*PA2.'),
 ('p',
  "**Lemma S1.** Let \\(M\\) hold every match of a seed with cost below its potential \\(r\\), and let \\(M'\\) be "
  '\\(M\\) without the matches whose local-pruning search (Section 2.4 of the main text) finds no path across the '
@@ -207,20 +199,20 @@ BODY = [
 ('p',
  '*Proof.* The heuristic charges a chain of matches the cost of each match and, for each gap between consecutive '
  'matches and from the last to the end, the larger of the potential of the seeds that start in the gap and the '
- 'number of diagonals the gap shifts (Groot Koerkamp and Ivanov, 2024). Let \\(\\pi\\) be a path from cell \\(u\\) to the end, '
- 'and sweep it from left to right from a column \\(x\\), at first that of \\(u\\). Let \\(s\\) be the next seed that '
- 'starts at or after \\(x\\); no seed starts between \\(x\\) and \\(s\\). If \\(\\pi\\) crosses \\(s\\) for at least \\(r\\), '
- 'its piece across \\(s\\) pays the potential of \\(s\\), and the sweep continues from the end of \\(s\\). Otherwise '
- "the crossing is a match \\(\\mu \\in M\\). If \\(\\mu \\in M'\\), it joins the chain and the sweep continues from its "
- 'end. If not, \\(\\pi\\) continued from \\(\\mathrm{end}(\\mu)\\) at cost \\(c(\\mu)\\) is a path that the search did not '
- 'find, so its cost reaches the potential of the seeds it has crossed at some column \\(y\\) no later than the end '
- 'of the \\(p\\)-th seed: the piece of \\(\\pi\\) from the start of \\(s\\) to \\(y\\) pays the potential of the seeds '
- 'that start in it, and the sweep continues from \\(y\\). The matches joined appear along \\(\\pi\\) in order, so '
- "they form a chain in \\(M'\\). On each joined match \\(\\pi\\) pays its cost. Each gap is cut into pieces, each of "
- 'which pays at least the potential of the seeds that start in it and at least the number of diagonals it '
- 'shifts. Summed over the pieces, \\(\\pi\\) pays in the gap at least the potential of the seeds that start in it '
- 'and at least the diagonals it shifts, so at least the larger of the two. Hence \\(\\pi\\) costs at least what the '
- 'heuristic charges this chain, and so at least the heuristic. \\(\\square\\)'),
+ 'number of diagonals the gap shifts (Groot Koerkamp and Ivanov, 2024). Let \\(\\pi\\) be a path from cell \\(u\\) to '
+ 'the end, and sweep it from left to right from a column \\(x\\), at first that of \\(u\\). Let \\(s\\) be the next '
+ 'seed that starts at or after \\(x\\); no seed starts between \\(x\\) and \\(s\\). If \\(\\pi\\) crosses \\(s\\) for at '
+ 'least \\(r\\), its piece across \\(s\\) pays the potential of \\(s\\), and the sweep continues from the end of '
+ "\\(s\\). Otherwise the crossing is a match \\(\\mu \\in M\\). If \\(\\mu \\in M'\\), it joins the chain and the sweep "
+ 'continues from its end. If not, \\(\\pi\\) continued from \\(\\mathrm{end}(\\mu)\\) at cost \\(c(\\mu)\\) is a path that '
+ 'the search did not find, so its cost reaches the potential of the seeds it has crossed at some column \\(y\\) no '
+ 'later than the end of the \\(p\\)-th seed: the piece of \\(\\pi\\) from the start of \\(s\\) to \\(y\\) pays the '
+ 'potential of the seeds that start in it, and the sweep continues from \\(y\\). The matches joined appear along '
+ "\\(\\pi\\) in order, so they form a chain in \\(M'\\). On each joined match \\(\\pi\\) pays its cost. Each gap is cut "
+ 'into pieces, each of which pays at least the potential of the seeds that start in it and at least the number '
+ 'of diagonals it shifts. Summed over the pieces, \\(\\pi\\) pays in the gap at least the potential of the seeds '
+ 'that start in it and at least the diagonals it shifts, so at least the larger of the two. Hence \\(\\pi\\) costs '
+ 'at least what the heuristic charges this chain, and so at least the heuristic. \\(\\square\\)'),
 ('p',
  'Besides local pruning, the implementation drops only matches whose gap to the end of the pair costs at least '
  'what they save, which no chain can use to lower the heuristic; a seed left uncounted, as in a long tandem '
@@ -236,12 +228,27 @@ BODY = [
  'an unreachable diagonal on either side replacing three bounds checks per diagonal.'),
 ('sub', 'Gap-affine costs'),
 ('p',
- '**Compact traceback.** For the traceback of the bidirectional wavefront, dinara-align stores, for every cost '
- 'and diagonal, the furthest-reaching column in four bytes and one byte of flags recording the predecessor of '
- 'every layer: five bytes per diagonal, compared with twelve in the high-memory mode of WFA. When the stored '
- 'wavefronts would exceed the memory limit (80 MiB by default), the pair is split at a cell through which an '
- 'optimal path passes. Under a general substitution matrix, substitution scores are obtained by byte shuffles '
- '(`pshufb`, `tbl`) for matrices of up to 16 entries and by gathers otherwise.'),
+ "**Divergent pairs at gap-affine costs.** The wavefront's work grows with the cost times the length, so on "
+ "unrelated pairs it is slower than an 8-bit difference sweep such as BSAlign's. A global pair with the whole "
+ 'matrix open is therefore handed to a full sweep in difference recurrences (Suzuki and Kasahara, 2018), in '
+ "8-bit lanes at any length, once its projected work exceeds the sweep's, at seven sweep cells per wavefront "
+ "step, the rate measured at 10 kbp. The sweep keeps each cell's predecessor flag under the tie rule of the "
+ 'wavefront, so the alignment is identical byte for byte, and for the traceback it keeps every \\(k\\)-th '
+ 'anti-diagonal, \\(k\\) the square root of the anti-diagonals times the bytes a cell takes, and sweeps each '
+ 'stretch again. Each anti-diagonal is swept in place from the last row up. On unrelated pairs of 1, 2 and 5 kbp '
+ 'at (4, 6, 2) alignment took 0.28, 0.87 and 4.8 ms instead of 1.50, 5.3 and 32.9 ms. The projection '
+ 'extrapolates the cost from how far the two wavefronts have advanced, which on nanopore reads, whose errors '
+ 'gather at the ends, ran up to 2.8 times too high in cost and 8 times in work, and handed reads to sweeps that '
+ 'took up to eight times longer than their wavefront: the ont-10k reads took 2.33 ms instead of 1.56. As for the '
+ "diagonal transition (main text, Section 3.10), the projection is now trusted only once the wavefront's work "
+ "has reached one twenty-fourth of the sweep's."),
+('p',
+ '**Compact traceback.** For the traceback of the wavefront, dinara-align stores, for every cost and diagonal, '
+ 'the furthest-reaching column in four bytes and one byte of flags recording the predecessor of every layer: '
+ 'five bytes per diagonal, compared with twelve in the high-memory mode of WFA. When the stored wavefronts would '
+ 'exceed the memory limit (80 MiB by default), the pair is split at a cell through which an optimal path passes. '
+ 'Under a general substitution matrix, substitution scores are obtained by byte shuffles (`pshufb`, `tbl`) for '
+ 'matrices of up to 16 entries and by gathers otherwise.'),
 ('p',
  '**Gathers.** In the gap-affine wavefront, AVX-512 gathers reduced the time for 1 kbp reads from 149 to 129 µs. '
  "Deriving each gather's mask from the group's own lanes, with one reduction after the loop rather than one per "
@@ -286,11 +293,19 @@ BODY = [
  'reduced the time for a prefix distance from 23.7 to 20.5 µs on the Skylake-X.'),
 ('p',
  '**A band derived from the score.** A table with one match and one mismatch score is converted to costs and '
- 'aligned by the wavefront. Under any other substitution matrix, the alignment is traced in a band that grows '
- "until the score it yields proves that it holds every optimal path (main text, Section 3.8), each cell's "
- 'decision kept in one byte. The backward sweep from the end of a local alignment and each half of a '
- 'linear-space alignment also use 16-bit lanes while the scores fit, which made 1 kbp local alignments 1.2 times '
- 'and linear-space global alignments 1.4 times faster on the M2.'),
+ 'aligned by the wavefront (main text, Section 3.8). Under any other substitution matrix, a global alignment is '
+ 'traced in a band of diagonals that grows at most fourfold per step until its own score proves that it holds '
+ "every optimal path, each cell's decision kept in one byte. With \\(\\alpha_{\\max}\\) the table's largest score, "
+ 'each gapped letter adds at least \\(2e+\\alpha_{\\max}\\) to \\(C = \\alpha_{\\max}(n+m) - 2S\\), and a path that '
+ 'strays \\(t\\) diagonals beyond those between the main and the end diagonal \\(\\delta\\) has at least \\(|\\delta| + '
+ '2t\\) gapped letters, so the score of any alignment confines every optimal path to \\(t \\le '
+ '(C/(2e+\\alpha_{\\max}) - |\\delta|)/2\\). A pair close to its diagonal thus costs about its own cells: with '
+ 'sweeps in 16-bit lanes and one-byte traceback decisions, 1 kbp pairs at 10% divergence under a '
+ 'transition-transversion table aligned in about 200 µs instead of 544 µs on the Skylake-X (Table S1). '
+ 'Anti-diagonals are swept in strips of rows of at most 16 KiB, which stay in the first-level cache; local '
+ 'alignment of 10 kbp against 12 kbp took 17.4 ms instead of 50.0 ms. The backward sweep from the end of a local '
+ 'alignment and each half of a linear-space alignment also use 16-bit lanes while the scores fit, which made 1 '
+ 'kbp local alignments 1.2 times and linear-space global alignments 1.4 times faster on the M2.'),
 ('sub', 'Batches'),
 ('p',
  '**Letter layout.** The pairs of a group are interleaved so that one 64-bit load reads eight letters of a lane, '
@@ -309,9 +324,9 @@ BODY = [
  'against the flags of one segment and minimises memory use.'),
 ('p',
  '**Lane groups.** A group of 64 bytes occupies one register on AVX-512 and several on narrower vector units; '
- 'with the 128-bit registers of the M2, 1 kbp pairs at 10% divergence required 73 µs per pair under affine costs '
- 'with four registers, compared with 132 µs with one. Local scores use 32 lanes of 16 bits or 16 lanes of 32 '
- 'bits, which on 128-bit registers spreads a group over four independent registers; on the M2, this scored '
+ 'with the 128-bit registers of the M2, 1 kbp pairs at 10% divergence required 73 µs per pair under gap-affine '
+ 'costs with four registers, compared with 132 µs with one. Local scores use 32 lanes of 16 bits or 16 lanes of '
+ '32 bits, which on 128-bit registers spreads a group over four independent registers; on the M2, this scored '
  '20,000 references against a read in 83 ms, compared with 160 ms with one register. Pairs whose first band does '
  'not satisfy the bound are grouped by power-of-two classes of the width of their second band, and a group stops '
  'once every lane has exceeded its cost limit.'),
@@ -336,14 +351,14 @@ BODY = [
  '**GPU scores.** Batch scores and alignments under a substitution table, and unit-cost distances, also run on '
  'NVIDIA GPUs and Apple silicon. Each pair is first scored over a band of sixteen diagonals by one thread, its '
  "scores and gap layers one register per diagonal, swept anti-diagonal by anti-diagonal; the band's score stands "
- "where the pair's own cost certifies it (Proposition 1 of the main text), and the thread stops once the "
- 'cheapest cell of its anti-diagonal costs more than every path off the band. The remaining pairs, about one in '
- 'six of the short-read batch, are scored over the whole matrix while the host packs the next chunk, several to '
- "a warp, each lane holding a run of its pair's columns in registers and passing its last column on by shuffle. "
- 'The cells of a global alignment are held shifted by their anti-diagonal times the gap extension, which reduces '
- "Gotoh's recurrence from five additions per cell to three. On an NVIDIA GeForce RTX 2070, the 500,000 "
- 'short-read pairs were scored in 36 ms at (1, 2, 1), the whole call included and most of it the host packing '
- 'the batch, against 27 ms on ten cores of the Skylake-X.'),
+ "where the pair's own score certifies it, by the bound of Proposition 1 of the main text with the table's least "
+ 'gap penalties, and the thread stops once the cheapest cell of its anti-diagonal costs more than every path off '
+ 'the band. The remaining pairs, about one in six of the short-read batch, are scored over the whole matrix '
+ "while the host packs the next chunk, several to a warp, each lane holding a run of its pair's columns in "
+ 'registers and passing its last column on by shuffle. The cells of a global alignment are held shifted by their '
+ "anti-diagonal times the gap extension, which reduces Gotoh's recurrence from five additions per cell to three. "
+ 'On an NVIDIA GeForce RTX 2070, the 500,000 short-read pairs were scored in 36 ms at (1, 2, 1), the whole call '
+ 'included and most of it the host packing the batch, against 27 ms on ten cores of the Skylake-X.'),
 ('sub', 'Code generation'),
 ('p',
  '**Avoiding division by a variable.** A 64-bit division by a variable takes tens of cycles on x86. The '
@@ -441,6 +456,11 @@ BODY = [
  '**Traceback during the sweep.** On the ultra-long reads and on 1 Mbp pairs at up to 15% errors, the stored '
  'tile boundaries occupied 0.6 to 13 MiB, compared with 10 to 17 MiB for the sequences and bit planes, so little '
  'memory could be saved; the traceback within a memory limit (Section S1.1) now bounds the worst case.',
+ "**A tighter first bound.** With each pair's distance supplied by an oracle, starting band doubling at it saved "
+ 'up to 27% (100 kbp pairs at 20% errors), but starting 15% above it lost 18 to 23% on the ultra-long reads; '
+ 'capping the bound at an upper bound 5% above the distance saved up to 27% (1 Mbp pairs at 20%), and one 15% '
+ 'above about half that or nothing. No upper bound cheap and tight enough was found: beam search cost more than '
+ 'it saved, and a batch edit-distance certificate proved 578 of 70,519 pairs.',
 ]),
 ]
 
@@ -461,7 +481,7 @@ TABLES = {
     ["100 kbp, 5%", "4.61", "−0.6%", "−0.2%", "+0.1%", "0.0%", "+0.2%", ""],
     ["100 kbp, 10%", "6.72", "+0.3%", "+3.4%", "+1.9%", "+0.5%", "−0.2%", ""],
     ["100 kbp, 20%", "15.0", "**+4.1%**", "**+11.5%**", "+3.9%", "−2.9%", "0.0%", ""],
-    ["Short reads, affine", "232", "", "", "", "", "", "**+188%**"],
+    ["Short reads, gap-affine", "232", "", "", "", "", "", "**+188%**"],
     ["Short reads, unit", "213", "", "", "", "", "", "**+215%**"],
   ]},
 "modes": {
@@ -614,7 +634,7 @@ TABLES = {
   ]},
 "changes": {
   "label": "S1",
-  "caption": "Changes behind the results and their measured effects, as recorded when each was made. Machines: the i9-7900X (Skylake-X, AVX-512) and the Apple M2 (NEON); “not recorded” where the commit does not say.",
+  "caption": "Changes behind the results and their measured effects, as recorded when each was made. Each row times what its commit timed (an in-process loop through one aligner, the benchmark runner, a distance or an alignment), so rows for one dataset need not agree with each other or with Section 4 of the main text. Machines: the i9-7900X (Skylake-X, AVX-512) and the Apple M2 (NEON); “not recorded” where the commit does not say.",
   "header": _changes[2],
   "align": "llll",
   "wrap": [1, 2],
