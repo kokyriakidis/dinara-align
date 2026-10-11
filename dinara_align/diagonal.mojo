@@ -167,14 +167,31 @@ struct DiagonalFronts(Movable):
     var lows: List[Int]
     var highs: List[Int]
 
+    comptime TYPICAL_OFFSETS = 4096
+    """The front cells a typical search keeps, room for which is taken up front."""
+    comptime TYPICAL_SCORES = 64
+    """The scores a typical search keeps."""
+
     def __init__(out self, reserve: Bool = True):
         """Room for a typical search up front, unless `reserve` is false and none is kept."""
-        var offsets = 4096 if reserve else 0
-        var scores = 64 if reserve else 0
+        var offsets = Self.TYPICAL_OFFSETS if reserve else 0
+        var scores = Self.TYPICAL_SCORES if reserve else 0
         self.offsets = List[Int32](capacity=offsets)
         self.starts = List[Int](capacity=scores)
         self.lows = List[Int](capacity=scores)
         self.highs = List[Int](capacity=scores)
+
+    def clear(mut self):
+        """No fronts, the room a typical search takes kept, or made if never taken: a reused space's
+        alignments search into the same memory."""
+        self.offsets.clear()
+        self.starts.clear()
+        self.lows.clear()
+        self.highs.clear()
+        self.offsets.reserve(Self.TYPICAL_OFFSETS)
+        self.starts.reserve(Self.TYPICAL_SCORES)
+        self.lows.reserve(Self.TYPICAL_SCORES)
+        self.highs.reserve(Self.TYPICAL_SCORES)
 
     @inline(.always)
     def at(self, score: Int, diagonal: Int) -> Int:

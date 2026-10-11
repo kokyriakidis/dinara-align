@@ -41,13 +41,16 @@ from .traceback import cigar_string, diagonal_cigar, EditPath
 struct EditSpace(Movable):
     """A batch worker's memory for its pairs' edit distances: the profile, the reversed codes and the
     two-ended search's rings, kept from pair to pair so a warm worker allocates nothing, where each
-    pair's own were a third of a short read's time and, on many threads, contended in the allocator."""
+    pair's own were a third of a short read's time and, on many threads, contended in the allocator;
+    and for an alignment, the fronts it traces back."""
 
     var profile: Profile
     var first_back: List[UInt8]
     var second_back: List[UInt8]
     var ahead: FrontPair
     var behind: FrontPair
+    var traced: DiagonalFronts
+    """The fronts an alignment settled by diagonal transition traces back (see `settle`)."""
 
     def __init__(out self):
         """Nothing profiled yet: the first pair does."""
@@ -56,6 +59,7 @@ struct EditSpace(Movable):
         self.second_back = List[UInt8]()
         self.ahead = FrontPair()
         self.behind = FrontPair()
+        self.traced = DiagonalFronts(reserve=False)
 
 
 def edit_distance(first: String, second: String) raises AlignmentError -> Int:
@@ -156,9 +160,9 @@ def edit_cigar(
     var reverse = ties == Ties.LEFT
     space.profile.reset(first, second, reverse)
     ref profile = space.profile
-    var settled = settle(profile, max_memory // EDGE_WORD_BYTES)
+    var settled = settle(profile, space.traced, max_memory // EDGE_WORD_BYTES)
     if not settled.banded:
-        return EditCigar(settled.distance, diagonal_cigar(profile, settled.fronts, settled.distance, reverse, eqx))
+        return EditCigar(settled.distance, diagonal_cigar(profile, space.traced, settled.distance, reverse, eqx))
     var path = oriented(settled^, profile.columns, profile.rows, reverse)
     return EditCigar(path.distance, cigar_string(first, second, path, eqx))
 
@@ -173,18 +177,16 @@ def oriented(var settled: Settled, columns: Int, rows: Int, reverse: Bool) -> Ed
 
 
 struct Settled(Movable):
-    """A pair's distance and how it was found: by diagonal transition, whose kept `fronts` hold the path
-    still to trace, or by band doubling, its path already traced into `moves`, right to left."""
+    """A pair's distance and how it was found: by diagonal transition, whose fronts `settle` kept hold
+    the path still to trace, or by band doubling, its path already traced into `moves`, right to left."""
 
     var distance: Int
-    var fronts: DiagonalFronts
     var moves: List[UInt8]
     var banded: Bool
 
-    def __init__(out self, distance: Int, var fronts: DiagonalFronts, var moves: List[UInt8], banded: Bool):
-        """A settled pair from its parts, taking ownership of `fronts` and `moves`."""
+    def __init__(out self, distance: Int, var moves: List[UInt8], banded: Bool):
+        """A settled pair from its parts, taking ownership of `moves`."""
         self.distance = distance
-        self.fronts = fronts^
         self.moves = moves^
         self.banded = banded
 
@@ -193,7 +195,7 @@ struct Settled(Movable):
         return self.moves^
 
 
-def settle(mut profile: Profile, budget: Int = Int.MAX) raises AlignmentError -> Settled:
+def settle(mut profile: Profile, mut traced: DiagonalFronts, budget: Int = Int.MAX) raises AlignmentError -> Settled:
     """The global edit distance between a profile's two sequences, and what an optimal alignment by
     WFA2-lib's rule for ties is traced from: from the corner back, an edit into each cell whenever one
     is optimal, a substitution before a base of the first sequence alone before one of the second.
@@ -205,21 +207,23 @@ def settle(mut profile: Profile, budget: Int = Int.MAX) raises AlignmentError ->
     far apart for either goes to band doubling, recording each tile's left edge in the round that
     succeeds, or within `budget` words only some, and each tile is traced by the same rule (see
     `band.retrace`).
+
+    The fronts to trace back are left in `traced`, whose memory a reused space keeps from pair to pair.
     """
     var columns = profile.columns
     var rows = profile.rows
-    var moves = List[UInt8](capacity=columns + rows)
     if columns == 0 or rows == 0:
+        var moves = List[UInt8](capacity=columns + rows)
         for _ in range(rows):
             moves.append(UP)
         for _ in range(columns):
             moves.append(LEFT)
-        return Settled(columns + rows, DiagonalFronts(reserve=False), moves^, True)
+        return Settled(columns + rows, moves^, True)
     # A near-identical pair: one front, kept whole, settles it before both ends' setup would pay.
-    var near = DiagonalFronts()
-    var close = diagonal_transition(profile, STEP_TENTHS_ALIGNMENT, near, switch_setup=two_ended_setup(columns, rows))
+    traced.clear()
+    var close = diagonal_transition(profile, STEP_TENTHS_ALIGNMENT, traced, switch_setup=two_ended_setup(columns, rows))
     if close.distance >= 0:
-        return Settled(close.distance, near^, moves^, False)
+        return Settled(close.distance, List[UInt8](), False)
     var first_back = reversed_codes(profile.column_codes, columns, FIRST_SENTINEL)
     var second_back = reversed_codes(profile.row_codes, rows, SECOND_SENTINEL)
     var ahead = FrontPair(record=True)
@@ -228,11 +232,13 @@ def settle(mut profile: Profile, budget: Int = Int.MAX) raises AlignmentError ->
     if meeting.probe.distance >= 0:
         var distance = meeting.probe.distance
         grow_to(profile, ahead.history, behind.history, distance)
-        return Settled(distance, ahead^.take_history(), moves^, False)
+        traced = ahead^.take_history()
+        return Settled(distance, List[UInt8](), False)
     var probe = meeting.probe
     var trusted = True
     var heuristic = band_start(profile, meeting.probe, probe, trusted)
     var trail = Trail(columns, budget)
     var distance = band_doubling[True](profile, False, probe, trail, heuristic, trusted)
+    var moves = List[UInt8](capacity=columns + rows)
     retrace(profile, trail, heuristic, columns, rows, distance, moves)
-    return Settled(distance, DiagonalFronts(reserve=False), moves^, True)
+    return Settled(distance, moves^, True)
