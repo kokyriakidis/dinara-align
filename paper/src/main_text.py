@@ -92,8 +92,8 @@ BODY = [
   'measured again on the final code, which exposed thresholds that had cost up to a third of the running time.']),
 ('p',
  'Section 2 reviews the algorithms dinara-align builds on, Section 3 describes our changes, Section 4 compares '
- 'dinara-align with the exact aligners of the A*PA2 and QuickEd benchmarks on their datasets, and Section 5 '
- 'discusses the results and their limitations.'),
+ 'it with the exact aligners of the A*PA2 and QuickEd benchmarks, and Section 5 discusses the results and their '
+ 'limitations.'),
 ('sec', 'Background'),
 ('sub', 'Alignment and costs'),
 ('p',
@@ -367,23 +367,25 @@ BODY = [
  'other tool and with the published A*PA2 results.'),
 ('sub', 'Speed and memory'),
 ('p',
- 'dinara-align had the lowest mean time per alignment of the exact aligners on every workload ([#tab:summary]). '
- 'On the nanopore reads it was 1.3 to 2.6 times faster than the fastest alternative, and on the simulated pairs '
- '1.1 to 2.3 times ([#fig:sweeps]): 100 kbp pairs at 1, 5, 10 and 20% errors took 1.5, 5.0, 7.2 and 16.0 ms, '
- 'against 7.5, 8.5, 13.9 and 36.7 ms for A*PA2-full and 12.5, 24.0, 39.0 and 62.8 ms for QuickEd, and its '
- 'narrowest margin was on 10 kbp pairs at 5%, 269 against 288 µs for A*PA2-simple. Over all 22 datasets QuickEd '
- 'took 3.0 to 22.5 times as long, 6.7 times in the geometric mean. At gap-affine costs dinara-align was 1.7 to '
- '3.8 times faster than WFA and BiWFA wherever a tool completed a dataset, and it completed more of the long '
- 'pairs than any other tool; in the other modes it was 1.0 to 22 times faster than the fastest tool offering the'
- ' same mode, the one tie being a workload whose time varies between 3.0 and 3.9 ms from build to build with the'
- ' placement of one loop. Full results are in Supplementary Tables S2 to S4.'),
-('table', 'summary'),
+ 'dinara-align had the lowest mean time per alignment of the exact aligners on every workload ([#tab:unit]; '
+ '[#tab:affine]). On the nanopore reads it was 1.3 to 2.6 times faster than the fastest alternative, and on the '
+ 'simulated pairs 1.1 to 2.3 times ([#fig:sweeps]): 100 kbp pairs at 1, 5, 10 and 20% errors took 1.5, 5.0, 7.2 '
+ 'and 16.0 ms, against 7.5, 8.5, 13.9 and 36.7 ms for A*PA2-full and 12.5, 24.0, 39.0 and 62.8 ms for QuickEd, '
+ 'and its narrowest margin was on 10 kbp pairs at 5%, 269 against 288 µs for A*PA2-simple. Over all 22 datasets '
+ 'QuickEd took 3.0 to 22.5 times as long, 6.7 times in the geometric mean. At gap-affine costs dinara-align was '
+ '1.7 to 3.8 times faster than WFA and BiWFA wherever a tool completed a dataset, and it completed more of the '
+ 'long pairs than any other tool; in the other modes it was 1.0 to 22 times faster than the fastest tool '
+ 'offering the same mode, the one tie lying within the variation between builds. Global scores of 500,000 '
+ 'short-read pairs took 230 ms on one core and 27 ms on ten at (1, 2, 1), 4.6 and 4.3 times faster than '
+ 'WFA2-lib.'),
+('table', 'unit'),
+('table', 'affine'),
 ('figure', 'sweeps'),
 ('p',
  'An alignment of an ultra-long read increased peak memory by at most 51 MB, against 82 MB for A*PA2-full, and '
- 'of a 1 Mbp pair at 20% errors by at most 126 MB, against 184 MB, the tile boundaries of its traceback staying '
- 'within the default limit of 80 MB (Section 3.7; Supplementary Table S6). QuickEd, which splits its traceback '
- 'above 16 MB, stayed near 25 MB, and Edlib below 8 MB.'),
+ 'of a 1 Mbp pair at 20% errors by at most 126 MB, against 184 MB, its traceback held within the default limit '
+ "of 80 MB (Section 3.7; Supplementary Table S6); QuickEd stayed near 25 MB. On short reads dinara-align's peak "
+ "is higher than the others' ([#tab:unit]), its runtime alone taking about 13 MB."),
 ('sub', 'Effect of each technique'),
 ('p',
  'To measure what each technique contributes, dinara-align was built with one switched off at a time and every '
@@ -395,8 +397,8 @@ BODY = [
  '4.5 to 5% on the ultra-long reads and 11.5% on 100 kbp pairs at 20% errors, whose bands are widest; the '
  "regrouped recurrence contributed 1 to 4%, as bands narrow enough to be bound by a single word's step are a "
  'small part of the work. Gathered diagonal transition contributed 13 to 27% where diagonal transition does most'
- ' of the work, and the agreement rule 22% on the 10 kbp reads, where extrapolations from noisy ends mislead. '
- 'Without the certified band, the short-read batch took 2.9 and 3.2 times as long.'),
+ ' of the work, and the agreement rule 22% on the 10 kbp reads. Without the certified band, the short-read batch'
+ ' took 2.9 and 3.2 times as long.'),
 ('table', 'ablation'),
 ('sec', 'Discussion'),
 ('p',
@@ -473,32 +475,44 @@ TABLES = {
     ["Short reads, affine", "232", "", "", "", "", "", "**+188%**"],
     ["Short reads, unit", "213", "", "", "", "", "", "**+215%**"],
   ]},
-"summary": {
-  "caption": "dinara-align against the fastest other exact aligner on each workload: mean time per alignment (per batch for the short reads), and that aligner's time as a multiple of dinara-align's. Every dataset and tool is in Supplementary Tables S2 to S4, S6 and S7.",
-  "header": ["Workload", "dinara-align", "Fastest alternative", "Ratio"],
-  "align": "lrlr",
-  "wrap": [0, 2],
+"unit": {
+  "fit": True,
+  "caption": "Unit-cost alignment of the A*PA2 real datasets by every exact aligner: mean time per alignment, traceback included, and below it the peak resident memory of the run in MB, as QuickEd reports it. t.o. marks a tool that completed no pair within 30 s and o.o.m. one the 8 GB limit stopped. The simulated datasets are in Fig. 2 and Supplementary Table S4.",
+  "header": ["Dataset", "dinara-align", "A*PA2-full", "A*PA2-simple", "A*PA", "QuickEd", "Edlib", "BiWFA", "WFA", "BSAlign", "KSW2"],
+  "align": "lrrrrrrrrrr",
   "rows": [
-    ["*Unit costs*", "", "", ""],
-    ["ont-1k (0.8 kbp)", "**23 µs**", "WFA 31 µs", "1.3×"],
-    ["ont-10k (3.6 kbp)", "**157 µs**", "A*PA2-simple 247 µs", "1.6×"],
-    ["ont-50k (9.6 kbp)", "**590 µs**", "A*PA2-simple 944 µs", "1.6×"],
-    ["ont-500k (642 kbp)", "**118 ms**", "A*PA2-full 283 ms", "2.4×"],
-    ["ont-500k-genvar (663 kbp)", "**156 ms**", "A*PA2-full 225 ms", "1.4×"],
-    ["SARS-CoV-2 (30 kbp)", "**285 µs**", "A*PA2-simple 728 µs", "2.6×"],
-    ["16 simulated datasets, 10 kbp to 1 Mbp, 1 to 20%", "**33 µs to 901 ms**", "A*PA2, A*PA, WFA", "1.1 to 2.3×"],
-    ["*Gap-affine costs (4, 6, 2)*", "", "", ""],
-    ["ont-1k", "**112 µs**", "WFA 186 µs", "1.7×"],
-    ["ont-10k", "**1.71 ms**", "WFA 4.80 ms", "2.8×"],
-    ["ont-50k", "**22.0 ms**", "BiWFA 54.9 ms", "2.5×"],
-    ["SARS-CoV-2", "**737 µs**", "BiWFA 1.79 ms", "2.4×"],
-    ["11 simulated datasets that a rival completed, at least in part", "**208 µs to 9.9 s**", "WFA, BiWFA, BSAlign", "1.6 to 3.2×"],
-    ["*Other modes*", "", "", ""],
-    ["14 local, overlap, infix, prefix, extension, two-piece and table workloads", "**32 µs to 17.5 ms**", "Edlib, WFA2-lib, KSW2, parasail, SSW", "1.0 to 22×"],
-    ["*500,000 short reads, global scores*", "", "", ""],
-    ["Affine (1, 2, 1), one core", "**230 ms**", "WFA2-lib 1.06 s", "4.6×"],
-    ["Affine (1, 2, 1), ten cores", "**27 ms**", "WFA2-lib 116 ms", "4.3×"],
-    ["Unit costs, one core", "**212 ms**", "WFA2-lib 450 ms", "2.1×"],
+    ["*Mean time per alignment*", "", "", "", "", "", "", "", "", "", ""],
+    ["ont-1k (0.8 kbp)", "**23 µs**", "81 µs", "48 µs", "612 µs", "75 µs", "124 µs", "44 µs", "31 µs", "119 µs", "539 µs"],
+    ["ont-10k (3.6 kbp)", "**157 µs**", "391 µs", "247 µs", "15.3 ms", "688 µs", "1.09 ms", "741 µs", "599 µs", "1.30 ms", "13.1 ms"],
+    ["ont-50k (9.6 kbp)", "**590 µs**", "1.27 ms", "944 µs", "263 ms", "2.31 ms", "6.14 ms", "7.43 ms", "6.38 ms", "12.3 ms", "167 ms"],
+    ["ont-500k (642 kbp)", "**118 ms**", "283 ms", "687 ms", "t.o.", "847 ms", "5.00 s", "6.33 s", "o.o.m.", "t.o.", "o.o.m."],
+    ["ont-500k-genvar (663 kbp)", "**156 ms**", "225 ms", "511 ms", "t.o.", "1.39 s", "5.23 s", "6.20 s", "o.o.m.", "t.o.", "o.o.m."],
+    ["SARS-CoV-2 (30 kbp)", "**285 µs**", "2.00 ms", "728 µs", "6.49 ms", "3.90 ms", "8.18 ms", "909 µs", "987 µs", "47.1 ms", "68.5 ms"],
+    ["*Peak resident memory (MB)*", "", "", "", "", "", "", "", "", "", ""],
+    ["ont-1k", "14", "5", "5", "6", "2", "7", "7", "8", "2", "7"],
+    ["ont-10k", "16", "6", "6", "39", "6", "8", "8", "39", "25", "72"],
+    ["ont-50k", "20", "8", "7", "858", "18", "8", "10", "187", "423", "650"],
+    ["ont-500k", "67", "89", "90", "t.o.", "26", "15", "29", "o.o.m.", "t.o.", "o.o.m."],
+    ["ont-500k-genvar", "63", "57", "55", "t.o.", "27", "16", "27", "o.o.m.", "t.o.", "o.o.m."],
+    ["SARS-CoV-2", "18", "7", "6", "19", "15", "8", "9", "26", "215", "151"],
+  ]},
+"affine": {
+  "caption": "Gap-affine alignment at costs (4, 6, 2) by every exact aligner that takes them: mean time per alignment, a 30 s budget per sample. Superscripts give the pairs completed where not all were; t.o. marks a tool that completed none and o.o.m. one the 8 GB limit stopped. Every dataset is in Supplementary Table S3.",
+  "header": ["Dataset", "dinara-align", "WFA", "BiWFA", "BSAlign", "KSW2"],
+  "align": "lrrrrr",
+  "rows": [
+    ["ont-1k", "**112 µs**", "186 µs", "304 µs", "336 µs", "1.10 ms"],
+    ["ont-10k", "**1.71 ms**", "4.80 ms", "5.84 ms", "7.84 ms", "29.8 ms"],
+    ["ont-50k", "**22.0 ms**", "63.5 ms", "54.9 ms", "87.0 ms", "343 ms^81/104"],
+    ["ont-500k", "t.o.", "o.o.m.", "t.o.", "o.o.m.", "o.o.m."],
+    ["ont-500k-genvar", "**21.7 s^1/4**", "o.o.m.", "t.o.", "o.o.m.", "o.o.m."],
+    ["SARS-CoV-2", "**737 µs**", "2.06 ms", "1.79 ms", "341 ms", "88.4 ms"],
+    ["10 kbp, 1%", "**208 µs**", "461 µs", "650 µs", "37.0 ms", "21.3 ms"],
+    ["10 kbp, 5%", "**2.32 ms**", "7.05 ms", "8.72 ms", "37.0 ms", "97.5 ms"],
+    ["10 kbp, 10%", "**7.18 ms**", "22.7 ms", "27.3 ms", "37.3 ms", "204 ms"],
+    ["10 kbp, 20%", "**20.6 ms**", "65.2 ms", "75.2 ms", "37.4 ms", "374 ms^81/99"],
+    ["100 kbp, 1%", "**14.0 ms**", "39.7 ms", "39.0 ms", "o.o.m.", "2.44 s"],
+    ["100 kbp, 5%", "**337 ms**", "811 ms", "715 ms", "o.o.m.", "9.25 s^3/9"],
   ]},
 }
 
