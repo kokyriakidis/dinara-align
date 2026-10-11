@@ -48,7 +48,8 @@ mean time per alignment and memory growth per pair, and QuickEd's total over the
 times its pairs, and peak resident memory. Every cost is checked against every other tool's on the pairs
 both aligned, and on A\*PA2's datasets against the costs its published results recorded. WFA, KSW2 and
 BSAlign, whose memory grows with the matrix or the square of the distance, run under an 8 GB cap; *t.o.*
-marks a tool its budget stopped before a pair, *o.o.m.* one the cap stopped, as QuickEd's tables do.
+marks a tool its budget stopped before a pair, *o.o.m.* one the cap stopped, as QuickEd's tables do, and
+*failed* one that crashed: BSAlign's edit distance on every pair of 500 kbp or more, with or without the cap.
 
 **The other suites** time many short calls, where one cold call measures the allocator as much as the
 aligner: each tool's time is the faster of two passes over a workload, its mean per pair, in process.
@@ -62,7 +63,8 @@ other modes and the short reads at `289bcf0`; Rust nightly
 ## Datasets
 
 A\*PA2's real datasets, as pa-bench releases them: Oxford Nanopore reads of about 1, 10, 50 and 500 kbp,
-the 500 kbp ones also against a reference with genetic variation (QuickEd's MiniION-a and MiniION-b), and
+the 500 kbp ones of CHM13 and, in ont-500k-genvar, of another individual, which adds genetic variation
+(QuickEd's MiniION-a and MiniION-b), and
 SARS-CoV-2 genomes. Real Illumina and PacBio HiFi reads, the two technologies QuickEd adds (`giab.py`):
 Genome in a Bottle's HG002 reads of one region of chromosome 20, its 2x250 bp Illumina reads of
 chr20:40.00-40.02 Mbp and its Sequel II HiFi reads of chr20:40.0-40.2 Mbp, streamed from GIAB's GRCh38
@@ -110,8 +112,8 @@ Edit distance with its alignment, a 30 s budget a tool a dataset. Mean time per 
 | ont-1k | 1221 of 12477 | 21.1 µs | 21.4 µs | 80.6 µs | 48 µs | 612 µs | 124 µs | 44.3 µs | 31.1 µs | 539 µs | 74.8 µs | 119 µs | ✓ |
 | ont-10k | 277 of 5000 | 156 µs | 150 µs | 391 µs | 247 µs | 15.3 ms | 1.09 ms | 741 µs | 599 µs | 13.1 ms | 688 µs | 1.3 ms | ✓ |
 | ont-50k | 104 of 10000 | 580 µs | 561 µs | 1.27 ms | 944 µs | 263 ms | 6.14 ms | 7.43 ms | 6.38 ms | 167 ms | 2.31 ms | 12.3 ms | ✓ |
-| ont-500k | 4 of 50 | 118 ms | 119 ms | 283 ms | 687 ms | t.o. (30 s) | 5 s | 6.33 s | o.o.m. | o.o.m. | 847 ms | t.o. (30 s) | ✓ |
-| ont-500k-genvar | 4 of 48 | 156 ms | 157 ms | 225 ms | 511 ms | t.o. (30 s) | 5.23 s | 6.2 s | o.o.m. | o.o.m. | 1.39 s | t.o. (30 s) | ✓ |
+| ont-500k | 4 of 50 | 118 ms | 119 ms | 283 ms | 687 ms | t.o. (30 s) | 5 s | 6.33 s | o.o.m. | o.o.m. | 847 ms | failed | ✓ |
+| ont-500k-genvar | 4 of 48 | 156 ms | 157 ms | 225 ms | 511 ms | t.o. (30 s) | 5.23 s | 6.2 s | o.o.m. | o.o.m. | 1.39 s | failed | ✓ |
 | sars-cov-2 | 33 of 10000 | 286 µs | 253 µs | 2 ms | 728 µs | 6.49 ms | 8.18 ms | 909 µs | 987 µs | 68.5 ms | 3.9 ms | 47.1 ms | ✓ |
 | illumina-250 | 4032 of 5992 | 0.576 µs | 0.798 µs | 14.5 µs | 4.1 µs | 13.7 µs | 23.3 µs | 2.04 µs | 1.12 µs | 12.4 µs | 16.5 µs | 20.6 µs | ✓ |
 | pacbio-hifi | 69 of 890 | 12.6 µs | 15.4 µs | 977 µs | 259 µs | 1.05 ms | 3.35 ms | 86.1 µs | 65.9 µs | 3.09 ms | 950 µs | 12.2 ms | ✓ |
@@ -123,14 +125,14 @@ Edit distance with its alignment, a 30 s budget a tool a dataset. Mean time per 
 | l100000.n1000.e5 | 9 of 1000 | 5.1 ms | 5.08 ms | 8.45 ms | 14.9 ms | 14.4 ms | 146 ms | 63.3 ms | 55 ms | 4.72 s (6/9) | 24 ms | 643 ms | ✓ |
 | l100000.n1000.e10 | 10 of 1000 | 7.28 ms | 7.17 ms | 13.9 ms | 27.6 ms | 48.3 ms | 247 ms | 218 ms | 182 ms | 9.19 s (3/10) | 39 ms | 631 ms | ✓ |
 | l100000.n1000.e20 | 10 of 1000 | 15.7 ms | 15.9 ms | 36.7 ms | 56.8 ms | t.o. (30 s) | 446 ms | 695 ms | 551 ms | 17.3 s (1/10) | 62.8 ms | 630 ms | ✓ |
-| l500000.n200.e1 | 4 of 200 | 33.5 ms | 35.8 ms | 42.7 ms | 72.3 ms | 41.2 ms | 670 ms | 80.8 ms | 74.8 ms | 24.1 s (1/4) | 124 ms | t.o. (30 s) | ✓ |
-| l500000.n200.e5 | 4 of 200 | 31.4 ms | 31.3 ms | 45 ms | 214 ms | 83.1 ms | 2.28 s | 1.56 s | 1.48 s | o.o.m. | 401 ms | t.o. (30 s) | ✓ |
-| l500000.n200.e10 | 4 of 200 | 68.4 ms | 68.1 ms | 119 ms | 425 ms | 406 ms | 4.38 s | 5.45 s | 5.05 s | o.o.m. | 711 ms | t.o. (30 s) | ✓ |
-| l500000.n200.e20 | 4 of 200 | 255 ms | 252 ms | 545 ms | 901 ms | t.o. (30 s) | 8.52 s (3/4) | 18 s (1/4) | o.o.m. | o.o.m. | 1.24 s | t.o. (30 s) | ✓ |
-| l1000000.n100.e1 | 4 of 100 | 59.7 ms | 57.8 ms | 89.1 ms | 253 ms | 97.3 ms | 2.38 s | 366 ms | 391 ms | o.o.m. | 398 ms | t.o. (30 s) | ✓ |
-| l1000000.n100.e5 | 4 of 100 | 65 ms | 65.1 ms | 118 ms | 818 ms | 183 ms | 8.67 s (3/4) | 6.35 s | o.o.m. | o.o.m. | 1.44 s | t.o. (30 s) | ✓ |
-| l1000000.n100.e10 | 4 of 100 | 183 ms | 184 ms | 369 ms | 1.65 s | 978 ms | 17.3 s (1/4) | 22.2 s (1/4) | o.o.m. | o.o.m. | 2.65 s | t.o. (30 s) | ✓ |
-| l1000000.n100.e20 | 4 of 100 | 892 ms | 901 ms | 2.02 s | 3.52 s | t.o. (30 s) | t.o. (30 s) | t.o. (30 s) | o.o.m. | o.o.m. | 4.8 s | t.o. (30 s) | ✓ |
+| l500000.n200.e1 | 4 of 200 | 33.5 ms | 35.8 ms | 42.7 ms | 72.3 ms | 41.2 ms | 670 ms | 80.8 ms | 74.8 ms | 24.1 s (1/4) | 124 ms | failed | ✓ |
+| l500000.n200.e5 | 4 of 200 | 31.4 ms | 31.3 ms | 45 ms | 214 ms | 83.1 ms | 2.28 s | 1.56 s | 1.48 s | o.o.m. | 401 ms | failed | ✓ |
+| l500000.n200.e10 | 4 of 200 | 68.4 ms | 68.1 ms | 119 ms | 425 ms | 406 ms | 4.38 s | 5.45 s | 5.05 s | o.o.m. | 711 ms | failed | ✓ |
+| l500000.n200.e20 | 4 of 200 | 255 ms | 252 ms | 545 ms | 901 ms | t.o. (30 s) | 8.52 s (3/4) | 18 s (1/4) | o.o.m. | o.o.m. | 1.24 s | failed | ✓ |
+| l1000000.n100.e1 | 4 of 100 | 59.7 ms | 57.8 ms | 89.1 ms | 253 ms | 97.3 ms | 2.38 s | 366 ms | 391 ms | o.o.m. | 398 ms | failed | ✓ |
+| l1000000.n100.e5 | 4 of 100 | 65 ms | 65.1 ms | 118 ms | 818 ms | 183 ms | 8.67 s (3/4) | 6.35 s | o.o.m. | o.o.m. | 1.44 s | failed | ✓ |
+| l1000000.n100.e10 | 4 of 100 | 183 ms | 184 ms | 369 ms | 1.65 s | 978 ms | 17.3 s (1/4) | 22.2 s (1/4) | o.o.m. | o.o.m. | 2.65 s | failed | ✓ |
+| l1000000.n100.e20 | 4 of 100 | 892 ms | 901 ms | 2.02 s | 3.52 s | t.o. (30 s) | t.o. (30 s) | t.o. (30 s) | o.o.m. | o.o.m. | 4.8 s | failed | ✓ |
 
 Each rival's time over dinara-align's on the pairs both aligned, across the datasets, as QuickEd's text
 summarizes its own:
@@ -379,25 +381,25 @@ a time by several percent; the alignment builds keep their jumps clear of those 
 
 | dataset | baseline (ms) | regroup | paired | gather | agreement | neighbours | certified |
 | :-- | --: | --: | --: | --: | --: | --: | --: |
-| ont-500k | 96.33 | +1.5% | +5.0% | +0.5% | +0.0% | +9.6% |  |
-| ont-500k-genvar | 133.3 | +1.8% | +5.0% | +0.4% | -0.2% | +16.7% |  |
-| ont-1k | 0.02082 | +0.4% | +0.4% | +15.6% | +0.3% | -0.1% |  |
-| ont-10k | 0.1511 | -1.2% | +0.6% | +3.7% | +17.3% | -0.0% |  |
-| sars-cov-2 | 0.1947 | +0.4% | +1.5% | +14.3% | +6.0% | -0.0% |  |
-| l100000.n1000.e1 | 1.104 | +0.5% | +0.1% | +26.7% | +0.4% | +0.3% |  |
-| l100000.n1000.e5 | 4.451 | -0.1% | -0.1% | +0.4% | +0.3% | +0.2% |  |
-| l100000.n1000.e10 | 9.728 | +0.0% | +0.2% | +1.3% | +0.3% | +11.5% |  |
-| l100000.n1000.e20 | 14.57 | +2.7% | +7.8% | +4.2% | +3.7% | +2.9% |  |
-| illumina-affine | 228.2 |  |  |  |  |  | +192.0% |
-| illumina-edit | 212.1 |  |  |  |  |  | +214.4% |
+| ont-500k | 98.8 | +1.1% | +4.5% | +0.5% | -0.2% | +8.9% |  |
+| ont-500k-genvar | 136.0 | +1.9% | +5.0% | +0.4% | 0.0% | +16.4% |  |
+| ont-1k | 0.021 | +0.2% | +0.3% | +14.9% | 0.0% | +0.7% |  |
+| ont-10k | 0.145 | -0.6% | +1.2% | +6.4% | +22.2% | +0.1% |  |
+| sars-cov-2 | 0.197 | -0.9% | +0.2% | +13.4% | +4.9% | -0.5% |  |
+| l100000.n1000.e1 | 1.10 | -1.4% | +0.4% | +26.5% | -0.1% | -1.0% |  |
+| l100000.n1000.e5 | 4.61 | -0.6% | -0.2% | +0.1% | 0.0% | +0.2% |  |
+| l100000.n1000.e10 | 6.72 | +0.3% | +3.4% | +1.9% | +0.5% | -0.2% |  |
+| l100000.n1000.e20 | 15.0 | +4.1% | +11.5% | +3.9% | -2.9% | 0.0% |  |
+| illumina-affine | 232 |  |  |  |  |  | +188% |
+| illumina-edit | 213 |  |  |  |  |  | +215% |
 
-Every technique pays where it was built to: the seed neighbours 10 to 17% on the ultra-long reads and 12%
-on 100 kbp pairs at 10%, gathered diagonal transition 14 to 27% where diagonal transition does most of
-the work, the agreement rule 17% on the 10 kbp reads, interleaved groups 5 to 8% on the long and divergent
-pairs, the regrouped step 1.5 to 2.7%, and the certified band three times on the short reads; switching one
-off never made a dataset more than 1.2% faster. Measured at `ffbf46e`: the alignments here are at unit
-costs, which neither the divergent-pair handover nor the later changes to it touch, and their bands' edges
-fit under the memory cap.
+Every technique pays where it was built to: the seed neighbours 9 and 16% on the ultra-long reads, gathered
+diagonal transition 6 to 27% where diagonal transition does most of the work, the agreement rule 22% on the
+ont-10k reads, interleaved groups 4.5 to 11.5% on the long and divergent pairs, the regrouped step up to
+4.1%, and the certified band about three times on the short reads; switching one off made a dataset at most
+2.9% faster. Measured at `dc980d7`, as the paper's Table S2 gives it: the alignments here are at unit costs,
+which neither the divergent-pair handover nor the later changes to it touch, and their bands' edges fit under
+the memory cap.
 
 ## Reading the Numbers
 

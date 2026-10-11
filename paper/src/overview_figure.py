@@ -10,12 +10,12 @@ BOXES = {
     "two": (200, 24, 160, 54, "Two-ended transition", "while cheaper than a band"),
     "band": (390, 24, 170, 54, "Band doubling, tiles", "seed heuristic on long pairs"),
     "trace": (590, 24, 160, 54, "Tile-by-tile traceback", "within the memory limit"),
-    "one": (10, 130, 180, 48, "One search, fronts kept", "the side the traceback reads"),
+    "one": (10, 130, 180, 48, "One search, fronts kept", "from the side the traceback reads"),
     "both": (290, 130, 180, 48, "Two searches", "as BiWFA"),
     "kept": (570, 130, 180, 48, "Traceback through fronts", "split past the memory limit"),
-    "sweep": (290, 206, 180, 44, "Full difference sweep", "8-bit lanes, same alignment"),
+    "sweep": (290, 206, 180, 44, "Full difference sweep", "own flags, same alignment"),
     "lanes": (10, 282, 240, 48, "One pair per vector lane", "8-bit, band certified per lane"),
-    "again": (330, 282, 240, 48, "Uncertified pairs again", "a wider band; 16 bits if a byte saturates"),
+    "again": (330, 282, 240, 48, "Uncertified pairs again", "wider band; 16-bit scores on saturation"),
 }
 
 # Arrows: polyline points and an optional label (x, y, text lines, anchor).
@@ -27,11 +27,10 @@ ARROWS = [
     ([(470, 154), (570, 154)], (520, 147, ["searches meet"], "middle")),
     ([(100, 130), (100, 123), (660, 123), (660, 130)], (380, 118, ["reaches the end alone: traced at once"], "middle")),
     ([(380, 178), (380, 206)], (392, 189, ["projected work above the", "sweep's, after 1/24 of it"], "start")),
-    ([(470, 228), (660, 228), (660, 178)], None),
     ([(250, 306), (330, 306)], (290, 299, ["not certified"], "middle")),
 ]
 
-NOTES = [(10, 96, "A pair settled by diagonal transition is traced back from its own wavefronts.")]
+NOTES = [(10, 96, "A pair aligned by diagonal transition is traced back from its own wavefronts.")]
 
 
 def svg():

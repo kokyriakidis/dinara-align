@@ -164,8 +164,8 @@ struct Band(Movable):
             # The seeds bound the bottom tighter, as A*PA2 bounds a block's: a row `k` past the
             # diagonal from the deepest kept cell costs at least `floor + k` to reach, so it is in
             # reach only while that plus the heuristic there fits the bound. Going up, the first drops
-            # by one a row and the heuristic by at most its `climb`, so a row `x` over rules out the
-            # next `ceil(x / (1 + climb))` above it unread.
+            # by one a row and the heuristic by at most its `climb`, so a row `x` over rules out itself
+            # and the next `ceil(x / (1 + climb)) - 1` above it, which the scan steps past unread.
             var diagonal_row = self.deepest + width
             var step = 1 + heuristic.climb()
             while reach_row > diagonal_row:
@@ -249,9 +249,9 @@ struct Band(Movable):
         self.anchor += end_column - self.bounds[tile]
         # Read the right edge back as scores and keep, as A*PA2 does, the rows from the first to the
         # last whose score plus heuristic fits the bound. Scores change by at most one per row and the
-        # heuristic by at most its `climb` either way, so a row `x` over the bound rules out the next
-        # `ceil(x / (1 + climb))` rows on either side without reading them: half of `x` for exact
-        # seeds or none, a third for inexact.
+        # heuristic by at most its `climb` either way, so a row `x` over the bound rules out itself and
+        # the next `ceil(x / (1 + climb)) - 1` rows beyond it, which the scan steps past unread: about
+        # half of `x` for exact seeds or none, a third for inexact.
         self.edge.capture(self.top, self.end_word, self.anchor, self.frontier, self.rows)
         var first_kept = self.edge.low_row
         var last_kept = self.edge.high_row

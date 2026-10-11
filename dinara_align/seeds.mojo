@@ -4,7 +4,7 @@
 # Ported from `pa-bitpacking` in A*PA (https://github.com/RagnarGrootKoerkamp/astar-pairwise-aligner,
 # commit bf2e14e), by Ragnar Groot Koerkamp and Pesho Ivanov, itself translated from Edlib.
 """
-A*PA2-full's gap-chaining seed heuristic, with A*PA's inexact seeds and local pruning: a lower bound on
+A*PA2-full's gap-chaining seed heuristic, with A*PA's inexact seeds and A*PA2's local pruning: a lower bound on
 the cost from any cell to the end, which narrows the band (see `SeedHeuristic`).
 """
 
@@ -926,7 +926,8 @@ struct SeedHeuristic(Movable):
         leftmost: List[Int32],
         mut fronts: List[Int],
     ) -> Bool:
-        """A*PA's local pruning: whether a match can lower the cost of some path, so dropping it would not.
+        """A*PA2's local pruning, its pre-pruning: whether a match can lower the cost of some path, so dropping
+        it would not.
 
         A match only helps a path that goes on to cross the next seeds for fewer edits than the
         seeds it crosses would cost unmatched. A diagonal transition from the match's end, starting

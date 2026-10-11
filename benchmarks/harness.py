@@ -506,8 +506,15 @@ def measure(binary: Path, tool: str, path: Path, budget: float, kept: dict | Non
     entry = kept.get(key)
     pairs = path.read_bytes().count(b"\n") // 2
     if entry is not None and not REMEASURE:
-        # Results kept before a run's ending was told apart know only whether it was stopped.
-        status = entry.get("status", BUDGET if entry.get("stopped") else DONE)
+        # Results kept before a run's ending was told apart know only whether it was stopped. One that ended on
+        # its own before its first pair failed: a runner starts pairs until its budget is spent, and BSAlign's
+        # edit distance, kept so, crashes on every pair of 500 kbp or more, capped or not.
+        if "status" in entry:
+            status = entry["status"]
+        elif entry.get("stopped"):
+            status = BUDGET
+        else:
+            status = DONE if entry["rows"] else FAILED
         whole = len(entry["rows"]) == pairs and status == DONE
         if budget <= entry["budget"] or whole or status == MEMORY:
             rows, status = replay([tuple(row) for row in entry["rows"]], status, budget)
