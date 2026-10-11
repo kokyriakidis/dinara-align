@@ -40,8 +40,6 @@
 \noindent\textbf{Motivation:} Exact pairwise alignment returns an optimal alignment that no heuristic cut-off can change, the reference for evaluating read mappers, assemblers and variant callers. Yet no exact algorithm is fastest across workloads: diagonal transition wins on near-identical pairs, bit-parallel band doubling on long divergent reads, and inter-sequence vectorisation on batches of short pairs.\par
 \noindent\textbf{Results:} We present dinara-align, an exact aligner that chooses its algorithm for each pair. Every hand-over that rests on a projection provably bounds its waste; a gap-affine alignment adds a second search only when its measured work exceeds what two would need, provably still finding an optimal alignment; short pairs are aligned in bands that each vector lane certifies optimal; and, within the memory limit, all engines break ties alike at unit and gap-affine costs. On one Skylake-X core, dinara-align was the fastest exact aligner compared on every dataset at unit costs: up to 2.4 times faster than A*PA2 on ultra-long nanopore reads, and 1.95 and 5.2 times faster than WFA on Illumina and HiFi reads. At gap-affine costs it was the fastest on every dataset any tool completed.\par
 \noindent\textbf{Availability and implementation:} dinara-align is free software under the Mozilla Public License 2.0, available at \url{https://github.com/kokyriakidis/dinara-align} with C, C++, Python and command-line interfaces.\par
-\noindent\textbf{Contact:} kkyriaki@ucsc.edu, bpaten@ucsc.edu\par
-\noindent\textbf{Supplementary information:} Supplementary data are available at \emph{Bioinformatics} online.\par
 \end{minipage}}
 \bigskip
 \end{@twocolumnfalse}
@@ -466,7 +464,7 @@ An alignment of an ultra-long read increased peak memory by at most 48 MiB, agai
 
 dinara-align was the fastest exact aligner on every dataset at unit costs, and on every dataset that any tool completed at gap-affine costs. This is consistent with choosing an algorithm for each pair: no single engine was fastest across these workloads, and since every engine is exact, choosing never forfeits the guarantee or changes the alignment. Three observations stand out. First, each technique paid where its engine does the work (Supplementary Table S2): on the ultra-long reads, switching off direct neighbour construction, which reduces work outside the inner loop, slowed alignment by 9 and 16\%, more than either change to the loop itself (at most 5\%), while the interleaved groups paid most on the widest bands and gathered extension where diagonal transition does most of the work. Second, on short reads the work that does not depend on the pair dominates: a 250~bp alignment at gap-affine costs once took 5.2~\textmu s through a fresh call and 2.4~\textmu s through a reused aligner (Supplementary Table S1), so a benchmark should call every tool as its own runner does. Third, thresholds that encode a cost model become outdated as the code changes, and measuring them again belongs in the evaluation of any aligner that selects its algorithm by thresholds. Gap-affine alignment of ultra-long reads remains open: no tool completed an ont-500k read within 30~s. Where memory matters more than time, Edlib, QuickEd and BiWFA (15 to 29 MiB on ultra-long reads) use less than dinara-align's 64 MiB. The measured-work rule, the regrouped recurrence and the per-lane certificate do not depend on this implementation and apply to other wavefront, bit-parallel and inter-sequence aligners.
 
-The study has several limitations:
+\subsection{Limitations}
 
 \begin{enumerate}
   \item The evaluation covers one x86 processor with AVX-512, and single-thread latency except for the batches; the AVX2 and NEON configurations are not evaluated here.
@@ -477,7 +475,7 @@ The study has several limitations:
   \item The ablation switches off one technique at a time, so it does not separate their interactions.
 \end{enumerate}
 
-Future work includes:
+\subsection{Future work}
 
 \begin{enumerate}
   \item a cheap upper bound on the distance: with the true distance supplied by an oracle, starting band doubling at it saves up to 27\% on 100~kbp pairs at 20\% errors, but starting 15\% above it loses up to 23\% on ultra-long reads, whereas capping the bound at an upper bound within 5\% of the distance saves up to 27\% on 1~Mbp pairs at 20\% (Supplementary Section S5);
@@ -486,11 +484,17 @@ Future work includes:
   \item measurements on further processors, and an evaluation of the GPU kernels the library provides for batches (Supplementary Section S1.5).
 \end{enumerate}
 
-\section*{Funding}
-This work received no specific funding.
+\section*{Author contributions}
+Konstantinos Kyriakidis (Conceptualization [lead], Methodology [lead], Software [lead], Validation [lead], Formal analysis [lead], Investigation [lead], Data curation [lead], Visualization [lead], Writing—original draft [lead]), Benedict Paten (Supervision [lead], Writing—review \& editing [equal]).
+
+\section*{Supplementary data}
+Supplementary data are available at \emph{Bioinformatics} online.
 
 \section*{Conflict of interest}
 None declared.
+
+\section*{Funding}
+This work received no specific funding.
 
 \section*{Data availability}
 The software, benchmark harness and the commits of every compared tool are available at \url{https://github.com/kokyriakidis/dinara-align}. The benchmarks are reproduced by \texttt{pixi run bench} (unit and \texttt{-{}-affine} costs), \texttt{bench-modes}, \texttt{bench-batch} and \texttt{bench-ablation}. Release builds target the baseline processor of each platform; the AVX-512 code paths require a build for the host processor.

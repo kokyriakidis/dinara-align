@@ -27,8 +27,7 @@ ABSTRACT = [('Motivation',
  ('Availability and implementation',
   'dinara-align is free software under the Mozilla Public License 2.0, available at '
   'https://github.com/kokyriakidis/dinara-align with C, C++, Python and command-line interfaces.'),
- ('Contact', 'kkyriaki@ucsc.edu, bpaten@ucsc.edu'),
- ('Supplementary information', 'Supplementary data are available at *Bioinformatics* online.')]
+]
 
 BODY = [
 ('sec', 'Introduction'),
@@ -481,8 +480,7 @@ BODY = [
  "Edlib, QuickEd and BiWFA (15 to 29 MiB on ultra-long reads) use less than dinara-align's 64 MiB. The "
  'measured-work rule, the regrouped recurrence and the per-lane certificate do not depend on this implementation '
  'and apply to other wavefront, bit-parallel and inter-sequence aligners.'),
-('p',
- 'The study has several limitations:'),
+('sub', 'Limitations'),
 ('list',
  ['The evaluation covers one x86 processor with AVX-512, and single-thread latency except for the batches; the '
   'AVX2 and NEON configurations are not evaluated here.',
@@ -499,8 +497,7 @@ BODY = [
  'The Illumina and HiFi reads come from one region of chromosome 20 and exclude reads that minimap2 leaves more '
   'than a tenth clipped, such as those spanning structural variants.',
  'The ablation switches off one technique at a time, so it does not separate their interactions.']),
-('p',
- 'Future work includes:'),
+('sub', 'Future work'),
 ('list',
  ['a cheap upper bound on the distance: with the true distance supplied by an oracle, starting band doubling at '
   'it saves up to 27% on 100 kbp pairs at 20% errors, but starting 15% above it loses up to 23% on ultra-long '
@@ -515,8 +512,12 @@ BODY = [
 ]
 
 BACK = [
-    ("Funding", "This work received no specific funding."),
+    ("Author contributions", "Konstantinos Kyriakidis (Conceptualization [lead], Methodology [lead], Software [lead], "
+     "Validation [lead], Formal analysis [lead], Investigation [lead], Data curation [lead], Visualization [lead], "
+     "Writing—original draft [lead]), Benedict Paten (Supervision [lead], Writing—review & editing [equal])."),
+    ("Supplementary data", "Supplementary data are available at *Bioinformatics* online."),
     ("Conflict of interest", "None declared."),
+    ("Funding", "This work received no specific funding."),
     ("Data availability", "The software, benchmark harness and the commits of every compared tool are available at "
      "https://github.com/kokyriakidis/dinara-align. The benchmarks are reproduced by `pixi run bench` (unit and "
      "`--affine` costs), `bench-modes`, `bench-batch` and `bench-ablation`. Release builds target the baseline "
