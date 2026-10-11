@@ -529,8 +529,8 @@ def load_kept() -> dict:
 
 def duration(seconds: float) -> str:
     """A time in the unit that keeps three significant figures readable."""
-    if seconds < 1e-3:
-        return f"{seconds * 1e6:.0f} µs"
+    if seconds < 0.9995e-3:
+        return f"{seconds * 1e6:.3g} µs"
     if seconds < 0.9995:
         return f"{seconds * 1e3:.3g} ms"
     return f"{seconds:.3g} s"

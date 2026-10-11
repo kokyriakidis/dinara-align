@@ -397,17 +397,19 @@ def main() -> None:
     peak_lines = memory_lines[:2]
     speedups = {rival: [] for rival in rivals}
     scaling = []
+    exact = {}
     failed = []
     for name, files in datasets:
         path, facts = sample(name, files, bases, published)
         pairs, whole = facts["pairs"], facts["of"]
-        times, medians, totals, grown, peaks, seen = [], [], [], [], [], []
+        times, medians, totals, grown, peaks, seen, raw_peaks = [], [], [], [], [], [], []
         measured = {}
         for column, binary, tool in chosen(name):
             print(f"{name}: {column} ...", file=sys.stderr, flush=True)
             rows, peak, status = measure(binary, tool, path, options.budget, None if binary == runners["ours"] else kept)
             measured[column] = (rows, status)
             peaks.append(megabytes(peak, status))
+            raw_peaks.append(peak)
             grown.append(growth(rows))
             seen.append((column, [row[1] for row in rows]))
             if not rows:
@@ -465,6 +467,21 @@ def main() -> None:
         total_lines.append(f"| {name} | {whole} | " + " | ".join(totals) + " |")
         memory_lines.append(f"| {name} | " + " | ".join(grown) + " |")
         peak_lines.append(f"| {name} | " + " | ".join(peaks) + " |")
+        # Every tool's figures unrounded, which the tables round to three digits, for the paper's tables.
+        exact[name] = {
+            "pairs": pairs,
+            "of": whole,
+            "tools": {
+                column: {
+                    "mean": sum(row[0] for row in rows) / len(rows) if rows else None,
+                    "median": statistics.median(row[0] for row in rows) if rows else None,
+                    "finished": len(rows),
+                    "status": status,
+                    "peak": peak,
+                }
+                for (column, (rows, status)), peak in zip(measured.items(), raw_peaks)
+            },
+        }
         if name.startswith("l") and ".e" in name:
             length, rate = int(name[1:].split(".")[0]), int(name.rsplit(".e", 1)[1])
             scaling.append({
@@ -519,6 +536,8 @@ def main() -> None:
     # Time per pair against length at each error rate, and against error at each length, over QuickEd's
     # simulated sets (its Figures S6 and S7), for the paper's charts.
     (RESULTS / f"{stem}-scaling.json").write_text(json.dumps(scaling, indent=1))
+    # Each tool's mean, median and pairs finished, in seconds, and its peak in bytes, by dataset.
+    (RESULTS / f"{stem}-exact.json").write_text(json.dumps(exact, indent=1))
     print(table)
     sys.exit(1 if failed else 0)
 
