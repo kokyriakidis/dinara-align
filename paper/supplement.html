@@ -305,15 +305,15 @@ td.wrap { vertical-align: top; }
 <tr><td class="l wrap">Infix with a reward, 1&nbsp;kbp read in a 3&nbsp;kbp window</td><td class="best"><b>0.693</b></td><td class="l">parasail 15.2</td></tr>
 </tbody></table></div>
 <div class="table-wrap" id="tab-affine_full"><table>
-<caption><b>Table S4.</b> Gap-affine alignment at costs (4, 6, 2), all datasets: mean time per alignment in ms, with a 30&nbsp;s budget per sample. Superscripts give the pairs completed where not all were; a dash marks a tool that completed none within 30&nbsp;s, o.o.m. one the 8&nbsp;GB limit stopped.</caption>
+<caption><b>Table S4.</b> Gap-affine alignment at costs (4, 6, 2), all datasets: mean time per alignment in ms, with a 30&nbsp;s budget per sample. Brackets give the pairs completed where not all were; a dash marks a tool that completed none within 30&nbsp;s, o.o.m. one the 8&nbsp;GB limit stopped.</caption>
 <thead><tr><th class="l">Dataset</th><th>dinara-align</th><th>WFA</th><th>BiWFA</th><th>KSW2</th><th>BSAlign</th></tr></thead>
 <tbody>
 <tr class="group"><td class="l" colspan="6"><em>Real data</em></td></tr>
 <tr><td class="l">ont-1k</td><td class="best"><b>0.105</b></td><td>0.188</td><td>0.308</td><td>1.10</td><td>0.336</td></tr>
 <tr><td class="l">ont-10k</td><td class="best"><b>1.60</b></td><td>4.89</td><td>5.86</td><td>30.0</td><td>7.84</td></tr>
-<tr><td class="l">ont-50k</td><td class="best"><b>21.5</b></td><td>63.4</td><td>54.9</td><td>341<sup>81/104</sup></td><td>87.0</td></tr>
+<tr><td class="l">ont-50k</td><td class="best"><b>21.5</b></td><td>63.4</td><td>54.9</td><td>341 [81/104]</td><td>87.0</td></tr>
 <tr><td class="l">ont-500k</td><td>–</td><td>o.o.m.</td><td>–</td><td>o.o.m.</td><td>o.o.m.</td></tr>
-<tr><td class="l">ont-500k-genvar</td><td class="best"><b>22,000<sup>1/4</sup></b></td><td>o.o.m.</td><td>–</td><td>o.o.m.</td><td>o.o.m.</td></tr>
+<tr><td class="l">ont-500k-genvar</td><td class="best"><b>22,000 [1/4]</b></td><td>o.o.m.</td><td>–</td><td>o.o.m.</td><td>o.o.m.</td></tr>
 <tr><td class="l">SARS-CoV-2</td><td class="best"><b>0.710</b></td><td>2.05</td><td>1.78</td><td>87.9</td><td>341</td></tr>
 <tr><td class="l">Illumina</td><td class="best"><b>0.00145</b></td><td>0.00155</td><td>0.00281</td><td>0.013</td><td>0.054</td></tr>
 <tr><td class="l">PacBio HiFi</td><td class="best"><b>0.095</b></td><td>0.227</td><td>0.231</td><td>9.72</td><td>86.0</td></tr>
@@ -321,13 +321,13 @@ td.wrap { vertical-align: top; }
 <tr><td class="l">10&nbsp;kbp, 1%</td><td class="best"><b>0.199</b></td><td>0.416</td><td>0.646</td><td>21.3</td><td>37.0</td></tr>
 <tr><td class="l">10&nbsp;kbp, 5%</td><td class="best"><b>2.32</b></td><td>7.14</td><td>8.72</td><td>96.1</td><td>37.0</td></tr>
 <tr><td class="l">10&nbsp;kbp, 10%</td><td class="best"><b>7.06</b></td><td>23.1</td><td>27.1</td><td>202</td><td>37.3</td></tr>
-<tr><td class="l">10&nbsp;kbp, 20%</td><td class="best"><b>20.1</b></td><td>66.0</td><td>75.1</td><td>375<sup>81/99</sup></td><td>37.4</td></tr>
+<tr><td class="l">10&nbsp;kbp, 20%</td><td class="best"><b>20.1</b></td><td>66.0</td><td>75.1</td><td>375 [81/99]</td><td>37.4</td></tr>
 <tr><td class="l">100&nbsp;kbp, 1%</td><td class="best"><b>11.9</b></td><td>39.9</td><td>39.0</td><td>2,420</td><td>o.o.m.</td></tr>
-<tr><td class="l">100&nbsp;kbp, 5%</td><td class="best"><b>331</b></td><td>808</td><td>714</td><td>9,170<sup>3/9</sup></td><td>o.o.m.</td></tr>
-<tr><td class="l">100&nbsp;kbp, 10%</td><td class="best"><b>1,160</b></td><td>o.o.m.</td><td>2,430</td><td>17,300<sup>1/10</sup></td><td>o.o.m.</td></tr>
-<tr><td class="l">100&nbsp;kbp, 20%</td><td class="best"><b>3,610<sup>8/10</sup></b></td><td>o.o.m.</td><td>7,360<sup>4/10</sup></td><td>o.o.m.</td><td>o.o.m.</td></tr>
+<tr><td class="l">100&nbsp;kbp, 5%</td><td class="best"><b>331</b></td><td>808</td><td>714</td><td>9,170 [3/9]</td><td>o.o.m.</td></tr>
+<tr><td class="l">100&nbsp;kbp, 10%</td><td class="best"><b>1,160</b></td><td>o.o.m.</td><td>2,430</td><td>17,300 [1/10]</td><td>o.o.m.</td></tr>
+<tr><td class="l">100&nbsp;kbp, 20%</td><td class="best"><b>3,610 [8/10]</b></td><td>o.o.m.</td><td>7,360 [4/10]</td><td>o.o.m.</td><td>o.o.m.</td></tr>
 <tr><td class="l">500&nbsp;kbp, 1%</td><td class="best"><b>477</b></td><td>1,290</td><td>942</td><td>o.o.m.</td><td>o.o.m.</td></tr>
-<tr><td class="l">500&nbsp;kbp, 5%</td><td class="best"><b>9,910<sup>3/4</sup></b></td><td>o.o.m.</td><td>19,400<sup>1/4</sup></td><td>o.o.m.</td><td>o.o.m.</td></tr>
+<tr><td class="l">500&nbsp;kbp, 5%</td><td class="best"><b>9,910 [3/4]</b></td><td>o.o.m.</td><td>19,400 [1/4]</td><td>o.o.m.</td><td>o.o.m.</td></tr>
 <tr><td class="l">500&nbsp;kbp, 10%</td><td>–</td><td>o.o.m.</td><td>–</td><td>o.o.m.</td><td>o.o.m.</td></tr>
 <tr><td class="l">500&nbsp;kbp, 20%</td><td>–</td><td>o.o.m.</td><td>–</td><td>o.o.m.</td><td>o.o.m.</td></tr>
 <tr><td class="l">1&nbsp;Mbp, 1%</td><td class="best"><b>2,300</b></td><td>o.o.m.</td><td>3,940</td><td>o.o.m.</td><td>o.o.m.</td></tr>
@@ -336,7 +336,7 @@ td.wrap { vertical-align: top; }
 <tr><td class="l">1&nbsp;Mbp, 20%</td><td>–</td><td>o.o.m.</td><td>–</td><td>o.o.m.</td><td>o.o.m.</td></tr>
 </tbody></table></div>
 <div class="table-wrap" id="tab-unit_full"><table>
-<caption><b>Table S5.</b> Unit costs, all datasets: mean time per alignment in ms, with the median in parentheses, traceback included, a 30&nbsp;s budget per sample. Superscripts give the pairs completed where not all were, the median over those; a dash marks a tool that completed none, o.o.m. one the 8&nbsp;GB limit stopped.</caption>
+<caption><b>Table S5.</b> Unit costs, all datasets: mean time per alignment in ms, with the median in parentheses, traceback included, a 30&nbsp;s budget per sample. Brackets give the pairs completed where not all were, the median over those; a dash marks a tool that completed none, o.o.m. one the 8&nbsp;GB limit stopped.</caption>
 <thead><tr><th class="l">Dataset</th><th>dinara-align</th><th>A*PA2-full</th><th>A*PA2-simple</th><th>A*PA</th><th>Edlib</th><th>BiWFA</th><th>WFA</th><th>QuickEd</th></tr></thead>
 <tbody>
 <tr class="group"><td class="l" colspan="9"><em>Real data</em></td></tr>
@@ -360,10 +360,10 @@ td.wrap { vertical-align: top; }
 <tr><td class="l">500&nbsp;kbp, 1%</td><td class="best"><b>33.5 (32.3)</b></td><td>42.7 (41.3)</td><td>72.3 (72.2)</td><td>41.2 (39.2)</td><td>670 (670)</td><td>80.8 (79.4)</td><td>74.8 (63.8)</td><td>124 (124)</td></tr>
 <tr><td class="l">500&nbsp;kbp, 5%</td><td class="best"><b>31.4 (30.2)</b></td><td>45.0 (44.4)</td><td>214 (213)</td><td>83.1 (82.5)</td><td>2,280 (2,280)</td><td>1,560 (1,560)</td><td>1,480 (1,250)</td><td>401 (400)</td></tr>
 <tr><td class="l">500&nbsp;kbp, 10%</td><td class="best"><b>68.4 (64.3)</b></td><td>119 (117)</td><td>425 (424)</td><td>406 (406)</td><td>4,380 (4,380)</td><td>5,450 (5,450)</td><td>5,050 (4,250)</td><td>711 (711)</td></tr>
-<tr><td class="l">500&nbsp;kbp, 20%</td><td class="best"><b>255 (257)</b></td><td>545 (545)</td><td>901 (896)</td><td>–</td><td>8,520<sup>3/4</sup> (8,520)</td><td>18,000<sup>1/4</sup> (18,000)</td><td>o.o.m.</td><td>1,240 (1,240)</td></tr>
+<tr><td class="l">500&nbsp;kbp, 20%</td><td class="best"><b>255 (257)</b></td><td>545 (545)</td><td>901 (896)</td><td>–</td><td>8,520 [3/4] (8,520)</td><td>18,000 [1/4] (18,000)</td><td>o.o.m.</td><td>1,240 (1,240)</td></tr>
 <tr><td class="l">1&nbsp;Mbp, 1%</td><td class="best"><b>59.7 (56.8)</b></td><td>89.1 (87.0)</td><td>253 (253)</td><td>97.3 (93.3)</td><td>2,380 (2,380)</td><td>366 (364)</td><td>391 (353)</td><td>398 (398)</td></tr>
-<tr><td class="l">1&nbsp;Mbp, 5%</td><td class="best"><b>65.0 (62.8)</b></td><td>118 (117)</td><td>818 (815)</td><td>183 (182)</td><td>8,670<sup>3/4</sup> (8,670)</td><td>6,350 (6,350)</td><td>o.o.m.</td><td>1,440 (1,440)</td></tr>
-<tr><td class="l">1&nbsp;Mbp, 10%</td><td class="best"><b>183 (183)</b></td><td>369 (366)</td><td>1,650 (1,640)</td><td>978 (980)</td><td>17,300<sup>1/4</sup> (17,300)</td><td>22,200<sup>1/4</sup> (22,200)</td><td>o.o.m.</td><td>2,650 (2,650)</td></tr>
+<tr><td class="l">1&nbsp;Mbp, 5%</td><td class="best"><b>65.0 (62.8)</b></td><td>118 (117)</td><td>818 (815)</td><td>183 (182)</td><td>8,670 [3/4] (8,670)</td><td>6,350 (6,350)</td><td>o.o.m.</td><td>1,440 (1,440)</td></tr>
+<tr><td class="l">1&nbsp;Mbp, 10%</td><td class="best"><b>183 (183)</b></td><td>369 (366)</td><td>1,650 (1,640)</td><td>978 (980)</td><td>17,300 [1/4] (17,300)</td><td>22,200 [1/4] (22,200)</td><td>o.o.m.</td><td>2,650 (2,650)</td></tr>
 <tr><td class="l">1&nbsp;Mbp, 20%</td><td class="best"><b>892 (688)</b></td><td>2,020 (2,010)</td><td>3,520 (3,500)</td><td>–</td><td>–</td><td>–</td><td>o.o.m.</td><td>4,800 (4,800)</td></tr>
 </tbody></table></div>
 <div class="table-wrap" id="tab-datasets"><table>
@@ -406,7 +406,7 @@ td.wrap { vertical-align: top; }
 <tr><td class="l">ont-500k-genvar</td><td>39 (64)</td><td>48 (57)</td><td>32 (55)</td><td>4.8 (16)</td><td>12 (27)</td><td>20 (27)</td></tr>
 <tr class="group"><td class="l" colspan="7"><em>Simulated: random sequences, uniform errors (QuickEd)</em></td></tr>
 <tr><td class="l">100&nbsp;kbp, 20%</td><td>5.2 (18)</td><td>7.3 (12)</td><td>4.7 (9)</td><td>1.4 (8)</td><td>3.6 (11)</td><td>8.8 (12)</td></tr>
-<tr><td class="l">500&nbsp;kbp, 20%</td><td>53 (82)</td><td>59 (66)</td><td>53 (61)</td><td>4.1<sup>3/4</sup></td><td>15<sup>1/4</sup></td><td>16 (20)</td></tr>
+<tr><td class="l">500&nbsp;kbp, 20%</td><td>53 (82)</td><td>59 (66)</td><td>53 (61)</td><td>4.1 [3/4]</td><td>15 [1/4]</td><td>16 (20)</td></tr>
 <tr><td class="l">1&nbsp;Mbp, 20%</td><td>123 (178)</td><td>184 (196)</td><td>192 (205)</td><td>–</td><td>–</td><td>26 (31)</td></tr>
 </tbody></table></div>
 <div class="table-wrap" id="tab-batch"><table>

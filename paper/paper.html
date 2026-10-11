@@ -336,32 +336,32 @@ td.wrap { vertical-align: top; }
 <tr><td class="l">PacBio HiFi</td><td>13</td><td>7</td><td>6</td><td>6</td><td>4</td><td>8</td><td>8</td><td>9</td><td>127</td><td>21</td></tr>
 </tbody></table></div>
 <div class="table-wrap" id="tab-affine"><table>
-<caption><b>Table 3.</b> Gap-affine alignment of the real datasets at costs (4, 6, 2) by every exact aligner that takes them: mean time per alignment in ms, a 30&nbsp;s budget per sample. Superscripts give the pairs completed where not all were; t.o. marks a tool that completed none and o.o.m. one the 8&nbsp;GB limit stopped. Every dataset is in Supplementary Table S4.</caption>
+<caption><b>Table 3.</b> Gap-affine alignment of the real datasets at costs (4, 6, 2) by every exact aligner that takes them: mean time per alignment in ms, a 30&nbsp;s budget per sample. Brackets give the pairs completed where not all were; t.o. marks a tool that completed none and o.o.m. one the 8&nbsp;GB limit stopped. Every dataset is in Supplementary Table S4.</caption>
 <thead><tr><th class="l">Dataset</th><th>dinara-align</th><th>WFA</th><th>BiWFA</th><th>BSAlign</th><th>KSW2</th></tr></thead>
 <tbody>
 <tr><td class="l">ont-1k</td><td class="best"><b>0.105</b></td><td>0.188</td><td>0.308</td><td>0.336</td><td>1.10</td></tr>
 <tr><td class="l">ont-10k</td><td class="best"><b>1.60</b></td><td>4.89</td><td>5.86</td><td>7.84</td><td>30.0</td></tr>
-<tr><td class="l">ont-50k</td><td class="best"><b>21.5</b></td><td>63.4</td><td>54.9</td><td>87.0</td><td>341<sup>81/104</sup></td></tr>
+<tr><td class="l">ont-50k</td><td class="best"><b>21.5</b></td><td>63.4</td><td>54.9</td><td>87.0</td><td>341 [81/104]</td></tr>
 <tr><td class="l">ont-500k</td><td>t.o.</td><td>o.o.m.</td><td>t.o.</td><td>o.o.m.</td><td>o.o.m.</td></tr>
-<tr><td class="l">ont-500k-genvar</td><td class="best"><b>22,000<sup>1/4</sup></b></td><td>o.o.m.</td><td>t.o.</td><td>o.o.m.</td><td>o.o.m.</td></tr>
+<tr><td class="l">ont-500k-genvar</td><td class="best"><b>22,000 [1/4]</b></td><td>o.o.m.</td><td>t.o.</td><td>o.o.m.</td><td>o.o.m.</td></tr>
 <tr><td class="l">SARS-CoV-2</td><td class="best"><b>0.710</b></td><td>2.05</td><td>1.78</td><td>341</td><td>87.9</td></tr>
 <tr><td class="l">Illumina</td><td class="best"><b>0.00145</b></td><td>0.00155</td><td>0.00281</td><td>0.054</td><td>0.013</td></tr>
 <tr><td class="l">PacBio HiFi</td><td class="best"><b>0.095</b></td><td>0.227</td><td>0.231</td><td>86.0</td><td>9.72</td></tr>
 </tbody></table></div>
 <div class="table-wrap" id="tab-affine_sim"><table>
-<caption><b>Table 4.</b> Gap-affine alignment of QuickEd's simulated datasets, random sequences with uniformly spread substitutions, insertions and deletions, at costs (4, 6, 2) by every exact aligner that takes them: mean time per alignment in ms, a 30&nbsp;s budget per sample. Superscripts give the pairs completed where not all were; t.o. marks a tool that completed none and o.o.m. one the 8&nbsp;GB limit stopped. Datasets no tool completed are left out; every dataset is in Supplementary Table S4.</caption>
+<caption><b>Table 4.</b> Gap-affine alignment of QuickEd's simulated datasets, random sequences with uniformly spread substitutions, insertions and deletions, at costs (4, 6, 2) by every exact aligner that takes them: mean time per alignment in ms, a 30&nbsp;s budget per sample. Brackets give the pairs completed where not all were; t.o. marks a tool that completed none and o.o.m. one the 8&nbsp;GB limit stopped. Datasets no tool completed are left out; every dataset is in Supplementary Table S4.</caption>
 <thead><tr><th class="l">Dataset</th><th>dinara-align</th><th>WFA</th><th>BiWFA</th><th>BSAlign</th><th>KSW2</th></tr></thead>
 <tbody>
 <tr><td class="l">10&nbsp;kbp, 1%</td><td class="best"><b>0.199</b></td><td>0.416</td><td>0.646</td><td>37.0</td><td>21.3</td></tr>
 <tr><td class="l">10&nbsp;kbp, 5%</td><td class="best"><b>2.32</b></td><td>7.14</td><td>8.72</td><td>37.0</td><td>96.1</td></tr>
 <tr><td class="l">10&nbsp;kbp, 10%</td><td class="best"><b>7.06</b></td><td>23.1</td><td>27.1</td><td>37.3</td><td>202</td></tr>
-<tr><td class="l">10&nbsp;kbp, 20%</td><td class="best"><b>20.1</b></td><td>66.0</td><td>75.1</td><td>37.4</td><td>375<sup>81/99</sup></td></tr>
+<tr><td class="l">10&nbsp;kbp, 20%</td><td class="best"><b>20.1</b></td><td>66.0</td><td>75.1</td><td>37.4</td><td>375 [81/99]</td></tr>
 <tr><td class="l">100&nbsp;kbp, 1%</td><td class="best"><b>11.9</b></td><td>39.9</td><td>39.0</td><td>o.o.m.</td><td>2,420</td></tr>
-<tr><td class="l">100&nbsp;kbp, 5%</td><td class="best"><b>331</b></td><td>808</td><td>714</td><td>o.o.m.</td><td>9,170<sup>3/9</sup></td></tr>
-<tr><td class="l">100&nbsp;kbp, 10%</td><td class="best"><b>1,160</b></td><td>o.o.m.</td><td>2,430</td><td>o.o.m.</td><td>17,300<sup>1/10</sup></td></tr>
-<tr><td class="l">100&nbsp;kbp, 20%</td><td class="best"><b>3,610<sup>8/10</sup></b></td><td>o.o.m.</td><td>7,360<sup>4/10</sup></td><td>o.o.m.</td><td>o.o.m.</td></tr>
+<tr><td class="l">100&nbsp;kbp, 5%</td><td class="best"><b>331</b></td><td>808</td><td>714</td><td>o.o.m.</td><td>9,170 [3/9]</td></tr>
+<tr><td class="l">100&nbsp;kbp, 10%</td><td class="best"><b>1,160</b></td><td>o.o.m.</td><td>2,430</td><td>o.o.m.</td><td>17,300 [1/10]</td></tr>
+<tr><td class="l">100&nbsp;kbp, 20%</td><td class="best"><b>3,610 [8/10]</b></td><td>o.o.m.</td><td>7,360 [4/10]</td><td>o.o.m.</td><td>o.o.m.</td></tr>
 <tr><td class="l">500&nbsp;kbp, 1%</td><td class="best"><b>477</b></td><td>1,290</td><td>942</td><td>o.o.m.</td><td>o.o.m.</td></tr>
-<tr><td class="l">500&nbsp;kbp, 5%</td><td class="best"><b>9,910<sup>3/4</sup></b></td><td>o.o.m.</td><td>19,400<sup>1/4</sup></td><td>o.o.m.</td><td>o.o.m.</td></tr>
+<tr><td class="l">500&nbsp;kbp, 5%</td><td class="best"><b>9,910 [3/4]</b></td><td>o.o.m.</td><td>19,400 [1/4]</td><td>o.o.m.</td><td>o.o.m.</td></tr>
 <tr><td class="l">1&nbsp;Mbp, 1%</td><td class="best"><b>2,300</b></td><td>o.o.m.</td><td>3,940</td><td>o.o.m.</td><td>o.o.m.</td></tr>
 </tbody></table></div>
 <figure id="fig-sweeps">
