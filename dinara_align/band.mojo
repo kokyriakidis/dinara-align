@@ -18,7 +18,6 @@ from .bit_parallel import (
     Edge,
     Frontier,
     LANES,
-    NARROW_COLUMNS,
     Profile,
     Resume,
     Sweep,
@@ -50,10 +49,6 @@ from .seeds import (
     SHORT_SEEDS,
 )
 from .traceback import TileTracer
-
-
-comptime NARROW_BAND = 1024
-"""The bound below which band tiles are `NARROW_COLUMNS` wide rather than `BAND_COLUMNS`."""
 
 
 @fieldwise_init
@@ -125,7 +120,7 @@ struct Band(Movable):
         self.frontier = Frontier(BAND_COLUMNS + 2 * LANES, self.words)
         profile.build_planes()
         self.sweep = self.frontier.sweep(profile)
-        self.bounds = tile_bounds(self.columns, NARROW_COLUMNS if threshold < NARROW_BAND else BAND_COLUMNS)
+        self.bounds = tile_bounds(self.columns, BAND_COLUMNS)
         self.top = 0
         self.end_word = 0
         self.anchor = 0

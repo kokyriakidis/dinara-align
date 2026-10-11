@@ -69,9 +69,12 @@ its bottom up to four words rather than eight.
 
 comptime BAND_COLUMNS = 256
 """
-Columns of one band tile, A*PA2's block width. A tile computes every word its columns reach, so a
-diagonal band costs about this many extra rows per tile, against the stagger's triangles repaid on
-every narrower one.
+Columns of one band tile, A*PA2's block width, whatever the band's height. A tile computes every word
+its columns reach, so a diagonal band costs about this many extra rows per tile, against the stagger's
+triangles and each tile's pruning, edge and traceback repaid on every narrower one. Tiles of 64 columns
+for bands under a bound of 1,024 rows, there from the first commit, were slower on the Skylake-X in 2026
+on every dataset of the benchmark but one, within 3%: QuickEd's 10 kbp pairs at 5% aligned in 318 µs
+rather than 254, ont-10k in 161 rather than 147.
 """
 
 
@@ -101,14 +104,6 @@ def append_diagonals(mut moves: List[UInt8], count: Int):
     while index < count:
         out[unsafe_offset=index] = DIAGONAL
         index += 1
-
-
-comptime NARROW_COLUMNS = 64
-"""
-Columns of one band tile when the band itself is narrow. A tile computes every word its columns reach,
-so a band slopes down by its own width across each tile; on a band only a few hundred rows tall that
-slope is most of the work, and narrower tiles cut it at the cost of more triangles.
-"""
 
 
 comptime CODE_PADDING = 16
@@ -1169,9 +1164,9 @@ struct Trail(Movable):
     """Whether the round re-aimed its bound at checkpoints (see `Band.check`)."""
 
     def __init__(out self, columns: Int = 0, budget: Int = Int.MAX):
-        """Room for a round over `columns` columns in its narrowest tiles, a vector's words each, its
-        edges kept within `budget` words."""
-        var tiles = columns // NARROW_COLUMNS + 2
+        """Room for a round over `columns` columns, a vector's words a tile, its edges kept within `budget`
+        words."""
+        var tiles = columns // BAND_COLUMNS + 2
         self.first_columns = List[Int](capacity=tiles)
         self.end_columns = List[Int](capacity=tiles)
         self.tops = List[Int](capacity=tiles)
