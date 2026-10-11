@@ -213,6 +213,25 @@ Ideas from the work the paper cites, each checked (2026-10-10, M2 unless noted).
   and miniwfa (Li) save traceback memory, not time; the GPU, FPGA and in-memory designs (WFA-GPU,
   eWFA, GeneTEK, Scrooge, GenASM, RAPIDx) carry no idea to the CPU paths beyond what is here. Nothing
   promised a gain past the builds' noise. Left.
+- [ ] **Sassy's text-direction tiling for the infix and prefix modes** (Beeloo and Groot Koerkamp,
+  Bioinformatics 2026). Sassy splits the text into four chunks searched in independent SIMD lanes, its
+  bit-vectors along the text rather than the pattern, so no lane waits on another's rotation; it reports
+  4 to 15 times Edlib's speed for patterns up to 1,000 bp. dinara-align's unit-cost infix runs 2 times
+  Edlib (135 against 270 µs, a 1 kbp read in a 3 kbp window): a kernel of Sassy's shape could take that
+  mode severalfold, exact as Sassy is, the minimum found by raising k. A mode of its own, not the main
+  benchmarks; not built.
+- [-] **The other aligners since 2023, read for ideas** (2026-10-10). Sassy2 (2026) puts many short
+  patterns in SIMD lanes behind a suffix filter: at its reported 6 Gbp/s a pattern a thread, the inexact
+  seeds' 40,000 16-mers against a 650 kbp read would take about 4 s, where the hashed halves take about 30
+  ms. SeqMatcher (J. Supercomputing 2025) packs sequences to two bits with AVX-512: building the profile
+  is 1.5% of a SARS-CoV-2 alignment and does not show on the 1 kbp reads (perf, Skylake-X), so packing has
+  nothing to win; its banded mode is a fixed threshold, 3 to 10% less accurate. BSAlign's striped sweep
+  with an active F loop claims 2 times other SIMD aligners, where the anti-diagonal sweeps already run 1.3
+  to 2.3 times SSW and 5.4 times parasail; untried, uncertain. FILTR (2026) chooses a wavefront or an
+  anti-diagonal schedule by divergence, as the quarter-matrix rule does; Medlib's (2025) threshold mode
+  is `max_cost`'s early stop; hashed longest-common-extension queries (Ding et al., ESA 2023) are
+  probabilistic, so not taken; composition and q-gram lower bounds (certified-alignment) are far looser
+  than the seeds' bound at the origin; Theseus (2026) is sequence-to-graph. Left.
 - [-] **Incremental doubling** (A*PA2, Section 3.8): a round after the first skips the rows the last
   round fixed, from horizontal differences stored along a fixed row in each tile. A*PA2 reports it only
   with three other methods, together 3 times faster. Measured what it could skip (2026-10-10, M2): the
