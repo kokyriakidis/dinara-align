@@ -37,19 +37,24 @@ ABSTRACT = [('Motivation',
 BODY = [
 ('sec', 'Introduction'),
 ('p',
- 'Pairwise alignment is a building block of genome analysis. Read mappers align each read to the reference '
- 'window its seeds select and extend alignments from seed matches, assemblers align reads to one another to find '
- 'their overlaps [@Li2018], and assemblies, haplotypes and viral genomes are compared base by base. Its cost '
- 'therefore grows with both the number of reads and their length. The classical dynamic program computes an '
- 'optimal alignment over an \\(n \\times m\\) matrix [@Gotoh1982], practical for short reads but not for long ones: '
- 'nanopore reads span tens to hundreds of kilobases with 5 to 15% errors, and one pair of 500 kbp reads fills '
- '\\(2.5 \\times 10^{11}\\) cells.'),
+ 'Pairwise alignment finds the least costly series of substitutions, insertions and deletions that transforms '
+ 'one sequence into another. It is a core component of genome analysis, applied to read mapping, variant '
+ 'detection, de novo genome assembly and multiple sequence alignment [@Prjibelski2019]: read mappers align each '
+ 'read to the reference window its seeds select and extend alignments from seed matches, assemblers align reads '
+ 'to one another to find their overlaps [@Li2018], and assemblies, haplotypes and viral genomes are compared '
+ 'base by base.'),
 ('p',
- 'Heuristic aligners compute only part of the matrix, a band, a window or the cells before a drop in score, and '
- 'lose the guarantee of optimality: their result depends on these cut-offs, and alignments with large indels or '
- 'clustered errors can be missed or misplaced. Exact aligners instead skip only those cells that provably cannot '
- 'lie on an optimal path, so that their running time depends on the distance between the sequences rather than '
- 'on the product of their lengths.'),
+ 'Read lengths have grown from hundreds of bases to hundreds of kilobases, and nanopore reads still carry 5 to '
+ '15% errors. The classical dynamic program computes an optimal alignment over an \\(n \\times m\\) matrix '
+ '[@Gotoh1982], practical for short reads but not for long ones: one pair of 500 kbp reads fills \\(2.5 \\times '
+ '10^{11}\\) cells, and the total cost grows with both the number of reads and their length.'),
+('p',
+ 'Heuristic aligners therefore compute only part of the matrix, a fixed band, a series of windows, or the cells '
+ 'before the score drops by more than a threshold (X-drop, and Z-drop in minimap2 [@Li2018]), and lose the '
+ 'guarantee of optimality: their result depends on these cut-offs, and alignments with large indels or clustered '
+ 'errors can be missed or misplaced. Exact aligners instead skip only those cells that provably cannot lie on an '
+ 'optimal path, so that their running time depends on the distance between the sequences rather than on the '
+ 'product of their lengths.'),
 ('p',
  'Three ideas underlie current exact aligners. *Band doubling* computes only the diagonals a path within a cost '
  'bound can reach, doubling the bound until the optimum lies within it [@Ukkonen1985]; *bit-parallelism* packs '
@@ -578,7 +583,7 @@ REFS = {
  "Rahn2018": ("Rahn et al.", "2018"), "Kallenborn2026": ("Kallenborn et al.", "2026"), "Modular": ("Modular Inc.", "2026"),
  "Lattner2021": ("Lattner et al.", "2021"), "Eizenga2022": ("Eizenga and Paten", "2022"), "hyalite": ("Ferguson", "2026"),
  "Gao2021": ("Gao et al.", "2021"), "Doblas2025": ("Doblas et al.", "2025"), "Shao2024": ("Shao and Ruan", "2024"), "Gibrat2018": ("Gibrat", "2018"), "Fujiki2020": ("Fujiki et al.", "2020"),
- "Zook2016": ("Zook et al.", "2016"), "Hansen2025": ("Hansen et al.", "2025"),
+ "Zook2016": ("Zook et al.", "2016"), "Hansen2025": ("Hansen et al.", "2025"), "Prjibelski2019": ("Prjibelski et al.", "2019"),
 }
 # The bibliography keys these map to in references.bib.
 BIBKEYS = {
@@ -589,5 +594,5 @@ BIBKEYS = {
  "Daily2016": "Daily2016parasail", "Liu2023": "Liu2023blockaligner", "Rognes2011": "Rognes2011swipe", "Rahn2018": "Rahn2018seqan",
  "Kallenborn2026": "Kallenborn2026accelign", "Modular": "Modular2025mojo", "Lattner2021": "Lattner2021mlir",
  "Eizenga2022": "Eizenga2022wfalm", "hyalite": "hyalite", "Gao2021": "Gao2021abpoa", "Doblas2025": "Doblas2025quicked", "Shao2024": "Shao2024bsalign", "Gibrat2018": "Gibrat2018band", "Fujiki2020": "Fujiki2020seedex",
- "Zook2016": "Zook2016giab", "Hansen2025": "Hansen2025hg002",
+ "Zook2016": "Zook2016giab", "Hansen2025": "Hansen2025hg002", "Prjibelski2019": "Prjibelski2019sequence",
 }
