@@ -203,6 +203,39 @@ answers held to the copies it replaces by the tests, and a hot path benchmarked 
   pairs take 10.6 µs to WFA's 9.6, where the first search hands over to two (see
   `gap_affine.traced_alone`); its model of the two searches leaves out their setup and the far side's
   grow-on, so it hands over a little early. Count those in from what the searches measure, not a factor.
+## Tighter bounds: the audit of 2026-10-11
+
+Every bound checked against A*PA2's code and paper, QuickEd, Edlib, KSW2, BSAlign, WFA2-lib, SeedEx,
+Gibrat 2018 and POASTA, and its ceiling measured on the Skylake-X with an oracle (the pair's own
+distance) in a scratch build, before anything is built:
+
+- At parity, nothing to gain: BiWFA's stop (`wavefront_bialign.c`: F + G >= best + o + w, ours exactly;
+  checking against every kept front instead of the ring cannot tighten it, costs jumping by w a move);
+  A*PA2's first bound and growth, kept rows, tile top and bottom, GCSH, pre-pruning, tile width; the
+  O(NP) band shape of Edlib and QuickEd. Band-edge DP values never beat Proposition 1's L(d): the edge
+  cell on row 0 is a pure gap.
+- [ ] **The band's first bound.** A first bound equal to the distance would save 27% on 100 kbp at 20%,
+  22% ont-50k, 19% ont-500k, 17% 10 kbp at 20%, 14% 100 kbp at 10%, 13% genvar, 5-7% ont-10k, HiFi,
+  1 Mbp at 5%. Failed rounds take 18-36% of the time on those (checkpoint lowering causes little: 6% on
+  ont-10k, ~0 elsewhere); on 1 Mbp at 20% no round fails and the loss is a first bound aimed high. A
+  loose bound is not robust: starting at 1.15 d loses 18-23% on the 500 kbp reads. Robust use is an
+  upper bound U as a cap (`best = U`, so a retry at U must succeed and no round widens): with U = 1.05 d
+  it saves 27% on 1 Mbp at 20%, 12% ont-50k, 7% 100 kbp at 20%, 6% ont-10k, 5% HiFi, ~0 elsewhere; with
+  1.15 d about half of that or none. QuickEd's windowed bound deviates 1-6% on ONT, 5% HiFi, up to 15%
+  (its paper's Table 1; to check). Worth it only for a U within ~5% that costs far less than it saves.
+- [ ] **Gap-heuristic pruning of the near-identical diagonal transition** (POASTA, A*PA's `dt.rs`): with
+  U = d, keeping only |k - delta| <= U - s saves 24% on 10 kbp at 1%, 13% ont-1k, 8% HiFi. Without U it
+  needs A* order, whose fronts depend on their own neighbours towards delta and would serialize the
+  gathered extension; the same holds for the one-search gap-affine phase. Find an exact U or a vector
+  form first.
+- [ ] **Incremental doubling** (A*PA2-full): ceiling 6-7% on long ONT reads, ~0 elsewhere (see above).
+- [ ] **The batch certificate, strengthened by edit distance** (after SeedEx's edit-distance check): a
+  path off the band has an insertion gap and a deletion gap, and its mismatches and gapped letters are at
+  least ED, so it costs at least max(L, 2o + min(x, e) ED). Provably never weaker; certifies pairs whose
+  cost is mostly mismatches. Measure first what share of the batch the re-swept pairs take.
+- [ ] Small and exact: the score-based storage band can subtract the two gaps' opening surcharge
+  (`vector_score.optimal_band`); Edlib's guaranteed mid-round bound, score + max(rows, columns left).
+
 ## From the paper's literature check
 
 Ideas from the work the paper cites, each checked (2026-10-10, M2 unless noted).
