@@ -11,22 +11,19 @@ AUTHORS = [("Konstantinos Kyriakidis", "kkyriaki@ucsc.edu"), ("Benedict Paten", 
 AFFILIATION = "UC Santa Cruz Genomics Institute, Santa Cruz, CA, USA"
 
 ABSTRACT = [('Motivation',
-  'Pairwise alignment underlies read mapping, genome assembly and variant calling. Heuristic aligners can '
-  'misplace alignments with large indels or clustered errors, whereas exact aligners return an optimal '
-  'alignment that no heuristic cut-off can change and serve as the reference for evaluating heuristics. Yet no '
-  'exact algorithm is fastest across workloads: diagonal transition wins on near-identical pairs, bit-parallel '
-  'band doubling on long divergent reads, while batches of short pairs suit inter-sequence vectorisation.'),
+  'Exact pairwise alignment returns an optimal alignment that no heuristic cut-off can change, the reference '
+  'for evaluating read mappers, assemblers and variant callers. Yet no exact algorithm is fastest across '
+  'workloads: diagonal transition wins on near-identical pairs, bit-parallel band doubling on long divergent '
+  'reads, and inter-sequence vectorisation on batches of short pairs.'),
  ('Results',
-  'We present dinara-align, an exact aligner that chooses its algorithm for each pair; every hand-over that '
-  'rests on a projection provably bounds the work it can waste. A gap-affine alignment starts with one '
-  'wavefront search and adds a second only when its measured work exceeds what two would need, which we prove '
-  'still finds an optimal alignment; short pairs are aligned in narrow bands that each vector lane certifies '
-  'optimal; and inexact seed neighbours are inserted without search, provably losing none that local pruning '
-  'keeps. At unit and gap-affine costs every engine breaks ties the same way within the memory limit. On one '
-  'Intel Skylake-X core, dinara-align was the fastest exact aligner compared on every dataset at unit costs, '
-  'from 250 bp reads to 1 Mbp pairs: up to 2.4 times faster than A*PA2 on ultra-long nanopore reads, and 1.95 '
-  'and 5.2 times faster than WFA on Illumina and HiFi reads. At gap-affine costs it was the fastest on every '
-  'dataset any tool completed, 1.07 to 3.3 times faster than the faster of WFA and BiWFA.'),
+  'We present dinara-align, an exact aligner that chooses its algorithm for each pair. Every hand-over that '
+  'rests on a projection provably bounds its waste; a gap-affine alignment adds a second search only when its '
+  'measured work exceeds what two would need, provably still finding an optimal alignment; short pairs are '
+  'aligned in bands that each vector lane certifies optimal; and, within the memory limit, all engines break '
+  'ties alike at unit and gap-affine costs. On one Skylake-X core, dinara-align was the fastest exact aligner '
+  'compared on every dataset at unit costs: up to 2.4 times faster than A*PA2 on ultra-long nanopore reads, and '
+  '1.95 and 5.2 times faster than WFA on Illumina and HiFi reads. At gap-affine costs it was the fastest on '
+  'every dataset any tool completed.'),
  ('Availability and implementation',
   'dinara-align is free software under the Mozilla Public License 2.0, available at '
   'https://github.com/kokyriakidis/dinara-align with C, C++, Python and command-line interfaces.'),
@@ -250,16 +247,9 @@ BODY = [
  '**Lemma 1.** If the search from an exact match \\(\\mu\\) finds no path across the next \\(p\\) seeds, it finds '
  'none from any of its four neighbours.'),
 ('p',
- '*Proof.* Each neighbour \\(\\nu\\) matches the same seed as \\(\\mu\\), so its search crosses the same seeds against '
- 'the same potentials. If \\(\\nu\\) shares the end of \\(\\mu\\), its search starts from \\(\\mathrm{end}(\\mu)\\) at '
- 'cost 1 instead of 0. If \\(\\nu\\) shares the start, \\(\\mathrm{end}(\\nu)\\) lies on an adjacent diagonal, and '
- 'after one edit the search from \\(\\mu\\) holds a point on that diagonal at or beyond \\(\\mathrm{end}(\\nu)\\), at '
- 'cost \\(1 = c(\\nu)\\), which is kept because one edit is below the potential 2 of the seed itself. In both '
- 'cases, at each cost and on each diagonal, the search from \\(\\mu\\) reaches at least as far as the search from '
- '\\(\\nu\\), by induction on the cost: an edit takes the furthest of three points, a run of matching bases from a '
- 'point goes on from any later point on it, and a further point has crossed at least as much potential, so it is '
- 'dropped only if the nearer one is too. Hence if the search from \\(\\nu\\) crosses the last of the seeds, so does '
- 'that from \\(\\mu\\). \\(\\square\\)'),
+ '*Proof idea.* The search from \\(\\mu\\) dominates that from each neighbour: at every cost and on every diagonal '
+ 'it reaches at least as far, and a further point has crossed at least as much potential, so it is dropped only '
+ 'if the nearer one is too (proof in Supplementary Section S6).'),
 ('p',
  'Every neighbour that the search would keep is therefore inserted. As in A*PA2, the implementation also keeps a '
  'match whose search runs into the start of a match already kept on the same diagonal, which keeps more matches '
@@ -282,14 +272,9 @@ BODY = [
  'L(d_\\ell-1)\\bigr)\\), then \\(C\\) is the optimal cost; if the inequality is strict, every optimal alignment lies '
  'within the band.'),
 ('p',
- '*Proof.* An alignment that leaves the band visits diagonal \\(d_h+1\\) or \\(d_\\ell-1\\). Consider \\(d=d_h+1 > '
- '\\max(0,\\delta)\\); the case below the band is symmetric. Starting on diagonal 0, the alignment contains '
- 'insertions totalling at least \\(d\\) letters to reach \\(d\\), and deletions totalling at least \\(d-\\delta\\) '
- 'letters to end on \\(\\delta\\). Since \\(g\\) is nondecreasing and subadditive for \\(o, e \\ge 0\\), as is the '
- 'minimum of two such functions for two-piece costs, gaps totalling at least \\(k\\) letters cost at least '
- '\\(g(k)\\), so their total cost is at least \\(g(d)+g(d-\\delta)=L(d)\\). Every alignment outside the band '
- 'therefore costs at least \\(\\min\\bigl(L(d_h+1), L(d_\\ell-1)\\bigr)\\), so \\(C\\) at most this minimum is optimal, '
- 'and \\(C\\) below it leaves every optimal alignment inside the band. \\(\\square\\)'),
+ '*Proof idea.* An alignment that leaves the band must open a gap reaching the diagonal beyond it and another '
+ 'returning to the end diagonal, which together cost at least \\(L\\) of that diagonal (proof in Supplementary '
+ 'Section S6).'),
 ('p',
  'Each vector lane of an inter-sequence batch evaluates its own certificate. When every optimal alignment lies '
  'in the band, each in-band score on an optimal path is exact, so the tie rule makes the same choices as in the '
@@ -365,22 +350,9 @@ BODY = [
  "BiWFA, each new front checked against the other side's last \\(w+1\\). When they stop, \\(C^*\\) is the optimal "
  'cost and its meeting lies on an optimal path.'),
 ('p',
- '*Proof.* Let \\(P\\) be an optimal path, of cost \\(C_{\\mathrm{opt}}\\), and suppose the searches stop with \\(C^* '
- '> C_{\\mathrm{opt}}\\). As costs are integers, \\(C^* - 1 \\ge C_{\\mathrm{opt}}\\), so both searches have passed '
- "\\((C_{\\mathrm{opt}}+\\theta)/2\\) when they stop. Write \\(u_1\\) and \\(u_2\\) for a cell's costs from the starts "
- 'of the first and the second search. Along \\(P\\), \\(u_1\\) never decreases and \\(u_2\\) never increases, \\(u_1 + '
- 'u_2 = C_{\\mathrm{opt}}\\) between moves and \\(u_1 + u_2 \\le C_{\\mathrm{opt}} + o\\) inside a gap, and one move '
- 'changes each by at most \\(w\\). Having checked at each cost up to \\(\\sigma\\) that it had not reached the far '
- "corner, which is meeting the second search's front of cost 0, the first search shows that \\(C_{\\mathrm{opt}} > "
- '\\sigma\\), so \\(P\\) has a cell with \\(\\sigma - w < u_1 \\le \\sigma\\). (i) If \\(u_2 < u_1 - w\\) there, then \\(u_2 '
- '< \\sigma - w\\) and \\(2u_2 < C_{\\mathrm{opt}} + o - w < C_{\\mathrm{opt}} + \\theta\\), so the second search '
- 'reaches the cell in its first phase and checks it against cost \\(u_1\\), which the first search holds. (ii) '
- 'Otherwise, since \\(u_2 - u_1\\) falls to \\(-C_{\\mathrm{opt}}\\) at the far corner in steps of at most \\(2w\\), '
- '\\(P\\) has a cell at or after this one with \\(|u_1 - u_2| \\le w\\) and \\(u_1 > \\sigma - w\\). Both of its costs '
- 'are at most \\((C_{\\mathrm{opt}} + o + w)/2 = (C_{\\mathrm{opt}} + \\theta)/2\\), so both searches reach it; it is '
- 'checked in the first phase if both costs are at most \\(\\sigma\\), and otherwise in the alternation, where each '
- "new front meets the other side's last \\(w + 1\\). Either way a meeting of cost \\(C_{\\mathrm{opt}}\\) is found, "
- 'contradicting \\(C^* > C_{\\mathrm{opt}}\\). \\(\\square\\)'),
+ '*Proof idea.* On every optimal path the costs from the two starts change by at most \\(w\\) a move, so some cell '
+ 'has them within \\(w\\) of each other, and the two phases check every such cell before the stopping rule can end '
+ 'the searches (proof in Supplementary Section S6).'),
 ('p',
  'An alignment traced from the unpruned fronts of the single search is the one the two searches would have '
  'traced: the traceback steps only from a cell to a predecessor on an optimal path, and the fronts that two '
@@ -438,29 +410,29 @@ BODY = [
  '`036e12b` (gap-affine costs at `a6d9166`; the other modes and the batches at `289bcf0`, before the one-search '
  "start of Section 3.9), and every tool compiled for the native instruction set except BSAlign's gap-affine "
  'kernel, which its own build keeps to SSE4.2. We combined the protocols of A*PA2 [@GrootKoerkamp2024b] and '
- 'QuickEd [@Doblas2025]. The real datasets come from A*PA2 and QuickEd. From A*PA2 we use the nanopore sets '
- 'ont-1k, ont-10k, ont-50k and ont-500k, named by length class (mean 0.83, 3.6, 9.6 and 642 kbp), CHM13 reads '
- 'paired with the CHM13 reference; ont-500k-genvar, ultra-long reads of another individual against the same '
- 'reference, which adds genetic variation and gaps of up to 42 kbp; and 30 kbp SARS-CoV-2 genomes. We call the '
- "two 500k sets ultra-long. For QuickEd's Illumina 2×250 bp and PacBio HiFi technologies we use HG002 reads from "
- 'Genome in a Bottle [@Zook2016] in one region of chromosome 20, picked with mapping quality at least 20 on '
- "GRCh38, each mapped by minimap2 [@Li2018] to both haplotypes of HG002's own assembly [@Hansen2025] and paired "
- 'with the stretch it covers, its soft-clipped ends trimmed, so that pairs differ mainly by sequencing errors. '
- "The simulated datasets are QuickEd's random sequences of 10 kbp to 1 Mbp whose pairs differ by single-base "
- 'substitutions, insertions and deletions spread uniformly at nominal error rates of 1, 5, 10 and 20%, modelling '
- 'no sequencing technology; the 20% sets measure 17% divergence (Supplementary Table S6). Each dataset was '
- 'sampled to about 2 Mbp and at least four pairs. Each tool aligned each pair once, with traceback, on one '
- 'pinned core, through one aligner object per sample as its own benchmark runner does, with a 30 s budget per '
- "sample. The other tools' times were measured once at their pinned commits and kept; dinara-align was timed "
- 'again at the commits above. Timings quoted in Section 3 were recorded when each change was made, against the '
- 'version before it (Supplementary Table S1). The exact aligners compared are A*PA2-full (with the seed '
- 'heuristic and pruning) and A*PA2-simple (band doubling alone), A*PA [@GrootKoerkamp2024a], Edlib [@Sosic2017], '
- 'WFA and BiWFA, which denote WFA2-lib in its high-memory and bidirectional modes [@MarcoSola2021; '
- '@MarcoSola2023], QuickEd, BSAlign [@Shao2024], KSW2 [@Li2018], parasail [@Daily2016] and SSW [@Zhao2013], each '
- 'on the workloads it supports. On the pairs any two tools completed, their costs agreed, and at unit costs they '
- 'agreed with the published A*PA2 results on its datasets. The other alignment modes were timed in-process on '
- 'simulated workloads, the faster of two passes (Supplementary Table S3), and the batches on 500,000 simulated '
- 'pairs of 148 bp at 1% error (Supplementary Table S8).'),
+ "QuickEd [@Doblas2025]. The real datasets come from A*PA2 and QuickEd. From A*PA2's release [@PaBench] we use "
+ 'the nanopore sets ont-1k, ont-10k, ont-50k and ont-500k, named by length class (mean 0.83, 3.6, 9.6 and 642 '
+ 'kbp), CHM13 reads paired with the CHM13 reference; ont-500k-genvar, ultra-long reads of another individual '
+ 'against the same reference, which adds genetic variation and gaps of up to 42 kbp; and 30 kbp SARS-CoV-2 '
+ "genomes. We call the two 500k sets ultra-long. For QuickEd's Illumina 2×250 bp and PacBio HiFi technologies we "
+ 'use HG002 reads from Genome in a Bottle [@Zook2016] in one region of chromosome 20, picked with mapping '
+ "quality at least 20 on GRCh38, each mapped by minimap2 [@Li2018] to both haplotypes of HG002's own assembly "
+ '[@Hansen2025] and paired with the stretch it covers, its soft-clipped ends trimmed, so that pairs differ '
+ "mainly by sequencing errors. The simulated datasets are QuickEd's random sequences [@QuickEdData] of 10 kbp to "
+ '1 Mbp whose pairs differ by single-base substitutions, insertions and deletions spread uniformly at nominal '
+ 'error rates of 1, 5, 10 and 20%, modelling no sequencing technology; the 20% sets measure 17% divergence '
+ '(Supplementary Table S6). Each dataset was sampled to about 2 Mbp and at least four pairs. Each tool aligned '
+ 'each pair once, with traceback, on one pinned core, through one aligner object per sample as its own benchmark '
+ "runner does, with a 30 s budget per sample. The other tools' times were measured once at their pinned commits "
+ 'and kept; dinara-align was timed again at the commits above. Timings quoted in Section 3 were recorded when '
+ 'each change was made, against the version before it (Supplementary Table S1). The exact aligners compared are '
+ 'A*PA2-full (with the seed heuristic and pruning) and A*PA2-simple (band doubling alone), A*PA '
+ '[@GrootKoerkamp2024a], Edlib [@Sosic2017], WFA and BiWFA, which denote WFA2-lib in its high-memory and '
+ 'bidirectional modes [@MarcoSola2021; @MarcoSola2023], QuickEd, BSAlign [@Shao2024], KSW2 [@Li2018], parasail '
+ '[@Daily2016] and SSW [@Zhao2013], each on the workloads it supports. On the pairs any two tools completed, '
+ 'their costs agreed, and at unit costs they agreed with the published A*PA2 results on its datasets. The other '
+ 'alignment modes were timed in-process on simulated workloads, the faster of two passes (Supplementary Table '
+ 'S3), and the batches on 500,000 simulated pairs of 148 bp at 1% error (Supplementary Table S8).'),
 ('sub', 'Speed and memory'),
 ('p',
  'At unit costs dinara-align had the lowest mean time per alignment of the exact aligners on every dataset. On '
@@ -639,7 +611,7 @@ REFS = {
  "Rahn2018": ("Rahn et al.", "2018"), "Kallenborn2026": ("Kallenborn et al.", "2026"), "Modular": ("Modular Inc.", "2026"),
  "Lattner2021": ("Lattner et al.", "2021"), "Eizenga2022": ("Eizenga and Paten", "2022"), "hyalite": ("Ferguson", "2026"),
  "Gao2021": ("Gao et al.", "2021"), "Doblas2025": ("Doblas et al.", "2025"), "Shao2024": ("Shao and Ruan", "2024"), "Gibrat2018": ("Gibrat", "2018"), "Fujiki2020": ("Fujiki et al.", "2020"),
- "Zook2016": ("Zook et al.", "2016"), "Hansen2025": ("Hansen et al.", "2026"), "Prjibelski2019": ("Prjibelski et al.", "2019"),
+ "Zook2016": ("Zook et al.", "2016"), "Shafin2020": ("Shafin et al.", "2020"), "QuickEdData": ("Doblas et al.", "2024"), "PaBench": ("Groot Koerkamp", "2024"), "Hansen2025": ("Hansen et al.", "2026"), "Prjibelski2019": ("Prjibelski et al.", "2019"),
 }
 # The bibliography keys these map to in references.bib.
 BIBKEYS = {
@@ -650,5 +622,5 @@ BIBKEYS = {
  "Daily2016": "Daily2016parasail", "Liu2023": "Liu2023blockaligner", "Rognes2011": "Rognes2011swipe", "Rahn2018": "Rahn2018seqan",
  "Kallenborn2026": "Kallenborn2026accelign", "Modular": "Modular2025mojo", "Lattner2021": "Lattner2021mlir",
  "Eizenga2022": "Eizenga2022wfalm", "hyalite": "hyalite", "Gao2021": "Gao2021abpoa", "Doblas2025": "Doblas2025quicked", "Shao2024": "Shao2024bsalign", "Gibrat2018": "Gibrat2018band", "Fujiki2020": "Fujiki2020seedex",
- "Zook2016": "Zook2016giab", "Hansen2025": "Hansen2025hg002", "Prjibelski2019": "Prjibelski2019sequence",
+ "Zook2016": "Zook2016giab", "Shafin2020": "Shafin2020shasta", "QuickEdData": "Doblas2024datasets", "PaBench": "GrootKoerkamp2024pabench", "Hansen2025": "Hansen2025hg002", "Prjibelski2019": "Prjibelski2019sequence",
 }

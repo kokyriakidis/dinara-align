@@ -35,10 +35,11 @@ BODY = [
  'text summarises. Section S1 gives implementation details, both of techniques the main text describes and of '
  'others, and how the library was validated (Section S1.7); Section S2 lists the measured effect of each change '
  'and of each technique switched off in turn; Section S3 gives the complete results at unit and gap-affine '
- 'costs, the other alignment modes, the samples, memory and batches; and Sections S4 and S5 describe robustness '
- 'measures and approaches that were evaluated and not adopted. Unless stated otherwise, the measurements in '
- 'Sections S1, S4 and S5 and in Table S1 were taken when each change was introduced, on the machine indicated, '
- 'and compare the change with the preceding version; Table S2 was measured at commit `dc980d7`. The results in '
+ 'costs, the other alignment modes, the samples, memory and batches; Sections S4 and S5 describe robustness '
+ 'measures and approaches that were evaluated and not adopted; and Section S6 gives the proofs of the main '
+ "text's Lemma 1 and Propositions 1 and 2, and Lemma S1. Unless stated otherwise, the measurements in Sections "
+ 'S1, S4 and S5 and in Table S1 were taken when each change was introduced, on the machine indicated, and '
+ 'compare the change with the preceding version; Table S2 was measured at commit `dc980d7`. The results in '
  'Section 4 of the main text and in Section S3 were obtained on the Skylake-X at commit `036e12b`, gap-affine '
  'costs at `a6d9166`, and the other alignment modes and batches at `289bcf0`. Timings were taken on an Intel '
  'Core i9-7900X (Skylake-X, AVX-512) and an Apple M2 (NEON); Section S1.5 also reports an NVIDIA GeForce RTX '
@@ -191,34 +192,6 @@ BODY = [
  'cells in 400 pairs before. The reported distances agreed with those of the other aligners in all benchmarks, '
  'both before and after the correction. The overestimate arose from our filter; we do not claim that it applies '
  'to A*PA or A*PA2.'),
-('p',
- "**Lemma S1.** Let \\(M\\) hold every match of a seed with cost below its potential \\(r\\), and let \\(M'\\) be "
- '\\(M\\) without the matches whose local-pruning search (Section 2.4 of the main text) finds no path across the '
- "next \\(p\\) seeds. The gap-chaining seed heuristic over \\(M'\\) does not exceed the cost of any path from its "
- 'cell to the end of the pair.'),
-('p',
- '*Proof.* The heuristic charges a chain of matches the cost of each match and, for each gap between consecutive '
- 'matches and from the last to the end, the larger of the potential of the seeds that start in the gap and the '
- 'number of diagonals the gap shifts (Groot Koerkamp and Ivanov, 2024). Let \\(\\pi\\) be a path from cell \\(u\\) to '
- 'the end, and sweep it from left to right from a column \\(x\\), at first that of \\(u\\). Let \\(s\\) be the next '
- 'seed that starts at or after \\(x\\); no seed starts between \\(x\\) and \\(s\\). If \\(\\pi\\) crosses \\(s\\) for at '
- 'least \\(r\\), its piece across \\(s\\) pays the potential of \\(s\\), and the sweep continues from the end of '
- "\\(s\\). Otherwise the crossing is a match \\(\\mu \\in M\\). If \\(\\mu \\in M'\\), it joins the chain and the sweep "
- 'continues from its end. If not, \\(\\pi\\) continued from \\(\\mathrm{end}(\\mu)\\) at cost \\(c(\\mu)\\) is a path that '
- 'the search did not find, so its cost reaches the potential of the seeds it has crossed at some column \\(y\\) no '
- 'later than the end of the \\(p\\)-th seed: the piece of \\(\\pi\\) from the start of \\(s\\) to \\(y\\) pays the '
- 'potential of the seeds that start in it, and the sweep continues from \\(y\\). The matches joined appear along '
- "\\(\\pi\\) in order, so they form a chain in \\(M'\\). On each joined match \\(\\pi\\) pays its cost. Each gap is cut "
- 'into pieces, each of which pays at least the potential of the seeds that start in it and at least the number '
- 'of diagonals it shifts. Summed over the pieces, \\(\\pi\\) pays in the gap at least the potential of the seeds '
- 'that start in it and at least the diagonals it shifts, so at least the larger of the two. Hence \\(\\pi\\) costs '
- 'at least what the heuristic charges this chain, and so at least the heuristic. \\(\\square\\)'),
-('p',
- 'Besides local pruning, the implementation drops only matches whose gap to the end of the pair costs at least '
- 'what they save, which no chain can use to lower the heuristic; a seed left uncounted, as in a long tandem '
- "repeat, has potential 0, which the proof covers. It keeps every other match of \\(M'\\) and some that local "
- 'pruning would drop (Section 3.5 of the main text); a heuristic over more matches is no larger, so it too never '
- 'exceeds the remaining cost. The cell-by-cell check above runs with local pruning enabled.'),
 ('p',
  '**Exact-seed filter.** A 32-bit filter per seed, placed before a half-full open-addressing hash table, '
  'resolves most lookups with a single predictable test. On the M2, matching a sample of 320 reads took 32 ms '
@@ -462,6 +435,89 @@ BODY = [
  'above about half that or nothing. No upper bound cheap and tight enough was found: beam search cost more than '
  'it saved, and a batch edit-distance certificate proved 578 of 70,519 pairs.',
 ]),
+('sec', 'Proofs'),
+('p',
+ 'This section gives the proofs of the statements in Sections 3.5, 3.6 and 3.9 of the main text, whose notation '
+ 'it uses, and a lemma on the pruning that Section 3.5 relies on.'),
+('p',
+ '**Lemma 1.** If the search from an exact match \\(\\mu\\) finds no path across the next \\(p\\) seeds, it finds '
+ 'none from any of its four neighbours.'),
+('p',
+ '*Proof.* Each neighbour \\(\\nu\\) matches the same seed as \\(\\mu\\), so its search crosses the same seeds against '
+ 'the same potentials. If \\(\\nu\\) shares the end of \\(\\mu\\), its search starts from \\(\\mathrm{end}(\\mu)\\) at '
+ 'cost 1 instead of 0. If \\(\\nu\\) shares the start, \\(\\mathrm{end}(\\nu)\\) lies on an adjacent diagonal, and '
+ 'after one edit the search from \\(\\mu\\) holds a point on that diagonal at or beyond \\(\\mathrm{end}(\\nu)\\), at '
+ 'cost \\(1 = c(\\nu)\\), which is kept because one edit is below the potential 2 of the seed itself. In both '
+ 'cases, at each cost and on each diagonal, the search from \\(\\mu\\) reaches at least as far as the search from '
+ '\\(\\nu\\), by induction on the cost: an edit takes the furthest of three points, a run of matching bases from a '
+ 'point goes on from any later point on it, and a further point has crossed at least as much potential, so it is '
+ 'dropped only if the nearer one is too. Hence if the search from \\(\\nu\\) crosses the last of the seeds, so does '
+ 'that from \\(\\mu\\). \\(\\square\\)'),
+('p',
+ '**Proposition 1.** Let \\(C\\) be the least cost of an alignment within \\([d_\\ell, d_h]\\), and let \\(L(d) = '
+ 'g(|d|) + g(|d-\\delta|)\\), or \\(\\infty\\) for a diagonal outside the matrix. If \\(C \\le \\min\\bigl(L(d_h+1), '
+ 'L(d_\\ell-1)\\bigr)\\), then \\(C\\) is the optimal cost; if the inequality is strict, every optimal alignment lies '
+ 'within the band.'),
+('p',
+ '*Proof.* An alignment that leaves the band visits diagonal \\(d_h+1\\) or \\(d_\\ell-1\\). Consider \\(d=d_h+1 > '
+ '\\max(0,\\delta)\\); the case below the band is symmetric. Starting on diagonal 0, the alignment contains '
+ 'insertions totalling at least \\(d\\) letters to reach \\(d\\), and deletions totalling at least \\(d-\\delta\\) '
+ 'letters to end on \\(\\delta\\). Since \\(g\\) is nondecreasing and subadditive for \\(o, e \\ge 0\\), as is the '
+ 'minimum of two such functions for two-piece costs, gaps totalling at least \\(k\\) letters cost at least '
+ '\\(g(k)\\), so their total cost is at least \\(g(d)+g(d-\\delta)=L(d)\\). Every alignment outside the band '
+ 'therefore costs at least \\(\\min\\bigl(L(d_h+1), L(d_\\ell-1)\\bigr)\\), so \\(C\\) at most this minimum is optimal, '
+ 'and \\(C\\) below it leaves every optimal alignment inside the band. \\(\\square\\)'),
+('p',
+ '**Proposition 2.** Suppose the first search stops at cost \\(\\sigma\\) without reaching the far corner, and the '
+ 'second search, growing from cost 0, checks each new front against the last \\(w+1\\) fronts of the first, costs '
+ '\\(\\sigma-w\\) to \\(\\sigma\\), while its own cost is at most \\(\\sigma\\), after which the two alternate as in '
+ "BiWFA, each new front checked against the other side's last \\(w+1\\). When they stop, \\(C^*\\) is the optimal "
+ 'cost and its meeting lies on an optimal path.'),
+('p',
+ '*Proof.* Let \\(P\\) be an optimal path, of cost \\(C_{\\mathrm{opt}}\\), and suppose the searches stop with \\(C^* '
+ '> C_{\\mathrm{opt}}\\). As costs are integers, \\(C^* - 1 \\ge C_{\\mathrm{opt}}\\), so both searches have passed '
+ "\\((C_{\\mathrm{opt}}+\\theta)/2\\) when they stop. Write \\(u_1\\) and \\(u_2\\) for a cell's costs from the starts "
+ 'of the first and the second search. Along \\(P\\), \\(u_1\\) never decreases and \\(u_2\\) never increases, \\(u_1 + '
+ 'u_2 = C_{\\mathrm{opt}}\\) between moves and \\(u_1 + u_2 \\le C_{\\mathrm{opt}} + o\\) inside a gap, and one move '
+ 'changes each by at most \\(w\\). Having checked at each cost up to \\(\\sigma\\) that it had not reached the far '
+ "corner, which is meeting the second search's front of cost 0, the first search shows that \\(C_{\\mathrm{opt}} > "
+ '\\sigma\\), so \\(P\\) has a cell with \\(\\sigma - w < u_1 \\le \\sigma\\). (i) If \\(u_2 < u_1 - w\\) there, then \\(u_2 '
+ '< \\sigma - w\\) and \\(2u_2 < C_{\\mathrm{opt}} + o - w < C_{\\mathrm{opt}} + \\theta\\), so the second search '
+ 'reaches the cell in its first phase and checks it against cost \\(u_1\\), which the first search holds. (ii) '
+ 'Otherwise, since \\(u_2 - u_1\\) falls to \\(-C_{\\mathrm{opt}}\\) at the far corner in steps of at most \\(2w\\), '
+ '\\(P\\) has a cell at or after this one with \\(|u_1 - u_2| \\le w\\) and \\(u_1 > \\sigma - w\\). Both of its costs '
+ 'are at most \\((C_{\\mathrm{opt}} + o + w)/2 = (C_{\\mathrm{opt}} + \\theta)/2\\), so both searches reach it; it is '
+ 'checked in the first phase if both costs are at most \\(\\sigma\\), and otherwise in the alternation, where each '
+ "new front meets the other side's last \\(w + 1\\). Either way a meeting of cost \\(C_{\\mathrm{opt}}\\) is found, "
+ 'contradicting \\(C^* > C_{\\mathrm{opt}}\\). \\(\\square\\)'),
+('p',
+ "**Lemma S1.** Let \\(M\\) hold every match of a seed with cost below its potential \\(r\\), and let \\(M'\\) be "
+ '\\(M\\) without the matches whose local-pruning search (Section 2.4 of the main text) finds no path across the '
+ "next \\(p\\) seeds. The gap-chaining seed heuristic over \\(M'\\) does not exceed the cost of any path from its "
+ 'cell to the end of the pair.'),
+('p',
+ '*Proof.* The heuristic charges a chain of matches the cost of each match and, for each gap between consecutive '
+ 'matches and from the last to the end, the larger of the potential of the seeds that start in the gap and the '
+ 'number of diagonals the gap shifts (Groot Koerkamp and Ivanov, 2024). Let \\(\\pi\\) be a path from cell \\(u\\) to '
+ 'the end, and sweep it from left to right from a column \\(x\\), at first that of \\(u\\). Let \\(s\\) be the next '
+ 'seed that starts at or after \\(x\\); no seed starts between \\(x\\) and \\(s\\). If \\(\\pi\\) crosses \\(s\\) for at '
+ 'least \\(r\\), its piece across \\(s\\) pays the potential of \\(s\\), and the sweep continues from the end of '
+ "\\(s\\). Otherwise the crossing is a match \\(\\mu \\in M\\). If \\(\\mu \\in M'\\), it joins the chain and the sweep "
+ 'continues from its end. If not, \\(\\pi\\) continued from \\(\\mathrm{end}(\\mu)\\) at cost \\(c(\\mu)\\) is a path that '
+ 'the search did not find, so its cost reaches the potential of the seeds it has crossed at some column \\(y\\) no '
+ 'later than the end of the \\(p\\)-th seed: the piece of \\(\\pi\\) from the start of \\(s\\) to \\(y\\) pays the '
+ 'potential of the seeds that start in it, and the sweep continues from \\(y\\). The matches joined appear along '
+ "\\(\\pi\\) in order, so they form a chain in \\(M'\\). On each joined match \\(\\pi\\) pays its cost. Each gap is cut "
+ 'into pieces, each of which pays at least the potential of the seeds that start in it and at least the number '
+ 'of diagonals it shifts. Summed over the pieces, \\(\\pi\\) pays in the gap at least the potential of the seeds '
+ 'that start in it and at least the diagonals it shifts, so at least the larger of the two. Hence \\(\\pi\\) costs '
+ 'at least what the heuristic charges this chain, and so at least the heuristic. \\(\\square\\)'),
+('p',
+ 'Besides local pruning, the implementation drops only matches whose gap to the end of the pair costs at least '
+ 'what they save, which no chain can use to lower the heuristic; a seed left uncounted, as in a long tandem '
+ "repeat, has potential 0, which the proof covers. It keeps every other match of \\(M'\\) and some that local "
+ 'pruning would drop (Section 3.5 of the main text); a heuristic over more matches is no larger, so it too never '
+ 'exceeds the remaining cost. The cell-by-cell check above runs with local pruning enabled.'),
 ]
 
 TABLES = {
