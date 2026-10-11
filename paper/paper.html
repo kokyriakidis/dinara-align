@@ -192,11 +192,11 @@ td.wrap { vertical-align: top; }
 <p>Under costs every engine selects the same alignment among equally good ones, following the backtrace order of WFA2-lib: from the end, an edit is taken into a cell whenever one is optimal, a substitution before a deletion before an insertion, and a gap is extended before it is opened. The tile traceback applies this order cell by cell (Section 3.7), the batches and the difference sweep store per-cell flags under it, and the wavefronts take the furthest-reaching source, which makes the same choice; leftmost indels come from the same rule applied to both sequences reversed. Two exceptions remain: a gap-affine pair whose wavefronts would exceed the memory limit is split and follows the rule within each piece, and alignments under a substitution matrix follow the traceback order of Gotoh's recurrence.</p>
 </div>
 <figure id="fig-overview">
-  <div class="fig-box chart-wrap"><svg class="chart overview" viewBox="0 0 760 318" role="img" aria-label="How dinara-align assigns a pair to an algorithm">
+  <div class="fig-box chart-wrap"><svg class="chart overview" viewBox="0 0 760 338" role="img" aria-label="How dinara-align assigns a pair to an algorithm">
 <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink-soft)"/></marker></defs>
 <text x="10" y="14" class="lane">UNIT COSTS</text>
-<text x="10" y="110" class="lane">GAP-AFFINE AND TWO-PIECE COSTS</text>
-<text x="10" y="250" class="lane">BATCHES OF SHORT PAIRS</text>
+<text x="10" y="116" class="lane">GAP-AFFINE AND TWO-PIECE COSTS</text>
+<text x="10" y="272" class="lane">BATCHES OF SHORT PAIRS</text>
 <rect x="10" y="24" width="160" height="54" rx="6" class="box"/>
 <text x="90.0" y="47.0" text-anchor="middle" class="box-title">Diagonal transition</text>
 <text x="90.0" y="64.0" text-anchor="middle" class="box-note">near-identical pairs</text>
@@ -209,35 +209,43 @@ td.wrap { vertical-align: top; }
 <rect x="590" y="24" width="160" height="54" rx="6" class="box"/>
 <text x="670.0" y="47.0" text-anchor="middle" class="box-title">Tile-by-tile traceback</text>
 <text x="670.0" y="64.0" text-anchor="middle" class="box-note">within the memory limit</text>
-<rect x="10" y="120" width="200" height="48" rx="6" class="box"/>
-<text x="110.0" y="140.0" text-anchor="middle" class="box-title">Bidirectional wavefront</text>
-<text x="110.0" y="157.0" text-anchor="middle" class="box-note">WFA, BiWFA</text>
-<rect x="560" y="120" width="190" height="48" rx="6" class="box"/>
-<text x="655.0" y="140.0" text-anchor="middle" class="box-title">Traceback through fronts</text>
-<text x="655.0" y="157.0" text-anchor="middle" class="box-note">split past the memory limit</text>
-<rect x="330" y="184" width="200" height="48" rx="6" class="box"/>
-<text x="430.0" y="204.0" text-anchor="middle" class="box-title">Full difference sweep</text>
-<text x="430.0" y="221.0" text-anchor="middle" class="box-note">8-bit lanes, same alignment</text>
-<rect x="10" y="260" width="240" height="48" rx="6" class="box"/>
-<text x="130.0" y="280.0" text-anchor="middle" class="box-title">One pair per vector lane</text>
-<text x="130.0" y="297.0" text-anchor="middle" class="box-note">8-bit, band certified per lane</text>
-<rect x="330" y="260" width="240" height="48" rx="6" class="box"/>
-<text x="450.0" y="280.0" text-anchor="middle" class="box-title">Uncertified pairs again</text>
-<text x="450.0" y="297.0" text-anchor="middle" class="box-note">a wider band; 16 bits if a byte saturates</text>
+<rect x="10" y="130" width="180" height="48" rx="6" class="box"/>
+<text x="100.0" y="150.0" text-anchor="middle" class="box-title">One search, fronts kept</text>
+<text x="100.0" y="167.0" text-anchor="middle" class="box-note">the side the traceback reads</text>
+<rect x="290" y="130" width="180" height="48" rx="6" class="box"/>
+<text x="380.0" y="150.0" text-anchor="middle" class="box-title">Two searches</text>
+<text x="380.0" y="167.0" text-anchor="middle" class="box-note">as BiWFA</text>
+<rect x="570" y="130" width="180" height="48" rx="6" class="box"/>
+<text x="660.0" y="150.0" text-anchor="middle" class="box-title">Traceback through fronts</text>
+<text x="660.0" y="167.0" text-anchor="middle" class="box-note">split past the memory limit</text>
+<rect x="290" y="206" width="180" height="44" rx="6" class="box"/>
+<text x="380.0" y="224.0" text-anchor="middle" class="box-title">Full difference sweep</text>
+<text x="380.0" y="241.0" text-anchor="middle" class="box-note">8-bit lanes, same alignment</text>
+<rect x="10" y="282" width="240" height="48" rx="6" class="box"/>
+<text x="130.0" y="302.0" text-anchor="middle" class="box-title">One pair per vector lane</text>
+<text x="130.0" y="319.0" text-anchor="middle" class="box-note">8-bit, band certified per lane</text>
+<rect x="330" y="282" width="240" height="48" rx="6" class="box"/>
+<text x="450.0" y="302.0" text-anchor="middle" class="box-title">Uncertified pairs again</text>
+<text x="450.0" y="319.0" text-anchor="middle" class="box-note">a wider band; 16 bits if a byte saturates</text>
 <polyline points="170,51 200,51" fill="none" class="flow" marker-end="url(#arrow)"/>
 <polyline points="360,51 390,51" fill="none" class="flow" marker-end="url(#arrow)"/>
+<text x="375" y="18" text-anchor="middle" class="flow-label">after 1/24 of the cheapest band</text>
 <polyline points="560,51 590,51" fill="none" class="flow" marker-end="url(#arrow)"/>
-<polyline points="210,144 560,144" fill="none" class="flow" marker-end="url(#arrow)"/>
-<text x="385" y="137" text-anchor="middle" class="flow-label">the wavefront finishes first</text>
-<polyline points="110,168 110,208 330,208" fill="none" class="flow" marker-end="url(#arrow)"/>
-<text x="122" y="192" text-anchor="start" class="flow-label">projected work above the</text>
-<text x="122" y="205" text-anchor="start" class="flow-label">sweep's, after 1/24 of it</text>
-<polyline points="530,208 655,208 655,168" fill="none" class="flow" marker-end="url(#arrow)"/>
-<polyline points="250,284 330,284" fill="none" class="flow" marker-end="url(#arrow)"/>
-<text x="290" y="277" text-anchor="middle" class="flow-label">not certified</text>
+<polyline points="190,154 290,154" fill="none" class="flow" marker-end="url(#arrow)"/>
+<text x="240" y="147" text-anchor="middle" class="flow-label">steps more than two</text>
+<polyline points="470,154 570,154" fill="none" class="flow" marker-end="url(#arrow)"/>
+<text x="520" y="147" text-anchor="middle" class="flow-label">searches meet</text>
+<polyline points="100,130 100,123 660,123 660,130" fill="none" class="flow" marker-end="url(#arrow)"/>
+<text x="380" y="118" text-anchor="middle" class="flow-label">reaches the end alone: traced at once</text>
+<polyline points="380,178 380,206" fill="none" class="flow" marker-end="url(#arrow)"/>
+<text x="392" y="189" text-anchor="start" class="flow-label">projected work above the</text>
+<text x="392" y="202" text-anchor="start" class="flow-label">sweep's, after 1/24 of it</text>
+<polyline points="470,228 660,228 660,178" fill="none" class="flow" marker-end="url(#arrow)"/>
+<polyline points="250,306 330,306" fill="none" class="flow" marker-end="url(#arrow)"/>
+<text x="290" y="299" text-anchor="middle" class="flow-label">not certified</text>
 <text x="10" y="96" class="flow-label">A pair settled by diagonal transition is traced back from its own wavefronts.</text>
 </svg></div>
-  <figcaption><b>Fig. 1.</b> How dinara-align assigns a pair to an algorithm. At unit costs, diagonal transition from one end and then from both settles near-identical pairs while it costs less than a band would; other pairs go to band doubling over bit-parallel tiles, pruned by the seed heuristic on long pairs, and are traced back a tile at a time within the memory limit. At gap-affine costs, the bidirectional wavefront hands a pair to a full sweep in difference recurrences once its projected work exceeds the sweep's, the alignment being the same either way. Batches of short pairs are aligned one pair per vector lane within a band whose optimality each lane certifies.</figcaption>
+  <figcaption><b>Fig. 1.</b> How dinara-align assigns a pair to an algorithm, and the rule behind each hand-over. At unit costs, diagonal transition from one end and then from both settles near-identical pairs, giving way to band doubling over bit-parallel tiles only once its projected work exceeds the band's and it has spent one twenty-fourth of the cheapest band (Section 3.10); the tiles are traced back within the memory limit. At gap-affine costs one search grows alone, its fronts kept, and is traced back at once if it reaches the end; a second search joins once one would step more diagonals than two would need (Section 3.9), and a pair projected to cost more than a full sweep in difference recurrences is handed to that sweep after one twenty-fourth of its work, the alignment the same either way. Batches of short pairs are aligned one pair per vector lane within a band whose optimality each lane certifies (Section 3.6).</figcaption>
 </figure>
 <div class="table-wrap" id="tab-engines"><table>
 <caption><b>Table 1.</b> Algorithms in dinara-align and the changes introduced in this work.</caption>

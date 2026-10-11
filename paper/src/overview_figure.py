@@ -1,8 +1,8 @@
 """The overview figure: how a pair reaches an algorithm, drawn once and rendered to SVG and to TikZ."""
 
-WIDTH, HEIGHT = 760, 318
+WIDTH, HEIGHT = 760, 338
 
-LANES = [(14, "Unit costs"), (110, "Gap-affine and two-piece costs"), (250, "Batches of short pairs")]
+LANES = [(14, "Unit costs"), (116, "Gap-affine and two-piece costs"), (272, "Batches of short pairs")]
 
 # Boxes: name -> (x, y, width, height, title, note).
 BOXES = {
@@ -10,22 +10,25 @@ BOXES = {
     "two": (200, 24, 160, 54, "Two-ended transition", "while cheaper than a band"),
     "band": (390, 24, 170, 54, "Band doubling, tiles", "seed heuristic on long pairs"),
     "trace": (590, 24, 160, 54, "Tile-by-tile traceback", "within the memory limit"),
-    "wave": (10, 120, 200, 48, "Bidirectional wavefront", "WFA, BiWFA"),
-    "kept": (560, 120, 190, 48, "Traceback through fronts", "split past the memory limit"),
-    "sweep": (330, 184, 200, 48, "Full difference sweep", "8-bit lanes, same alignment"),
-    "lanes": (10, 260, 240, 48, "One pair per vector lane", "8-bit, band certified per lane"),
-    "again": (330, 260, 240, 48, "Uncertified pairs again", "a wider band; 16 bits if a byte saturates"),
+    "one": (10, 130, 180, 48, "One search, fronts kept", "the side the traceback reads"),
+    "both": (290, 130, 180, 48, "Two searches", "as BiWFA"),
+    "kept": (570, 130, 180, 48, "Traceback through fronts", "split past the memory limit"),
+    "sweep": (290, 206, 180, 44, "Full difference sweep", "8-bit lanes, same alignment"),
+    "lanes": (10, 282, 240, 48, "One pair per vector lane", "8-bit, band certified per lane"),
+    "again": (330, 282, 240, 48, "Uncertified pairs again", "a wider band; 16 bits if a byte saturates"),
 }
 
 # Arrows: polyline points and an optional label (x, y, text lines, anchor).
 ARROWS = [
     ([(170, 51), (200, 51)], None),
-    ([(360, 51), (390, 51)], None),
+    ([(360, 51), (390, 51)], (375, 18, ["after 1/24 of the cheapest band"], "middle")),
     ([(560, 51), (590, 51)], None),
-    ([(210, 144), (560, 144)], (385, 137, ["the wavefront finishes first"], "middle")),
-    ([(110, 168), (110, 208), (330, 208)], (122, 192, ["projected work above the", "sweep's, after 1/24 of it"], "start")),
-    ([(530, 208), (655, 208), (655, 168)], None),
-    ([(250, 284), (330, 284)], (290, 277, ["not certified"], "middle")),
+    ([(190, 154), (290, 154)], (240, 147, ["steps more than two"], "middle")),
+    ([(470, 154), (570, 154)], (520, 147, ["searches meet"], "middle")),
+    ([(100, 130), (100, 123), (660, 123), (660, 130)], (380, 118, ["reaches the end alone: traced at once"], "middle")),
+    ([(380, 178), (380, 206)], (392, 189, ["projected work above the", "sweep's, after 1/24 of it"], "start")),
+    ([(470, 228), (660, 228), (660, 178)], None),
+    ([(250, 306), (330, 306)], (290, 299, ["not certified"], "middle")),
 ]
 
 NOTES = [(10, 96, "A pair settled by diagonal transition is traced back from its own wavefronts.")]

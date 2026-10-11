@@ -106,8 +106,8 @@ Under costs every engine selects the same alignment among equally good ones, fol
 \centering
 \resizebox{\textwidth}{!}{\begin{tikzpicture}
 \node[anchor=west,font=\scriptsize\scshape] at (0.224,-0.224) {Unit costs};
-\node[anchor=west,font=\scriptsize\scshape] at (0.224,-2.374) {Gap-affine and two-piece costs};
-\node[anchor=west,font=\scriptsize\scshape] at (0.224,-5.510) {Batches of short pairs};
+\node[anchor=west,font=\scriptsize\scshape] at (0.224,-2.509) {Gap-affine and two-piece costs};
+\node[anchor=west,font=\scriptsize\scshape] at (0.224,-6.003) {Batches of short pairs};
 \draw[rounded corners=2pt,fill=gray!8,draw=gray!60] (0.224,-0.538) rectangle (3.808,-1.747);
 \node[align=center,font=\scriptsize] at (2.016,-1.142) {\textbf{Diagonal transition}\\{\color{gray!70!black}near-identical pairs}};
 \draw[rounded corners=2pt,fill=gray!8,draw=gray!60] (4.480,-0.538) rectangle (8.064,-1.747);
@@ -116,29 +116,36 @@ Under costs every engine selects the same alignment among equally good ones, fol
 \node[align=center,font=\scriptsize] at (10.640,-1.142) {\textbf{Band doubling, tiles}\\{\color{gray!70!black}seed heuristic on long pairs}};
 \draw[rounded corners=2pt,fill=gray!8,draw=gray!60] (13.216,-0.538) rectangle (16.800,-1.747);
 \node[align=center,font=\scriptsize] at (15.008,-1.142) {\textbf{Tile-by-tile traceback}\\{\color{gray!70!black}within the memory limit}};
-\draw[rounded corners=2pt,fill=gray!8,draw=gray!60] (0.224,-2.688) rectangle (4.704,-3.763);
-\node[align=center,font=\scriptsize] at (2.464,-3.226) {\textbf{Bidirectional wavefront}\\{\color{gray!70!black}WFA, BiWFA}};
-\draw[rounded corners=2pt,fill=gray!8,draw=gray!60] (12.544,-2.688) rectangle (16.800,-3.763);
-\node[align=center,font=\scriptsize] at (14.672,-3.226) {\textbf{Traceback through fronts}\\{\color{gray!70!black}split past the memory limit}};
-\draw[rounded corners=2pt,fill=gray!8,draw=gray!60] (7.392,-4.122) rectangle (11.872,-5.197);
-\node[align=center,font=\scriptsize] at (9.632,-4.659) {\textbf{Full difference sweep}\\{\color{gray!70!black}8-bit lanes, same alignment}};
-\draw[rounded corners=2pt,fill=gray!8,draw=gray!60] (0.224,-5.824) rectangle (5.600,-6.899);
-\node[align=center,font=\scriptsize] at (2.912,-6.362) {\textbf{One pair per vector lane}\\{\color{gray!70!black}8-bit, band certified per lane}};
-\draw[rounded corners=2pt,fill=gray!8,draw=gray!60] (7.392,-5.824) rectangle (12.768,-6.899);
-\node[align=center,font=\scriptsize] at (10.080,-6.362) {\textbf{Uncertified pairs again}\\{\color{gray!70!black}a wider band; 16 bits if a byte saturates}};
+\draw[rounded corners=2pt,fill=gray!8,draw=gray!60] (0.224,-2.912) rectangle (4.256,-3.987);
+\node[align=center,font=\scriptsize] at (2.240,-3.450) {\textbf{One search, fronts kept}\\{\color{gray!70!black}the side the traceback reads}};
+\draw[rounded corners=2pt,fill=gray!8,draw=gray!60] (6.496,-2.912) rectangle (10.528,-3.987);
+\node[align=center,font=\scriptsize] at (8.512,-3.450) {\textbf{Two searches}\\{\color{gray!70!black}as BiWFA}};
+\draw[rounded corners=2pt,fill=gray!8,draw=gray!60] (12.768,-2.912) rectangle (16.800,-3.987);
+\node[align=center,font=\scriptsize] at (14.784,-3.450) {\textbf{Traceback through fronts}\\{\color{gray!70!black}split past the memory limit}};
+\draw[rounded corners=2pt,fill=gray!8,draw=gray!60] (6.496,-4.614) rectangle (10.528,-5.600);
+\node[align=center,font=\scriptsize] at (8.512,-5.107) {\textbf{Full difference sweep}\\{\color{gray!70!black}8-bit lanes, same alignment}};
+\draw[rounded corners=2pt,fill=gray!8,draw=gray!60] (0.224,-6.317) rectangle (5.600,-7.392);
+\node[align=center,font=\scriptsize] at (2.912,-6.854) {\textbf{One pair per vector lane}\\{\color{gray!70!black}8-bit, band certified per lane}};
+\draw[rounded corners=2pt,fill=gray!8,draw=gray!60] (7.392,-6.317) rectangle (12.768,-7.392);
+\node[align=center,font=\scriptsize] at (10.080,-6.854) {\textbf{Uncertified pairs again}\\{\color{gray!70!black}a wider band; 16 bits if a byte saturates}};
 \draw[->,>=stealth,gray!70!black] (3.808,-1.142) -- (4.480,-1.142);
 \draw[->,>=stealth,gray!70!black] (8.064,-1.142) -- (8.736,-1.142);
+\node[align=center,font=\tiny] at (8.400,-0.336) {after 1/24 of the cheapest band};
 \draw[->,>=stealth,gray!70!black] (12.544,-1.142) -- (13.216,-1.142);
-\draw[->,>=stealth,gray!70!black] (4.704,-3.226) -- (12.544,-3.226);
-\node[align=center,font=\tiny] at (8.624,-3.002) {the wavefront finishes first};
-\draw[->,>=stealth,gray!70!black] (2.464,-3.763) -- (2.464,-4.659) -- (7.392,-4.659);
-\node[anchor=west,align=left,font=\tiny] at (2.733,-4.368) {projected work above the\\sweep's, after 1/24 of it};
-\draw[->,>=stealth,gray!70!black] (11.872,-4.659) -- (14.672,-4.659) -- (14.672,-3.763);
-\draw[->,>=stealth,gray!70!black] (5.600,-6.362) -- (7.392,-6.362);
-\node[align=center,font=\tiny] at (6.496,-6.138) {not certified};
+\draw[->,>=stealth,gray!70!black] (4.256,-3.450) -- (6.496,-3.450);
+\node[align=center,font=\tiny] at (5.376,-3.226) {steps more than two};
+\draw[->,>=stealth,gray!70!black] (10.528,-3.450) -- (12.768,-3.450);
+\node[align=center,font=\tiny] at (11.648,-3.226) {searches meet};
+\draw[->,>=stealth,gray!70!black] (2.240,-2.912) -- (2.240,-2.755) -- (14.784,-2.755) -- (14.784,-2.912);
+\node[align=center,font=\tiny] at (8.512,-2.576) {reaches the end alone: traced at once};
+\draw[->,>=stealth,gray!70!black] (8.512,-3.987) -- (8.512,-4.614);
+\node[anchor=west,align=left,font=\tiny] at (8.781,-4.301) {projected work above the\\sweep's, after 1/24 of it};
+\draw[->,>=stealth,gray!70!black] (10.528,-5.107) -- (14.784,-5.107) -- (14.784,-3.987);
+\draw[->,>=stealth,gray!70!black] (5.600,-6.854) -- (7.392,-6.854);
+\node[align=center,font=\tiny] at (6.496,-6.630) {not certified};
 \node[anchor=west,font=\tiny] at (0.224,-2.083) {A pair settled by diagonal transition is traced back from its own wavefronts.};
 \end{tikzpicture}}
-\caption{How dinara-align assigns a pair to an algorithm. At unit costs, diagonal transition from one end and then from both settles near-identical pairs while it costs less than a band would; other pairs go to band doubling over bit-parallel tiles, pruned by the seed heuristic on long pairs, and are traced back a tile at a time within the memory limit. At gap-affine costs, the bidirectional wavefront hands a pair to a full sweep in difference recurrences once its projected work exceeds the sweep's, the alignment being the same either way. Batches of short pairs are aligned one pair per vector lane within a band whose optimality each lane certifies.}\label{fig:overview}
+\caption{How dinara-align assigns a pair to an algorithm, and the rule behind each hand-over. At unit costs, diagonal transition from one end and then from both settles near-identical pairs, giving way to band doubling over bit-parallel tiles only once its projected work exceeds the band's and it has spent one twenty-fourth of the cheapest band (Section 3.10); the tiles are traced back within the memory limit. At gap-affine costs one search grows alone, its fronts kept, and is traced back at once if it reaches the end; a second search joins once one would step more diagonals than two would need (Section 3.9), and a pair projected to cost more than a full sweep in difference recurrences is handed to that sweep after one twenty-fourth of its work, the alignment the same either way. Batches of short pairs are aligned one pair per vector lane within a band whose optimality each lane certifies (Section 3.6).}\label{fig:overview}
 \end{figure*}
 
 \begin{table*}[t]
