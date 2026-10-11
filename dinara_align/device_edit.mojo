@@ -9,8 +9,8 @@ The shorter sequence of each pair is the pattern, its letters down the bits of u
 `MAX_PATTERN_WORDS` words, and the longer one the text, a column a step. The host builds each pair's
 match vectors, one row of words for each symbol the pattern holds and one, empty, for every other,
 and codes the text by the same symbols; a thread then reads only its own pair's rows and text. The
-pairs go out longest first, so a warp's threads run about as long as each other. A pair whose
-pattern is longer stays on the host (see `api.distances`).
+pairs go out in the batch's own order, so a warp whose pairs differ in length runs as long as its
+longest. A pair whose pattern is longer stays on the host (see `api.distances`).
 """
 
 from std.math import ceildiv

@@ -404,7 +404,10 @@ struct Ties(Equatable, ImplicitlyCopyable, TrivialRegisterPassable, Writable):
     each step back the edit that reached furthest, ties going to a substitution, then a letter of the
     reference alone, then one of the query, the second gap piece before the first and a gap's extension
     before its opening; they differ in the end it runs from. So the CIGAR is the same however the search
-    found the cost, whatever the band or cap, and whatever the costs' common factor.
+    found the cost, whatever the band or cap, and whatever the costs' common factor, with one exception:
+    a gap-affine pair whose kept fronts would pass `max_memory` is split where an optimal path crosses,
+    and each piece then follows the rule on its own (see `gap_affine.solve`). Under a `Scoring`, Gotoh's
+    walk picks among equal alignments, not `Ties`.
 
     With free ends the span comes first. `LEFT` decides it from the end back, as it places edits: the
     end on the highest diagonal an equally good alignment reaches, the most reference letters less query
