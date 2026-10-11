@@ -15,8 +15,8 @@ The datasets:
 - A*PA2's real ones (Groot Koerkamp, Bioinformatics 2025), as pa-bench releases them: ONT reads of about
   1, 10, 50 and 500 kbp, the 500 kbp ones also against a reference with genetic variation, and SARS-CoV-2
   genomes. QuickEd's MiniION-a and MiniION-b are `ont-500k` and `ont-500k-genvar`.
-- Real Illumina and PacBio HiFi reads, the two technologies QuickEd adds: HG002's reads from Genome in a
-  Bottle, each against the stretch of HG002's own assembly, T2T Q100 v1.1, it maps to (see `giab`).
+- Real Illumina, PacBio HiFi and PromethION reads, the technologies QuickEd adds: HG002's reads from Genome
+  in a Bottle, each against the stretch of HG002's own assembly, T2T Q100 v1.1, it maps to (see `giab`).
 - QuickEd's simulated ones (Doblas et al., Bioinformatics 2025), from Zenodo: random sequences of 10 kbp,
   100 kbp, 500 kbp and 1 Mbp with 1, 5, 10 and 20% uniformly spread errors, 100 Mbp a file, 3.2 GB in all,
   downloaded the first time. They cover the lengths and divergences A*PA2's synthetic sets did.
@@ -341,6 +341,24 @@ def setup_note(runners: dict) -> str:
     )
 
 
+def combined(runs: list[tuple[list[tuple], int, str]]) -> tuple[list[tuple], int, str, list[float], bool]:
+    """One tool's rounds on a sample as one: the pairs it finished in every round, each its median time and
+    growth over the rounds; the median peak; the ending of the round that finished fewest; each round's mean
+    over those pairs; and whether every round found the same costs."""
+    shortest = min(runs, key=lambda run: len(run[0]))
+    finished = len(shortest[0])
+    rows = [
+        (statistics.median(run[0][index][0] for run in runs), runs[0][0][index][1],
+         statistics.median(run[0][index][2] for run in runs))
+        for index in range(finished)
+    ]
+    peaks = [peak for _, peak, _ in runs if peak >= 0]
+    peak = int(statistics.median(peaks)) if peaks else shortest[1]
+    means = [sum(row[0] for row in run[0][:finished]) / finished for run in runs] if finished else []
+    same = all([row[1] for row in run[0][:finished]] == [row[1] for row in runs[0][0][:finished]] for run in runs)
+    return rows, peak, shortest[2], means, same
+
+
 def main() -> None:
     """Runs every tool on a sample of every dataset, checks their costs agree with each other's and the
     published ones, and writes the tables; exits nonzero when any disagree."""
@@ -350,6 +368,7 @@ def main() -> None:
     parser.add_argument("--only", nargs="*", default=[], help="run only datasets whose names hold one of these")
     parser.add_argument("--affine", metavar="X,O,E", help="align at affine costs: WFA's mismatch, opening and extension")
     parser.add_argument("--fresh", action="store_true", help="run the rivals again rather than reuse their results")
+    parser.add_argument("--repeats", type=int, default=1, help="rounds of every tool on a dataset, alternating (default 1)")
     parser.add_argument("--install-rust", action="store_true", help="install A*PA's nightly under the cache")
     parser.add_argument("--cpu", default="native", help="the CPU every tool is built for (default: the host's)")
     options = parser.parse_args()
@@ -403,10 +422,19 @@ def main() -> None:
         path, facts = sample(name, files, bases, published)
         pairs, whole = facts["pairs"], facts["of"]
         times, medians, totals, grown, peaks, seen, raw_peaks = [], [], [], [], [], [], []
-        measured = {}
+        measured, rounds = {}, {column: [] for column, _, _ in chosen(name)}
+        # Every tool once a round, the rounds alternating, so that a drift in the machine falls on all of them.
+        for round in range(options.repeats):
+            for column, binary, tool in chosen(name):
+                print(f"{name}: {column} (round {round + 1} of {options.repeats}) ...", file=sys.stderr, flush=True)
+                rounds[column].append(measure(binary, tool, path, options.budget,
+                                              None if binary == runners["ours"] else kept))
+        round_means = {}
         for column, binary, tool in chosen(name):
-            print(f"{name}: {column} ...", file=sys.stderr, flush=True)
-            rows, peak, status = measure(binary, tool, path, options.budget, None if binary == runners["ours"] else kept)
+            rows, peak, status, round_means[column], same = combined(rounds[column])
+            if not same:
+                print(f"DISAGREEMENT on {name}: {column} between rounds", file=sys.stderr)
+                failed.append(name)
             measured[column] = (rows, status)
             peaks.append(megabytes(peak, status))
             raw_peaks.append(peak)
@@ -470,6 +498,7 @@ def main() -> None:
         # Every tool's figures unrounded, which the tables round to three digits, for the paper's tables.
         exact[name] = {
             "pairs": pairs,
+            "rounds": options.repeats,
             "of": whole,
             "tools": {
                 column: {
@@ -478,6 +507,7 @@ def main() -> None:
                     "finished": len(rows),
                     "status": status,
                     "peak": peak,
+                    "round_means": round_means[column],
                 }
                 for (column, (rows, status)), peak in zip(measured.items(), raw_peaks)
             },
