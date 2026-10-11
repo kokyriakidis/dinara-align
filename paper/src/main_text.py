@@ -37,16 +37,19 @@ ABSTRACT = [('Motivation',
 BODY = [
 ('sec', 'Introduction'),
 ('p',
- 'Pairwise alignment is a building block of read mapping, genome assembly and variant calling. The classical '
- 'dynamic program computes an optimal alignment over an \\(n \\times m\\) matrix [@Gotoh1982], practical for short '
- 'reads but not for long ones: nanopore reads span tens to hundreds of kilobases with 5 to 15% errors, and one '
- 'pair of 500 kbp reads fills \\(2.5 \\times 10^{11}\\) cells.'),
+ 'Pairwise alignment is a building block of genome analysis. Read mappers align each read to the reference '
+ 'window its seeds select and extend alignments from seed matches, assemblers align reads to one another to find '
+ 'their overlaps [@Li2018], and assemblies, haplotypes and viral genomes are compared base by base. Its cost '
+ 'therefore grows with both the number of reads and their length. The classical dynamic program computes an '
+ 'optimal alignment over an \\(n \\times m\\) matrix [@Gotoh1982], practical for short reads but not for long ones: '
+ 'nanopore reads span tens to hundreds of kilobases with 5 to 15% errors, and one pair of 500 kbp reads fills '
+ '\\(2.5 \\times 10^{11}\\) cells.'),
 ('p',
  'Heuristic aligners compute only part of the matrix, a band, a window or the cells before a drop in score, and '
  'lose the guarantee of optimality: their result depends on these cut-offs, and alignments with large indels or '
- 'clustered errors can be missed or misplaced. Exact aligners instead skip only those cells that provably cannot lie on an '
- 'optimal path, so that their running time depends on the distance between the sequences rather than on the '
- 'product of their lengths.'),
+ 'clustered errors can be missed or misplaced. Exact aligners instead skip only those cells that provably cannot '
+ 'lie on an optimal path, so that their running time depends on the distance between the sequences rather than '
+ 'on the product of their lengths.'),
 ('p',
  'Three ideas underlie current exact aligners. *Band doubling* computes only the diagonals a path within a cost '
  'bound can reach, doubling the bound until the optimum lies within it [@Ukkonen1985]; *bit-parallelism* packs '
@@ -97,8 +100,11 @@ BODY = [
  'Let \\(A=a_1\\dots a_n\\) be the reference and \\(B=b_1\\dots b_m\\) the query, and let cell \\((i,j)\\) lie on '
  'diagonal \\(j-i\\). Under gap-affine costs a mismatch costs \\(x\\) and a gap of \\(k\\) letters \\(g(k)=o+ke\\); unit '
  'costs have \\(x=e=1\\) and \\(o=0\\), two-piece costs take the minimum of two such functions [@Li2018], and a '
- 'substitution matrix instead scores each pair of letters. An alignment is *exact* if it is optimal under the '
- 'requested costs, mode (global, ends-free, extension or local), band and cost limit. At unit costs the distance '
+ 'substitution matrix instead scores each pair of letters. Global alignment compares two whole sequences, such '
+ 'as two assemblies or a read and the reference stretch it maps to; ends-free alignment places a read inside a '
+ 'longer window or finds the overlap of two reads; extension grows an alignment from a seed match, as read '
+ 'mappers do [@Li2018]; and local alignment finds the best-matching parts of two sequences. An alignment is '
+ '*exact* if it is optimal under the requested costs, mode, band and cost limit. At unit costs the distance '
  '\\(D(i,j)\\) between the prefixes \\(a_1\\dots a_i\\) and \\(b_1\\dots b_j\\) satisfies'),
 ('p',
  '\\[ D(i,j) = \\min\\bigl(D(i-1,j)+1,\\; D(i,j-1)+1, \\qquad D(i-1,j-1)+[a_i \\ne b_j]\\bigr), \\]'),
