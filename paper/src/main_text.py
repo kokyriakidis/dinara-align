@@ -237,21 +237,23 @@ BODY = [
  'query rows are issued together, so that their memory accesses overlap, and only seeds whose matches could '
  'still chain to the end of the pair are considered.'),
 ('p',
- 'An exact match \\(\\mu\\) of a seed at query rows \\([i, i+16)\\) always has four neighbouring matches with one '
- 'edit: two share its start, at rows \\([i, i+15)\\) and \\([i, i+17)\\), and two share its end, at \\([i+1, i+16)\\) '
- 'and \\([i-1, i+16)\\). Because chaining is all-or-nothing, a neighbour one diagonal away may chain where \\(\\mu\\) '
- 'cannot, and the neighbours are required for the heuristic to remain a lower bound. Rather than locating them '
- 'by search and testing each for local pruning, dinara-align inserts them whenever \\(\\mu\\) is retained, which is '
- 'justified by the following lemma. Local pruning retains a match \\(\\nu\\) only if \\(c(\\nu) + h(e(\\nu)) < \\tau\\) '
- '(Section 2.4).'),
+ 'An exact match \\(\\mu\\) of a seed at query rows \\([i, i+16)\\) has four neighbouring matches with one edit, '
+ 'fewer at the ends of the query: two share its start, at rows \\([i, i+15)\\) and \\([i, i+17)\\), and two share '
+ 'its end, at \\([i+1, i+16)\\) and \\([i-1, i+16)\\). Because chaining is all-or-nothing, a neighbour one diagonal '
+ 'away may chain where \\(\\mu\\) cannot, and the neighbours are required for the heuristic to remain a lower '
+ 'bound. Rather than locating them by search and testing each for local pruning, dinara-align inserts them '
+ 'whenever \\(\\mu\\) is retained, which is justified by the following lemma. Local pruning retains a match \\(\\nu\\) '
+ 'only if \\(c(\\nu) + h(e(\\nu)) < \\tau\\) (Section 2.4).'),
 ('p',
  '**Lemma 1.** If an exact match \\(\\mu\\) fails local pruning, so does each of its four neighbours.'),
 ('p',
- '*Proof.* A neighbour \\(\\nu\\) that shares the end of \\(\\mu\\) has \\(e(\\nu)=e(\\mu)\\) and \\(c(\\nu)=1>c(\\mu)=0\\). A '
- 'neighbour that shares the start ends on an adjacent diagonal, and one insertion or deletion from \\(e(\\mu)\\) '
- 'reaches a cell on that diagonal at or beyond \\(e(\\nu)\\). The least remaining cost does not increase along a '
- 'diagonal [@Ukkonen1985], so \\(h(e(\\mu)) \\le 1 + h(e(\\nu))\\) and \\(c(\\mu)+h(e(\\mu)) \\le c(\\nu)+h(e(\\nu))\\). In '
- 'both cases the pruning test value of \\(\\nu\\) is at least that of \\(\\mu\\). \\(\\square\\)'),
+ '*Proof.* Each neighbour matches the same seed as \\(\\mu\\), so it is tested against the same \\(\\tau\\). A '
+ 'neighbour \\(\\nu\\) that shares the end of \\(\\mu\\) has \\(e(\\nu)=e(\\mu)\\) and \\(c(\\nu)=1>c(\\mu)=0\\). A neighbour '
+ 'that shares the start ends on an adjacent diagonal, and one insertion or deletion from \\(e(\\mu)\\) reaches a '
+ 'cell on that diagonal at or beyond \\(e(\\nu)\\). The least cost from a cell to beyond the following seeds does '
+ "not increase further along its diagonal, by Ukkonen's lemma applied to the reversed sequences [@Ukkonen1985], "
+ 'so \\(h(e(\\mu)) \\le 1 + h(e(\\nu))\\) and \\(c(\\mu)+h(e(\\mu)) \\le c(\\nu)+h(e(\\nu))\\). In both cases the pruning '
+ 'test value of \\(\\nu\\) is at least that of \\(\\mu\\). \\(\\square\\)'),
 ('p',
  'Every neighbour that local pruning would keep is therefore inserted; one it would have discarded can only '
  'lower the heuristic, which remains a lower bound, so the alignment stays exact. Neighbours sharing the start '
@@ -274,10 +276,10 @@ BODY = [
  '*Proof.* An alignment that leaves the band visits diagonal \\(d_h+1\\) or \\(d_\\ell-1\\). Consider \\(d=d_h+1 > '
  '\\max(0,\\delta)\\); the case below the band is symmetric. Starting on diagonal 0, the alignment contains '
  'insertions totalling at least \\(d\\) letters to reach \\(d\\), and deletions totalling at least \\(d-\\delta\\) '
- 'letters to end on \\(\\delta\\). These form at least one gap of each kind, and since \\(g\\) is subadditive (for '
- 'two-piece costs, with the usual convention that the longer piece has the lower extension cost), their total '
- 'cost is at least \\(g(d)+g(d-\\delta)=L(d)\\). Every alignment outside the band therefore costs at least '
- '\\(\\min\\bigl(L(d_h+1), L(d_\\ell-1)\\bigr)\\). \\(\\square\\)'),
+ 'letters to end on \\(\\delta\\). These form at least one gap of each kind, and since \\(g\\) is subadditive, as is '
+ 'the minimum of two such functions for two-piece costs, their total cost is at least \\(g(d)+g(d-\\delta)=L(d)\\). '
+ 'Every alignment outside the band therefore costs at least \\(\\min\\bigl(L(d_h+1), L(d_\\ell-1)\\bigr)\\). '
+ '\\(\\square\\)'),
 ('p',
  'Such bounds underlie band doubling [@Ukkonen1985] and verify narrow-band results in software [@Gibrat2018] and '
  'hardware [@Fujiki2020]; here each vector lane of an inter-sequence batch evaluates its own certificate, and '
