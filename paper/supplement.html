@@ -259,77 +259,77 @@ td.wrap { vertical-align: top; }
 <p>Table S2 gives the results for the other alignment modes, each compared on one pinned thread of the Skylake-X with the aligners that support the same mode. Table S3 gives the complete gap-affine comparison at costs (4, 6, 2). Table S4 gives the mean and median time per alignment at unit costs on every dataset, Table S5 the samples, Table S6 the memory and Table S7 the short-read batch. The approximate aligners of the A*PA2 benchmark, WFA-adaptive and Block Aligner, are no longer run. KSW2 and BSAlign, which ran out of time or memory on most datasets of 500&nbsp;kbp and more, are in the benchmark's own tables (benchmarks/README.md in the repository).</p>
 </div>
 <div class="table-wrap" id="tab-modes"><table>
-<caption><b>Table S2.</b> Other modes: mean time per pair on one pinned thread, the faster of two passes. Every tool's costs or scores agree on every pair.</caption>
+<caption><b>Table S2.</b> Other modes: mean time per pair in ms on one pinned thread, the faster of two passes. Every tool's costs or scores agree on every pair.</caption>
 <thead><tr><th class="l">Workload</th><th>dinara-align</th><th class="l">Next fastest</th></tr></thead>
 <tbody>
-<tr><td class="l wrap">Infix at unit costs, 1&nbsp;kbp read at 10% in a 3&nbsp;kbp window</td><td class="best"><b>132&nbsp;µs</b></td><td class="l">Edlib 273&nbsp;µs</td></tr>
-<tr><td class="l wrap">Infix at unit costs, 10&nbsp;kbp read at 5% in a 30&nbsp;kbp window</td><td class="best"><b>2.01&nbsp;ms</b></td><td class="l">Edlib 13.6&nbsp;ms</td></tr>
-<tr><td class="l wrap">Prefix at unit costs, 1&nbsp;kbp read against 2&nbsp;kbp</td><td class="best"><b>44&nbsp;µs</b></td><td class="l">WFA2-lib 47&nbsp;µs</td></tr>
-<tr><td class="l wrap">Infix at (4, 6, 2), 1&nbsp;kbp read in a 3&nbsp;kbp window</td><td class="best"><b>3.93&nbsp;ms</b></td><td class="l">WFA2-lib 3.94&nbsp;ms</td></tr>
-<tr><td class="l wrap">Extension, match 2 at (4, 6, 2)</td><td class="best"><b>734&nbsp;µs</b></td><td class="l">KSW2 2.06&nbsp;ms</td></tr>
-<tr><td class="l wrap">Extension with an end bonus of 50</td><td class="best"><b>166&nbsp;µs</b></td><td class="l">KSW2 1.23&nbsp;ms</td></tr>
-<tr><td class="l wrap">Two-piece gaps (4, 6, 2, 24, 1), 5&nbsp;kbp at 5%</td><td class="best"><b>8.3&nbsp;ms</b></td><td class="l">WFA2-lib 15.9&nbsp;ms</td></tr>
-<tr><td class="l wrap">Table, global, 1&nbsp;kbp at 10%</td><td class="best"><b>198&nbsp;µs</b></td><td class="l">parasail 2.92&nbsp;ms</td></tr>
-<tr><td class="l wrap">Table, local, 1&nbsp;kbp read in a 10&nbsp;kbp window</td><td class="best"><b>1.91&nbsp;ms</b></td><td class="l">SSW 3.27&nbsp;ms</td></tr>
-<tr><td class="l wrap">Local, 600 short noisy pairs (20–700&nbsp;bp)</td><td class="best"><b>32&nbsp;µs</b></td><td class="l">SSW 51&nbsp;µs</td></tr>
-<tr><td class="l wrap">Local, 1&nbsp;kbp read at 10% in a 10&nbsp;kbp window</td><td class="best"><b>1.36&nbsp;ms</b></td><td class="l">SSW 3.15&nbsp;ms</td></tr>
-<tr><td class="l wrap">Local, 10&nbsp;kbp at 5% against 12&nbsp;kbp</td><td class="best"><b>17.5&nbsp;ms</b></td><td class="l">SSW 85.1&nbsp;ms</td></tr>
-<tr><td class="l wrap">Overlap of 2&nbsp;kbp reads by 0.5–1.5&nbsp;kbp</td><td class="best"><b>724&nbsp;µs</b></td><td class="l">parasail 15.4&nbsp;ms</td></tr>
-<tr><td class="l wrap">Infix with a reward, 1&nbsp;kbp read in a 3&nbsp;kbp window</td><td class="best"><b>693&nbsp;µs</b></td><td class="l">parasail 15.2&nbsp;ms</td></tr>
+<tr><td class="l wrap">Infix at unit costs, 1&nbsp;kbp read at 10% in a 3&nbsp;kbp window</td><td class="best"><b>0.132</b></td><td class="l">Edlib 0.273</td></tr>
+<tr><td class="l wrap">Infix at unit costs, 10&nbsp;kbp read at 5% in a 30&nbsp;kbp window</td><td class="best"><b>2.01</b></td><td class="l">Edlib 13.6</td></tr>
+<tr><td class="l wrap">Prefix at unit costs, 1&nbsp;kbp read against 2&nbsp;kbp</td><td class="best"><b>0.044</b></td><td class="l">WFA2-lib 0.047</td></tr>
+<tr><td class="l wrap">Infix at (4, 6, 2), 1&nbsp;kbp read in a 3&nbsp;kbp window</td><td class="best"><b>3.93</b></td><td class="l">WFA2-lib 3.94</td></tr>
+<tr><td class="l wrap">Extension, match 2 at (4, 6, 2)</td><td class="best"><b>0.734</b></td><td class="l">KSW2 2.06</td></tr>
+<tr><td class="l wrap">Extension with an end bonus of 50</td><td class="best"><b>0.166</b></td><td class="l">KSW2 1.23</td></tr>
+<tr><td class="l wrap">Two-piece gaps (4, 6, 2, 24, 1), 5&nbsp;kbp at 5%</td><td class="best"><b>8.30</b></td><td class="l">WFA2-lib 15.9</td></tr>
+<tr><td class="l wrap">Table, global, 1&nbsp;kbp at 10%</td><td class="best"><b>0.198</b></td><td class="l">parasail 2.92</td></tr>
+<tr><td class="l wrap">Table, local, 1&nbsp;kbp read in a 10&nbsp;kbp window</td><td class="best"><b>1.91</b></td><td class="l">SSW 3.27</td></tr>
+<tr><td class="l wrap">Local, 600 short noisy pairs (20–700&nbsp;bp)</td><td class="best"><b>0.032</b></td><td class="l">SSW 0.051</td></tr>
+<tr><td class="l wrap">Local, 1&nbsp;kbp read at 10% in a 10&nbsp;kbp window</td><td class="best"><b>1.36</b></td><td class="l">SSW 3.15</td></tr>
+<tr><td class="l wrap">Local, 10&nbsp;kbp at 5% against 12&nbsp;kbp</td><td class="best"><b>17.5</b></td><td class="l">SSW 85.1</td></tr>
+<tr><td class="l wrap">Overlap of 2&nbsp;kbp reads by 0.5–1.5&nbsp;kbp</td><td class="best"><b>0.724</b></td><td class="l">parasail 15.4</td></tr>
+<tr><td class="l wrap">Infix with a reward, 1&nbsp;kbp read in a 3&nbsp;kbp window</td><td class="best"><b>0.693</b></td><td class="l">parasail 15.2</td></tr>
 </tbody></table></div>
 <div class="table-wrap" id="tab-affine_full"><table>
-<caption><b>Table S3.</b> Gap-affine alignment at costs (4, 6, 2), all datasets: mean time per alignment with a 30&nbsp;s budget per sample. Superscripts give the pairs completed where not all were; a dash marks a tool that completed none within 30&nbsp;s, o.o.m. one the 8&nbsp;GB limit stopped.</caption>
+<caption><b>Table S3.</b> Gap-affine alignment at costs (4, 6, 2), all datasets: mean time per alignment in ms, with a 30&nbsp;s budget per sample. Superscripts give the pairs completed where not all were; a dash marks a tool that completed none within 30&nbsp;s, o.o.m. one the 8&nbsp;GB limit stopped.</caption>
 <thead><tr><th class="l">Dataset</th><th>dinara-align</th><th>WFA</th><th>BiWFA</th><th>KSW2</th><th>BSAlign</th></tr></thead>
 <tbody>
-<tr><td class="l">ont-1k</td><td class="best"><b>112&nbsp;µs</b></td><td>186&nbsp;µs</td><td>304&nbsp;µs</td><td>1.1&nbsp;ms</td><td>336&nbsp;µs</td></tr>
-<tr><td class="l">ont-10k</td><td class="best"><b>1.71&nbsp;ms</b></td><td>4.8&nbsp;ms</td><td>5.84&nbsp;ms</td><td>29.8&nbsp;ms</td><td>7.84&nbsp;ms</td></tr>
-<tr><td class="l">ont-50k</td><td class="best"><b>22&nbsp;ms</b></td><td>63.5&nbsp;ms</td><td>54.9&nbsp;ms</td><td>343&nbsp;ms<sup>81/104</sup></td><td>87&nbsp;ms</td></tr>
+<tr><td class="l">ont-1k</td><td class="best"><b>0.112</b></td><td>0.186</td><td>0.304</td><td>1.10</td><td>0.336</td></tr>
+<tr><td class="l">ont-10k</td><td class="best"><b>1.71</b></td><td>4.80</td><td>5.84</td><td>29.8</td><td>7.84</td></tr>
+<tr><td class="l">ont-50k</td><td class="best"><b>22.0</b></td><td>63.5</td><td>54.9</td><td>343<sup>81/104</sup></td><td>87.0</td></tr>
 <tr><td class="l">ont-500k</td><td>–</td><td>o.o.m.</td><td>–</td><td>o.o.m.</td><td>o.o.m.</td></tr>
-<tr><td class="l">ont-500k-genvar</td><td class="best"><b>21.7&nbsp;s<sup>1/4</sup></b></td><td>o.o.m.</td><td>–</td><td>o.o.m.</td><td>o.o.m.</td></tr>
-<tr><td class="l">SARS-CoV-2</td><td class="best"><b>737&nbsp;µs</b></td><td>2.06&nbsp;ms</td><td>1.79&nbsp;ms</td><td>88.4&nbsp;ms</td><td>341&nbsp;ms</td></tr>
-<tr><td class="l">10&nbsp;kbp, 1%</td><td class="best"><b>208&nbsp;µs</b></td><td>461&nbsp;µs</td><td>650&nbsp;µs</td><td>21.3&nbsp;ms</td><td>37&nbsp;ms</td></tr>
-<tr><td class="l">10&nbsp;kbp, 5%</td><td class="best"><b>2.32&nbsp;ms</b></td><td>7.05&nbsp;ms</td><td>8.72&nbsp;ms</td><td>97.5&nbsp;ms</td><td>37&nbsp;ms</td></tr>
-<tr><td class="l">10&nbsp;kbp, 10%</td><td class="best"><b>7.18&nbsp;ms</b></td><td>22.7&nbsp;ms</td><td>27.3&nbsp;ms</td><td>204&nbsp;ms</td><td>37.3&nbsp;ms</td></tr>
-<tr><td class="l">10&nbsp;kbp, 20%</td><td class="best"><b>20.6&nbsp;ms</b></td><td>65.2&nbsp;ms</td><td>75.2&nbsp;ms</td><td>374&nbsp;ms<sup>81/99</sup></td><td>37.4&nbsp;ms</td></tr>
-<tr><td class="l">100&nbsp;kbp, 1%</td><td class="best"><b>14&nbsp;ms</b></td><td>39.7&nbsp;ms</td><td>39&nbsp;ms</td><td>2.44&nbsp;s</td><td>o.o.m.</td></tr>
-<tr><td class="l">100&nbsp;kbp, 5%</td><td class="best"><b>337&nbsp;ms</b></td><td>811&nbsp;ms</td><td>715&nbsp;ms</td><td>9.25&nbsp;s<sup>3/9</sup></td><td>o.o.m.</td></tr>
-<tr><td class="l">100&nbsp;kbp, 10%</td><td class="best"><b>1.19&nbsp;s</b></td><td>o.o.m.</td><td>2.43&nbsp;s</td><td>17.5&nbsp;s<sup>1/10</sup></td><td>o.o.m.</td></tr>
-<tr><td class="l">100&nbsp;kbp, 20%</td><td class="best"><b>3.62&nbsp;s<sup>8/10</sup></b></td><td>o.o.m.</td><td>7.34&nbsp;s<sup>4/10</sup></td><td>o.o.m.</td><td>o.o.m.</td></tr>
-<tr><td class="l">500&nbsp;kbp, 1%</td><td class="best"><b>490&nbsp;ms</b></td><td>1.29&nbsp;s</td><td>942&nbsp;ms</td><td>o.o.m.</td><td>o.o.m.</td></tr>
-<tr><td class="l">500&nbsp;kbp, 5%</td><td class="best"><b>9.92&nbsp;s<sup>3/4</sup></b></td><td>o.o.m.</td><td>19.4&nbsp;s<sup>1/4</sup></td><td>o.o.m.</td><td>o.o.m.</td></tr>
+<tr><td class="l">ont-500k-genvar</td><td class="best"><b>21,700<sup>1/4</sup></b></td><td>o.o.m.</td><td>–</td><td>o.o.m.</td><td>o.o.m.</td></tr>
+<tr><td class="l">SARS-CoV-2</td><td class="best"><b>0.737</b></td><td>2.06</td><td>1.79</td><td>88.4</td><td>341</td></tr>
+<tr><td class="l">10&nbsp;kbp, 1%</td><td class="best"><b>0.208</b></td><td>0.461</td><td>0.650</td><td>21.3</td><td>37.0</td></tr>
+<tr><td class="l">10&nbsp;kbp, 5%</td><td class="best"><b>2.32</b></td><td>7.05</td><td>8.72</td><td>97.5</td><td>37.0</td></tr>
+<tr><td class="l">10&nbsp;kbp, 10%</td><td class="best"><b>7.18</b></td><td>22.7</td><td>27.3</td><td>204</td><td>37.3</td></tr>
+<tr><td class="l">10&nbsp;kbp, 20%</td><td class="best"><b>20.6</b></td><td>65.2</td><td>75.2</td><td>374<sup>81/99</sup></td><td>37.4</td></tr>
+<tr><td class="l">100&nbsp;kbp, 1%</td><td class="best"><b>14.0</b></td><td>39.7</td><td>39.0</td><td>2,440</td><td>o.o.m.</td></tr>
+<tr><td class="l">100&nbsp;kbp, 5%</td><td class="best"><b>337</b></td><td>811</td><td>715</td><td>9,250<sup>3/9</sup></td><td>o.o.m.</td></tr>
+<tr><td class="l">100&nbsp;kbp, 10%</td><td class="best"><b>1,190</b></td><td>o.o.m.</td><td>2,430</td><td>17,500<sup>1/10</sup></td><td>o.o.m.</td></tr>
+<tr><td class="l">100&nbsp;kbp, 20%</td><td class="best"><b>3,620<sup>8/10</sup></b></td><td>o.o.m.</td><td>7,340<sup>4/10</sup></td><td>o.o.m.</td><td>o.o.m.</td></tr>
+<tr><td class="l">500&nbsp;kbp, 1%</td><td class="best"><b>490</b></td><td>1,290</td><td>942</td><td>o.o.m.</td><td>o.o.m.</td></tr>
+<tr><td class="l">500&nbsp;kbp, 5%</td><td class="best"><b>9,920<sup>3/4</sup></b></td><td>o.o.m.</td><td>19,400<sup>1/4</sup></td><td>o.o.m.</td><td>o.o.m.</td></tr>
 <tr><td class="l">500&nbsp;kbp, 10%</td><td>–</td><td>o.o.m.</td><td>–</td><td>o.o.m.</td><td>o.o.m.</td></tr>
 <tr><td class="l">500&nbsp;kbp, 20%</td><td>–</td><td>o.o.m.</td><td>–</td><td>o.o.m.</td><td>o.o.m.</td></tr>
-<tr><td class="l">1&nbsp;Mbp, 1%</td><td class="best"><b>2.32&nbsp;s</b></td><td>o.o.m.</td><td>3.92&nbsp;s</td><td>o.o.m.</td><td>o.o.m.</td></tr>
+<tr><td class="l">1&nbsp;Mbp, 1%</td><td class="best"><b>2,320</b></td><td>o.o.m.</td><td>3,920</td><td>o.o.m.</td><td>o.o.m.</td></tr>
 <tr><td class="l">1&nbsp;Mbp, 5%</td><td>–</td><td>o.o.m.</td><td>–</td><td>o.o.m.</td><td>o.o.m.</td></tr>
 <tr><td class="l">1&nbsp;Mbp, 10%</td><td>–</td><td>o.o.m.</td><td>–</td><td>o.o.m.</td><td>o.o.m.</td></tr>
 <tr><td class="l">1&nbsp;Mbp, 20%</td><td>–</td><td>o.o.m.</td><td>–</td><td>o.o.m.</td><td>o.o.m.</td></tr>
 </tbody></table></div>
 <div class="table-wrap" id="tab-unit_full"><table>
-<caption><b>Table S4.</b> Unit costs, all datasets: mean time per alignment, with the median in parentheses, traceback included, a 30&nbsp;s budget per sample. Superscripts give the pairs completed where not all were, the median over those; a dash marks a tool that completed none, o.o.m. one the 8&nbsp;GB limit stopped.</caption>
+<caption><b>Table S4.</b> Unit costs, all datasets: mean time per alignment in ms, with the median in parentheses, traceback included, a 30&nbsp;s budget per sample. Superscripts give the pairs completed where not all were, the median over those; a dash marks a tool that completed none, o.o.m. one the 8&nbsp;GB limit stopped.</caption>
 <thead><tr><th class="l">Dataset</th><th>dinara-align</th><th>A*PA2-full</th><th>A*PA2-simple</th><th>A*PA</th><th>Edlib</th><th>BiWFA</th><th>WFA</th><th>QuickEd</th></tr></thead>
 <tbody>
-<tr><td class="l">ont-1k</td><td class="best"><b>23&nbsp;µs (23&nbsp;µs)</b></td><td>81&nbsp;µs (89&nbsp;µs)</td><td>48&nbsp;µs (54&nbsp;µs)</td><td>612&nbsp;µs (556&nbsp;µs)</td><td>124&nbsp;µs (118&nbsp;µs)</td><td>44&nbsp;µs (46&nbsp;µs)</td><td>31&nbsp;µs (32&nbsp;µs)</td><td>75&nbsp;µs (73&nbsp;µs)</td></tr>
-<tr><td class="l">ont-10k</td><td class="best"><b>157&nbsp;µs (107&nbsp;µs)</b></td><td>391&nbsp;µs (264&nbsp;µs)</td><td>247&nbsp;µs (177&nbsp;µs)</td><td>15.3&nbsp;ms (3.29&nbsp;ms)</td><td>1.09&nbsp;ms (569&nbsp;µs)</td><td>741&nbsp;µs (278&nbsp;µs)</td><td>599&nbsp;µs (225&nbsp;µs)</td><td>688&nbsp;µs (451&nbsp;µs)</td></tr>
-<tr><td class="l">ont-50k</td><td class="best"><b>590&nbsp;µs (224&nbsp;µs)</b></td><td>1.27&nbsp;ms (513&nbsp;µs)</td><td>944&nbsp;µs (307&nbsp;µs)</td><td>263&nbsp;ms (9.26&nbsp;ms)</td><td>6.14&nbsp;ms (2.05&nbsp;ms)</td><td>7.43&nbsp;ms (872&nbsp;µs)</td><td>6.38&nbsp;ms (726&nbsp;µs)</td><td>2.31&nbsp;ms (1.05&nbsp;ms)</td></tr>
-<tr><td class="l">ont-500k</td><td class="best"><b>118&nbsp;ms (71.1&nbsp;ms)</b></td><td>283&nbsp;ms (110&nbsp;ms)</td><td>687&nbsp;ms (398&nbsp;ms)</td><td>–</td><td>5&nbsp;s (3.05&nbsp;s)</td><td>6.33&nbsp;s (2.19&nbsp;s)</td><td>o.o.m.</td><td>847&nbsp;ms (585&nbsp;ms)</td></tr>
-<tr><td class="l">ont-500k-genvar</td><td class="best"><b>156&nbsp;ms (154&nbsp;ms)</b></td><td>225&nbsp;ms (196&nbsp;ms)</td><td>511&nbsp;ms (564&nbsp;ms)</td><td>–</td><td>5.23&nbsp;s (5.2&nbsp;s)</td><td>6.2&nbsp;s (6.63&nbsp;s)</td><td>o.o.m.</td><td>1.39&nbsp;s (1.32&nbsp;s)</td></tr>
-<tr><td class="l">SARS-CoV-2</td><td class="best"><b>285&nbsp;µs (169&nbsp;µs)</b></td><td>2&nbsp;ms (2.07&nbsp;ms)</td><td>728&nbsp;µs (662&nbsp;µs)</td><td>6.49&nbsp;ms (2.07&nbsp;ms)</td><td>8.18&nbsp;ms (7.74&nbsp;ms)</td><td>909&nbsp;µs (456&nbsp;µs)</td><td>987&nbsp;µs (362&nbsp;µs)</td><td>3.9&nbsp;ms (4.27&nbsp;ms)</td></tr>
-<tr><td class="l">10&nbsp;kbp, 1%</td><td class="best"><b>33&nbsp;µs (27&nbsp;µs)</b></td><td>729&nbsp;µs (724&nbsp;µs)</td><td>160&nbsp;µs (156&nbsp;µs)</td><td>564&nbsp;µs (560&nbsp;µs)</td><td>3.22&nbsp;ms (3.21&nbsp;ms)</td><td>92&nbsp;µs (88&nbsp;µs)</td><td>66&nbsp;µs (58&nbsp;µs)</td><td>611&nbsp;µs (609&nbsp;µs)</td></tr>
-<tr><td class="l">10&nbsp;kbp, 5%</td><td class="best"><b>269&nbsp;µs (244&nbsp;µs)</b></td><td>797&nbsp;µs (794&nbsp;µs)</td><td>288&nbsp;µs (285&nbsp;µs)</td><td>1.08&nbsp;ms (1.07&nbsp;ms)</td><td>3.79&nbsp;ms (3.8&nbsp;ms)</td><td>642&nbsp;µs (635&nbsp;µs)</td><td>508&nbsp;µs (495&nbsp;µs)</td><td>1.25&nbsp;ms (1.24&nbsp;ms)</td></tr>
-<tr><td class="l">10&nbsp;kbp, 10%</td><td class="best"><b>354&nbsp;µs (357&nbsp;µs)</b></td><td>726&nbsp;µs (714&nbsp;µs)</td><td>450&nbsp;µs (439&nbsp;µs)</td><td>3.26&nbsp;ms (3.23&nbsp;ms)</td><td>4.56&nbsp;ms (4.55&nbsp;ms)</td><td>2.26&nbsp;ms (2.26&nbsp;ms)</td><td>1.81&nbsp;ms (1.66&nbsp;ms)</td><td>1.99&nbsp;ms (2.01&nbsp;ms)</td></tr>
-<tr><td class="l">10&nbsp;kbp, 20%</td><td class="best"><b>519&nbsp;µs (481&nbsp;µs)</b></td><td>1.44&nbsp;ms (1.44&nbsp;ms)</td><td>1.02&nbsp;ms (1.01&nbsp;ms)</td><td>205&nbsp;ms (203&nbsp;ms)</td><td>5.93&nbsp;ms (5.93&nbsp;ms)</td><td>7.33&nbsp;ms (7.32&nbsp;ms)</td><td>5.32&nbsp;ms (5.11&nbsp;ms)</td><td>1.55&nbsp;ms (1.56&nbsp;ms)</td></tr>
-<tr><td class="l">100&nbsp;kbp, 1%</td><td class="best"><b>1.5&nbsp;ms (1.16&nbsp;ms)</b></td><td>7.53&nbsp;ms (7.27&nbsp;ms)</td><td>3.26&nbsp;ms (3.14&nbsp;ms)</td><td>7.76&nbsp;ms (7.53&nbsp;ms)</td><td>57.6&nbsp;ms (57.4&nbsp;ms)</td><td>3.71&nbsp;ms (3.47&nbsp;ms)</td><td>4.05&nbsp;ms (4.28&nbsp;ms)</td><td>12.5&nbsp;ms (12.8&nbsp;ms)</td></tr>
-<tr><td class="l">100&nbsp;kbp, 5%</td><td class="best"><b>5.02&nbsp;ms (4.8&nbsp;ms)</b></td><td>8.45&nbsp;ms (8.11&nbsp;ms)</td><td>14.9&nbsp;ms (14.7&nbsp;ms)</td><td>14.4&nbsp;ms (14.8&nbsp;ms)</td><td>146&nbsp;ms (146&nbsp;ms)</td><td>63.3&nbsp;ms (63.2&nbsp;ms)</td><td>55&nbsp;ms (51.2&nbsp;ms)</td><td>24&nbsp;ms (23.8&nbsp;ms)</td></tr>
-<tr><td class="l">100&nbsp;kbp, 10%</td><td class="best"><b>7.21&nbsp;ms (7&nbsp;ms)</b></td><td>13.9&nbsp;ms (13.3&nbsp;ms)</td><td>27.6&nbsp;ms (27.5&nbsp;ms)</td><td>48.3&nbsp;ms (45.8&nbsp;ms)</td><td>247&nbsp;ms (247&nbsp;ms)</td><td>218&nbsp;ms (219&nbsp;ms)</td><td>182&nbsp;ms (170&nbsp;ms)</td><td>39&nbsp;ms (38.9&nbsp;ms)</td></tr>
-<tr><td class="l">100&nbsp;kbp, 20%</td><td class="best"><b>16&nbsp;ms (15.8&nbsp;ms)</b></td><td>36.7&nbsp;ms (36&nbsp;ms)</td><td>56.8&nbsp;ms (56.6&nbsp;ms)</td><td>–</td><td>446&nbsp;ms (446&nbsp;ms)</td><td>695&nbsp;ms (695&nbsp;ms)</td><td>551&nbsp;ms (510&nbsp;ms)</td><td>62.8&nbsp;ms (62.7&nbsp;ms)</td></tr>
-<tr><td class="l">500&nbsp;kbp, 1%</td><td class="best"><b>33.9&nbsp;ms (31.8&nbsp;ms)</b></td><td>42.7&nbsp;ms (41.3&nbsp;ms)</td><td>72.3&nbsp;ms (72.2&nbsp;ms)</td><td>41.2&nbsp;ms (39.2&nbsp;ms)</td><td>670&nbsp;ms (670&nbsp;ms)</td><td>80.8&nbsp;ms (79.4&nbsp;ms)</td><td>74.8&nbsp;ms (63.8&nbsp;ms)</td><td>124&nbsp;ms (124&nbsp;ms)</td></tr>
-<tr><td class="l">500&nbsp;kbp, 5%</td><td class="best"><b>31&nbsp;ms (29.8&nbsp;ms)</b></td><td>45&nbsp;ms (44.4&nbsp;ms)</td><td>214&nbsp;ms (213&nbsp;ms)</td><td>83.1&nbsp;ms (82.5&nbsp;ms)</td><td>2.28&nbsp;s (2.28&nbsp;s)</td><td>1.56&nbsp;s (1.56&nbsp;s)</td><td>1.48&nbsp;s (1.25&nbsp;s)</td><td>401&nbsp;ms (400&nbsp;ms)</td></tr>
-<tr><td class="l">500&nbsp;kbp, 10%</td><td class="best"><b>67.4&nbsp;ms (63.4&nbsp;ms)</b></td><td>119&nbsp;ms (117&nbsp;ms)</td><td>425&nbsp;ms (424&nbsp;ms)</td><td>406&nbsp;ms (406&nbsp;ms)</td><td>4.38&nbsp;s (4.38&nbsp;s)</td><td>5.45&nbsp;s (5.45&nbsp;s)</td><td>5.05&nbsp;s (4.25&nbsp;s)</td><td>711&nbsp;ms (711&nbsp;ms)</td></tr>
-<tr><td class="l">500&nbsp;kbp, 20%</td><td class="best"><b>254&nbsp;ms (254&nbsp;ms)</b></td><td>545&nbsp;ms (545&nbsp;ms)</td><td>901&nbsp;ms (896&nbsp;ms)</td><td>–</td><td>8.52&nbsp;s<sup>3/4</sup> (8.52&nbsp;s)</td><td>18&nbsp;s<sup>1/4</sup> (18&nbsp;s)</td><td>o.o.m.</td><td>1.24&nbsp;s (1.24&nbsp;s)</td></tr>
-<tr><td class="l">1&nbsp;Mbp, 1%</td><td class="best"><b>60.2&nbsp;ms (56.5&nbsp;ms)</b></td><td>89.1&nbsp;ms (87&nbsp;ms)</td><td>253&nbsp;ms (253&nbsp;ms)</td><td>97.3&nbsp;ms (93.3&nbsp;ms)</td><td>2.38&nbsp;s (2.38&nbsp;s)</td><td>366&nbsp;ms (364&nbsp;ms)</td><td>391&nbsp;ms (353&nbsp;ms)</td><td>398&nbsp;ms (398&nbsp;ms)</td></tr>
-<tr><td class="l">1&nbsp;Mbp, 5%</td><td class="best"><b>64.1&nbsp;ms (61.6&nbsp;ms)</b></td><td>118&nbsp;ms (117&nbsp;ms)</td><td>818&nbsp;ms (815&nbsp;ms)</td><td>183&nbsp;ms (182&nbsp;ms)</td><td>8.67&nbsp;s<sup>3/4</sup> (8.67&nbsp;s)</td><td>6.35&nbsp;s (6.35&nbsp;s)</td><td>o.o.m.</td><td>1.44&nbsp;s (1.44&nbsp;s)</td></tr>
-<tr><td class="l">1&nbsp;Mbp, 10%</td><td class="best"><b>184&nbsp;ms (185&nbsp;ms)</b></td><td>369&nbsp;ms (366&nbsp;ms)</td><td>1.65&nbsp;s (1.64&nbsp;s)</td><td>978&nbsp;ms (980&nbsp;ms)</td><td>17.3&nbsp;s<sup>1/4</sup> (17.3&nbsp;s)</td><td>22.2&nbsp;s<sup>1/4</sup> (22.2&nbsp;s)</td><td>o.o.m.</td><td>2.65&nbsp;s (2.65&nbsp;s)</td></tr>
-<tr><td class="l">1&nbsp;Mbp, 20%</td><td class="best"><b>901&nbsp;ms (701&nbsp;ms)</b></td><td>2.02&nbsp;s (2.01&nbsp;s)</td><td>3.52&nbsp;s (3.5&nbsp;s)</td><td>–</td><td>–</td><td>–</td><td>o.o.m.</td><td>4.8&nbsp;s (4.8&nbsp;s)</td></tr>
+<tr><td class="l">ont-1k</td><td class="best"><b>0.023 (0.023)</b></td><td>0.081 (0.089)</td><td>0.048 (0.054)</td><td>0.612 (0.556)</td><td>0.124 (0.118)</td><td>0.044 (0.046)</td><td>0.031 (0.032)</td><td>0.075 (0.073)</td></tr>
+<tr><td class="l">ont-10k</td><td class="best"><b>0.157 (0.107)</b></td><td>0.391 (0.264)</td><td>0.247 (0.177)</td><td>15.3 (3.29)</td><td>1.09 (0.569)</td><td>0.741 (0.278)</td><td>0.599 (0.225)</td><td>0.688 (0.451)</td></tr>
+<tr><td class="l">ont-50k</td><td class="best"><b>0.590 (0.224)</b></td><td>1.27 (0.513)</td><td>0.944 (0.307)</td><td>263 (9.26)</td><td>6.14 (2.05)</td><td>7.43 (0.872)</td><td>6.38 (0.726)</td><td>2.31 (1.05)</td></tr>
+<tr><td class="l">ont-500k</td><td class="best"><b>118 (71.1)</b></td><td>283 (110)</td><td>687 (398)</td><td>–</td><td>5,000 (3,050)</td><td>6,330 (2,190)</td><td>o.o.m.</td><td>847 (585)</td></tr>
+<tr><td class="l">ont-500k-genvar</td><td class="best"><b>156 (154)</b></td><td>225 (196)</td><td>511 (564)</td><td>–</td><td>5,230 (5,200)</td><td>6,200 (6,630)</td><td>o.o.m.</td><td>1,390 (1,320)</td></tr>
+<tr><td class="l">SARS-CoV-2</td><td class="best"><b>0.285 (0.169)</b></td><td>2.00 (2.07)</td><td>0.728 (0.662)</td><td>6.49 (2.07)</td><td>8.18 (7.74)</td><td>0.909 (0.456)</td><td>0.987 (0.362)</td><td>3.90 (4.27)</td></tr>
+<tr><td class="l">10&nbsp;kbp, 1%</td><td class="best"><b>0.033 (0.027)</b></td><td>0.729 (0.724)</td><td>0.160 (0.156)</td><td>0.564 (0.560)</td><td>3.22 (3.21)</td><td>0.092 (0.088)</td><td>0.066 (0.058)</td><td>0.611 (0.609)</td></tr>
+<tr><td class="l">10&nbsp;kbp, 5%</td><td class="best"><b>0.269 (0.244)</b></td><td>0.797 (0.794)</td><td>0.288 (0.285)</td><td>1.08 (1.07)</td><td>3.79 (3.80)</td><td>0.642 (0.635)</td><td>0.508 (0.495)</td><td>1.25 (1.24)</td></tr>
+<tr><td class="l">10&nbsp;kbp, 10%</td><td class="best"><b>0.354 (0.357)</b></td><td>0.726 (0.714)</td><td>0.450 (0.439)</td><td>3.26 (3.23)</td><td>4.56 (4.55)</td><td>2.26 (2.26)</td><td>1.81 (1.66)</td><td>1.99 (2.01)</td></tr>
+<tr><td class="l">10&nbsp;kbp, 20%</td><td class="best"><b>0.519 (0.481)</b></td><td>1.44 (1.44)</td><td>1.02 (1.01)</td><td>205 (203)</td><td>5.93 (5.93)</td><td>7.33 (7.32)</td><td>5.32 (5.11)</td><td>1.55 (1.56)</td></tr>
+<tr><td class="l">100&nbsp;kbp, 1%</td><td class="best"><b>1.50 (1.16)</b></td><td>7.53 (7.27)</td><td>3.26 (3.14)</td><td>7.76 (7.53)</td><td>57.6 (57.4)</td><td>3.71 (3.47)</td><td>4.05 (4.28)</td><td>12.5 (12.8)</td></tr>
+<tr><td class="l">100&nbsp;kbp, 5%</td><td class="best"><b>5.02 (4.80)</b></td><td>8.45 (8.11)</td><td>14.9 (14.7)</td><td>14.4 (14.8)</td><td>146 (146)</td><td>63.3 (63.2)</td><td>55.0 (51.2)</td><td>24.0 (23.8)</td></tr>
+<tr><td class="l">100&nbsp;kbp, 10%</td><td class="best"><b>7.21 (7.00)</b></td><td>13.9 (13.3)</td><td>27.6 (27.5)</td><td>48.3 (45.8)</td><td>247 (247)</td><td>218 (219)</td><td>182 (170)</td><td>39.0 (38.9)</td></tr>
+<tr><td class="l">100&nbsp;kbp, 20%</td><td class="best"><b>16.0 (15.8)</b></td><td>36.7 (36.0)</td><td>56.8 (56.6)</td><td>–</td><td>446 (446)</td><td>695 (695)</td><td>551 (510)</td><td>62.8 (62.7)</td></tr>
+<tr><td class="l">500&nbsp;kbp, 1%</td><td class="best"><b>33.9 (31.8)</b></td><td>42.7 (41.3)</td><td>72.3 (72.2)</td><td>41.2 (39.2)</td><td>670 (670)</td><td>80.8 (79.4)</td><td>74.8 (63.8)</td><td>124 (124)</td></tr>
+<tr><td class="l">500&nbsp;kbp, 5%</td><td class="best"><b>31.0 (29.8)</b></td><td>45.0 (44.4)</td><td>214 (213)</td><td>83.1 (82.5)</td><td>2,280 (2,280)</td><td>1,560 (1,560)</td><td>1,480 (1,250)</td><td>401 (400)</td></tr>
+<tr><td class="l">500&nbsp;kbp, 10%</td><td class="best"><b>67.4 (63.4)</b></td><td>119 (117)</td><td>425 (424)</td><td>406 (406)</td><td>4,380 (4,380)</td><td>5,450 (5,450)</td><td>5,050 (4,250)</td><td>711 (711)</td></tr>
+<tr><td class="l">500&nbsp;kbp, 20%</td><td class="best"><b>254 (254)</b></td><td>545 (545)</td><td>901 (896)</td><td>–</td><td>8,520<sup>3/4</sup> (8,520)</td><td>18,000<sup>1/4</sup> (18,000)</td><td>o.o.m.</td><td>1,240 (1,240)</td></tr>
+<tr><td class="l">1&nbsp;Mbp, 1%</td><td class="best"><b>60.2 (56.5)</b></td><td>89.1 (87.0)</td><td>253 (253)</td><td>97.3 (93.3)</td><td>2,380 (2,380)</td><td>366 (364)</td><td>391 (353)</td><td>398 (398)</td></tr>
+<tr><td class="l">1&nbsp;Mbp, 5%</td><td class="best"><b>64.1 (61.6)</b></td><td>118 (117)</td><td>818 (815)</td><td>183 (182)</td><td>8,670<sup>3/4</sup> (8,670)</td><td>6,350 (6,350)</td><td>o.o.m.</td><td>1,440 (1,440)</td></tr>
+<tr><td class="l">1&nbsp;Mbp, 10%</td><td class="best"><b>184 (185)</b></td><td>369 (366)</td><td>1,650 (1,640)</td><td>978 (980)</td><td>17,300<sup>1/4</sup> (17,300)</td><td>22,200<sup>1/4</sup> (22,200)</td><td>o.o.m.</td><td>2,650 (2,650)</td></tr>
+<tr><td class="l">1&nbsp;Mbp, 20%</td><td class="best"><b>901 (701)</b></td><td>2,020 (2,010)</td><td>3,520 (3,500)</td><td>–</td><td>–</td><td>–</td><td>o.o.m.</td><td>4,800 (4,800)</td></tr>
 </tbody></table></div>
 <div class="table-wrap" id="tab-datasets"><table>
 <caption><b>Table S5.</b> The samples: pairs in each sample of the dataset, their lengths and their divergence, the edit distance over the longer sequence, as QuickEd's Table S1 describes its datasets.</caption>
@@ -369,13 +369,13 @@ td.wrap { vertical-align: top; }
 <tr><td class="l">1&nbsp;Mbp, 20%</td><td>126 (186)</td><td>184 (196)</td><td>192 (205)</td><td>–</td><td>–</td><td>26 (31)</td></tr>
 </tbody></table></div>
 <div class="table-wrap" id="tab-batch"><table>
-<caption><b>Table S7.</b> Global scores of 500,000 short-read pairs; each time is the whole call.</caption>
+<caption><b>Table S7.</b> Global scores of 500,000 short-read pairs: each time is the whole call, in ms.</caption>
 <thead><tr><th class="l">Costs</th><th class="l">Threads</th><th>dinara-align</th><th>WFA2-lib</th><th>KSW2</th><th>parasail</th><th>Edlib</th></tr></thead>
 <tbody>
-<tr><td class="l">Affine (1, 2, 1)</td><td class="l">1</td><td class="best"><b>230&nbsp;ms</b></td><td>1.06&nbsp;s</td><td>10.9&nbsp;s</td><td>21.7&nbsp;s</td><td>–</td></tr>
-<tr><td class="l">Unit</td><td class="l">1</td><td class="best"><b>212&nbsp;ms</b></td><td>450&nbsp;ms</td><td>–</td><td>–</td><td>2.00&nbsp;s</td></tr>
-<tr><td class="l">Affine (1, 2, 1)</td><td class="l">10</td><td class="best"><b>27&nbsp;ms</b></td><td>116&nbsp;ms</td><td>1.21&nbsp;s</td><td>2.32&nbsp;s</td><td>–</td></tr>
-<tr><td class="l">Unit</td><td class="l">10</td><td class="best"><b>29&nbsp;ms</b></td><td>64&nbsp;ms</td><td>–</td><td>–</td><td>216&nbsp;ms</td></tr>
+<tr><td class="l">Affine (1, 2, 1)</td><td class="l">1</td><td class="best"><b>230</b></td><td>1,060</td><td>10,900</td><td>21,700</td><td>–</td></tr>
+<tr><td class="l">Unit</td><td class="l">1</td><td class="best"><b>212</b></td><td>450</td><td>–</td><td>–</td><td>2,000</td></tr>
+<tr><td class="l">Affine (1, 2, 1)</td><td class="l">10</td><td class="best"><b>27.0</b></td><td>116</td><td>1,210</td><td>2,320</td><td>–</td></tr>
+<tr><td class="l">Unit</td><td class="l">10</td><td class="best"><b>29.0</b></td><td>64.0</td><td>–</td><td>–</td><td>216</td></tr>
 </tbody></table></div>
 <div class="col">
 <h2 id="sS4"><span class="num">S4</span>Robustness</h2>

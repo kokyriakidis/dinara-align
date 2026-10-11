@@ -371,13 +371,13 @@ BODY = [
  '[#tab:affine]). On the nanopore reads it was 1.3 to 2.6 times faster than the fastest alternative, and on the '
  'simulated pairs 1.1 to 2.3 times ([#fig:sweeps]): 100 kbp pairs at 1, 5, 10 and 20% errors took 1.5, 5.0, 7.2 '
  'and 16.0 ms, against 7.5, 8.5, 13.9 and 36.7 ms for A*PA2-full and 12.5, 24.0, 39.0 and 62.8 ms for QuickEd, '
- 'and its narrowest margin was on 10 kbp pairs at 5%, 269 against 288 µs for A*PA2-simple. Over all 22 datasets '
- 'QuickEd took 3.0 to 22.5 times as long, 6.7 times in the geometric mean. At gap-affine costs dinara-align was '
- '1.7 to 3.8 times faster than WFA and BiWFA wherever a tool completed a dataset, and it completed more of the '
- 'long pairs than any other tool; in the other modes it was 1.0 to 22 times faster than the fastest tool '
- 'offering the same mode, the one tie lying within the variation between builds. Global scores of 500,000 '
- 'short-read pairs took 230 ms on one core and 27 ms on ten at (1, 2, 1), 4.6 and 4.3 times faster than '
- 'WFA2-lib.'),
+ 'and its narrowest margin was on 10 kbp pairs at 5%, 0.269 against 0.288 ms for A*PA2-simple. Over all 22 '
+ 'datasets QuickEd took 3.0 to 22.5 times as long, 6.7 times in the geometric mean. At gap-affine costs '
+ 'dinara-align was 1.7 to 3.8 times faster than WFA and BiWFA wherever a tool completed a dataset, and it '
+ 'completed more of the long pairs than any other tool; in the other modes it was 1.0 to 22 times faster than '
+ 'the fastest tool offering the same mode, the one tie lying within the variation between builds. Global scores '
+ 'of 500,000 short-read pairs took 230 ms on one core and 27 ms on ten at (1, 2, 1), 4.6 and 4.3 times faster '
+ 'than WFA2-lib.'),
 ('table', 'unit'),
 ('table', 'affine'),
 ('figure', 'sweeps'),
@@ -477,17 +477,17 @@ TABLES = {
   ]},
 "unit": {
   "fit": True,
-  "caption": "Unit-cost alignment of the A*PA2 real datasets by every exact aligner: mean time per alignment, traceback included, and below it the peak resident memory of the run in MB, as QuickEd reports it. t.o. marks a tool that completed no pair within 30 s and o.o.m. one the 8 GB limit stopped. The simulated datasets are in Fig. 2 and Supplementary Table S4.",
+  "caption": "Unit-cost alignment of the A*PA2 real datasets by every exact aligner: mean time per alignment in ms, traceback included, and below it the peak resident memory of the run in MB, as QuickEd reports it. t.o. marks a tool that completed no pair within 30 s and o.o.m. one the 8 GB limit stopped. The simulated datasets are in Fig. 2 and Supplementary Table S4.",
   "header": ["Dataset", "dinara-align", "A*PA2-full", "A*PA2-simple", "A*PA", "QuickEd", "Edlib", "BiWFA", "WFA", "BSAlign", "KSW2"],
   "align": "lrrrrrrrrrr",
   "rows": [
     ["*Mean time per alignment*", "", "", "", "", "", "", "", "", "", ""],
-    ["ont-1k (0.8 kbp)", "**23 µs**", "81 µs", "48 µs", "612 µs", "75 µs", "124 µs", "44 µs", "31 µs", "119 µs", "539 µs"],
-    ["ont-10k (3.6 kbp)", "**157 µs**", "391 µs", "247 µs", "15.3 ms", "688 µs", "1.09 ms", "741 µs", "599 µs", "1.30 ms", "13.1 ms"],
-    ["ont-50k (9.6 kbp)", "**590 µs**", "1.27 ms", "944 µs", "263 ms", "2.31 ms", "6.14 ms", "7.43 ms", "6.38 ms", "12.3 ms", "167 ms"],
-    ["ont-500k (642 kbp)", "**118 ms**", "283 ms", "687 ms", "t.o.", "847 ms", "5.00 s", "6.33 s", "o.o.m.", "t.o.", "o.o.m."],
-    ["ont-500k-genvar (663 kbp)", "**156 ms**", "225 ms", "511 ms", "t.o.", "1.39 s", "5.23 s", "6.20 s", "o.o.m.", "t.o.", "o.o.m."],
-    ["SARS-CoV-2 (30 kbp)", "**285 µs**", "2.00 ms", "728 µs", "6.49 ms", "3.90 ms", "8.18 ms", "909 µs", "987 µs", "47.1 ms", "68.5 ms"],
+    ["ont-1k (0.8 kbp)", "**0.023**", "0.081", "0.048", "0.612", "0.075", "0.124", "0.044", "0.031", "0.119", "0.539"],
+    ["ont-10k (3.6 kbp)", "**0.157**", "0.391", "0.247", "15.3", "0.688", "1.09", "0.741", "0.599", "1.30", "13.1"],
+    ["ont-50k (9.6 kbp)", "**0.590**", "1.27", "0.944", "263", "2.31", "6.14", "7.43", "6.38", "12.3", "167"],
+    ["ont-500k (642 kbp)", "**118**", "283", "687", "t.o.", "847", "5,000", "6,330", "o.o.m.", "t.o.", "o.o.m."],
+    ["ont-500k-genvar (663 kbp)", "**156**", "225", "511", "t.o.", "1,390", "5,230", "6,200", "o.o.m.", "t.o.", "o.o.m."],
+    ["SARS-CoV-2 (30 kbp)", "**0.285**", "2.00", "0.728", "6.49", "3.90", "8.18", "0.909", "0.987", "47.1", "68.5"],
     ["*Peak resident memory (MB)*", "", "", "", "", "", "", "", "", "", ""],
     ["ont-1k", "14", "5", "5", "6", "2", "7", "7", "8", "2", "7"],
     ["ont-10k", "16", "6", "6", "39", "6", "8", "8", "39", "25", "72"],
@@ -497,22 +497,22 @@ TABLES = {
     ["SARS-CoV-2", "18", "7", "6", "19", "15", "8", "9", "26", "215", "151"],
   ]},
 "affine": {
-  "caption": "Gap-affine alignment at costs (4, 6, 2) by every exact aligner that takes them: mean time per alignment, a 30 s budget per sample. Superscripts give the pairs completed where not all were; t.o. marks a tool that completed none and o.o.m. one the 8 GB limit stopped. Every dataset is in Supplementary Table S3.",
+  "caption": "Gap-affine alignment at costs (4, 6, 2) by every exact aligner that takes them: mean time per alignment in ms, a 30 s budget per sample. Superscripts give the pairs completed where not all were; t.o. marks a tool that completed none and o.o.m. one the 8 GB limit stopped. Every dataset is in Supplementary Table S3.",
   "header": ["Dataset", "dinara-align", "WFA", "BiWFA", "BSAlign", "KSW2"],
   "align": "lrrrrr",
   "rows": [
-    ["ont-1k", "**112 µs**", "186 µs", "304 µs", "336 µs", "1.10 ms"],
-    ["ont-10k", "**1.71 ms**", "4.80 ms", "5.84 ms", "7.84 ms", "29.8 ms"],
-    ["ont-50k", "**22.0 ms**", "63.5 ms", "54.9 ms", "87.0 ms", "343 ms^81/104"],
+    ["ont-1k", "**0.112**", "0.186", "0.304", "0.336", "1.10"],
+    ["ont-10k", "**1.71**", "4.80", "5.84", "7.84", "29.8"],
+    ["ont-50k", "**22.0**", "63.5", "54.9", "87.0", "343^81/104"],
     ["ont-500k", "t.o.", "o.o.m.", "t.o.", "o.o.m.", "o.o.m."],
-    ["ont-500k-genvar", "**21.7 s^1/4**", "o.o.m.", "t.o.", "o.o.m.", "o.o.m."],
-    ["SARS-CoV-2", "**737 µs**", "2.06 ms", "1.79 ms", "341 ms", "88.4 ms"],
-    ["10 kbp, 1%", "**208 µs**", "461 µs", "650 µs", "37.0 ms", "21.3 ms"],
-    ["10 kbp, 5%", "**2.32 ms**", "7.05 ms", "8.72 ms", "37.0 ms", "97.5 ms"],
-    ["10 kbp, 10%", "**7.18 ms**", "22.7 ms", "27.3 ms", "37.3 ms", "204 ms"],
-    ["10 kbp, 20%", "**20.6 ms**", "65.2 ms", "75.2 ms", "37.4 ms", "374 ms^81/99"],
-    ["100 kbp, 1%", "**14.0 ms**", "39.7 ms", "39.0 ms", "o.o.m.", "2.44 s"],
-    ["100 kbp, 5%", "**337 ms**", "811 ms", "715 ms", "o.o.m.", "9.25 s^3/9"],
+    ["ont-500k-genvar", "**21,700^1/4**", "o.o.m.", "t.o.", "o.o.m.", "o.o.m."],
+    ["SARS-CoV-2", "**0.737**", "2.06", "1.79", "341", "88.4"],
+    ["10 kbp, 1%", "**0.208**", "0.461", "0.650", "37.0", "21.3"],
+    ["10 kbp, 5%", "**2.32**", "7.05", "8.72", "37.0", "97.5"],
+    ["10 kbp, 10%", "**7.18**", "22.7", "27.3", "37.3", "204"],
+    ["10 kbp, 20%", "**20.6**", "65.2", "75.2", "37.4", "374^81/99"],
+    ["100 kbp, 1%", "**14.0**", "39.7", "39.0", "o.o.m.", "2,440"],
+    ["100 kbp, 5%", "**337**", "811", "715", "o.o.m.", "9,250^3/9"],
   ]},
 }
 

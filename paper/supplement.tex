@@ -193,58 +193,58 @@ dc980d7 & Inexact seeds from 128~kbp on AVX-512 & 100~kbp at 10\% 10.3 $\to$ 6.8
 Table S2 gives the results for the other alignment modes, each compared on one pinned thread of the Skylake-X with the aligners that support the same mode. Table S3 gives the complete gap-affine comparison at costs (4, 6, 2). Table S4 gives the mean and median time per alignment at unit costs on every dataset, Table S5 the samples, Table S6 the memory and Table S7 the short-read batch. The approximate aligners of the A*PA2 benchmark, WFA-adaptive and Block Aligner, are no longer run. KSW2 and BSAlign, which ran out of time or memory on most datasets of 500~kbp and more, are in the benchmark's own tables (benchmarks/README.md in the repository).
 
 \begin{table}[t]
-\caption{Other modes: mean time per pair on one pinned thread, the faster of two passes. Every tool's costs or scores agree on every pair.}\label{tab:modes}
+\caption{Other modes: mean time per pair in ms on one pinned thread, the faster of two passes. Every tool's costs or scores agree on every pair.}\label{tab:modes}
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
 \begin{tabular}{@{}>{\raggedright\arraybackslash}p{3.1cm}rl@{}}
 \toprule
 Workload & dinara-align & Next fastest \\
 \midrule
-Infix at unit costs, 1~kbp read at 10\% in a 3~kbp window & \textbf{132~\textmu s} & Edlib 273~\textmu s \\
-Infix at unit costs, 10~kbp read at 5\% in a 30~kbp window & \textbf{2.01~ms} & Edlib 13.6~ms \\
-Prefix at unit costs, 1~kbp read against 2~kbp & \textbf{44~\textmu s} & WFA2-lib 47~\textmu s \\
-Infix at (4, 6, 2), 1~kbp read in a 3~kbp window & \textbf{3.93~ms} & WFA2-lib 3.94~ms \\
-Extension, match 2 at (4, 6, 2) & \textbf{734~\textmu s} & KSW2 2.06~ms \\
-Extension with an end bonus of 50 & \textbf{166~\textmu s} & KSW2 1.23~ms \\
-Two-piece gaps (4, 6, 2, 24, 1), 5~kbp at 5\% & \textbf{8.3~ms} & WFA2-lib 15.9~ms \\
-Table, global, 1~kbp at 10\% & \textbf{198~\textmu s} & parasail 2.92~ms \\
-Table, local, 1~kbp read in a 10~kbp window & \textbf{1.91~ms} & SSW 3.27~ms \\
-Local, 600 short noisy pairs (20–700~bp) & \textbf{32~\textmu s} & SSW 51~\textmu s \\
-Local, 1~kbp read at 10\% in a 10~kbp window & \textbf{1.36~ms} & SSW 3.15~ms \\
-Local, 10~kbp at 5\% against 12~kbp & \textbf{17.5~ms} & SSW 85.1~ms \\
-Overlap of 2~kbp reads by 0.5–1.5~kbp & \textbf{724~\textmu s} & parasail 15.4~ms \\
-Infix with a reward, 1~kbp read in a 3~kbp window & \textbf{693~\textmu s} & parasail 15.2~ms \\
+Infix at unit costs, 1~kbp read at 10\% in a 3~kbp window & \textbf{0.132} & Edlib 0.273 \\
+Infix at unit costs, 10~kbp read at 5\% in a 30~kbp window & \textbf{2.01} & Edlib 13.6 \\
+Prefix at unit costs, 1~kbp read against 2~kbp & \textbf{0.044} & WFA2-lib 0.047 \\
+Infix at (4, 6, 2), 1~kbp read in a 3~kbp window & \textbf{3.93} & WFA2-lib 3.94 \\
+Extension, match 2 at (4, 6, 2) & \textbf{0.734} & KSW2 2.06 \\
+Extension with an end bonus of 50 & \textbf{0.166} & KSW2 1.23 \\
+Two-piece gaps (4, 6, 2, 24, 1), 5~kbp at 5\% & \textbf{8.30} & WFA2-lib 15.9 \\
+Table, global, 1~kbp at 10\% & \textbf{0.198} & parasail 2.92 \\
+Table, local, 1~kbp read in a 10~kbp window & \textbf{1.91} & SSW 3.27 \\
+Local, 600 short noisy pairs (20–700~bp) & \textbf{0.032} & SSW 0.051 \\
+Local, 1~kbp read at 10\% in a 10~kbp window & \textbf{1.36} & SSW 3.15 \\
+Local, 10~kbp at 5\% against 12~kbp & \textbf{17.5} & SSW 85.1 \\
+Overlap of 2~kbp reads by 0.5–1.5~kbp & \textbf{0.724} & parasail 15.4 \\
+Infix with a reward, 1~kbp read in a 3~kbp window & \textbf{0.693} & parasail 15.2 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \begin{table}[t]
-\caption{Gap-affine alignment at costs (4, 6, 2), all datasets: mean time per alignment with a 30~s budget per sample. Superscripts give the pairs completed where not all were; a dash marks a tool that completed none within 30~s, o.o.m. one the 8~GB limit stopped.}\label{tab:affine_full}
+\caption{Gap-affine alignment at costs (4, 6, 2), all datasets: mean time per alignment in ms, with a 30~s budget per sample. Superscripts give the pairs completed where not all were; a dash marks a tool that completed none within 30~s, o.o.m. one the 8~GB limit stopped.}\label{tab:affine_full}
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
 \resizebox{\textwidth}{!}{\begin{tabular}{@{}lrrrrr@{}}
 \toprule
 Dataset & dinara-align & WFA & BiWFA & KSW2 & BSAlign \\
 \midrule
-ont-1k & \textbf{112~\textmu s} & 186~\textmu s & 304~\textmu s & 1.1~ms & 336~\textmu s \\
-ont-10k & \textbf{1.71~ms} & 4.8~ms & 5.84~ms & 29.8~ms & 7.84~ms \\
-ont-50k & \textbf{22~ms} & 63.5~ms & 54.9~ms & 343~ms$^{81/104}$ & 87~ms \\
+ont-1k & \textbf{0.112} & 0.186 & 0.304 & 1.10 & 0.336 \\
+ont-10k & \textbf{1.71} & 4.80 & 5.84 & 29.8 & 7.84 \\
+ont-50k & \textbf{22.0} & 63.5 & 54.9 & 343$^{81/104}$ & 87.0 \\
 ont-500k & – & o.o.m. & – & o.o.m. & o.o.m. \\
-ont-500k-genvar & \textbf{21.7~s$^{1/4}$} & o.o.m. & – & o.o.m. & o.o.m. \\
-SARS-CoV-2 & \textbf{737~\textmu s} & 2.06~ms & 1.79~ms & 88.4~ms & 341~ms \\
-10~kbp, 1\% & \textbf{208~\textmu s} & 461~\textmu s & 650~\textmu s & 21.3~ms & 37~ms \\
-10~kbp, 5\% & \textbf{2.32~ms} & 7.05~ms & 8.72~ms & 97.5~ms & 37~ms \\
-10~kbp, 10\% & \textbf{7.18~ms} & 22.7~ms & 27.3~ms & 204~ms & 37.3~ms \\
-10~kbp, 20\% & \textbf{20.6~ms} & 65.2~ms & 75.2~ms & 374~ms$^{81/99}$ & 37.4~ms \\
-100~kbp, 1\% & \textbf{14~ms} & 39.7~ms & 39~ms & 2.44~s & o.o.m. \\
-100~kbp, 5\% & \textbf{337~ms} & 811~ms & 715~ms & 9.25~s$^{3/9}$ & o.o.m. \\
-100~kbp, 10\% & \textbf{1.19~s} & o.o.m. & 2.43~s & 17.5~s$^{1/10}$ & o.o.m. \\
-100~kbp, 20\% & \textbf{3.62~s$^{8/10}$} & o.o.m. & 7.34~s$^{4/10}$ & o.o.m. & o.o.m. \\
-500~kbp, 1\% & \textbf{490~ms} & 1.29~s & 942~ms & o.o.m. & o.o.m. \\
-500~kbp, 5\% & \textbf{9.92~s$^{3/4}$} & o.o.m. & 19.4~s$^{1/4}$ & o.o.m. & o.o.m. \\
+ont-500k-genvar & \textbf{21{,}700$^{1/4}$} & o.o.m. & – & o.o.m. & o.o.m. \\
+SARS-CoV-2 & \textbf{0.737} & 2.06 & 1.79 & 88.4 & 341 \\
+10~kbp, 1\% & \textbf{0.208} & 0.461 & 0.650 & 21.3 & 37.0 \\
+10~kbp, 5\% & \textbf{2.32} & 7.05 & 8.72 & 97.5 & 37.0 \\
+10~kbp, 10\% & \textbf{7.18} & 22.7 & 27.3 & 204 & 37.3 \\
+10~kbp, 20\% & \textbf{20.6} & 65.2 & 75.2 & 374$^{81/99}$ & 37.4 \\
+100~kbp, 1\% & \textbf{14.0} & 39.7 & 39.0 & 2{,}440 & o.o.m. \\
+100~kbp, 5\% & \textbf{337} & 811 & 715 & 9{,}250$^{3/9}$ & o.o.m. \\
+100~kbp, 10\% & \textbf{1{,}190} & o.o.m. & 2{,}430 & 17{,}500$^{1/10}$ & o.o.m. \\
+100~kbp, 20\% & \textbf{3{,}620$^{8/10}$} & o.o.m. & 7{,}340$^{4/10}$ & o.o.m. & o.o.m. \\
+500~kbp, 1\% & \textbf{490} & 1{,}290 & 942 & o.o.m. & o.o.m. \\
+500~kbp, 5\% & \textbf{9{,}920$^{3/4}$} & o.o.m. & 19{,}400$^{1/4}$ & o.o.m. & o.o.m. \\
 500~kbp, 10\% & – & o.o.m. & – & o.o.m. & o.o.m. \\
 500~kbp, 20\% & – & o.o.m. & – & o.o.m. & o.o.m. \\
-1~Mbp, 1\% & \textbf{2.32~s} & o.o.m. & 3.92~s & o.o.m. & o.o.m. \\
+1~Mbp, 1\% & \textbf{2{,}320} & o.o.m. & 3{,}920 & o.o.m. & o.o.m. \\
 1~Mbp, 5\% & – & o.o.m. & – & o.o.m. & o.o.m. \\
 1~Mbp, 10\% & – & o.o.m. & – & o.o.m. & o.o.m. \\
 1~Mbp, 20\% & – & o.o.m. & – & o.o.m. & o.o.m. \\
@@ -253,35 +253,35 @@ SARS-CoV-2 & \textbf{737~\textmu s} & 2.06~ms & 1.79~ms & 88.4~ms & 341~ms \\
 \end{table}
 
 \begin{table}[t]
-\caption{Unit costs, all datasets: mean time per alignment, with the median in parentheses, traceback included, a 30~s budget per sample. Superscripts give the pairs completed where not all were, the median over those; a dash marks a tool that completed none, o.o.m. one the 8~GB limit stopped.}\label{tab:unit_full}
+\caption{Unit costs, all datasets: mean time per alignment in ms, with the median in parentheses, traceback included, a 30~s budget per sample. Superscripts give the pairs completed where not all were, the median over those; a dash marks a tool that completed none, o.o.m. one the 8~GB limit stopped.}\label{tab:unit_full}
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
 \resizebox{\textwidth}{!}{\begin{tabular}{@{}lrrrrrrrr@{}}
 \toprule
 Dataset & dinara-align & A*PA2-full & A*PA2-simple & A*PA & Edlib & BiWFA & WFA & QuickEd \\
 \midrule
-ont-1k & \textbf{23~\textmu s (23~\textmu s)} & 81~\textmu s (89~\textmu s) & 48~\textmu s (54~\textmu s) & 612~\textmu s (556~\textmu s) & 124~\textmu s (118~\textmu s) & 44~\textmu s (46~\textmu s) & 31~\textmu s (32~\textmu s) & 75~\textmu s (73~\textmu s) \\
-ont-10k & \textbf{157~\textmu s (107~\textmu s)} & 391~\textmu s (264~\textmu s) & 247~\textmu s (177~\textmu s) & 15.3~ms (3.29~ms) & 1.09~ms (569~\textmu s) & 741~\textmu s (278~\textmu s) & 599~\textmu s (225~\textmu s) & 688~\textmu s (451~\textmu s) \\
-ont-50k & \textbf{590~\textmu s (224~\textmu s)} & 1.27~ms (513~\textmu s) & 944~\textmu s (307~\textmu s) & 263~ms (9.26~ms) & 6.14~ms (2.05~ms) & 7.43~ms (872~\textmu s) & 6.38~ms (726~\textmu s) & 2.31~ms (1.05~ms) \\
-ont-500k & \textbf{118~ms (71.1~ms)} & 283~ms (110~ms) & 687~ms (398~ms) & – & 5~s (3.05~s) & 6.33~s (2.19~s) & o.o.m. & 847~ms (585~ms) \\
-ont-500k-genvar & \textbf{156~ms (154~ms)} & 225~ms (196~ms) & 511~ms (564~ms) & – & 5.23~s (5.2~s) & 6.2~s (6.63~s) & o.o.m. & 1.39~s (1.32~s) \\
-SARS-CoV-2 & \textbf{285~\textmu s (169~\textmu s)} & 2~ms (2.07~ms) & 728~\textmu s (662~\textmu s) & 6.49~ms (2.07~ms) & 8.18~ms (7.74~ms) & 909~\textmu s (456~\textmu s) & 987~\textmu s (362~\textmu s) & 3.9~ms (4.27~ms) \\
-10~kbp, 1\% & \textbf{33~\textmu s (27~\textmu s)} & 729~\textmu s (724~\textmu s) & 160~\textmu s (156~\textmu s) & 564~\textmu s (560~\textmu s) & 3.22~ms (3.21~ms) & 92~\textmu s (88~\textmu s) & 66~\textmu s (58~\textmu s) & 611~\textmu s (609~\textmu s) \\
-10~kbp, 5\% & \textbf{269~\textmu s (244~\textmu s)} & 797~\textmu s (794~\textmu s) & 288~\textmu s (285~\textmu s) & 1.08~ms (1.07~ms) & 3.79~ms (3.8~ms) & 642~\textmu s (635~\textmu s) & 508~\textmu s (495~\textmu s) & 1.25~ms (1.24~ms) \\
-10~kbp, 10\% & \textbf{354~\textmu s (357~\textmu s)} & 726~\textmu s (714~\textmu s) & 450~\textmu s (439~\textmu s) & 3.26~ms (3.23~ms) & 4.56~ms (4.55~ms) & 2.26~ms (2.26~ms) & 1.81~ms (1.66~ms) & 1.99~ms (2.01~ms) \\
-10~kbp, 20\% & \textbf{519~\textmu s (481~\textmu s)} & 1.44~ms (1.44~ms) & 1.02~ms (1.01~ms) & 205~ms (203~ms) & 5.93~ms (5.93~ms) & 7.33~ms (7.32~ms) & 5.32~ms (5.11~ms) & 1.55~ms (1.56~ms) \\
-100~kbp, 1\% & \textbf{1.5~ms (1.16~ms)} & 7.53~ms (7.27~ms) & 3.26~ms (3.14~ms) & 7.76~ms (7.53~ms) & 57.6~ms (57.4~ms) & 3.71~ms (3.47~ms) & 4.05~ms (4.28~ms) & 12.5~ms (12.8~ms) \\
-100~kbp, 5\% & \textbf{5.02~ms (4.8~ms)} & 8.45~ms (8.11~ms) & 14.9~ms (14.7~ms) & 14.4~ms (14.8~ms) & 146~ms (146~ms) & 63.3~ms (63.2~ms) & 55~ms (51.2~ms) & 24~ms (23.8~ms) \\
-100~kbp, 10\% & \textbf{7.21~ms (7~ms)} & 13.9~ms (13.3~ms) & 27.6~ms (27.5~ms) & 48.3~ms (45.8~ms) & 247~ms (247~ms) & 218~ms (219~ms) & 182~ms (170~ms) & 39~ms (38.9~ms) \\
-100~kbp, 20\% & \textbf{16~ms (15.8~ms)} & 36.7~ms (36~ms) & 56.8~ms (56.6~ms) & – & 446~ms (446~ms) & 695~ms (695~ms) & 551~ms (510~ms) & 62.8~ms (62.7~ms) \\
-500~kbp, 1\% & \textbf{33.9~ms (31.8~ms)} & 42.7~ms (41.3~ms) & 72.3~ms (72.2~ms) & 41.2~ms (39.2~ms) & 670~ms (670~ms) & 80.8~ms (79.4~ms) & 74.8~ms (63.8~ms) & 124~ms (124~ms) \\
-500~kbp, 5\% & \textbf{31~ms (29.8~ms)} & 45~ms (44.4~ms) & 214~ms (213~ms) & 83.1~ms (82.5~ms) & 2.28~s (2.28~s) & 1.56~s (1.56~s) & 1.48~s (1.25~s) & 401~ms (400~ms) \\
-500~kbp, 10\% & \textbf{67.4~ms (63.4~ms)} & 119~ms (117~ms) & 425~ms (424~ms) & 406~ms (406~ms) & 4.38~s (4.38~s) & 5.45~s (5.45~s) & 5.05~s (4.25~s) & 711~ms (711~ms) \\
-500~kbp, 20\% & \textbf{254~ms (254~ms)} & 545~ms (545~ms) & 901~ms (896~ms) & – & 8.52~s$^{3/4}$ (8.52~s) & 18~s$^{1/4}$ (18~s) & o.o.m. & 1.24~s (1.24~s) \\
-1~Mbp, 1\% & \textbf{60.2~ms (56.5~ms)} & 89.1~ms (87~ms) & 253~ms (253~ms) & 97.3~ms (93.3~ms) & 2.38~s (2.38~s) & 366~ms (364~ms) & 391~ms (353~ms) & 398~ms (398~ms) \\
-1~Mbp, 5\% & \textbf{64.1~ms (61.6~ms)} & 118~ms (117~ms) & 818~ms (815~ms) & 183~ms (182~ms) & 8.67~s$^{3/4}$ (8.67~s) & 6.35~s (6.35~s) & o.o.m. & 1.44~s (1.44~s) \\
-1~Mbp, 10\% & \textbf{184~ms (185~ms)} & 369~ms (366~ms) & 1.65~s (1.64~s) & 978~ms (980~ms) & 17.3~s$^{1/4}$ (17.3~s) & 22.2~s$^{1/4}$ (22.2~s) & o.o.m. & 2.65~s (2.65~s) \\
-1~Mbp, 20\% & \textbf{901~ms (701~ms)} & 2.02~s (2.01~s) & 3.52~s (3.5~s) & – & – & – & o.o.m. & 4.8~s (4.8~s) \\
+ont-1k & \textbf{0.023 (0.023)} & 0.081 (0.089) & 0.048 (0.054) & 0.612 (0.556) & 0.124 (0.118) & 0.044 (0.046) & 0.031 (0.032) & 0.075 (0.073) \\
+ont-10k & \textbf{0.157 (0.107)} & 0.391 (0.264) & 0.247 (0.177) & 15.3 (3.29) & 1.09 (0.569) & 0.741 (0.278) & 0.599 (0.225) & 0.688 (0.451) \\
+ont-50k & \textbf{0.590 (0.224)} & 1.27 (0.513) & 0.944 (0.307) & 263 (9.26) & 6.14 (2.05) & 7.43 (0.872) & 6.38 (0.726) & 2.31 (1.05) \\
+ont-500k & \textbf{118 (71.1)} & 283 (110) & 687 (398) & – & 5{,}000 (3{,}050) & 6{,}330 (2{,}190) & o.o.m. & 847 (585) \\
+ont-500k-genvar & \textbf{156 (154)} & 225 (196) & 511 (564) & – & 5{,}230 (5{,}200) & 6{,}200 (6{,}630) & o.o.m. & 1{,}390 (1{,}320) \\
+SARS-CoV-2 & \textbf{0.285 (0.169)} & 2.00 (2.07) & 0.728 (0.662) & 6.49 (2.07) & 8.18 (7.74) & 0.909 (0.456) & 0.987 (0.362) & 3.90 (4.27) \\
+10~kbp, 1\% & \textbf{0.033 (0.027)} & 0.729 (0.724) & 0.160 (0.156) & 0.564 (0.560) & 3.22 (3.21) & 0.092 (0.088) & 0.066 (0.058) & 0.611 (0.609) \\
+10~kbp, 5\% & \textbf{0.269 (0.244)} & 0.797 (0.794) & 0.288 (0.285) & 1.08 (1.07) & 3.79 (3.80) & 0.642 (0.635) & 0.508 (0.495) & 1.25 (1.24) \\
+10~kbp, 10\% & \textbf{0.354 (0.357)} & 0.726 (0.714) & 0.450 (0.439) & 3.26 (3.23) & 4.56 (4.55) & 2.26 (2.26) & 1.81 (1.66) & 1.99 (2.01) \\
+10~kbp, 20\% & \textbf{0.519 (0.481)} & 1.44 (1.44) & 1.02 (1.01) & 205 (203) & 5.93 (5.93) & 7.33 (7.32) & 5.32 (5.11) & 1.55 (1.56) \\
+100~kbp, 1\% & \textbf{1.50 (1.16)} & 7.53 (7.27) & 3.26 (3.14) & 7.76 (7.53) & 57.6 (57.4) & 3.71 (3.47) & 4.05 (4.28) & 12.5 (12.8) \\
+100~kbp, 5\% & \textbf{5.02 (4.80)} & 8.45 (8.11) & 14.9 (14.7) & 14.4 (14.8) & 146 (146) & 63.3 (63.2) & 55.0 (51.2) & 24.0 (23.8) \\
+100~kbp, 10\% & \textbf{7.21 (7.00)} & 13.9 (13.3) & 27.6 (27.5) & 48.3 (45.8) & 247 (247) & 218 (219) & 182 (170) & 39.0 (38.9) \\
+100~kbp, 20\% & \textbf{16.0 (15.8)} & 36.7 (36.0) & 56.8 (56.6) & – & 446 (446) & 695 (695) & 551 (510) & 62.8 (62.7) \\
+500~kbp, 1\% & \textbf{33.9 (31.8)} & 42.7 (41.3) & 72.3 (72.2) & 41.2 (39.2) & 670 (670) & 80.8 (79.4) & 74.8 (63.8) & 124 (124) \\
+500~kbp, 5\% & \textbf{31.0 (29.8)} & 45.0 (44.4) & 214 (213) & 83.1 (82.5) & 2{,}280 (2{,}280) & 1{,}560 (1{,}560) & 1{,}480 (1{,}250) & 401 (400) \\
+500~kbp, 10\% & \textbf{67.4 (63.4)} & 119 (117) & 425 (424) & 406 (406) & 4{,}380 (4{,}380) & 5{,}450 (5{,}450) & 5{,}050 (4{,}250) & 711 (711) \\
+500~kbp, 20\% & \textbf{254 (254)} & 545 (545) & 901 (896) & – & 8{,}520$^{3/4}$ (8{,}520) & 18{,}000$^{1/4}$ (18{,}000) & o.o.m. & 1{,}240 (1{,}240) \\
+1~Mbp, 1\% & \textbf{60.2 (56.5)} & 89.1 (87.0) & 253 (253) & 97.3 (93.3) & 2{,}380 (2{,}380) & 366 (364) & 391 (353) & 398 (398) \\
+1~Mbp, 5\% & \textbf{64.1 (61.6)} & 118 (117) & 818 (815) & 183 (182) & 8{,}670$^{3/4}$ (8{,}670) & 6{,}350 (6{,}350) & o.o.m. & 1{,}440 (1{,}440) \\
+1~Mbp, 10\% & \textbf{184 (185)} & 369 (366) & 1{,}650 (1{,}640) & 978 (980) & 17{,}300$^{1/4}$ (17{,}300) & 22{,}200$^{1/4}$ (22{,}200) & o.o.m. & 2{,}650 (2{,}650) \\
+1~Mbp, 20\% & \textbf{901 (701)} & 2{,}020 (2{,}010) & 3{,}520 (3{,}500) & – & – & – & o.o.m. & 4{,}800 (4{,}800) \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -338,17 +338,17 @@ ont-500k-genvar & 37 (63) & 48 (57) & 32 (55) & 4.8 (16) & 12 (27) & 20 (27) \\
 \end{table}
 
 \begin{table}[t]
-\caption{Global scores of 500{,}000 short-read pairs; each time is the whole call.}\label{tab:batch}
+\caption{Global scores of 500{,}000 short-read pairs: each time is the whole call, in ms.}\label{tab:batch}
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
 \begin{tabular}{@{}llrrrrr@{}}
 \toprule
 Costs & Threads & dinara-align & WFA2-lib & KSW2 & parasail & Edlib \\
 \midrule
-Affine (1, 2, 1) & 1 & \textbf{230~ms} & 1.06~s & 10.9~s & 21.7~s & – \\
-Unit & 1 & \textbf{212~ms} & 450~ms & – & – & 2.00~s \\
-Affine (1, 2, 1) & 10 & \textbf{27~ms} & 116~ms & 1.21~s & 2.32~s & – \\
-Unit & 10 & \textbf{29~ms} & 64~ms & – & – & 216~ms \\
+Affine (1, 2, 1) & 1 & \textbf{230} & 1{,}060 & 10{,}900 & 21{,}700 & – \\
+Unit & 1 & \textbf{212} & 450 & – & – & 2{,}000 \\
+Affine (1, 2, 1) & 10 & \textbf{27.0} & 116 & 1{,}210 & 2{,}320 & – \\
+Unit & 10 & \textbf{29.0} & 64.0 & – & – & 216 \\
 \bottomrule
 \end{tabular}
 \end{table}
