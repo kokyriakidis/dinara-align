@@ -201,6 +201,18 @@ Ideas from the work the paper cites, each checked (2026-10-10, M2 unless noted).
   times Edlib's speed on ont-10k and 22 times on 100 kbp pairs at 15%. A striped layout also needs a
   correction pass for the bits crossing between segments, each column, the chain it means to shorten.
   A*PA2 weighed it and left it too. Not built.
+- [-] **The aligners since A*PA2** (surveyed 2026-10-10). QuickEd (Doblas et al., Bioinformatics 2025):
+  an upper bound from overlapping windows of bit-parallel Myers (128 and 640 wide), then one tiled pass
+  with Ukkonen's cutoff; its bound runs 1 to 1.5% over on ultra-long and PromethION reads but takes
+  about a quarter of QuickEd's own time, and QuickEd itself runs about as fast as A*PA2 (1.03 times
+  A*PA2-simple, 0.94 times A*PA2-full). A bound only spares the rounds that fail, at most 16% of the
+  band's word-columns on genvar and 7% on ont-500k with the bound free; see "An upper bound on the
+  distance" below. Sassy and Sassy2 (Beeloo and Groot Koerkamp, 2025 to 2026): bit-vectors along the text,
+  four text chunks in the SIMD lanes, stopping once every cell passes k; for searching patterns up to
+  about 1,000 bp in long texts, a search mode dinara-align does not have. TALCO (Walia et al., HPCA 2024)
+  and miniwfa (Li) save traceback memory, not time; the GPU, FPGA and in-memory designs (WFA-GPU,
+  eWFA, GeneTEK, Scrooge, GenASM, RAPIDx) carry no idea to the CPU paths beyond what is here. Nothing
+  promised a gain past the builds' noise. Left.
 - [-] **Incremental doubling** (A*PA2, Section 3.8): a round after the first skips the rows the last
   round fixed, from horizontal differences stored along a fixed row in each tile. A*PA2 reports it only
   with three other methods, together 3 times faster. Measured what it could skip (2026-10-10, M2): the
