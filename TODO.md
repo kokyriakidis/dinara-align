@@ -237,8 +237,8 @@ Ideas from the work the paper cites, each checked (2026-10-10, M2 unless noted).
   ms. SeqMatcher (J. Supercomputing 2025) packs sequences to two bits with AVX-512: building the profile
   is 1.5% of a SARS-CoV-2 alignment and does not show on the 1 kbp reads (perf, Skylake-X), so packing has
   nothing to win; its banded mode is a fixed threshold, 3 to 10% less accurate. BSAlign's striped sweep
-  with an active F loop claims 2 times other SIMD aligners, where the anti-diagonal sweeps already run 1.3
-  to 2.3 times SSW and 5.4 times parasail; untried, uncertain. FILTR (2026) chooses a wavefront or an
+  with an active F loop claims 2 times other SIMD aligners; measured since, see "Rivals' implementations"
+  below. FILTR (2026) chooses a wavefront or an
   anti-diagonal schedule by divergence, as the quarter-matrix rule does; Medlib's (2025) threshold mode
   is `max_cost`'s early stop; hashed longest-common-extension queries (Ding et al., ESA 2023) are
   probabilistic, so not taken; composition and q-gram lower bounds (certified-alignment) are far looser
@@ -254,6 +254,37 @@ Ideas from the work the paper cites, each checked (2026-10-10, M2 unless noted).
   pruning reads the scores, and A*PA2 asserts it without a proof that carries over to these tiles; were
   it wrong, a round could accept a distance too high. It would also change every bit-parallel kernel's
   top word, which reads `+1` from above. Worth taking up only with that proof in hand.
+
+## Rivals' implementations of ideas dinara-align has, measured
+
+Each rival built at a pinned commit and run as the benchmarks run every aligner (2026-10-10, Skylake-X
+unless noted; BSAlign and QuickEd are x86-only).
+
+- [x] **BSAlign** (Shao and Ruan, Bioinformatics 2024), its striped kernels with the band off, so exact:
+  now a column of `pa_bench.py`. Its edit distance fills the whole matrix, 5 times slower than
+  dinara-align on ont-1k, 8 on ont-10k and 170 on SARS-CoV-2; its affine alignment (4, 6, 2), 8-bit
+  difference recurrences with an active F loop, 3 to 4.6 times slower on the ONT sets and 3 times faster
+  than KSW2. Its kernel fills about 0.38 ns a cell with the traceback, where the Gotoh sweep under a
+  table took 0.55 ns for the score alone in 32-bit lanes, which led to four changes, each holding CIGARs
+  byte for byte: the 16-bit bound charges the straight path, not every letter the dearest move; the
+  unreachable cell sits 4096 above 16 bits' least, not a quarter of the way down; the banded traceback
+  keeps each cell's decision, a byte, not three 32-bit scores; and the band proves itself from its own
+  score rather than after a sweep of the whole matrix for it. table-global went from 544 to 253 us on
+  the Skylake-X with the first and third, and to about 157 on the M2 with all four.
+- [x] **QuickEd** (Doblas et al., Bioinformatics 2025), bound-and-align beside the band doubling: on its
+  own simulated sets, 10,000 pairs of 10 kbp take dinara-align 0.3, 2.9 and 3.7 s at 1, 5 and 10% where
+  QuickEd takes 6.1, 12.6 and 19.9; see `quicked_bench.py`.
+- [x] **Parallel output-sensitive edit distance** (Ding et al., ESA 2023), its BFS-Hash and BFS-SA on one
+  thread, distance only against dinara-align's with its traceback: 40 to 150 times slower on 100 kbp
+  and 1 Mbp pairs at 1 and 5%, its design point, and about 100 times on divergent pairs.
+- [ ] **Divergent pairs at affine costs.** The wavefront's work grows with the cost times the length,
+  so where BSAlign's 8-bit matrix takes 1.5 ms for unrelated 2 kbp pairs the wavefront takes 4.6, and
+  1.2 to 1.3 times BSAlign's time at 30%. The table's certified band now sweeps unrelated 2 kbp pairs in
+  16 bits at 1.77 ms where the wavefront takes 3.99 (M2), even at 30% and 2 kbp, and slower at 10 kbp,
+  which still needs 32 bits. `Costs` place ties as WFA2-lib does, which the Gotoh walk does not, so a
+  switch needs the batch lanes' wavefront flags (see `lanes.band_flags`) in the single pair's band, and
+  a rule from the wavefront's work so far; difference recurrences would then give the band 8-bit lanes at
+  any length. Not built.
 
 ## From A*PA2's discussion
 
