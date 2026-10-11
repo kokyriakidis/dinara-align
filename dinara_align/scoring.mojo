@@ -79,7 +79,7 @@ from .modes import Alignment, Anchor, Band, Costs, Mode
 from .score_groups import grouped_scores
 from .scored import ANYWHERE, FROM_EDGE, FROM_ORIGIN, costs_deficit, started_span, sweep
 from .substitutions import SubstitutionLookup, shuffled_table, table_extremes, uniform_pair
-from .vector_score import optimal_band, reach_back, vector_align, vector_bytes
+from .vector_score import WIDTH as VECTOR_WIDTH, optimal_band, reach_back, vector_align, vector_bytes
 
 # region Memory
 
@@ -423,10 +423,11 @@ def global_on_host(
 
     Under a table of one match and one mismatch score whose costs a wavefront can grow by, the wavefront
     from both ends traces it through its own fronts, split where they would outgrow `stored_cells` (see
-    `gap_affine.wavefront_align`). Under any other table the score bounds a band of diagonals every optimal
-    path stays inside, swept by anti-diagonal with each cell's decision kept (see `optimal_band`,
-    `vector_align`), and a band whose decisions would pass `stored_cells`' bytes takes the linear-space path. A score `known` beforehand, as a local alignment's span
-    knows it, spares the sweep that would find it.
+    `gap_affine.wavefront_align`). Under any other table it is traced in a band of diagonals that holds
+    every optimal path, swept by anti-diagonal with each cell's decision kept (see `vector_align`), the
+    band proved by the score it yields (see `certified_alignment`); a score `known` beforehand, as a local
+    alignment's span knows it, bounds the band outright (see `optimal_band`). A band whose decisions would
+    pass `stored_cells`' bytes takes the linear-space path.
     """
     if len(first) == 0 or len(second) == 0:
         return serial_align[AlignmentMode.GLOBAL](
@@ -440,13 +441,16 @@ def global_on_host(
             first_codes, second_codes, penalties.value(), scoring.alphabet, fronts_within(stored_cells)
         )
         return GappedAlignment(Int32(traced[0]), traced[1], traced[2])
+    var lookup = SubstitutionLookup(scoring.substitutions, scoring.alphabet_size())
     # Not `known.or_else(...)`, whose argument would sweep for the score even when it is known.
     var best: Int
     if known:
         best = known.value()
     else:
+        var certified = certified_alignment(first_codes, second_codes, lookup, scoring, stored_cells)
+        if certified:
+            return certified.take()
         best = swept_score[AlignmentMode.GLOBAL](Span(first_codes), Span(second_codes), scoring)
-    var lookup = SubstitutionLookup(scoring.substitutions, scoring.alphabet_size())
     var band = optimal_band(len(first), len(second), lookup.best, scoring.gaps, best)
     var width = min(band[1], len(second)) - max(band[0], -len(first)) + 1
     # Counted with its indexes and its three diagonals of scores, which a narrow band's decisions are fewer than.
@@ -463,6 +467,53 @@ def global_on_host(
         band[0],
         band[1],
     )
+
+
+def certified_alignment(
+    first: List[UInt8], second: List[UInt8], lookup: SubstitutionLookup, scoring: Scoring, stored_cells: Int
+) -> Optional[GappedAlignment]:
+    """An optimal global alignment traced in bands of diagonals that grow until one proves itself, or None
+    when the next would pass `stored_cells`' bytes.
+
+    A band holding the start's and the end's diagonals and the run between them holds a path, so its
+    traced score is a score some alignment earns, at most the best; every alignment scoring that much or
+    more stays inside the band `optimal_band` gives for it. When that band lies within the one traced,
+    so does every optimal path: the traced score is the best, and the walk, whose every decision on an
+    optimal path reads only cells on optimal paths, takes the path the whole matrix's walk takes. Else
+    the band grows toward the one the score proves, at most fourfold a step, so a first score far below
+    the best, from a band that missed the path, costs a few narrower sweeps rather than the whole matrix.
+    The first band reaches a step's lanes either side, so a pair close to its diagonal takes one sweep
+    of about its own cells, where a sweep for the score alone covered the matrix.
+    """
+    var rows = len(first)
+    var columns = len(second)
+    var difference = columns - rows
+    var low = max(min(0, difference) - 2 * VECTOR_WIDTH, -rows)
+    var high = min(max(0, difference) + 2 * VECTOR_WIDTH, columns)
+    while True:
+        var width = high - low + 1
+        if vector_bytes(rows, columns, (rows + 1) * width) > cells_bytes(stored_cells):
+            return None
+        var traced = vector_align(
+            first,
+            second,
+            lookup,
+            scoring.gaps,
+            scoring.substitutions,
+            scoring.alphabet_size(),
+            scoring.alphabet,
+            low,
+            high,
+        )
+        var needed = optimal_band(rows, columns, lookup.best, scoring.gaps, Int(traced.score))
+        var needed_low = max(needed[0], -rows)
+        var needed_high = min(needed[1], columns)
+        if needed_low >= low and needed_high <= high:
+            return traced^
+        if needed_low < low:
+            low = max(needed_low, low - 3 * width // 2)
+        if needed_high > high:
+            high = min(needed_high, high + 3 * width // 2)
 
 
 def linear_global(
