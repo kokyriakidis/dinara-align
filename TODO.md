@@ -176,14 +176,26 @@ answers held to the copies it replaces by the tests, and a hot path benchmarked 
   already names the new tasks. Re-measure and rewrite them together: the main text's real, affine, batch and
   ablation tables, the figure over QuickEd's lengths and error rates, the supplement's tables S2 to S4, and
   the prose quoting them (benchmarks/README.md has the 2026-10-10 numbers at `289bcf0`).
-- [ ] **Affine memory past the kept fronts' cap.** At (4, 6, 2) an alignment's peak grew by 144 MB on an
-  ont-500k-genvar read and 112 MB on 100 kbp pairs at 20%, past the 80 MB the kept fronts stay within;
-  find what else grows with the pair (rings, the moves, the difference sweep's stretches) before claiming
-  the bound for the whole alignment.
-- [ ] **A*PA2-simple on QuickEd's 10 kbp pairs at 5%**: 288 against 329 µs a pair, the one dataset of the
-  22 where a rival is faster. Profile which part of the band or the diagonal transition loses it before
-  changing anything.
-
+- [x] **Affine memory past the kept fronts' cap.** At (4, 6, 2) an alignment's peak grew by 144 MB on an
+  ont-500k-genvar read and 112 MB on 100 kbp pairs at 20%, past the 80 MB the kept fronts stay within. A
+  100 kbp pair at 20% grows 115, 73, 42 and 33 MB under `max_memory` of 80, 40, 10 and 2 MB: the fronts fill
+  the cap, and about 31 MB beside them is the searches' rings, which grow with the cost, not its square,
+  and which `ORDINARY_WINDOW` leaves out of the memory allowed by design. Not a leak; the README says so.
+- [x] **A*PA2-simple on QuickEd's 10 kbp pairs at 5%**: 288 against 329 µs a pair, the one dataset of the
+  22 where a rival was faster. The band took 64-column tiles under a bound of 1,024, a rule from the first
+  commit never measured since; with 256-column tiles throughout, 254 µs (`bit_parallel.BAND_COLUMNS`).
+- [x] **Every tuning constant halved and doubled** (2026-10-11, on the Skylake-X, 41 constants, 83 builds,
+  each timed on 17 unit-cost samples, align and distance, or 8 affine ones, a baseline every six builds,
+  its spread 1.2% in the median). About thirty moved no sample past 3% either way. Most of the rest trade
+  one dataset against another (`DOUBLING_START`, `PROBE_START`, `AGREEMENT`, `GIVE_UP_SHARE`,
+  `SEED_COLUMNS`), left as they are. One was stale: `INEXACT_COLUMNS`, from which seeds match within one
+  edit, at 64 kbp handed QuickEd's 100 kbp pairs at 10% to inexact seeds that cost them a third of their
+  time since the band took wide tiles; on AVX-512 it is now 128 kbp, measured to pay from between 100 and
+  500 kbp.
+- [ ] **ont-500k-genvar and the inexact seeds.** With no seeds matching within one edit below 1 Mbp, the
+  genvar reads aligned 25% faster (146 to 110 ms) and ont-500k's distance 30% slower: `INEXACT_CHAINED`
+  rebuilds the seeds inexact on reads where the exact ones would win. Find what tells the two apart
+  before touching the gate; a cutoff moved for one dataset is a tuned knob.
 ## From the paper's literature check
 
 Ideas from the work the paper cites, each checked (2026-10-10, M2 unless noted).

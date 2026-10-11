@@ -28,10 +28,16 @@ comptime INEXACT_LENGTH = 16
 one-edit match is still rare, each seed then charging two edits to a path that matches it nowhere."""
 
 
-comptime INEXACT_COLUMNS = 65_536
+comptime INEXACT_COLUMNS = 65_536 if not PAIRED_GROUPS else 131_072
 """Columns from which the seeds may match with one edit. Their setup grows with the length and the band
 they save with its square: on real reads of 16 to 70 kbp exact seeds win however divergent the pair,
-and from about 100 kbp, and on uniform errors of one in seven, inexact ones do."""
+and from about 100 kbp, and on uniform errors of one in seven, inexact ones do.
+
+On AVX-512, whose band sweeps two groups at a time (see `PAIRED_GROUPS`), and since every band takes
+256-column tiles, the band runs fast enough beside the setup that inexact seeds pay only from between
+100 and 500 kbp: on the Skylake-X (2026-10-11), QuickEd's 100 kbp pairs at 10% aligned in 6.8 ms on exact
+seeds against 10.3 on inexact ones, their distance 5.3 against 9.5 ms, while 500 kbp pairs at 10 and 20%
+ran 7 to 10% slower with inexact seeds gated from 512 kbp, and 1 Mbp ones 36 to 58% slower without them."""
 
 
 comptime INEXACT_DIVERGENCE = 10
