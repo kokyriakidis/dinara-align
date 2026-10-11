@@ -229,10 +229,13 @@ distance) in a scratch build, before anything is built:
   gathered extension; the same holds for the one-search gap-affine phase. Find an exact U or a vector
   form first.
 - [ ] **Incremental doubling** (A*PA2-full): ceiling 6-7% on long ONT reads, ~0 elsewhere (see above).
-- [ ] **The batch certificate, strengthened by edit distance** (after SeedEx's edit-distance check): a
+- [x] **The batch certificate, strengthened by edit distance** (after SeedEx's edit-distance check): a
   path off the band has an insertion gap and a deletion gap, and its mismatches and gapped letters are at
-  least ED, so it costs at least max(L, 2o + min(x, e) ED). Provably never weaker; certifies pairs whose
-  cost is mostly mismatches. Measure first what share of the batch the re-swept pairs take.
+  least ED, so it costs at least max(L, 2o + min(x, e) ED). Measured and dropped: of 500,000 Illumina
+  pairs at (1, 2, 1), 70,519 are swept again, 59 of about 300 ms; the bound proves 578 of them. 65% of
+  them hold a dearer cost in the first band than their least and need the wider band whatever proves
+  it; the other 35% have their least cost already, but more than two gaps, so their cost passes ED plus
+  two openings. A perfect certificate would save at most about 7% of the batch.
 - [ ] Small and exact: the score-based storage band can subtract the two gaps' opening surcharge
   (`vector_score.optimal_band`); Edlib's guaranteed mid-round bound, score + max(rows, columns left).
 
