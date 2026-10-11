@@ -17,7 +17,7 @@ opening before one extending: every walk here, and the device's, decides a cell 
 `advance`, so they agree. A path walks all three layers, so the score it reports is the one it realizes.
 """
 
-from .anti_diagonals import AntiDiagonals, GapLanes, fits_16_bits, gotoh_lanes, straight_deficit
+from .anti_diagonals import AntiDiagonals, GapLanes, fits_16_bits, gotoh_lanes, straight_deficit, strip_rows
 from .cigar import CigarWriter
 from .common import GAP_BYTE, NEGATIVE_INFINITY, SubstitutionDType, SymbolDType
 from .errors import AlignmentError, ErrorKind
@@ -804,9 +804,6 @@ def vector_sweep_bands[
     var columns = area.width()
     var open = Int(gaps.open)
     var extend = Int(gaps.extend)
-    var sweep = AntiDiagonals[dtype, width](
-        first[area.row_from : area.row_to], second[area.column_from : area.column_to], 0, backward, backward
-    )
 
     @always_inline
     def top_border(column: Int) {imm open, imm extend} -> Int:
@@ -816,37 +813,58 @@ def vector_sweep_bands[
     def left_border(row: Int) {imm open, imm extend, imm entering} -> Int:
         return row * extend if entering == GapRun.EXTENDS else open + (row - 1) * extend
 
-    var cells = sweep.cells()
-    # The corner, and the two border cells beside it, diagonal one.
-    cells.two_back[unsafe_offset=0] = 0
-    cells.one_back[unsafe_offset=0] = Value(top_border(1))
-    cells.deletes_back[unsafe_offset=0] = Value(top_border(1) + open + extend)
-    cells.one_back[unsafe_offset=1] = Value(left_border(1))
-    cells.deletes_back[unsafe_offset=1] = Value(left_border(1))
-    cells.inserts_back[unsafe_offset=1] = Value(left_border(1) + open + extend)
-    if rows == 1:
-        last_scores[0] = Int32(cells.one_back[unsafe_offset=1])
-        last_deletes[0] = Int32(cells.deletes_back[unsafe_offset=1])
-
+    # The rows go in strips that stay in the core's first cache (see `anti_diagonals.strip_rows`), each swept
+    # from the row above it: the area's first row's border, then each strip's last row, which it leaves in
+    # `last_scores` and `last_deletes`, scores and deletion runs alike, so the last strip leaves the area's.
+    for column in range(columns + 1):
+        last_scores[column] = Int32(top_border(column))
+        last_deletes[column] = Int32(top_border(column) + open + extend)
     var substitute = lookup.lanes[width, dtype]()
     var lanes = GapLanes[dtype, width].symmetric(open, extend)
-    for diagonal in range(2, rows + columns + 1):
-        var row = max(1, diagonal - columns)
-        while row <= min(rows, diagonal - 1):
-            _ = cells.step(row, columns - diagonal, substitute, lanes)
-            row += width
-        # The diagonal's border cells, after the lanes that may have run over them.
-        if diagonal <= columns:
-            cells.current[unsafe_offset=0] = Value(top_border(diagonal))
-            cells.deletes[unsafe_offset=0] = Value(top_border(diagonal) + open + extend)
-        if diagonal <= rows:
-            cells.current[unsafe_offset=diagonal] = Value(left_border(diagonal))
-            cells.deletes[unsafe_offset=diagonal] = Value(left_border(diagonal))
-            cells.inserts[unsafe_offset=diagonal] = Value(left_border(diagonal) + open + extend)
-        if diagonal >= rows:
-            last_scores[diagonal - rows] = Int32(cells.current[unsafe_offset=rows])
-            last_deletes[diagonal - rows] = Int32(cells.deletes[unsafe_offset=rows])
-        cells.advance()
+    var strip = strip_rows[dtype, width, 1]()
+    var row_letters = first[area.row_from : area.row_to]
+    for strip_start in range(0, rows, strip):
+        var height = min(strip, rows - strip_start)
+        var strip_end = strip_start + height
+        # Read backward, a strip's rows are the letters before the ones the strips above took.
+        var letters = row_letters[rows - strip_end : rows - strip_start] if backward else row_letters[
+            strip_start:strip_end
+        ]
+        var sweep = AntiDiagonals[dtype, width](
+            letters, second[area.column_from : area.column_to], 0, backward, backward
+        )
+        var cells = sweep.cells()
+        # The strip's corner, and the two cells beside it, its diagonal one.
+        cells.two_back[unsafe_offset=0] = Value(left_border(strip_start) if strip_start > 0 else 0)
+        cells.one_back[unsafe_offset=0] = Value(Int(last_scores[1])) if columns >= 1 else Value(0)
+        cells.deletes_back[unsafe_offset=0] = Value(Int(last_deletes[1])) if columns >= 1 else Value(0)
+        cells.one_back[unsafe_offset=1] = Value(left_border(strip_start + 1))
+        cells.deletes_back[unsafe_offset=1] = Value(left_border(strip_start + 1))
+        cells.inserts_back[unsafe_offset=1] = Value(left_border(strip_start + 1) + open + extend)
+        if height == 1:
+            last_scores[0] = Int32(cells.one_back[unsafe_offset=1])
+            last_deletes[0] = Int32(cells.deletes_back[unsafe_offset=1])
+        for local_diagonal in range(2, height + columns + 1):
+            var row = max(1, local_diagonal - columns)
+            while row <= min(height, local_diagonal - 1):
+                _ = cells.step(row, columns - local_diagonal, substitute, lanes)
+                row += width
+            # The diagonal's border cells, after the lanes that may have run over them: the row above the strip
+            # and the area's first column.
+            if local_diagonal <= columns:
+                cells.current[unsafe_offset=0] = Value(Int(last_scores[local_diagonal]))
+                cells.deletes[unsafe_offset=0] = Value(Int(last_deletes[local_diagonal]))
+            if local_diagonal <= height:
+                cells.current[unsafe_offset=local_diagonal] = Value(left_border(strip_start + local_diagonal))
+                cells.deletes[unsafe_offset=local_diagonal] = Value(left_border(strip_start + local_diagonal))
+                cells.inserts[unsafe_offset=local_diagonal] = Value(
+                    left_border(strip_start + local_diagonal) + open + extend
+                )
+            # The strip's last row, its cell on this diagonal, read once every cell above it is.
+            if local_diagonal >= height:
+                last_scores[local_diagonal - height] = Int32(cells.current[unsafe_offset=height])
+                last_deletes[local_diagonal - height] = Int32(cells.deletes[unsafe_offset=height])
+            cells.advance()
 
 
 def sweep_half[

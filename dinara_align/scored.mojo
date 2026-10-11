@@ -17,8 +17,6 @@ alignment whose reward folds into the costs (see `rewarded_alignment`).
 """
 
 
-from std.sys import size_of
-
 from .common import SubstitutionDType
 from .cigar import reversed_list, cigar_counts, cigar_matches, cigar_runs, reversed_cigar, reversed_text, text_of
 from .errors import AlignmentError
@@ -33,7 +31,7 @@ from .gap_affine import (
     traced_extension,
 )
 from .modes import Alignment, Anchor, Band, Costs, Ties
-from .anti_diagonals import AntiDiagonals, GapLanes, lane_bits, straight_deficit, unreachable
+from .anti_diagonals import AntiDiagonals, GapLanes, lane_bits, straight_deficit, strip_rows, unreachable
 from .substitutions import SubstitutionLookup
 
 
@@ -66,19 +64,6 @@ def best_end[
     return swept_cells[pieces, dtype, width, transposed, kind, False, True](
         reference, query, costs, ends, highest, lookup, -1, unused
     )
-
-
-comptime STRIP_BYTES = 16 * 1024
-"""What a strip of a sweep's rows may hold, half the 32 KB first-level data cache of the smallest core it runs
-on, the rest left to the row above, the letters and the stack."""
-
-
-def strip_rows[dtype: DType, width: Int, pieces: Int]() -> Int:
-    """The rows of a strip of a sweep (see `swept_cells`): as many as the strip's diagonals, three of scores and
-    two of each gap layer, and its letters fit in `STRIP_BYTES`, in whole steps. Swept whole, a 16 kbp pair took
-    0.82 ns a cell where 1 kbp took 0.14, its diagonals missing the first cache on 72% of loads (Skylake-X)."""
-    var per_row = (3 + 4 * pieces) * size_of[dtype]() + 1
-    return max(width, STRIP_BYTES // per_row // width * width)
 
 
 def swept_cells[

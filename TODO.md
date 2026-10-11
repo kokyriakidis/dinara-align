@@ -289,6 +289,31 @@ unless noted; BSAlign and QuickEd are x86-only).
   ms to 0.28, 0.87 and 4.8; at 30% 0.57, 2.2 and 16.4 to 0.28, 0.88 and 4.7; `distance` 2 to 14 times
   faster; pairs under 15% apart unchanged. The exchange rate is `CELLS_PER_STEP`, measured.
 
+## Memory locality
+
+Sweeps whose working set outgrew the first-level cache, or whose traceback faulted in fresh pages, found by
+the difference sweep's case (2026-10-10, Skylake-X).
+
+- [x] **The anti-diagonal score sweeps in strips.** Each anti-diagonal restreamed every row of seven
+  diagonals, so past some 2,000 rows each pass reloaded them from the second-level cache: local sweeps 0.14
+  ns a cell at 1 kbp, 0.39 at 8 kbp, 0.82 at 16 kbp, 72% of first-level loads missing. Now the rows go in
+  strips of 16 KB (`anti_diagonals.strip_rows`), each from the row above it, which the strip before leaves:
+  the local, free-end and extension sweeps (a Z-drop, which judges whole anti-diagonals, keeps one strip),
+  the sweep back from a local end (`reach_back`), and the linear-space halves. Local sweeps run 0.12 ns a
+  cell from 4 to 8 kbp; local-long 50.0 to 17.4 ms; long local table alignments 2.5 times faster; every
+  score, end and CIGAR the same.
+- [x] **The banded traceback in place.** Two diagonals of scores and one of each gap layer, the newest
+  overwriting the oldest from the last row up, not three of each: divergent table pairs 18 to 37% faster
+  (10 kbp at 30%, 75.5 to 47.7 ms). A band whose decisions would pass the memory allowed keeps a few
+  anti-diagonals and sweeps each stretch again, rather than taking the linear-space path, which breaks ties
+  its own way.
+- [x] **The difference sweep in place, its traceback in stretches** (see "Divergent pairs at affine costs").
+- [-] **The wavefront's kept fronts, fresh memory each call.** `align` builds its searches anew each call,
+  as the library keeps no state of its own, so its kept fronts come from the allocator each time. Measured
+  on fresh 5 kbp pairs 15% apart from a fresh process: the first three calls 8.4, 6.2 and 4.3 ms, then 3.5,
+  as much as one `Aligner` reused takes; the allocator keeps the blocks once it has given them out, so it is
+  a process's warm-up, not a call's cost. Left.
+
 ## From A*PA2's discussion
 
 Its limitations and future work (curiouscoding.nl/posts/astarpa2/#discussion), and where dinara-align

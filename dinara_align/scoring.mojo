@@ -426,7 +426,9 @@ def global_on_host(
     every optimal path, swept by anti-diagonal with each cell's decision kept (see `vector_align`), the
     band proved by the score it yields (see `certified_alignment`); a score `known` beforehand, as a local
     alignment's span knows it, bounds the band outright (see `optimal_band`). A band whose decisions would
-    pass `stored_cells`' bytes takes the linear-space path.
+    pass `stored_cells`' bytes keeps a few anti-diagonals and sweeps each stretch between them again for its
+    decisions (see `vector_score.traced_band`); one whose kept diagonals would pass them too takes the
+    linear-space path.
     """
     if len(first) == 0 or len(second) == 0:
         return serial_align[AlignmentMode.GLOBAL](
@@ -452,7 +454,8 @@ def global_on_host(
         best = swept_score[AlignmentMode.GLOBAL](Span(first_codes), Span(second_codes), scoring)
     var band = optimal_band(len(first), len(second), lookup.best, scoring.gaps, best)
     var width = min(band[1], len(second)) - max(band[0], -len(first)) + 1
-    # Counted with its indexes and its three diagonals of scores, which a narrow band's decisions are fewer than.
+    # Counted with its indexes and its diagonals of scores, which a narrow band's decisions are fewer than; past
+    # the memory allowed for every decision, its kept diagonals and one stretch's (see `vector_score.vector_bytes`).
     if vector_bytes(len(first), len(second), (len(first) + 1) * width) > cells_bytes(stored_cells):
         return linear_global(first, second, scoring)
     return vector_align(
@@ -465,6 +468,7 @@ def global_on_host(
         scoring.alphabet,
         band[0],
         band[1],
+        cells_bytes(stored_cells),
     )
 
 
@@ -503,6 +507,7 @@ def certified_alignment(
             scoring.alphabet,
             low,
             high,
+            cells_bytes(stored_cells),
         )
         var needed = optimal_band(rows, columns, lookup.best, scoring.gaps, Int(traced.score))
         var needed_low = max(needed[0], -rows)

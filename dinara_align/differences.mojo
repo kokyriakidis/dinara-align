@@ -298,9 +298,8 @@ struct DifferenceSweep[value: DType, pieces: Int](Movable):
             var low = max(1, diagonal - columns)
             var high = min(rows, diagonal - 1)
             var lag = columns - diagonal
-            var steps = ceildiv(high - low + 1, WIDTH) if high >= low else 0
-            for step in reversed(range(steps)):
-                var row = low + step * WIDTH
+            var row = low + (ceildiv(high - low + 1, WIDTH) - 1) * WIDTH if high >= low else low - WIDTH
+            while row >= low:
                 # The cell above is the last diagonal's on the row before, the one to the left its on this row.
                 var above = row - 1
                 var left = row
@@ -351,6 +350,7 @@ struct DifferenceSweep[value: DType, pieces: Int](Movable):
                             Flags(layer_bit(SECOND_INSERTION)), Flags(0)
                         )
                     flag_cells.unsafe_offset(written + row - low).unsafe_store(flag)
+                row -= WIDTH
             written += max(high - low + 1, 0)
             # The borders, written after the step's spare lanes may have run over them. Row zero's cell is at
             # index zero: an insertion of every column so far, no deletion run reaching it. Column zero's is at

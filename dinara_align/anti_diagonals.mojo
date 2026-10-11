@@ -14,6 +14,8 @@ where a local alignment starts; `gotoh.vector_sweep_bands` a half's last row. `v
 keeps every diagonal of its band rather than the last two, so it shares the letters and the recurrence.
 """
 
+from std.sys import size_of
+
 from .substitutions import SubstitutionLanes
 
 
@@ -79,6 +81,19 @@ def straight_deficit(substitution: Int, first_letter: Int, further_letter: Int, 
     letter, none dearer than the dearer of a substitution and a gap's further letter. A sweep with free
     starts has more paths to each cell, so none falls further."""
     return first_letter + max(substitution, further_letter) * max(rows, columns)
+
+
+comptime STRIP_BYTES = 16 * 1024
+"""What a strip of a sweep's rows may hold, half the 32 KB first-level data cache of the smallest core it runs
+on, the rest left to the row above, the letters and the stack."""
+
+
+def strip_rows[dtype: DType, width: Int, pieces: Int]() -> Int:
+    """The rows of a strip of a sweep (see `scored.swept_cells`): as many as the strip's diagonals, three of scores and
+    two of each gap layer, and its letters fit in `STRIP_BYTES`, in whole steps. Swept whole, a 16 kbp pair took
+    0.82 ns a cell where 1 kbp took 0.14, its diagonals missing the first cache on 72% of loads (Skylake-X)."""
+    var per_row = (3 + 4 * pieces) * size_of[dtype]() + 1
+    return max(width, STRIP_BYTES // per_row // width * width)
 
 
 @always_inline
