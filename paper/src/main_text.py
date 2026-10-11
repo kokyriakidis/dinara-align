@@ -42,9 +42,9 @@ BODY = [
  'often with 5 to 15% errors, and one pair of 500 kbp reads fills a matrix of \\(2.5 \\times 10^{11}\\) cells.'),
 ('p',
  'Heuristic aligners compute only part of the matrix, a band, a window or the cells before a drop in score, and '
- 'lose the guarantee of optimality, which the analyses that follow then inherit. Exact aligners instead skip '
- 'only those cells that provably cannot lie on an optimal path, so that their running time depends on the '
- 'distance between the sequences rather than on the product of their lengths.'),
+ 'lose the guarantee of optimality. Exact aligners instead skip only those cells that provably cannot lie on an '
+ 'optimal path, so that their running time depends on the distance between the sequences rather than on the '
+ 'product of their lengths.'),
 ('p',
  'Three ideas underlie current exact aligners. *Band doubling* computes only the diagonals that a path within a '
  'given cost bound can reach, and doubles the bound until the optimal cost lies within it [@Ukkonen1985]. '
@@ -103,8 +103,8 @@ BODY = [
  'such functions [@Li2018]. A substitution matrix instead assigns each pair of letters a score to be maximised. '
  'We consider global, ends-free, extension and local alignment. An alignment is *exact* if it is optimal under '
  'the requested costs, mode, band and cost limit; among optimal alignments, a fixed rule places indels leftmost '
- 'or rightmost, so that the result does not depend on which algorithm computed the cost. At unit costs, the '
- 'distance \\(D(i,j)\\) between the prefixes \\(a_1\\dots a_i\\) and \\(b_1\\dots b_j\\) satisfies'),
+ 'or rightmost, so that, under costs, the result does not depend on which algorithm computed it (Section 3.1). '
+ 'At unit costs, the distance \\(D(i,j)\\) between the prefixes \\(a_1\\dots a_i\\) and \\(b_1\\dots b_j\\) satisfies'),
 ('p',
  '\\[ D(i,j) = \\min\\bigl(D(i-1,j)+1,\\; D(i,j-1)+1, \\qquad D(i-1,j-1)+[a_i \\ne b_j]\\bigr), \\]'),
 ('p',
@@ -146,6 +146,16 @@ BODY = [
  'wavefront of WFA and BiWFA [@MarcoSola2021; @MarcoSola2023]. A short diagonal-transition search estimates the '
  'distance, and the estimate, the length and the cost model select the algorithm. The thresholds are fixed at '
  'compile time for each instruction set (Section 3.9).'),
+('p',
+ 'Under costs, every engine selects the same alignment among equally good ones. All follow the backtrace order '
+ 'of WFA2-lib: from the end of the alignment, an edit is taken into a cell whenever one is optimal, a '
+ 'substitution before a deletion before an insertion, and a gap is extended before it is opened. The tile '
+ 'traceback applies this order cell by cell (Section 3.7), the batches and the difference sweep store per-cell '
+ 'flags under it, and the wavefronts take the furthest-reaching source, which makes the same choice. Leftmost '
+ 'placement of indels is obtained by running this rightmost rule on both sequences reversed and reversing the '
+ 'result. Two exceptions remain: a gap-affine pair whose wavefronts would exceed the memory limit is split where'
+ ' an optimal path crosses and follows the rule within each piece, and alignments under a substitution table '
+ "follow the traceback order of Gotoh's recurrence."),
 ('figure', 'overview'),
 ('table', 'engines'),
 ('sub', "A shorter critical path for Myers' recurrence"),
@@ -187,11 +197,20 @@ BODY = [
  'nanopore reads. dinara-align therefore computes two extrapolations, \\(\\hat d_1\\) from the first eight edits of'
  ' a diagonal-transition search and \\(\\hat d_2\\) from the same search continued until its budget, and sets the '
  'first bound from them only if \\(\\max(\\hat d_1,\\hat d_2) \\le \\tfrac43 \\min(\\hat d_1,\\hat d_2)\\). Otherwise, as '
- 'in A*PA2, the bound starts 256 above the known lower bound and doubles. Within a round, the distance is '
- 'extrapolated again after one eighth, one quarter and one half of the columns; the bound is lowered if the '
- 'extrapolation lies below it, and the round is abandoned if the extrapolation exceeds it. Because these rules '
- 'change only the sequence of bounds, the result remains exact.'),
-('sub', 'Gathered diagonal transition'),
+ 'in A*PA2, the bound starts 256 above the known lower bound, and each retry at most doubles it. A failed round '
+ 'sets the next bound from where it stopped, its progress extrapolated to the whole width, rather than doubling.'
+ ' Within a round, the distance is extrapolated again after one eighth, one quarter and one half of the columns;'
+ ' the bound is lowered if the extrapolation lies below it, and the round is abandoned if the extrapolation '
+ 'exceeds it. Because these rules change only the sequence of bounds, the result remains exact.'),
+('p',
+ 'Within a round, the band reads the scores down the right edge of each tile and drops the rows at its top and '
+ 'bottom whose score plus the heuristic exceeds the bound, as A*PA2 does. A score changes by at most one per '
+ 'row, and the heuristic by at most its climb \\(c\\), one for exact seeds and two for inexact ones, so a row that'
+ ' exceeds the bound by \\(x\\) rules out the next \\(\\lceil x/(1+c) \\rceil\\) rows without reading them. The bottom'
+ ' of the next tile is bounded by the deepest row kept, since going \\(k\\) rows past it costs at least \\(k\\) '
+ 'more. With seeds, when at least one seed in 32 chains from the origin, the first bound starts 64 above the '
+ 'heuristic at the origin, which on long reads lies within a few percent of the distance.'),
+('sub', 'Diagonal transition for near-identical pairs'),
 ('p',
  'Diagonal transition extends each diagonal of a wavefront along its run of matches. dinara-align compares eight'
  ' letters at a time by the exclusive-or of two 64-bit words and a count of trailing zeros. On AVX-512, eight '
@@ -201,6 +220,13 @@ BODY = [
  'that would otherwise serialise them. The same vectorised step serves near-identical pairs, computed from one '
  'or both ends [@MarcoSola2023], the traceback inside each tile, restricted to the diagonals that can still '
  'reach the traced cell, and the three-layer gap-affine wavefront.'),
+('p',
+ 'A pair whose diagonal transition finishes within its budget is aligned from its wavefronts alone. From one end'
+ ' the wavefronts are kept whole. From both ends, as in BiWFA, the forward wavefronts are grown on to the proven'
+ ' distance, each cost kept only on the diagonals on which the backward wavefronts show that an optimal path '
+ 'passes, so that the extra costs grow few diagonals. The backtrace then takes, at each cost, the '
+ 'furthest-reaching source, which is the order of Section 3.1, and the CIGAR is written run by run from the '
+ 'wavefronts.'),
 ('sub', 'Seed heuristic: direct neighbour construction'),
 ('p',
  'The reference is divided into disjoint seeds of 12 bases, matched exactly, or of 16 bases, matched with at '
@@ -231,11 +257,12 @@ BODY = [
 ('sub', 'Certified bands for inter-sequence batches'),
 ('p',
  'Batches of short pairs are aligned with one pair per vector lane [@Rognes2011; @Rahn2018], first in saturating'
- ' 8-bit lanes and, for pairs that saturate, in 16-bit lanes [@Zhao2013; @Daily2016]. Rather than computing each'
- ' matrix in full, a lane computes the band of diagonals \\([d_\\ell, d_h]\\) containing the main diagonal 0 and '
- 'the end diagonal \\(\\delta = m - n\\), together with one further diagonal on either side. Its optimality is '
- 'certified with the following bound, a cost form of the out-of-band bounds of [@!Gibrat2018] and '
- '[@!Fujiki2020], stated for gap-affine and two-piece costs and with a strict form for tie-breaking.'),
+ ' 8-bit lanes and, for the scores of pairs that saturate, in 16-bit lanes [@Zhao2013; @Daily2016]; alignments '
+ 'stay in 8-bit lanes. Rather than computing each matrix in full, a lane computes the band of diagonals '
+ '\\([d_\\ell, d_h]\\) containing the main diagonal 0 and the end diagonal \\(\\delta = m - n\\), together with one '
+ 'further diagonal on either side. Its optimality is certified with the following bound, a cost form of the '
+ 'out-of-band bounds of [@!Gibrat2018] and [@!Fujiki2020], stated for gap-affine and two-piece costs and with a '
+ 'strict form for tie-breaking.'),
 ('p',
  '**Proposition 1.** Let \\(C\\) be the least cost of an alignment within \\([d_\\ell, d_h]\\), and let \\(L(d) = '
  'g(|d|) + g(|d-\\delta|)\\). If \\(C \\le \\min\\bigl(L(d_h+1), L(d_\\ell-1)\\bigr)\\), then \\(C\\) is the optimal cost; '
@@ -265,10 +292,10 @@ BODY = [
  'carries into it: its first and last words, the score at its top, the deepest row kept and its score, and the '
  'bound. The traceback computes a stretch of tiles again from the last kept boundary before a missing one. Every'
  ' step of a band depends only on this state and on the scores it computes, so each boundary is recovered as the'
- ' round left it, and the alignment is the same byte for byte. A Hirschberg-style split, as in QuickEd '
- '[@Doblas2025], would align the two halves independently and resolve ties within each. On the 1 Mbp pairs at '
- '20% errors, the growth of peak memory fell from 175 to 133 MB on the worst pair, and the four pairs took 9% '
- 'longer; pairs whose boundaries fit are unchanged.'),
+ ' round left it, and the alignment is the same byte for byte. Splitting the pair instead, as QuickEd does '
+ '[@Doblas2025] and as our gap-affine wavefront does past its own limit, aligns the parts independently and '
+ 'resolves ties within each. On the 1 Mbp pairs at 20% errors, the growth of peak memory fell from 175 to 133 MB'
+ ' on the worst pair, and the four pairs took 9% longer; pairs whose boundaries fit are unchanged.'),
 ('sub', 'Gap-affine and score-based alignment'),
 ('p',
  'A scoring scheme with match score \\(a\\), mismatch score \\(b\\) and gap scores \\(-(o+ke)\\) can be converted into'
@@ -281,12 +308,30 @@ BODY = [
  'bounds the band in which the alignment must be stored. Each gapped letter contributes at least \\(2e+a\\) to '
  '\\(C\\), and an alignment that deviates by \\(t\\) diagonals from both the main and the end diagonal contains at '
  'least \\(2t\\) gapped letters; hence only diagonals within \\(C/(2(2e+a))\\) of them can contain an optimal '
- 'alignment. For a 1 kbp pair at 5% divergence, this stores 137 diagonals instead of 1,000. Under a general '
- 'substitution matrix, anti-diagonals are computed in 16-bit vector lanes while the scores provably fit '
- '[@Wozniak1997]. Local alignment first locates the end of the optimal alignment with a forward sweep, as in SSW'
- ' [@Zhao2013], and then extends a wavefront backwards from that end, stopping at the first cell that attains '
- 'the maximal score; this avoids the correction pass that striped layouts may need when long alignments score '
- 'highly [@Farrar2007].'),
+ 'alignment. For a 1 kbp pair at 5% divergence, this stores 137 diagonals instead of 1,000. Local alignment '
+ 'first locates the end of the optimal alignment with a forward sweep, as in SSW [@Zhao2013], and then extends a'
+ ' wavefront backwards from that end, stopping at the first cell that attains the maximal score; this avoids the'
+ ' correction pass that striped layouts may need when long alignments score highly [@Farrar2007].'),
+('p',
+ 'The bidirectional wavefront keeps, for every cost and diagonal, the furthest column and one byte naming the '
+ 'source of each layer, five bytes per diagonal, and traces the alignment through these fronts from where the '
+ 'two searches met; a pair whose fronts would exceed the memory limit is split where an optimal path crosses, as'
+ ' in BiWFA. A pair that ends within the costs the forward search can hold is finished by that search alone, '
+ 'before the backward one starts, which saved a third of the time of short reads at 1% errors, and a cost '
+ 'without traceback stops as soon as its best lies within one of the costs both searches have checked against '
+ 'the start of the other. A global pair whose projected work exceeds that of a full sweep in difference '
+ 'recurrences [@Suzuki2018], in 8-bit lanes, is handed to that sweep once the wavefront has spent one '
+ 'twenty-fourth of it; the sweep stores the predecessor flags of Section 3.1, so the alignment is the same, and '
+ 'unrelated pairs of 5 kbp aligned in 4.8 ms instead of 32.9 ms.'),
+('p',
+ 'Under a general substitution matrix, anti-diagonals are computed in 16-bit lanes while the scores provably fit'
+ ' [@Wozniak1997], a strip of rows of at most 16 KB at a time, so that the rows a strip reads stay in the '
+ 'first-level cache; this took local alignment of 10 kbp against 12 kbp from 50.0 to 17.4 ms. A global alignment'
+ ' is traced in a band of diagonals that grows, at most fourfold per step, until the score it yields proves that'
+ ' every optimal path lies inside it, so a pair close to its diagonal takes one sweep of about its own cells '
+ 'rather than a sweep of the matrix for its score: 1 kbp pairs at 10% divergence aligned in about 200 µs instead'
+ ' of 544 µs. A band whose decisions would exceed the memory limit keeps every \\(k\\)-th anti-diagonal and '
+ 'computes each stretch again for the traceback.'),
 ('sub', 'Thresholds measured against the code'),
 ('p',
  'The choice of algorithm and the bounds of each search rest on 41 thresholds, from the step budgets of the '
@@ -302,99 +347,56 @@ BODY = [
  ' which had slowed them by half (Supplementary Section S1).'),
 ('sub', 'Validation'),
 ('p',
- 'A differential fuzzer compares the results on random pairs, cost models, modes, bands, cost limits and tie '
- 'rules with a full-matrix implementation that shares no code with the library. The WFA2-lib regression set is '
- 'reproduced exactly, including every CIGAR string under the rightmost tie rule, and the seed heuristic is '
- 'compared with the true remaining cost at every cell of random pairs (Supplementary Section S1).'),
+ 'A differential fuzzer compares every mode, cost model, band, cost limit and tie rule on random pairs with a '
+ 'full-matrix implementation that shares no code with the library, and the WFA2-lib regression set is reproduced'
+ ' exactly, every CIGAR included (Supplementary Section S1).'),
 ('sec', 'Results'),
 ('sub', 'Experimental setup'),
 ('p',
- 'All measurements were taken on an Intel Core i9-7900X (Skylake-X, AVX-512) with ten cores fixed at 3.3 GHz, '
- 'turbo boost and hyper-threading disabled, and 91 GB of memory, running Ubuntu 26.04. dinara-align is '
- 'implemented in Mojo [@Modular] and was compiled with Mojo 1.1.0 at commit `dc980d7`, and for gap-affine costs '
- 'and batches at `289bcf0`, whose code those workloads share; all tools were compiled for the native instruction'
- ' set. The exact aligners compared are A*PA2-full and A*PA2-simple [@GrootKoerkamp2024b], A*PA '
- '[@GrootKoerkamp2024a], Edlib [@Sosic2017], WFA and BiWFA [@MarcoSola2021; @MarcoSola2023], QuickEd '
- '[@Doblas2025], BSAlign [@Shao2024], KSW2 [@Li2018; @Suzuki2018], parasail [@Daily2016] and SSW [@Zhao2013]. '
- 'Every cost was compared with those of every other tool, and on the A*PA2 datasets with the costs of the '
- 'published A*PA2 results; none differed.'),
+ 'All measurements were taken on an Intel Core i9-7900X (Skylake-X, AVX-512), its ten cores fixed at 3.3 GHz '
+ 'with turbo boost and hyper-threading disabled, with dinara-align compiled by Mojo 1.1.0 [@Modular] at commit '
+ '`dc980d7` (gap-affine costs and batches at `289bcf0`, whose code those workloads share) and every tool '
+ 'compiled for the native instruction set. We combined the protocols of A*PA2 [@GrootKoerkamp2024b] and QuickEd '
+ '[@Doblas2025]: the real datasets of A*PA2, nanopore reads of about 1, 10, 50 and 500 kbp, the last also with '
+ 'genetic variation, and SARS-CoV-2 genomes, and the simulated datasets of QuickEd, random sequences of 10 kbp '
+ 'to 1 Mbp with 1, 5, 10 and 20% errors, each sampled to about 2 Mbp and at least four pairs (Supplementary '
+ 'Table S5). Each tool aligned each pair once, with traceback, on one pinned core, within 30 s per sample. The '
+ 'exact aligners compared are A*PA2-full and A*PA2-simple, A*PA [@GrootKoerkamp2024a], Edlib [@Sosic2017], WFA '
+ 'and BiWFA [@MarcoSola2021; @MarcoSola2023], QuickEd, BSAlign [@Shao2024], KSW2 [@Li2018], parasail '
+ '[@Daily2016] and SSW [@Zhao2013], each on the workloads it supports; every cost agreed with those of every '
+ 'other tool and with the published A*PA2 results.'),
+('sub', 'Speed and memory'),
 ('p',
- 'We combined the protocols of A*PA2 [@GrootKoerkamp2024b] and QuickEd [@Doblas2025]. The datasets are the real '
- 'datasets of A*PA2, nanopore reads of about 1, 10, 50 and 500 kbp, the last also against a reference with '
- 'genetic variation, and SARS-CoV-2 genomes, and the simulated datasets of QuickEd, random sequences of 10 kbp, '
- '100 kbp, 500 kbp and 1 Mbp with 1, 5, 10 and 20% uniformly distributed errors (Supplementary Table S5). Each '
- 'dataset was sampled in a fixed random order to about 2 Mbp of sequence and at least four pairs, the same '
- 'sample for every tool. One single-threaded job ran at a time, pinned to one core; each tool aligned the pairs '
- 'of a sample once each, with traceback, within 30 s per sample, after which only the completed pairs are '
- 'reported, and tools whose memory grows with the matrix or the square of the distance ran under an 8 GB limit. '
- 'We report the mean and median wall-clock time per alignment, excluding input, the increase in peak resident '
- 'memory during an alignment, measured with `getrusage` as in A*PA2, and the peak resident memory of the '
- 'process, as in QuickEd. Gap-affine costs used the same samples and protocol. The other modes and the '
- 'short-read batches were timed in-process as the faster of two passes over each workload.'),
-('sub', 'Edit distance'),
-('p',
- 'On the real datasets, dinara-align had the lowest mean and median time among the exact aligners ([#tab:real]; '
- 'Supplementary Table S4). It aligned the 1 kbp reads in 23 µs, compared with 31 µs for WFA, required about two '
- 'thirds of the time of A*PA2-simple on the 10 and 50 kbp reads (157 against 247 µs and 590 against 944 µs), and'
- ' aligned the ultra-long reads in 118 and 156 ms, compared with 283 and 225 ms for A*PA2-full and 847 ms and '
- '1.39 s for QuickEd.'),
-('table', 'real'),
-('p',
- 'On the simulated datasets ([#fig:sweeps]; Supplementary Table S4), dinara-align was the fastest at every '
- 'length and error rate. On 100 kbp pairs it required 1.5, 5.0, 7.2 and 16.0 ms at 1, 5, 10 and 20% errors, '
- 'compared with 7.5, 8.5, 13.9 and 36.7 ms for A*PA2-full and 12.5, 24.0, 39.0 and 62.8 ms for QuickEd, and on 1'
- ' Mbp pairs at 20% errors 901 ms, compared with 2.02 s for A*PA2-full and 4.8 s for QuickEd. Its narrowest '
- 'margin was on 10 kbp pairs at 5%, 269 against 288 µs for A*PA2-simple. Over the 22 datasets, on the pairs both'
- ' completed, A*PA2-full took 1.3 to 22.3 times as long as dinara-align (2.5 in the geometric mean), '
- 'A*PA2-simple 1.1 to 12.8 times (3.2) and QuickEd 3.0 to 22.5 times (6.7).'),
+ 'dinara-align had the lowest mean time per alignment of the exact aligners on every workload ([#tab:summary]). '
+ 'On the nanopore reads it was 1.3 to 2.6 times faster than the fastest alternative, and on the simulated pairs '
+ '1.1 to 2.3 times ([#fig:sweeps]): 100 kbp pairs at 1, 5, 10 and 20% errors took 1.5, 5.0, 7.2 and 16.0 ms, '
+ 'against 7.5, 8.5, 13.9 and 36.7 ms for A*PA2-full and 12.5, 24.0, 39.0 and 62.8 ms for QuickEd, and its '
+ 'narrowest margin was on 10 kbp pairs at 5%, 269 against 288 µs for A*PA2-simple. Over all 22 datasets QuickEd '
+ 'took 3.0 to 22.5 times as long, 6.7 times in the geometric mean. At gap-affine costs dinara-align was 1.7 to '
+ '3.8 times faster than WFA and BiWFA wherever a tool completed a dataset, and it completed more of the long '
+ 'pairs than any other tool; in the other modes it was 1.0 to 22 times faster than the fastest tool offering the'
+ ' same mode, the one tie being a workload whose time varies between 3.0 and 3.9 ms from build to build with the'
+ ' placement of one loop. Full results are in Supplementary Tables S2 to S4.'),
+('table', 'summary'),
 ('figure', 'sweeps'),
 ('p',
- 'On the ultra-long reads, an alignment increased peak memory by at most 51 MB without and 37 MB with genetic '
- 'variation, compared with 82 and 48 MB for A*PA2-full and 82 and 32 MB for A*PA2-simple; on 1 Mbp pairs at 20% '
- 'errors, by at most 126 MB, compared with 184 and 192 MB for A*PA2-full and A*PA2-simple, the tile boundaries '
- 'kept for the traceback staying within the default limit of 80 MB (Section 3.7; [#tab:memory]). QuickEd, which '
- 'splits its traceback recursively above 16 MB, stayed near 25 MB on every dataset, and Edlib below 8 MB. On '
- 'shorter inputs dinara-align generally used more memory than the most economical tool, and its runtime occupies'
- ' about 13 MB, compared with 2 to 8 MB for the other tools.'),
-('table', 'memory'),
-('sub', 'Gap-affine costs, other modes and batches'),
-('p',
- 'At the WFA costs (4, 6, 2), dinara-align was 1.7 to 3.8 times faster than WFA and BiWFA on every dataset that '
- 'any tool completed, 2.7 and 2.6 times in the geometric mean, and it completed more of the long pairs than any '
- 'other tool: 8 of the 10 pairs of 100 kbp at 20% errors, against 4 for BiWFA ([#tab:affine]; Supplementary '
- 'Table S3). No tool completed a pair of 1 Mbp beyond 1% errors within 30 s. In each of the 14 workloads '
- 'covering local, overlap, infix, prefix, extension, two-piece and substitution-matrix alignment, it was at '
- 'least as fast as the fastest alternative, by factors from 1.0 to 22 (Supplementary Table S2); in the one tie, '
- 'infix alignment at (4, 6, 2), its time varies between 3.0 and 3.9 ms from build to build with the placement of'
- ' one loop, for the same instructions.'),
-('table', 'affine'),
-('p',
- 'Following the short-read case study of Accelign [@Kallenborn2026], we computed global scores for 500,000 pairs'
- ' of 148 bp reads with 1% error against reference segments of similar length ([#tab:batch]). Under gap-affine '
- 'costs (mismatch 1, gap \\(2+k\\)), dinara-align required 0.46 µs per pair on one core, compared with 2.12 µs for'
- ' WFA2-lib, and 27 ms for the whole batch on ten cores, compared with 116 ms.'),
-('table', 'batch'),
+ 'An alignment of an ultra-long read increased peak memory by at most 51 MB, against 82 MB for A*PA2-full, and '
+ 'of a 1 Mbp pair at 20% errors by at most 126 MB, against 184 MB, the tile boundaries of its traceback staying '
+ 'within the default limit of 80 MB (Section 3.7; Supplementary Table S6). QuickEd, which splits its traceback '
+ 'above 16 MB, stayed near 25 MB, and Edlib below 8 MB.'),
 ('sub', 'Effect of each technique'),
 ('p',
- 'To measure what each technique contributes, dinara-align was built with one technique switched off at a time, '
- 'everything else unchanged, and every build aligned samples of the A*PA2 real datasets and of the 100 kbp '
- 'simulated pairs with traceback, the ultra-long reads ten times the usual sample, and scored the short-read '
- 'batch. The builds alternated within each of three rounds, pinned to one core, and we report the median against'
- ' the build with every technique on ([#tab:ablation]). Because the Skylake-X penalises jumps that cross 32-byte'
- ' boundaries, the position of a loop after a rebuild can move the running time by several percent; the '
- 'alignment builds were therefore assembled with branches kept clear of those boundaries '
- '(`-mbranches-within-32B-boundaries`). A baseline built in this way from a different source file ran within '
- '0.7% of the baseline on every dataset, and every build returned the same costs on every dataset. Constructing '
- 'the neighbours of exact seed matches directly contributed most on the ultra-long reads, which without it took '
- '9% and 16% longer; on 100 kbp pairs, which now take exact seeds on AVX-512, it made no difference. '
- 'Interleaving two groups of bit-parallel words contributed 4.5 to 5% on the ultra-long reads and 11.5% on 100 '
- 'kbp pairs at 20% errors, whose bands are widest; the regrouped recurrence, although it shortens a single '
- "word's step from 14 to 8 cycles, contributed 1 to 4%, because bands narrow enough to be bound by that step "
- 'make up a small part of the work. Gathered diagonal transition contributed 13 to 27% where diagonal transition'
- ' does most of the work, on the 1 kbp reads, the SARS-CoV-2 genomes and 100 kbp pairs at 1% errors. The '
- 'agreement rule for extrapolated bounds mattered on the 10 kbp reads (22%) and the SARS-CoV-2 genomes (5%), and'
- ' not on the ultra-long reads, where the seed heuristic sets the first bound. Without the certified band, the '
- 'short-read batch took 2.9 and 3.2 times as long at affine and unit costs.'),
+ 'To measure what each technique contributes, dinara-align was built with one switched off at a time and every '
+ 'build aligned samples of the A*PA2 real datasets and of the 100 kbp simulated pairs, and scored the short-read'
+ ' batch, the builds alternating within three rounds on one pinned core, assembled with branches kept clear of '
+ '32-byte boundaries, which the Skylake-X penalises ([#tab:ablation]); every build returned the same costs. '
+ 'Constructing seed neighbours directly contributed most on the ultra-long reads, 9% and 16%; 100 kbp pairs, '
+ 'which take exact seeds on AVX-512, do not use it. Interleaving two groups of bit-parallel words contributed '
+ '4.5 to 5% on the ultra-long reads and 11.5% on 100 kbp pairs at 20% errors, whose bands are widest; the '
+ "regrouped recurrence contributed 1 to 4%, as bands narrow enough to be bound by a single word's step are a "
+ 'small part of the work. Gathered diagonal transition contributed 13 to 27% where diagonal transition does most'
+ ' of the work, and the agreement rule 22% on the 10 kbp reads, where extrapolations from noisy ends mislead. '
+ 'Without the certified band, the short-read batch took 2.9 and 3.2 times as long.'),
 ('table', 'ablation'),
 ('sec', 'Discussion'),
 ('p',
@@ -403,19 +405,15 @@ BODY = [
  'reduce work outside the inner loop contributed more than those that speed it up: constructing seed neighbours '
  'directly saved up to 16%, against 4.5 to 11.5% for interleaving bit-parallel groups and 1 to 4% for the '
  'regrouped recurrence ([#tab:ablation]). Second, thresholds that encode a cost model go stale as the code '
- 'around them changes. A tile width for narrow bands, kept from the first version, and the length from which '
- 'seeds match with one edit cost 10 kbp pairs at 5% a fifth and 100 kbp pairs at 10% a third of their running '
- 'time, and a projection that handed divergent gap-affine pairs to a full sweep slowed nanopore reads by half, '
- 'until they were measured again (Section 3.9). Such a sweep belongs in the evaluation of any aligner whose '
- 'choice of algorithm depends on fixed thresholds. Neither the regrouped recurrence nor the per-lane band '
+ 'around them changes, and measuring them all again belongs in the evaluation of any aligner that chooses its '
+ 'algorithm by fixed thresholds (Section 3.9). Neither the regrouped recurrence nor the per-lane band '
  'certificate depends on the implementation, and both apply directly to other bit-parallel and inter-sequence '
  'aligners.'),
 ('p',
  'The study has several limitations:'),
 ('list',
- ['The evaluation covers a single x86 processor with AVX-512. The AVX2 configuration was measured only for its '
-  'inexact-seed threshold, built for Haswell on the same machine (20 and 30% equal within 0.5%, 40% up to 6% '
-  'slower), and the NEON configuration, which the library also supports, is not evaluated here.',
+ ['The evaluation covers a single x86 processor with AVX-512; the AVX2 configuration was measured only for its '
+  'inexact-seed threshold, and the NEON configuration is not evaluated here.',
  'Some thresholds were chosen using workloads that also appear in the evaluation; in particular, the AVX-512 '
   'thresholds for inexact seeds, the share of chained seeds (lowered from 40 to 20%) and the length from which '
   'they are used (raised from 64 to 128 kbp), were set after measurements on uniform 100 kbp pairs like those of '
@@ -433,7 +431,8 @@ BODY = [
  ['faster construction of the seed heuristic, whose scalar lookups dominate on long divergent pairs;',
  'reusing computation across band-doubling rounds, as in the incremental doubling of A*PA2;',
  'a seed heuristic for gap-affine costs, at which no tool completed a 1 Mbp pair beyond 1% errors;',
- 'measurements on further processors, and GPU implementations of the same algorithms.']),
+ 'measurements on further processors, and an evaluation of the GPU kernels the library provides for batch '
+  'scores and alignments (Supplementary Section S1).']),
 ]
 
 BACK = [
@@ -474,52 +473,32 @@ TABLES = {
     ["Short reads, affine", "232", "", "", "", "", "", "**+188%**"],
     ["Short reads, unit", "213", "", "", "", "", "", "**+215%**"],
   ]},
-"real": {
-  "caption": "Unit-cost alignment of the A*PA2 real datasets: mean time per alignment, traceback included. Superscripts give the number of pairs completed within 30 s where not all were; a dash marks a tool that completed none, o.o.m. one the 8 GB limit stopped.",
-  "header": ["Dataset", "dinara-align", "A*PA2-full", "A*PA2-simple", "A*PA", "Edlib", "BiWFA", "WFA", "QuickEd"],
-  "align": "lrrrrrrrr",
+"summary": {
+  "caption": "dinara-align against the fastest other exact aligner on each workload: mean time per alignment (per batch for the short reads), and that aligner's time as a multiple of dinara-align's. Every dataset and tool is in Supplementary Tables S2 to S4, S6 and S7.",
+  "header": ["Workload", "dinara-align", "Fastest alternative", "Ratio"],
+  "align": "lrlr",
+  "wrap": [0, 2],
   "rows": [
-    ["ont-1k (0.8 kbp)", "**23 µs**", "81 µs", "48 µs", "612 µs", "124 µs", "44 µs", "31 µs", "75 µs"],
-    ["ont-10k (3.6 kbp)", "**157 µs**", "391 µs", "247 µs", "15.3 ms", "1.09 ms", "741 µs", "599 µs", "688 µs"],
-    ["ont-50k (9.6 kbp)", "**590 µs**", "1.27 ms", "944 µs", "263 ms", "6.14 ms", "7.43 ms", "6.38 ms", "2.31 ms"],
-    ["ont-500k (642 kbp)", "**118 ms**", "283 ms", "687 ms", "–", "5.00 s", "6.33 s", "o.o.m.", "847 ms"],
-    ["genvar (663 kbp)", "**156 ms**", "225 ms", "511 ms", "–", "5.23 s", "6.20 s", "o.o.m.", "1.39 s"],
-    ["SARS-CoV-2 (30 kbp)", "**285 µs**", "2.00 ms", "728 µs", "6.49 ms", "8.18 ms", "909 µs", "987 µs", "3.90 ms"],
-  ]},
-"memory": {
-  "caption": "Memory at unit costs: the largest growth of peak resident memory aligning one pair of the sample, in MB, as in A*PA2, and the peak resident memory of the whole run in parentheses, as in QuickEd, runtime and input included. A dash marks a tool that completed no pair within 30 s.",
-  "header": ["Dataset", "dinara-align", "A*PA2-full", "A*PA2-simple", "Edlib", "BiWFA", "QuickEd"],
-  "align": "lrrrrrr",
-  "rows": [
-    ["ont-500k", "51 (67)", "82 (89)", "82 (90)", "5.3 (15)", "15 (29)", "22 (26)"],
-    ["ont-500k-genvar", "37 (63)", "48 (57)", "32 (55)", "4.8 (16)", "12 (27)", "20 (27)"],
-    ["100 kbp, 20%", "6.3 (20)", "7.3 (12)", "4.7 (9)", "1.4 (8)", "3.6 (11)", "8.8 (12)"],
-    ["500 kbp, 20%", "53 (86)", "59 (66)", "53 (61)", "4.1^3/4", "15^1/4", "16 (20)"],
-    ["1 Mbp, 20%", "126 (186)", "184 (196)", "192 (205)", "–", "–", "26 (31)"],
-  ]},
-"affine": {
-  "caption": "Gap-affine alignment at costs (4, 6, 2): mean time per alignment with a 30 s budget per sample. Superscripts give the number of pairs completed where not all were; o.o.m. marks a tool the 8 GB limit stopped.",
-  "header": ["Dataset", "dinara-align", "WFA", "BiWFA", "KSW2", "BSAlign"],
-  "align": "lrrrrr",
-  "rows": [
-    ["ont-1k", "**112 µs**", "186 µs", "304 µs", "1.10 ms", "336 µs"],
-    ["ont-10k", "**1.71 ms**", "4.80 ms", "5.84 ms", "29.8 ms", "7.84 ms"],
-    ["ont-50k", "**22.0 ms**", "63.5 ms", "54.9 ms", "343 ms^81/104", "87.0 ms"],
-    ["SARS-CoV-2", "**737 µs**", "2.06 ms", "1.79 ms", "88.4 ms", "341 ms"],
-    ["10 kbp, 5%", "**2.32 ms**", "7.05 ms", "8.72 ms", "97.5 ms", "37.0 ms"],
-    ["10 kbp, 20%", "**20.6 ms**", "65.2 ms", "75.2 ms", "374 ms^81/99", "37.4 ms"],
-    ["100 kbp, 1%", "**14.0 ms**", "39.7 ms", "39.0 ms", "2.44 s", "o.o.m."],
-    ["100 kbp, 5%", "**337 ms**", "811 ms", "715 ms", "9.25 s^3/9", "o.o.m."],
-  ]},
-"batch": {
-  "caption": "Global scores of 500,000 short-read pairs; each time is the whole call.",
-  "header": ["Costs", "Threads", "dinara-align", "WFA2-lib", "KSW2", "parasail", "Edlib"],
-  "align": "llrrrrr",
-  "rows": [
-    ["Affine (1, 2, 1)", "1", "**230 ms**", "1.06 s", "10.9 s", "21.7 s", "–"],
-    ["Unit", "1", "**212 ms**", "450 ms", "–", "–", "2.00 s"],
-    ["Affine (1, 2, 1)", "10", "**27 ms**", "116 ms", "1.21 s", "2.32 s", "–"],
-    ["Unit", "10", "**29 ms**", "64 ms", "–", "–", "216 ms"],
+    ["*Unit costs*", "", "", ""],
+    ["ont-1k (0.8 kbp)", "**23 µs**", "WFA 31 µs", "1.3×"],
+    ["ont-10k (3.6 kbp)", "**157 µs**", "A*PA2-simple 247 µs", "1.6×"],
+    ["ont-50k (9.6 kbp)", "**590 µs**", "A*PA2-simple 944 µs", "1.6×"],
+    ["ont-500k (642 kbp)", "**118 ms**", "A*PA2-full 283 ms", "2.4×"],
+    ["ont-500k-genvar (663 kbp)", "**156 ms**", "A*PA2-full 225 ms", "1.4×"],
+    ["SARS-CoV-2 (30 kbp)", "**285 µs**", "A*PA2-simple 728 µs", "2.6×"],
+    ["16 simulated datasets, 10 kbp to 1 Mbp, 1 to 20%", "**33 µs to 901 ms**", "A*PA2, A*PA, WFA", "1.1 to 2.3×"],
+    ["*Gap-affine costs (4, 6, 2)*", "", "", ""],
+    ["ont-1k", "**112 µs**", "WFA 186 µs", "1.7×"],
+    ["ont-10k", "**1.71 ms**", "WFA 4.80 ms", "2.8×"],
+    ["ont-50k", "**22.0 ms**", "BiWFA 54.9 ms", "2.5×"],
+    ["SARS-CoV-2", "**737 µs**", "BiWFA 1.79 ms", "2.4×"],
+    ["11 simulated datasets that a rival completed, at least in part", "**208 µs to 9.9 s**", "WFA, BiWFA, BSAlign", "1.6 to 3.2×"],
+    ["*Other modes*", "", "", ""],
+    ["14 local, overlap, infix, prefix, extension, two-piece and table workloads", "**32 µs to 17.5 ms**", "Edlib, WFA2-lib, KSW2, parasail, SSW", "1.0 to 22×"],
+    ["*500,000 short reads, global scores*", "", "", ""],
+    ["Affine (1, 2, 1), one core", "**230 ms**", "WFA2-lib 1.06 s", "4.6×"],
+    ["Affine (1, 2, 1), ten cores", "**27 ms**", "WFA2-lib 116 ms", "4.3×"],
+    ["Unit costs, one core", "**212 ms**", "WFA2-lib 450 ms", "2.1×"],
   ]},
 }
 

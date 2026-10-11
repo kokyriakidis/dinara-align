@@ -207,7 +207,9 @@ BODY = [
  "optional wrapper while the search runs, so that its fields remain in registers, reduced the time for an infix "
  "alignment at (4, 6, 2) from 3.92 to 3.00 ms."),
 ("p", "**Infix and prefix alignment at unit costs.** Infix alignment uses the bit-parallel sweep with the cut-off of "
- "Edlib, with a bound doubling from 64; words entering the band are initialised to +1, and the last word advances "
+ "Edlib, with a first bound of 64; a failed try extrapolates the distance from the deepest row its band kept "
+ "within the bound and the retry aims past it, which on the M2 took a 10 kbp infix from 3.39 to 1.99 ms; words "
+ "entering the band are initialised to +1, and the last word advances "
  "one column at a time. Prefix alignment sweeps only the band permitted by its bound: the top of the band moves down "
  "with the diagonal, no column beyond the read length plus the best end so far is computed, an attempt whose band "
  "becomes empty stops, and at one eighth, one quarter and one half of the columns an attempt that can no longer "
@@ -217,7 +219,8 @@ BODY = [
  "least \\(2e+a\\) to the total \\(C=a(n+m)-2S\\), and a path that deviates by \\(t\\) diagonals from both the main "
  "and the end diagonal contains at least \\(2t\\) gapped letters, so only diagonals within \\(C/(2(2e+a))\\) of "
  "these can contain an optimal path. For a 1 kbp pair at 5% divergence, 137 diagonals are stored instead of 1,000. "
- "Under any other substitution matrix, the score of the sweep bounds the band in the same way. The backward sweep "
+ "Under any other substitution matrix, the alignment is traced in a band that grows until the score it yields "
+ "proves that it holds every optimal path (main text, Section 3.8), each cell's decision kept in one byte. The backward sweep "
  "from the end of a local alignment and each half of a linear-space alignment also use 16-bit lanes while the scores "
  "fit, which made 1 kbp local alignments 1.2 times and linear-space global alignments 1.4 times faster on the M2."),
 
@@ -240,6 +243,32 @@ BODY = [
  "four independent registers' worth of work; on the M2, this scored 20,000 references against a read in 83 ms, "
  "compared with 160 ms with one register. Pairs whose first band does not satisfy the bound are grouped by the exact "
  "width of their second band, and a group stops once every lane has exceeded its cost limit."),
+
+("p", "**Work shares.** Batch calls spread their pairs over threads, longest first: the pairs are dealt into "
+ "classes of lengths within an eighth of each other, with no sort, since sorting the short reads on one thread had "
+ "taken a fifteenth of the work ten threads did on them. Each worker then takes a share of half of what is left "
+ "divided among the workers, as OpenMP's guided schedule does, but never more than twice its last share, starting "
+ "from one; a first share of a twentieth of the batch had left one worker holding the longest pairs while the "
+ "others finished, adding half the batch's time on the Skylake-X. Building the packed batch is split across the "
+ "threads in the same way; on one thread it had taken three times as long as the GPU took to score it."),
+("p", "**Free ends in lanes.** Ends-free alignments take the lanes too, their span found first as the tie rule "
+ "picks it for a single pair: the end, of the cells an optimal alignment may stop on the one furthest along the "
+ "reference, from a sweep that proves its cost with every optimal path inside its band; then the start, by a sweep "
+ "back from that end over the reversed prefixes; then the global alignment of the span. On one core of the Skylake-X, "
+ "150 bp reads at 3% errors in 200 bp windows aligned at (4, 6, 2) in 8.0 µs per pair as an infix, against 26.6 µs "
+ "one pair at a time, in 12.1 against 29.3 µs as a prefix, and in 20.0 against 50.3 µs with 60 letters free at the "
+ "end of the window and the start of the read; at unit costs that overlap took 8.3 against 32.4 µs."),
+("p", "**GPU scores.** Batch scores and alignments under a substitution table, and unit-cost distances, also run on "
+ "NVIDIA GPUs and Apple silicon. Each pair is first scored over a band of sixteen diagonals by one thread, its "
+ "scores and gap layers one register per diagonal, swept anti-diagonal by anti-diagonal; the band's score stands "
+ "where the pair's own cost certifies it (Proposition 1 of the main text), and the thread stops once the cheapest "
+ "cell of its anti-diagonal costs more than every path off the band. The remaining pairs, about one in six of the "
+ "short-read batch, are scored over the whole matrix while the host packs the next chunk, several to a warp, each "
+ "lane holding a run of its pair's columns in registers and passing its last column on by shuffle. The cells of a "
+ "global alignment are held shifted by their anti-diagonal times the gap extension, which reduces Gotoh's "
+ "recurrence from five additions per cell to three. On an NVIDIA GeForce RTX 2070, the 500,000 short-read pairs "
+ "were scored in 36 ms at (1, 2, 1), the whole call included and most of it the host packing the batch, against "
+ "27 ms on ten cores of the Skylake-X."),
 
 ("sub", "Code generation"),
 ("p", "**Avoiding division by a variable.** A 64-bit division by a variable takes tens of cycles on x86. The "
@@ -264,14 +293,16 @@ BODY = [
 ("sec", "Additional results"),
 ("p", "Table S2 gives the results for the other alignment modes, each compared on one pinned thread of the Skylake-X "
  "with the aligners that support the same mode. Table S3 gives the complete gap-affine comparison at costs "
- "(4, 6, 2). Table S4 gives the mean and median time per alignment at unit costs on every dataset, and Table S5 "
- "the samples. The approximate aligners of the A*PA2 benchmark, WFA-adaptive and Block Aligner, are no longer "
+ "(4, 6, 2). Table S4 gives the mean and median time per alignment at unit costs on every dataset, Table S5 the "
+ "samples, Table S6 the memory and Table S7 the short-read batch. The approximate aligners of the A*PA2 benchmark, WFA-adaptive and Block Aligner, are no longer "
  "run. KSW2 and BSAlign, which ran out of time or memory on most datasets of 500 kbp and more, are in the "
  "benchmark's own tables (benchmarks/README.md in the repository)."),
 ("table", "modes"),
 ("table", "affine_full"),
 ("table", "unit_full"),
 ("table", "datasets"),
+("table", "memory"),
+("table", "batch"),
 
 ("sec", "Robustness"),
 ("p", "Three changes address inputs on which the running time had been disproportionate:"),
@@ -416,6 +447,29 @@ TABLES = {
     ["1 Mbp, 5%", "4 of 100", "1,000,185 / 1,000,301 / 1,000,551", "5 / 5 / 5"],
     ["1 Mbp, 10%", "4 of 100", "1,000,000 / 1,000,054 / 1,000,120", "9 / 9 / 9"],
     ["1 Mbp, 20%", "4 of 100", "1,000,000 / 1,000,166 / 1,000,355", "17 / 17 / 17"],
+  ]},
+"memory": {
+  "label": "S6",
+  "caption": "Memory at unit costs: the largest growth of peak resident memory aligning one pair of the sample, in MB, as in A*PA2, and the peak resident memory of the whole run in parentheses, as in QuickEd, runtime and input included. A dash marks a tool that completed no pair within 30 s.",
+  "header": ["Dataset", "dinara-align", "A*PA2-full", "A*PA2-simple", "Edlib", "BiWFA", "QuickEd"],
+  "align": "lrrrrrr",
+  "rows": [
+    ["ont-500k", "51 (67)", "82 (89)", "82 (90)", "5.3 (15)", "15 (29)", "22 (26)"],
+    ["ont-500k-genvar", "37 (63)", "48 (57)", "32 (55)", "4.8 (16)", "12 (27)", "20 (27)"],
+    ["100 kbp, 20%", "6.3 (20)", "7.3 (12)", "4.7 (9)", "1.4 (8)", "3.6 (11)", "8.8 (12)"],
+    ["500 kbp, 20%", "53 (86)", "59 (66)", "53 (61)", "4.1^3/4", "15^1/4", "16 (20)"],
+    ["1 Mbp, 20%", "126 (186)", "184 (196)", "192 (205)", "–", "–", "26 (31)"],
+  ]},
+"batch": {
+  "label": "S7",
+  "caption": "Global scores of 500,000 short-read pairs; each time is the whole call.",
+  "header": ["Costs", "Threads", "dinara-align", "WFA2-lib", "KSW2", "parasail", "Edlib"],
+  "align": "llrrrrr",
+  "rows": [
+    ["Affine (1, 2, 1)", "1", "**230 ms**", "1.06 s", "10.9 s", "21.7 s", "–"],
+    ["Unit", "1", "**212 ms**", "450 ms", "–", "–", "2.00 s"],
+    ["Affine (1, 2, 1)", "10", "**27 ms**", "116 ms", "1.21 s", "2.32 s", "–"],
+    ["Unit", "10", "**29 ms**", "64 ms", "–", "–", "216 ms"],
   ]},
 "changes": {
   "label": "S1",

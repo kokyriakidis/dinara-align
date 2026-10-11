@@ -14,7 +14,7 @@ BOXES = {
     "kept": (560, 120, 190, 48, "Traceback through fronts", "split past the memory limit"),
     "sweep": (330, 184, 200, 48, "Full difference sweep", "8-bit lanes, same alignment"),
     "lanes": (10, 260, 240, 48, "One pair per vector lane", "8-bit, band certified per lane"),
-    "again": (330, 260, 240, 48, "Uncertified lanes again", "16-bit lanes, wider bands"),
+    "again": (330, 260, 240, 48, "Uncertified pairs again", "a wider band; 16 bits if a byte saturates"),
 }
 
 # Arrows: polyline points and an optional label (x, y, text lines, anchor).

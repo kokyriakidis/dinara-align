@@ -93,9 +93,9 @@ When they were introduced, these rules reduced the mean time on the ultra-long r
 
 \textbf{Ends-free alignment.} Under gap costs with free ends, the forward search starts at cost zero on every diagonal on which a free start lies. The span is determined first: one search from the free side finds the end on the highest diagonal, and a narrow search backwards finds the start; the span is then aligned globally. On x86, this aligns a read at the start of a reference, an overlap or a suffix 1.4 to 3.5 times faster, and a read anywhere within the reference 0 to 14\% slower, than the previous approach. Keeping the search state outside an optional wrapper while the search runs, so that its fields remain in registers, reduced the time for an infix alignment at (4, 6, 2) from 3.92 to 3.00~ms.
 
-\textbf{Infix and prefix alignment at unit costs.} Infix alignment uses the bit-parallel sweep with the cut-off of Edlib, with a bound doubling from 64; words entering the band are initialised to +1, and the last word advances one column at a time. Prefix alignment sweeps only the band permitted by its bound: the top of the band moves down with the diagonal, no column beyond the read length plus the best end so far is computed, an attempt whose band becomes empty stops, and at one eighth, one quarter and one half of the columns an attempt that can no longer succeed is abandoned. This reduced the time for a prefix distance from 23.7 to 20.5~\textmu s on the Skylake-X.
+\textbf{Infix and prefix alignment at unit costs.} Infix alignment uses the bit-parallel sweep with the cut-off of Edlib, with a first bound of 64; a failed try extrapolates the distance from the deepest row its band kept within the bound and the retry aims past it, which on the M2 took a 10~kbp infix from 3.39 to 1.99~ms; words entering the band are initialised to +1, and the last word advances one column at a time. Prefix alignment sweeps only the band permitted by its bound: the top of the band moves down with the diagonal, no column beyond the read length plus the best end so far is computed, an attempt whose band becomes empty stops, and at one eighth, one quarter and one half of the columns an attempt that can no longer succeed is abandoned. This reduced the time for a prefix distance from 23.7 to 20.5~\textmu s on the Skylake-X.
 
-\textbf{A band derived from the score.} A global alignment under a single match score and a single mismatch score stores only the diagonals permitted by its score. In the converted costs, every gapped letter contributes at least \(2e+a\) to the total \(C=a(n+m)-2S\), and a path that deviates by \(t\) diagonals from both the main and the end diagonal contains at least \(2t\) gapped letters, so only diagonals within \(C/(2(2e+a))\) of these can contain an optimal path. For a 1~kbp pair at 5\% divergence, 137 diagonals are stored instead of 1{,}000. Under any other substitution matrix, the score of the sweep bounds the band in the same way. The backward sweep from the end of a local alignment and each half of a linear-space alignment also use 16-bit lanes while the scores fit, which made 1~kbp local alignments 1.2 times and linear-space global alignments 1.4 times faster on the M2.
+\textbf{A band derived from the score.} A global alignment under a single match score and a single mismatch score stores only the diagonals permitted by its score. In the converted costs, every gapped letter contributes at least \(2e+a\) to the total \(C=a(n+m)-2S\), and a path that deviates by \(t\) diagonals from both the main and the end diagonal contains at least \(2t\) gapped letters, so only diagonals within \(C/(2(2e+a))\) of these can contain an optimal path. For a 1~kbp pair at 5\% divergence, 137 diagonals are stored instead of 1{,}000. Under any other substitution matrix, the alignment is traced in a band that grows until the score it yields proves that it holds every optimal path (main text, Section 3.8), each cell's decision kept in one byte. The backward sweep from the end of a local alignment and each half of a linear-space alignment also use 16-bit lanes while the scores fit, which made 1~kbp local alignments 1.2 times and linear-space global alignments 1.4 times faster on the M2.
 
 \subsection{Batches}
 
@@ -106,6 +106,12 @@ When they were introduced, these rules reduced the mean time on the ultra-long r
 \textbf{Cache-efficient traceback.} Storing the traceback flags of a group's whole band would exceed the caches on long pairs and touch new memory pages for every group; with ten threads, this doubled the time for 1~kbp pairs relative to the searches alone. The sweep therefore stores one row of every layer every \(s\) rows and recomputes a segment to obtain its flags during the traceback. With \(R\) rows, \(s\) is the square root of \(R\) times the bytes per cell of a stored row divided by those of a flag, which balances the stored rows against the flags of one segment and minimises memory use.
 
 \textbf{Lane groups.} A group of 64 bytes occupies one register on AVX-512 and several on narrower vector units; with the 128-bit registers of the M2, 1~kbp pairs at 10\% divergence required 73~\textmu s per pair under affine costs with four registers, compared with 132~\textmu s with one. Local scores use 32 lanes of 16 bits or 16 lanes of 32 bits, four independent registers' worth of work; on the M2, this scored 20{,}000 references against a read in 83~ms, compared with 160~ms with one register. Pairs whose first band does not satisfy the bound are grouped by the exact width of their second band, and a group stops once every lane has exceeded its cost limit.
+
+\textbf{Work shares.} Batch calls spread their pairs over threads, longest first: the pairs are dealt into classes of lengths within an eighth of each other, with no sort, since sorting the short reads on one thread had taken a fifteenth of the work ten threads did on them. Each worker then takes a share of half of what is left divided among the workers, as OpenMP's guided schedule does, but never more than twice its last share, starting from one; a first share of a twentieth of the batch had left one worker holding the longest pairs while the others finished, adding half the batch's time on the Skylake-X. Building the packed batch is split across the threads in the same way; on one thread it had taken three times as long as the GPU took to score it.
+
+\textbf{Free ends in lanes.} Ends-free alignments take the lanes too, their span found first as the tie rule picks it for a single pair: the end, of the cells an optimal alignment may stop on the one furthest along the reference, from a sweep that proves its cost with every optimal path inside its band; then the start, by a sweep back from that end over the reversed prefixes; then the global alignment of the span. On one core of the Skylake-X, 150~bp reads at 3\% errors in 200~bp windows aligned at (4, 6, 2) in 8.0~\textmu s per pair as an infix, against 26.6~\textmu s one pair at a time, in 12.1 against 29.3~\textmu s as a prefix, and in 20.0 against 50.3~\textmu s with 60 letters free at the end of the window and the start of the read; at unit costs that overlap took 8.3 against 32.4~\textmu s.
+
+\textbf{GPU scores.} Batch scores and alignments under a substitution table, and unit-cost distances, also run on NVIDIA GPUs and Apple silicon. Each pair is first scored over a band of sixteen diagonals by one thread, its scores and gap layers one register per diagonal, swept anti-diagonal by anti-diagonal; the band's score stands where the pair's own cost certifies it (Proposition 1 of the main text), and the thread stops once the cheapest cell of its anti-diagonal costs more than every path off the band. The remaining pairs, about one in six of the short-read batch, are scored over the whole matrix while the host packs the next chunk, several to a warp, each lane holding a run of its pair's columns in registers and passing its last column on by shuffle. The cells of a global alignment are held shifted by their anti-diagonal times the gap extension, which reduces Gotoh's recurrence from five additions per cell to three. On an NVIDIA GeForce RTX 2070, the 500{,}000 short-read pairs were scored in 36~ms at (1, 2, 1), the whole call included and most of it the host packing the batch, against 27~ms on ten cores of the Skylake-X.
 
 \subsection{Code generation}
 
@@ -184,7 +190,7 @@ dc980d7 & Inexact seeds from 128~kbp on AVX-512 & 100~kbp at 10\% 10.3 $\to$ 6.8
 
 \section{Additional results}
 
-Table S2 gives the results for the other alignment modes, each compared on one pinned thread of the Skylake-X with the aligners that support the same mode. Table S3 gives the complete gap-affine comparison at costs (4, 6, 2). Table S4 gives the mean and median time per alignment at unit costs on every dataset, and Table S5 the samples. The approximate aligners of the A*PA2 benchmark, WFA-adaptive and Block Aligner, are no longer run. KSW2 and BSAlign, which ran out of time or memory on most datasets of 500~kbp and more, are in the benchmark's own tables (benchmarks/README.md in the repository).
+Table S2 gives the results for the other alignment modes, each compared on one pinned thread of the Skylake-X with the aligners that support the same mode. Table S3 gives the complete gap-affine comparison at costs (4, 6, 2). Table S4 gives the mean and median time per alignment at unit costs on every dataset, Table S5 the samples, Table S6 the memory and Table S7 the short-read batch. The approximate aligners of the A*PA2 benchmark, WFA-adaptive and Block Aligner, are no longer run. KSW2 and BSAlign, which ran out of time or memory on most datasets of 500~kbp and more, are in the benchmark's own tables (benchmarks/README.md in the repository).
 
 \begin{table}[t]
 \caption{Other modes: mean time per pair on one pinned thread, the faster of two passes. Every tool's costs or scores agree on every pair.}\label{tab:modes}
@@ -310,6 +316,39 @@ SARS-CoV-2 & 33 of 10000 & 29{,}244 / 29{,}746 / 29{,}864 & 0 / 1 / 7 \\
 1~Mbp, 5\% & 4 of 100 & 1{,}000,185 / 1{,}000,301 / 1{,}000,551 & 5 / 5 / 5 \\
 1~Mbp, 10\% & 4 of 100 & 1{,}000,000 / 1{,}000,054 / 1{,}000,120 & 9 / 9 / 9 \\
 1~Mbp, 20\% & 4 of 100 & 1{,}000,000 / 1{,}000,166 / 1{,}000,355 & 17 / 17 / 17 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\caption{Memory at unit costs: the largest growth of peak resident memory aligning one pair of the sample, in MB, as in A*PA2, and the peak resident memory of the whole run in parentheses, as in QuickEd, runtime and input included. A dash marks a tool that completed no pair within 30~s.}\label{tab:memory}
+\centering\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}lrrrrrr@{}}
+\toprule
+Dataset & dinara-align & A*PA2-full & A*PA2-simple & Edlib & BiWFA & QuickEd \\
+\midrule
+ont-500k & 51 (67) & 82 (89) & 82 (90) & 5.3 (15) & 15 (29) & 22 (26) \\
+ont-500k-genvar & 37 (63) & 48 (57) & 32 (55) & 4.8 (16) & 12 (27) & 20 (27) \\
+100~kbp, 20\% & 6.3 (20) & 7.3 (12) & 4.7 (9) & 1.4 (8) & 3.6 (11) & 8.8 (12) \\
+500~kbp, 20\% & 53 (86) & 59 (66) & 53 (61) & 4.1$^{3/4}$ & 15$^{1/4}$ & 16 (20) \\
+1~Mbp, 20\% & 126 (186) & 184 (196) & 192 (205) & – & – & 26 (31) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\caption{Global scores of 500{,}000 short-read pairs; each time is the whole call.}\label{tab:batch}
+\centering\footnotesize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{@{}llrrrrr@{}}
+\toprule
+Costs & Threads & dinara-align & WFA2-lib & KSW2 & parasail & Edlib \\
+\midrule
+Affine (1, 2, 1) & 1 & \textbf{230~ms} & 1.06~s & 10.9~s & 21.7~s & – \\
+Unit & 1 & \textbf{212~ms} & 450~ms & – & – & 2.00~s \\
+Affine (1, 2, 1) & 10 & \textbf{27~ms} & 116~ms & 1.21~s & 2.32~s & – \\
+Unit & 10 & \textbf{29~ms} & 64~ms & – & – & 216~ms \\
 \bottomrule
 \end{tabular}
 \end{table}
