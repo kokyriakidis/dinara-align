@@ -32,13 +32,14 @@
 \begin{@twocolumnfalse}
 {\small\textit{Bioinformatics}, Original Paper, Sequence analysis --- draft}\par\medskip
 {\LARGE\bfseries dinara-align: hardware-aware algorithms for exact pairwise alignment\par}\medskip
-{\large Konstantinos Kyriakidis$^{1}$}\par
-{\small $^{1}$\textcolor{red}{[affiliation]}}\par\bigskip
+{\large Konstantinos Kyriakidis$^{1,*}$ and Benedict Paten$^{1,*}$}\par
+{\small $^{1}$UC Santa Cruz Genomics Institute, Santa Cruz, CA, USA}\par
+{\small $^{*}$To whom correspondence should be addressed: kkyriaki@ucsc.edu, bpaten@ucsc.edu}\par\bigskip
 \fbox{\begin{minipage}{0.97\textwidth}\small
 \noindent\textbf{Motivation:} Exact pairwise alignment of long sequencing reads remains computationally demanding. Band doubling over bit-parallel blocks, the wavefront algorithm and A* with seed heuristics have greatly reduced the number of cells an exact aligner must compute. A large part of the remaining running time depends on how the computation maps onto the processor: loop-carried dependency chains, memory-bound table lookups, and bounds and thresholds that are poorly matched to the input or the hardware.\par
 \noindent\textbf{Results:} We present dinara-align, an exact pairwise aligner built on algorithmic changes that address these bottlenecks: a regrouping of Myers' bit-parallel recurrence that shortens its loop-carried dependency chain, band bounds accepted only when independent estimates agree, diagonal transition vectorised across diagonals, a direct construction of the neighbours of exact seed matches that provably preserves local pruning, and per-pair optimality certificates for banded inter-sequence batches. On an Intel Skylake-X processor, dinara-align had the lowest mean running time among the exact aligners tested in 33 of the 34 configurations of the A*PA2 benchmark, aligning ultra-long nanopore reads in 104~ms on average, compared with 176~ms for A*PA2-full. It was 1.7 to 3.2 times faster than WFA at gap-affine costs and computed global scores for 500{,}000 short-read pairs on one core 4.5 times faster than WFA2-lib.\par
 \noindent\textbf{Availability and implementation:} dinara-align is free software under the Mozilla Public License 2.0, available at \url{https://github.com/kokyriakidis/dinara-align} with C, C++, Python and command-line interfaces.\par
-\noindent\textbf{Contact:} kkyriaki@ucsc.edu\par
+\noindent\textbf{Contact:} kkyriaki@ucsc.edu, bpaten@ucsc.edu\par
 \noindent\textbf{Supplementary information:} Supplementary data are available at \emph{Bioinformatics} online.\par
 \end{minipage}}
 \bigskip
@@ -471,11 +472,8 @@ The study has several limitations. First, all reported measurements were taken o
 
 Future work includes speeding up seed construction, reusing computation across band-doubling rounds as in the incremental doubling of A*PA2, measurements on further processors, and GPU implementations of the same algorithms.
 
-\section*{Acknowledgements}
-[acknowledgements]
-
 \section*{Funding}
-[funding]
+This work received no specific funding.
 
 \section*{Conflict of interest}
 None declared.

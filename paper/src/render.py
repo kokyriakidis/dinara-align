@@ -241,6 +241,16 @@ def page_assets():
     charts = open(os.path.join(HERE, "assets", "charts.js")).read().replace("/*DATA*/", charts_data.js())
     return style, charts
 
+def author_line_html():
+    """The authors, each from affiliation 1 and a corresponding author."""
+    return " and ".join(f"{name}<sup>1,*</sup>" for name, _ in M.AUTHORS)
+
+
+def author_line_tex():
+    """`author_line_html` in LaTeX."""
+    return " and ".join(f"{name}$^{{1,*}}$" for name, _ in M.AUTHORS)
+
+
 def render_html_main():
     style, charts = page_assets()
     abstract = "\n".join(f'<p><b>{h}:</b> {inline_html(t, {}, {}, M.REFS)}</p>' for h, t in M.ABSTRACT)
@@ -256,8 +266,9 @@ def render_html_main():
 <header class="col masthead">
   <div class="journal">Bioinformatics · Original Paper · Sequence analysis <span class="draft">Draft</span></div>
   <h1>{title}</h1>
-  <div class="authors">{M.AUTHOR}<sup>1</sup></div>
-  <div class="affil"><sup>1</sup><span class="todo">{M.AFFILIATION}</span> · Contact: {M.EMAIL}</div>
+  <div class="authors">{author_line_html()}</div>
+  <div class="affil"><sup>1</sup>{M.AFFILIATION}</div>
+  <div class="affil">*To whom correspondence should be addressed: {", ".join(email for _, email in M.AUTHORS)}</div>
   <div class="supp-link">Supplementary material: <a href="{SUPPLEMENT_URL}">companion page</a></div>
 </header>
 <section class="col abstract" id="abstract">
@@ -293,7 +304,7 @@ def render_html_supplement():
 <header class="col masthead">
   <div class="journal">Bioinformatics · Supplementary material <span class="draft">Draft</span></div>
   <h1>{inline_html(S.TITLE, {}, {}, M.REFS)}</h1>
-  <div class="authors">{M.AUTHOR}</div>
+  <div class="authors">{" and ".join(name for name, _ in M.AUTHORS)}</div>
 </header>
 {body}
 </main>
@@ -442,8 +453,9 @@ def render_tex_main():
 \\begin{{@twocolumnfalse}}
 {{\\small\\textit{{Bioinformatics}}, Original Paper, Sequence analysis --- draft}}\\par\\medskip
 {{\\LARGE\\bfseries {inline_tex(M.TITLE, bk)}\\par}}\\medskip
-{{\\large {M.AUTHOR}$^{{1}}$}}\\par
-{{\\small $^{{1}}$\\textcolor{{red}}{{{tex_escape(M.AFFILIATION)}}}}}\\par\\bigskip
+{{\\large {author_line_tex()}}}\\par
+{{\\small $^{{1}}${tex_escape(M.AFFILIATION)}}}\\par
+{{\\small $^{{*}}$To whom correspondence should be addressed: {", ".join(email for _, email in M.AUTHORS)}}}\\par\\bigskip
 \\fbox{{\\begin{{minipage}}{{0.97\\textwidth}}\\small
 {abstract}
 \\end{{minipage}}}}
@@ -470,7 +482,7 @@ def render_tex_supplement():
 \\renewcommand{{\\thetable}}{{S\\arabic{{table}}}}
 \\begin{{document}}
 {{\\Large\\bfseries {inline_tex(S.TITLE, bk)}\\par}}\\medskip
-{{\\large {M.AUTHOR}}}\\par\\bigskip
+{{\\large {" and ".join(name for name, _ in M.AUTHORS)}}}\\par\\bigskip
 {body}
 \\end{{document}}
 """

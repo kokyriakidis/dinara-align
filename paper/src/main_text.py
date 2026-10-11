@@ -6,9 +6,9 @@ Blocks: ("sec", title), ("sub", title), ("p", text), ("list", [items]) numbered,
 """
 
 TITLE = 'dinara-align: hardware-aware algorithms for exact pairwise alignment'
-AUTHOR = "Konstantinos Kyriakidis"
-AFFILIATION = "[affiliation]"
-EMAIL = "kkyriaki@ucsc.edu"
+# Authors in order, each with an email; both are corresponding authors.
+AUTHORS = [("Konstantinos Kyriakidis", "kkyriaki@ucsc.edu"), ("Benedict Paten", "bpaten@ucsc.edu")]
+AFFILIATION = "UC Santa Cruz Genomics Institute, Santa Cruz, CA, USA"
 
 ABSTRACT = [('Motivation',
   'Exact pairwise alignment of long sequencing reads remains computationally demanding. Band doubling over '
@@ -29,7 +29,7 @@ ABSTRACT = [('Motivation',
  ('Availability and implementation',
   'dinara-align is free software under the Mozilla Public License 2.0, available at '
   'https://github.com/kokyriakidis/dinara-align with C, C++, Python and command-line interfaces.'),
- ('Contact', 'kkyriaki@ucsc.edu'),
+ ('Contact', 'kkyriaki@ucsc.edu, bpaten@ucsc.edu'),
  ('Supplementary information', 'Supplementary data are available at *Bioinformatics* online.')]
 
 BODY = [
@@ -330,8 +330,7 @@ BODY = [
 ]
 
 BACK = [
-    ("Acknowledgements", "[acknowledgements]"),
-    ("Funding", "[funding]"),
+    ("Funding", "This work received no specific funding."),
     ("Conflict of interest", "None declared."),
     ("Data availability", "The software, benchmark harness and the commits of every compared tool are available at "
      "https://github.com/kokyriakidis/dinara-align. The benchmarks are reproduced by `pixi run bench-astarpa2`, "
