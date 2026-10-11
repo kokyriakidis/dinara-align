@@ -1492,7 +1492,7 @@ def bidirectional[
     an alignment, which the split decides, keeps the margin.
 
     With `grown_alone`, the forward search has grown by itself, no further than its ring holds every
-    cost it grew, checking at each cost that it had not reached the end (see `forward_alone`): what
+    cost it grew, checking at each cost that it had not reached the end (see `alone`): what
     meeting the backward search's start at each of those costs would have checked.
     """
     var columns = forward.columns
@@ -1646,16 +1646,16 @@ def searched_distance[
     band: Band,
 ) -> Int:
     """The two searches of `wavefront_distance`, built the first time and begun afresh after: the
-    forward one first by itself, while it may (see `forward_alone`), and the backward one only for a
+    forward one first by itself, while it may (see `alone`), and the backward one only for a
     pair that has not ended by then."""
     begun(
         forward, first, second, penalties, FREE_START, False, False, ends_free.first_begin, ends_free.second_begin, band
     )
     var grown_alone = ends_free.first_end == 0 and ends_free.second_end == 0
     if grown_alone:
-        var alone = forward_alone(forward.value(), ceiling)
-        if alone != GROWING:
-            return alone
+        var found = alone(forward.value(), ceiling)
+        if found != GROWING:
+            return found
     var mirrored = band.mirrored(len(first) - len(second))
     begun(
         backward, first, second, penalties, FREE_START, False, True, ends_free.first_end, ends_free.second_end, mirrored
@@ -1704,32 +1704,59 @@ def begun[
 
 
 comptime GROWING = -2
-"""`forward_alone`'s answer for a pair it leaves to the two searches."""
+"""`alone`'s answer for a pair it leaves to the two searches."""
 
 
-def forward_alone[pieces: Int](mut forward: Wavefront[pieces], ceiling: Int) -> Int:
-    """The least cost, found by the forward search alone; -1 once it passes `ceiling`; or `GROWING`
-    once the search has grown as far as its ring holds every cost it grew, `window` of them, and
-    leaves the rest to the two searches (see `bidirectional`'s `grown_alone`).
+def alone[pieces: Int, record: Bool = False](mut search: Wavefront[pieces], ceiling: Int) -> Int:
+    """The least cost, found by one search alone, either one, its fronts kept with `record`; -1 once it
+    passes `ceiling`; or `GROWING` once the search has grown as far as its ring holds every cost it
+    grew, `window` of them, and leaves the rest to the two searches (see `bidirectional`'s
+    `grown_alone`).
 
     Costs grow from 0 up, so the first that reaches the end is the least. A pair differing in a few
-    letters ends within those costs, and the backward search, its sequences reversed and its rings
-    cleared, need not begin at all: on short reads at 1% error that was a third of their time. A
-    costlier pair loses nothing, its forward search grown no further than the two would have taken
-    it. Only for an end the alignment must reach, the last letter of each: there, reaching the end is
-    one diagonal's front reaching the last column, its alignment front holding the gaps' too."""
-    var target = forward.columns - forward.rows
-    var window = forward.penalties.window[pieces]()
+    letters ends within those costs, and the other search, its sequences copied and its rings cleared,
+    need not begin at all: on short reads at 1% error that was a third of their time. A costlier pair
+    loses nothing, the search grown no further than the two would have taken it. Only for an end the
+    alignment must reach, the last letter of each: there, reaching the end is one diagonal's front
+    reaching the last column, its alignment front holding the gaps' too; the backward search's end is
+    the forward one's origin, over both sequences reversed, the same test."""
+    var target = search.columns - search.rows
+    var window = search.penalties.window[pieces]()
     while True:
-        var slot = forward.fronts.current
-        if forward.fronts.lows[slot] <= target and target <= forward.fronts.highs[slot]:
-            if Int(forward.fronts.row(slot, ALIGNED)[unsafe_offset=target]) >= forward.columns:
-                return forward.cost if forward.cost <= ceiling else -1
-        if forward.cost >= ceiling:
+        var slot = search.fronts.current
+        if search.fronts.lows[slot] <= target and target <= search.fronts.highs[slot]:
+            if Int(search.fronts.row(slot, ALIGNED)[unsafe_offset=target]) >= search.columns:
+                return search.cost if search.cost <= ceiling else -1
+        if search.cost >= ceiling:
             return -1
-        if forward.cost >= window:
+        if search.cost >= window:
             return GROWING
-        forward.advance[False]()
+        search.advance[record]()
+
+
+def traced_alone[
+    pieces: Int
+](mut search: Wavefront[pieces], ceiling: Int, mirrored: Bool, mut moves: List[UInt8]) -> Int:
+    """`alone` for an alignment: the search `canonical` would trace grown by itself, its fronts kept, and
+    traced back from the end the moment it reaches it, as `canonical` traces it, appending the moves
+    right to left; with `mirrored` the search is the backward one. The cost, -1 past `ceiling`, or
+    `GROWING` with nothing appended.
+
+    Grown on by `canonical` after the two searches met, the search keeps only the diagonals an optimal
+    path passes; kept whole here, it holds those and others, and the trace from the end, which steps
+    only from a cell to one an optimal path leaves it by, takes the same moves."""
+    var cost = alone[pieces, True](search, ceiling)
+    if cost < 0:
+        return cost
+    var columns = search.columns
+    var rows = search.rows
+    var path = List[UInt8](capacity=columns + rows)
+    trace(search.history, search.penalties, ALIGNED, cost, columns - rows, columns, path)
+    if mirrored:
+        append_reversed(moves, path)
+    else:
+        moves.extend(path^)
+    return cost
 
 
 struct SearchSpace(Movable):
@@ -2012,8 +2039,25 @@ def solve[
         for _ in range(rows):
             moves.append(UInt8(SECOND_GAP))
         return cost
-    begun(forward_search, first, second, penalties, start, keep, False, 0, 0, band)
-    begun(backward_search, first, second, penalties, finish, keep, True, 0, 0, band.mirrored(columns - rows))
+    # A whole alignment kept for its traceback begins with the one search `canonical` would trace, the
+    # backward one for `Ties.LEFT`, grown by itself while it may (see `traced_alone`); the other begins
+    # only for a pair that has not ended by then.
+    var whole = keep and start == FREE_START and finish == FREE_START
+    var mirrored = ties != Ties.RIGHT
+    if whole and mirrored:
+        begun(backward_search, first, second, penalties, finish, keep, True, 0, 0, band.mirrored(columns - rows))
+        var cost = traced_alone(backward_search.value(), ceiling, True, moves)
+        if cost != GROWING:
+            return cost
+    elif whole:
+        begun(forward_search, first, second, penalties, start, keep, False, 0, 0, band)
+        var cost = traced_alone(forward_search.value(), ceiling, False, moves)
+        if cost != GROWING:
+            return cost
+    if not whole or mirrored:
+        begun(forward_search, first, second, penalties, start, keep, False, 0, 0, band)
+    if not whole or not mirrored:
+        begun(backward_search, first, second, penalties, finish, keep, True, 0, 0, band.mirrored(columns - rows))
     ref forward = forward_search.value()
     ref backward = backward_search.value()
     var best = Meeting.none()
@@ -2315,10 +2359,20 @@ def cigar_of(
 ) -> String:
     """The CIGAR of the moves `solve` appended for two sequences, at that cost."""
     # The CIGAR's room is bounded by the edits: every gapped letter, and a substitution per mismatch cost.
+    # Counted 32 moves at a time: a move at a time, the count was most of a short read's CIGAR time.
+    comptime CHUNK = 32
     var gapped = 0
-    for move in moves:
-        if move != UInt8(ALIGNED):
+    var count = len(moves)
+    var at = moves.unsafe_ptr()
+    var index = 0
+    while index + CHUNK <= count:
+        var chunk = at.unsafe_offset(index).unsafe_load[width=CHUNK]()
+        gapped += Int(chunk.ne(UInt8(ALIGNED)).cast[DType.uint8]().reduce_add())
+        index += CHUNK
+    while index < count:
+        if at[unsafe_offset=index] != UInt8(ALIGNED):
             gapped += 1
+        index += 1
     # Each substitution costs a mismatch, so the cost bounds them; free ones only the moves do.
     var substitutions = cost // penalties.mismatch if penalties.mismatch > 0 else len(moves)
     var path = EditPath(moves^, List[UInt8](), len(first), len(second), gapped + substitutions)
