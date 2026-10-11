@@ -308,6 +308,7 @@ td.wrap { vertical-align: top; }
 <caption><b>Table S4.</b> Gap-affine alignment at costs (4, 6, 2), all datasets: mean time per alignment in ms, with a 30&nbsp;s budget per sample. Superscripts give the pairs completed where not all were; a dash marks a tool that completed none within 30&nbsp;s, o.o.m. one the 8&nbsp;GB limit stopped.</caption>
 <thead><tr><th class="l">Dataset</th><th>dinara-align</th><th>WFA</th><th>BiWFA</th><th>KSW2</th><th>BSAlign</th></tr></thead>
 <tbody>
+<tr class="group"><td class="l" colspan="6"><em>Real data</em></td></tr>
 <tr><td class="l">ont-1k</td><td class="best"><b>0.105</b></td><td>0.188</td><td>0.308</td><td>1.10</td><td>0.336</td></tr>
 <tr><td class="l">ont-10k</td><td class="best"><b>1.60</b></td><td>4.89</td><td>5.86</td><td>30.0</td><td>7.84</td></tr>
 <tr><td class="l">ont-50k</td><td class="best"><b>21.5</b></td><td>63.4</td><td>54.9</td><td>341<sup>81/104</sup></td><td>87.0</td></tr>
@@ -316,6 +317,7 @@ td.wrap { vertical-align: top; }
 <tr><td class="l">SARS-CoV-2</td><td class="best"><b>0.710</b></td><td>2.05</td><td>1.78</td><td>87.9</td><td>341</td></tr>
 <tr><td class="l">Illumina</td><td class="best"><b>0.00145</b></td><td>0.00155</td><td>0.00281</td><td>0.013</td><td>0.054</td></tr>
 <tr><td class="l">PacBio HiFi</td><td class="best"><b>0.095</b></td><td>0.227</td><td>0.231</td><td>9.72</td><td>86.0</td></tr>
+<tr class="group"><td class="l" colspan="6"><em>Simulated: random sequences, uniform errors (QuickEd)</em></td></tr>
 <tr><td class="l">10&nbsp;kbp, 1%</td><td class="best"><b>0.199</b></td><td>0.416</td><td>0.646</td><td>21.3</td><td>37.0</td></tr>
 <tr><td class="l">10&nbsp;kbp, 5%</td><td class="best"><b>2.32</b></td><td>7.14</td><td>8.72</td><td>96.1</td><td>37.0</td></tr>
 <tr><td class="l">10&nbsp;kbp, 10%</td><td class="best"><b>7.06</b></td><td>23.1</td><td>27.1</td><td>202</td><td>37.3</td></tr>
@@ -337,6 +339,7 @@ td.wrap { vertical-align: top; }
 <caption><b>Table S5.</b> Unit costs, all datasets: mean time per alignment in ms, with the median in parentheses, traceback included, a 30&nbsp;s budget per sample. Superscripts give the pairs completed where not all were, the median over those; a dash marks a tool that completed none, o.o.m. one the 8&nbsp;GB limit stopped.</caption>
 <thead><tr><th class="l">Dataset</th><th>dinara-align</th><th>A*PA2-full</th><th>A*PA2-simple</th><th>A*PA</th><th>Edlib</th><th>BiWFA</th><th>WFA</th><th>QuickEd</th></tr></thead>
 <tbody>
+<tr class="group"><td class="l" colspan="9"><em>Real data</em></td></tr>
 <tr><td class="l">ont-1k</td><td class="best"><b>0.021 (0.021)</b></td><td>0.081 (0.089)</td><td>0.048 (0.054)</td><td>0.612 (0.556)</td><td>0.124 (0.118)</td><td>0.044 (0.046)</td><td>0.031 (0.032)</td><td>0.075 (0.073)</td></tr>
 <tr><td class="l">ont-10k</td><td class="best"><b>0.156 (0.109)</b></td><td>0.391 (0.264)</td><td>0.247 (0.177)</td><td>15.3 (3.29)</td><td>1.09 (0.569)</td><td>0.741 (0.278)</td><td>0.599 (0.225)</td><td>0.688 (0.451)</td></tr>
 <tr><td class="l">ont-50k</td><td class="best"><b>0.580 (0.229)</b></td><td>1.27 (0.513)</td><td>0.944 (0.307)</td><td>263 (9.26)</td><td>6.14 (2.05)</td><td>7.43 (0.872)</td><td>6.38 (0.726)</td><td>2.31 (1.05)</td></tr>
@@ -345,6 +348,7 @@ td.wrap { vertical-align: top; }
 <tr><td class="l">SARS-CoV-2</td><td class="best"><b>0.286 (0.146)</b></td><td>2.00 (2.07)</td><td>0.728 (0.662)</td><td>6.49 (2.07)</td><td>8.18 (7.74)</td><td>0.909 (0.456)</td><td>0.987 (0.362)</td><td>3.90 (4.27)</td></tr>
 <tr><td class="l">Illumina</td><td class="best"><b>0.000576 (0.000482)</b></td><td>0.014 (0.014)</td><td>0.00410 (0.00405)</td><td>0.014 (0.013)</td><td>0.023 (0.023)</td><td>0.00204 (0.00179)</td><td>0.00112 (0.000999)</td><td>0.016 (0.015)</td></tr>
 <tr><td class="l">PacBio HiFi</td><td class="best"><b>0.013 (0.00527)</b></td><td>0.977 (0.921)</td><td>0.259 (0.237)</td><td>1.05 (0.962)</td><td>3.35 (3.14)</td><td>0.086 (0.069)</td><td>0.066 (0.047)</td><td>0.950 (0.881)</td></tr>
+<tr class="group"><td class="l" colspan="9"><em>Simulated: random sequences, uniform errors (QuickEd)</em></td></tr>
 <tr><td class="l">10&nbsp;kbp, 1%</td><td class="best"><b>0.026 (0.023)</b></td><td>0.729 (0.724)</td><td>0.160 (0.156)</td><td>0.564 (0.560)</td><td>3.22 (3.21)</td><td>0.092 (0.088)</td><td>0.066 (0.058)</td><td>0.611 (0.609)</td></tr>
 <tr><td class="l">10&nbsp;kbp, 5%</td><td class="best"><b>0.267 (0.242)</b></td><td>0.797 (0.794)</td><td>0.288 (0.285)</td><td>1.08 (1.07)</td><td>3.79 (3.80)</td><td>0.642 (0.635)</td><td>0.508 (0.495)</td><td>1.25 (1.24)</td></tr>
 <tr><td class="l">10&nbsp;kbp, 10%</td><td class="best"><b>0.355 (0.361)</b></td><td>0.726 (0.714)</td><td>0.450 (0.439)</td><td>3.26 (3.23)</td><td>4.56 (4.55)</td><td>2.26 (2.26)</td><td>1.81 (1.66)</td><td>1.99 (2.01)</td></tr>
@@ -366,6 +370,7 @@ td.wrap { vertical-align: top; }
 <caption><b>Table S6.</b> The samples: pairs in each sample of the dataset, their lengths and their divergence, the edit distance over the longer sequence, as QuickEd's Table S1 describes its datasets.</caption>
 <thead><tr><th class="l">Dataset</th><th>Pairs</th><th>Length, min / mean / max (bp)</th><th>Divergence, min / mean / max (%)</th></tr></thead>
 <tbody>
+<tr class="group"><td class="l" colspan="4"><em>Real data</em></td></tr>
 <tr><td class="l">ont-1k</td><td>1221 of 12477</td><td>42 / 830 / 1,089</td><td>0 / 11 / 21</td></tr>
 <tr><td class="l">ont-10k</td><td>277 of 5000</td><td>342 / 3,643 / 9,791</td><td>4 / 13 / 20</td></tr>
 <tr><td class="l">ont-50k</td><td>104 of 10000</td><td>360 / 9,633 / 42,626</td><td>4 / 12 / 19</td></tr>
@@ -374,6 +379,7 @@ td.wrap { vertical-align: top; }
 <tr><td class="l">SARS-CoV-2</td><td>33 of 10000</td><td>29,244 / 29,746 / 29,864</td><td>0 / 1 / 7</td></tr>
 <tr><td class="l">Illumina</td><td>4032 of 5992</td><td>77 / 248 / 251</td><td>0 / 0 / 10</td></tr>
 <tr><td class="l">PacBio HiFi</td><td>69 of 890</td><td>10,956 / 14,372 / 22,816</td><td>0 / 0 / 1</td></tr>
+<tr class="group"><td class="l" colspan="4"><em>Simulated: random sequences, uniform errors (QuickEd)</em></td></tr>
 <tr><td class="l">10&nbsp;kbp, 1%</td><td>100 of 10000</td><td>10,000 / 10,003 / 10,023</td><td>1 / 1 / 1</td></tr>
 <tr><td class="l">10&nbsp;kbp, 5%</td><td>99 of 10000</td><td>10,000 / 10,008 / 10,045</td><td>5 / 5 / 5</td></tr>
 <tr><td class="l">10&nbsp;kbp, 10%</td><td>100 of 10000</td><td>10,000 / 10,008 / 10,056</td><td>9 / 9 / 9</td></tr>
@@ -395,8 +401,10 @@ td.wrap { vertical-align: top; }
 <caption><b>Table S7.</b> Memory at unit costs: the largest growth of peak resident memory aligning one pair of the sample, in MB, as in A*PA2, and the peak resident memory of the whole run in parentheses, as in QuickEd, runtime and input included. A dash marks a tool that completed no pair within 30&nbsp;s.</caption>
 <thead><tr><th class="l">Dataset</th><th>dinara-align</th><th>A*PA2-full</th><th>A*PA2-simple</th><th>Edlib</th><th>BiWFA</th><th>QuickEd</th></tr></thead>
 <tbody>
+<tr class="group"><td class="l" colspan="7"><em>Real data</em></td></tr>
 <tr><td class="l">ont-500k</td><td>48 (64)</td><td>82 (89)</td><td>82 (90)</td><td>5.3 (15)</td><td>15 (29)</td><td>22 (26)</td></tr>
 <tr><td class="l">ont-500k-genvar</td><td>39 (64)</td><td>48 (57)</td><td>32 (55)</td><td>4.8 (16)</td><td>12 (27)</td><td>20 (27)</td></tr>
+<tr class="group"><td class="l" colspan="7"><em>Simulated: random sequences, uniform errors (QuickEd)</em></td></tr>
 <tr><td class="l">100&nbsp;kbp, 20%</td><td>5.2 (18)</td><td>7.3 (12)</td><td>4.7 (9)</td><td>1.4 (8)</td><td>3.6 (11)</td><td>8.8 (12)</td></tr>
 <tr><td class="l">500&nbsp;kbp, 20%</td><td>53 (82)</td><td>59 (66)</td><td>53 (61)</td><td>4.1<sup>3/4</sup></td><td>15<sup>1/4</sup></td><td>16 (20)</td></tr>
 <tr><td class="l">1&nbsp;Mbp, 20%</td><td>123 (178)</td><td>184 (196)</td><td>192 (205)</td><td>–</td><td>–</td><td>26 (31)</td></tr>

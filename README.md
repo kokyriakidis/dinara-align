@@ -60,8 +60,8 @@ and how to reproduce them.
 | SARS-CoV-2 genomes, 30 kbp, edit distance | **287 µs** | A\*PA2-simple, 728 µs |
 | Illumina 2x250 reads of HG002 against its own assembly, edit distance | **0.576 µs** | WFA2-lib, 1.12 µs |
 | PacBio HiFi reads of HG002, mean 14 kbp, edit distance | **12.6 µs** | WFA2-lib, 65.9 µs |
-| 100 kbp pairs at 10% errors (QuickEd), edit distance | **7.28 ms** | A\*PA2-full, 13.9 ms; QuickEd, 39 ms |
-| 1 Mbp pairs at 20% errors (QuickEd), edit distance | **892 ms** | A\*PA2-full, 2.02 s; QuickEd, 4.8 s |
+| simulated 100 kbp pairs at 10% uniform errors (QuickEd), edit distance | **7.28 ms** | A\*PA2-full, 13.9 ms; QuickEd, 39 ms |
+| simulated 1 Mbp pairs at 20% uniform errors (QuickEd), edit distance | **892 ms** | A\*PA2-full, 2.02 s; QuickEd, 4.8 s |
 | ONT reads, mean 3.6 kbp (ont-10k), gap-affine (4, 6, 2) | **1.60 ms** | WFA2-lib, 4.89 ms |
 | Illumina 2x250 reads of HG002, gap-affine (4, 6, 2) | **1.45 µs** | WFA2-lib, 1.55 µs |
 | PacBio HiFi reads of HG002, gap-affine (4, 6, 2) | **95 µs** | WFA2-lib, 227 µs |
