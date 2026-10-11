@@ -52,14 +52,13 @@ from .device_align import (
 from .errors import AlignmentError, ErrorKind
 from .gap_affine import (
     DEFAULT_MAX_MEMORY,
-    FREE_START,
     KEPT_BYTES,
     EndsFree,
     Penalties,
     SearchSpace,
     cigar_of,
     rings_fit,
-    solve,
+    global_path,
     wavefront_align,
     wavefront_penalties,
     wavefront_score,
@@ -362,8 +361,8 @@ def host_score[
 ](first: ImmSpan[Scalar[SymbolDType], _], second: ImmSpan[Scalar[SymbolDType], _], scoring: Scoring) -> Int32:
     """The best score on the host. A global one under a table of one match and one mismatch score tries the
     wavefront, whose work grows with the score rather than the matrix, and whose rings the default memory
-    holds; the wavefront hands back a pair a sweep would finish sooner. Everything else is swept (see
-    `swept_score`)."""
+    holds; the wavefront hands a pair a sweep would finish sooner to the sweep in differences (see
+    `gap_affine.wavefront_score`). Everything else is swept (see `swept_score`)."""
     var first_codes = List[UInt8](first)
     var second_codes = List[UInt8](second)
     comptime if mode == AlignmentMode.GLOBAL:
@@ -827,14 +826,12 @@ def wavefront_alignment(
     var second_codes = translate(second, scoring.alphabet)
     var letters = len(first_codes) + len(second_codes)
     var moves = List[UInt8](capacity=letters)
-    var cost = solve[1](
+    var cost = global_path[1](
         space.forward,
         space.backward,
         Span(first_codes),
         Span(second_codes),
         penalties,
-        FREE_START,
-        FREE_START,
         fronts_within(stored_cells),
         moves,
     )

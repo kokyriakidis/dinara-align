@@ -80,6 +80,7 @@ from dinara_align.gap_affine import (
     wavefront_penalties,
 )
 from dinara_align.substitutions import SubstitutionLookup
+from dinara_align.differences import difference_bits, swept_cost, swept_path
 
 comptime GLOBAL = Mode.GLOBAL
 comptime LOCAL = Mode(Mode.SMITH_WATERMAN, 0, 0, 0, 0, 0, Anchor.START, -1, -1)
@@ -3177,6 +3178,93 @@ def test_lane_alignments_match_single_pairs() raises:
                         if expected:
                             assert_equal(found[index].value().cost, expected.value().cost)
                             assert_equal(found[index].value().cigar, expected.value().cigar)
+
+
+def test_sweep_in_differences_matches_the_wavefront() raises:
+    """The sweep in differences, which a divergent pair's alignment hands over to, finds the wavefront's cost
+    and appends the moves of the path the wavefront's backtrace takes under either tie rule: under affine,
+    linear and two-piece costs, deletions priced apart, dear costs that need 16-bit lanes, pairs of a letter
+    to a few hundred, identical to unrelated, against the wavefront with nothing handed over."""
+    seed(71)
+    var all_costs: List[Costs] = [
+        Costs.affine(4, 6, 2),
+        Costs.affine(1, 2, 1).with_deletions(3, 2),
+        Costs.linear(2, 3),
+        Costs.two_piece(4, 6, 2, 24, 1),
+        Costs.two_piece(3, 4, 2, 12, 1).with_deletions(5, 3, 15, 1),
+        Costs.affine(40, 60, 20),
+    ]
+    for trial in range(240):
+        var reference = random_sequence(1, 13 if trial % 4 == 0 else 300, DNA_ALPHABET)
+        var query = random_sequence(1, 300, DNA_ALPHABET) if trial % 5 == 0 else mutated(
+            reference, [0.0, 0.05, 0.2, 0.4][trial % 4], 12
+        )
+        if query.byte_length() == 0:
+            query = "A"
+        var costs = all_costs[trial % len(all_costs)]
+        var penalties = penalties_of(costs)
+        assert_true(difference_bits[2](penalties) > 0)
+        for ties in [Ties.LEFT, Ties.RIGHT]:
+            var expected = List[UInt8]()
+            var swept = List[UInt8]()
+            var cost: Int
+            var found: Int
+            var plain: Int
+            if costs.pieces() == 2:
+                cost = solve[2](
+                    reference.as_bytes(),
+                    query.as_bytes(),
+                    penalties,
+                    FREE_START,
+                    FREE_START,
+                    1 << 24,
+                    expected,
+                    ties=ties,
+                )
+                found = swept_path[2](reference.as_bytes(), query.as_bytes(), penalties, ties, swept)
+                plain = swept_cost[2](reference.as_bytes(), query.as_bytes(), penalties)
+            else:
+                cost = solve[1](
+                    reference.as_bytes(),
+                    query.as_bytes(),
+                    penalties,
+                    FREE_START,
+                    FREE_START,
+                    1 << 24,
+                    expected,
+                    ties=ties,
+                )
+                found = swept_path[1](reference.as_bytes(), query.as_bytes(), penalties, ties, swept)
+                plain = swept_cost[1](reference.as_bytes(), query.as_bytes(), penalties)
+            assert_equal(found, cost)
+            assert_equal(plain, cost)
+            assert_equal(len(swept), len(expected))
+            for index in range(len(expected)):
+                assert_equal(swept[index], expected[index])
+
+
+def test_divergent_pairs_align_as_close_ones_do() raises:
+    """Pairs too divergent for the wavefront hand over to the sweep in differences, and give the alignment a
+    batch traces in the lanes, its CIGAR the one either tie rule picks, distances agreeing, whatever the
+    memory allowed: unrelated and far apart, of a kilobase or two."""
+    seed(73)
+    var references = List[String]()
+    var queries = List[String]()
+    for trial in range(12):
+        var reference = random_sequence(800, 2000, DNA_ALPHABET)
+        references.append(reference)
+        queries.append(random_sequence(800, 2000, DNA_ALPHABET) if trial % 2 == 0 else mutated(reference, 0.45, 8))
+    for costs in [Costs.affine(4, 6, 2), Costs.two_piece(4, 6, 2, 24, 1)]:
+        for ties in [Ties.LEFT, Ties.RIGHT]:
+            var batch = alignments(references, queries, costs, ties=ties)
+            for index in range(len(references)):
+                var single = align(references[index], queries[index], costs, ties=ties)
+                assert_equal(single.cost, batch[index].cost)
+                assert_equal(single.cigar, batch[index].cigar)
+                assert_equal(distance(references[index], queries[index], costs), single.cost)
+                # Too little memory for the flags keeps the wavefront, which splits the pair: the cost still the least.
+                var tight = align(references[index], queries[index], costs, ties=ties, max_memory=200000)
+                assert_equal(tight.cost, single.cost)
 
 
 def test_lane_scores_match_single_pairs() raises:

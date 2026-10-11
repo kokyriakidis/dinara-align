@@ -277,14 +277,17 @@ unless noted; BSAlign and QuickEd are x86-only).
 - [x] **Parallel output-sensitive edit distance** (Ding et al., ESA 2023), its BFS-Hash and BFS-SA on one
   thread, distance only against dinara-align's with its traceback: 40 to 150 times slower on 100 kbp
   and 1 Mbp pairs at 1 and 5%, its design point, and about 100 times on divergent pairs.
-- [ ] **Divergent pairs at affine costs.** The wavefront's work grows with the cost times the length,
-  so where BSAlign's 8-bit matrix takes 1.5 ms for unrelated 2 kbp pairs the wavefront takes 4.6, and
-  1.2 to 1.3 times BSAlign's time at 30%. The table's certified band now sweeps unrelated 2 kbp pairs in
-  16 bits at 1.77 ms where the wavefront takes 3.99 (M2), even at 30% and 2 kbp, and slower at 10 kbp,
-  which still needs 32 bits. `Costs` place ties as WFA2-lib does, which the Gotoh walk does not, so a
-  switch needs the batch lanes' wavefront flags (see `lanes.band_flags`) in the single pair's band, and
-  a rule from the wavefront's work so far; difference recurrences would then give the band 8-bit lanes at
-  any length. Not built.
+- [x] **Divergent pairs at affine costs.** The wavefront's work grows with the cost times the length,
+  so where BSAlign's 8-bit matrix took 1.5 ms for unrelated 2 kbp pairs the wavefront took 4.6. Now the
+  wavefront hands a pair over once its projected work passes a full sweep in difference recurrences
+  (Suzuki and Kasahara 2018), 8-bit lanes at any length, that keeps each cell's flag by the lanes' rule
+  for the wavefront's ties, so the alignment is the same byte for byte (see `differences`). Its traceback
+  keeps every few anti-diagonals and sweeps each stretch again, memory the square root of the matrix's:
+  a byte a cell faulted in fresh pages that cost more than the sweep. Each diagonal is swept in place
+  from the last row up, which kept 5 and 10 kbp pairs at 0.18 to 0.24 ns a cell where two diagonals took
+  0.36 and 0.45. On the Skylake-X, `align` at (4, 6, 2): unrelated 1, 2 and 5 kbp pairs 1.50, 5.3 and 32.9
+  ms to 0.28, 0.87 and 4.8; at 30% 0.57, 2.2 and 16.4 to 0.28, 0.88 and 4.7; `distance` 2 to 14 times
+  faster; pairs under 15% apart unchanged. The exchange rate is `CELLS_PER_STEP`, measured.
 
 ## From A*PA2's discussion
 

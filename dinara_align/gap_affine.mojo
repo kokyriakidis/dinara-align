@@ -72,6 +72,7 @@ from .errors import AlignmentError, ErrorKind
 from .modes import Anchor, Band, Costs, Ties, Mode
 from .slides import GATHERED_SLIDES, gathered_slides, slide
 from .traceback import cigar_string, EditPath
+from .differences import difference_bits, path_bytes, swept_cost, swept_path
 
 comptime Slot = MutPointer[Int32, MutUntrackedOrigin]
 """A front read or written by `step`, indexed by diagonal: a source and its destination may share a row."""
@@ -135,17 +136,25 @@ def along_first(layer: Int) -> Bool:
     return (layer - 1) % 2 == 0
 
 
-comptime CELLS_PER_STEP = 4
-"""Cells of the full sweep one diagonal step of the three fronts costs about as much as: about 1.5
-against 0.4 ns, measured against the 32-bit sweep `scoring.swept_score` replaced; its 16-bit lanes cost
-less a cell, so the wavefront now hands a pair over a little later than it would have to."""
+comptime CELLS_PER_STEP = 10
+"""Cells of the full sweep in differences (see `differences`) that one diagonal step of the fronts costs
+about as much as: the exchange rate by which the wavefront judges a sweep would finish first. Measured, not
+derived, since a step's slide along the matches is as long as the pair's runs make it. On the Skylake-X,
+over 1 to 10 kbp pairs 10 to 30% apart at affine costs (4, 6, 2), a step took 1.7 to 2.6 ns and a cell,
+its flag, the kept diagonals and the walk included, 0.18 to 0.24 ns: 9.4 to 12 cells a step near where the
+two cross, at 15 to 20% apart, on 1 to 5 kbp pairs, and 7 on 10 kbp ones. No answer depends on it: both
+give the same cost and the same alignment, so a rate off by half hands a pair over a little early or late."""
 
 comptime MET = 0
 """`bidirectional`'s answer when the searches proved where an optimal path splits."""
 comptime OVER = 1
 """Its answer when they proved every path dearer than the ceiling."""
 comptime HALTED = 2
-"""Its answer when they stopped first: a full sweep would be cheaper, or the kept fronts too large."""
+"""Its answer when they stopped first: the kept fronts would pass the memory allowed."""
+comptime SWEEP = 3
+"""Its answer when a full sweep of the matrix would finish first (see `CELLS_PER_STEP`)."""
+comptime SWEEP_INSTEAD = -2
+"""`solve`'s answer, with `give_up`, when a full sweep of the matrix would finish first."""
 
 comptime FREE_START = 0
 """A search's origin as a whole alignment's: any first move, each at its own cost. An origin of a gap
@@ -1457,8 +1466,8 @@ def bidirectional[
 ) -> Int:
     """Grows the two searches a cost at a time each in turn, lowering `best` to the cheapest place an
     optimal path splits between them, until no cheaper one is left unchecked: `MET`. `OVER` once no
-    path can cost `ceiling` or less, or none stays inside the band; `HALTED` once a full sweep would be
-    cheaper, with `give_up`, or, with `record`, once the kept fronts would pass `limit` entries, and
+    path can cost `ceiling` or less, or none stays inside the band; `SWEEP` once a full sweep would be
+    cheaper, with `give_up`; `HALTED`, with `record`, once the kept fronts would pass `limit` entries, and
     the searches may resume.
 
     Each new front is checked against the other side's last `window` costs, which its ring holds. Every
@@ -1553,7 +1562,7 @@ def bidirectional[
             var ratio = Float64(projected) / Float64(spent)
             var work = forward.work + backward.work
             if Float64(work) * (ratio * ratio - 1.0) > Float64(budget - work):
-                return HALTED
+                return SWEEP
 
 
 def wavefront_score(first: List[UInt8], second: List[UInt8], penalties: Penalties) -> Optional[Int]:
@@ -1564,7 +1573,10 @@ def wavefront_score(first: List[UInt8], second: List[UInt8], penalties: Penaltie
     var forward = Wavefront[1](Span(first), Span(second), penalties, FREE_START, False, False)
     var backward = Wavefront[1](Span(first), Span(second), penalties, FREE_START, False, True)
     var best = Meeting.none()
-    if bidirectional[1, False, cost_only=True](forward, backward, best, True, Int.MAX) != MET:
+    var status = bidirectional[1, False, cost_only=True](forward, backward, best, True, Int.MAX)
+    if status == SWEEP and difference_bits[1](penalties) > 0:
+        return penalties.score(swept_cost[1](Span(first), Span(second), penalties), letters)
+    if status != MET:
         return None
     return penalties.score(best.cost, letters)
 
@@ -1639,9 +1651,22 @@ def searched_distance[
         backward, first, second, penalties, FREE_START, False, True, ends_free.first_end, ends_free.second_end, mirrored
     )
     var best = Meeting.none()
-    var status = bidirectional[pieces, False, cost_only=True](
-        forward.value(), backward.value(), best, False, Int.MAX, ceiling, grown_alone
+    # A global pair with the whole matrix open may take the sweep in differences once it would finish first.
+    var columns = len(first)
+    var rows = len(second)
+    var sweepable = (
+        grown_alone
+        and ends_free.first_begin == 0
+        and ends_free.second_begin == 0
+        and band.covers(columns, rows)
+        and difference_bits[pieces](penalties) > 0
     )
+    var status = bidirectional[pieces, False, cost_only=True](
+        forward.value(), backward.value(), best, sweepable, Int.MAX, ceiling, grown_alone
+    )
+    if status == SWEEP:
+        var cost = swept_cost[pieces](first, second, penalties)
+        return cost if cost <= ceiling else -1
     if status != MET:
         return -1
     return best.cost
@@ -1913,12 +1938,13 @@ def solve[
     ceiling: Int = Int.MAX,
     band: Band = Band(),
     ties: Ties = Ties.LEFT,
+    give_up: Bool = False,
 ) -> Int:
     """`solve` with searches of its own."""
     var forward: Optional[Wavefront[pieces]] = None
     var backward: Optional[Wavefront[pieces]] = None
     return solve[pieces](
-        forward, backward, first, second, penalties, start, finish, limit, moves, keep, ceiling, band, ties
+        forward, backward, first, second, penalties, start, finish, limit, moves, keep, ceiling, band, ties, give_up
     )
 
 
@@ -1938,6 +1964,7 @@ def solve[
     ceiling: Int = Int.MAX,
     band: Band = Band(),
     ties: Ties = Ties.LEFT,
+    give_up: Bool = False,
 ) -> Int:
     """Appends an optimal path's moves right to left and returns its cost, from an origin as `start`
     allows and to a corner the backward search's origin `finish` allows (see `FREE_START`), a global
@@ -1955,6 +1982,9 @@ def solve[
     a gap leaves the piece before it to end in that gap and the piece after it to begin there, the
     opening paid once, its piece's. A piece is about a quarter of the pair, its two searches about half
     of the diagonals the pair's search grew from its end, so one that cannot fit skips keeping at once.
+
+    With `give_up`, a pair kept whole whose searches project a full sweep of the matrix finishing first
+    appends nothing and returns `SWEEP_INSTEAD`.
     """
     var columns = len(first)
     var rows = len(second)
@@ -1978,9 +2008,11 @@ def solve[
     ref backward = backward_search.value()
     var best = Meeting.none()
     if keep:
-        var status = bidirectional[pieces, True](forward, backward, best, False, limit, ceiling)
+        var status = bidirectional[pieces, True](forward, backward, best, give_up, limit, ceiling)
         if status == OVER:
             return -1
+        if status == SWEEP:
+            return SWEEP_INSTEAD
         if status == MET and start == FREE_START and finish == FREE_START:
             var traced: Bool
             if ties == Ties.RIGHT:
@@ -2090,7 +2122,9 @@ def wavefront_align(
     it, keeping at most `limit` entries of fronts at once (see `solve`)."""
     var letters = len(first) + len(second)
     var moves = List[UInt8](capacity=letters)
-    var cost = solve[1](Span(first), Span(second), penalties, FREE_START, FREE_START, limit, moves)
+    var forward: Optional[Wavefront[1]] = None
+    var backward: Optional[Wavefront[1]] = None
+    var cost = global_path[1](forward, backward, Span(first), Span(second), penalties, limit, moves)
     comptime GAP = UInt8(ord("-"))
     var symbols = alphabet.as_bytes()
     var top = List[UInt8](capacity=len(moves))
@@ -2172,40 +2206,32 @@ def cigar_within[
     ties: Ties = Ties.LEFT,
     limit: Int = HISTORY_LIMIT,
 ) -> Optional[AffineCigar]:
-    """`cigar_within` through `space`'s searches, as `wavefront_distance` takes them."""
-    var columns = first.byte_length()
-    var rows = second.byte_length()
+    """`cigar_within` through `space`'s searches, as `wavefront_distance` takes them (see `global_path`)."""
     # UTF-8 never holds the sentinels' bytes, so the text's own bytes serve as codes.
-    var moves = List[UInt8](capacity=columns + rows)
+    var moves = List[UInt8](capacity=first.byte_length() + second.byte_length())
     var cost: Int
     comptime if pieces == 1:
-        cost = solve[1](
+        cost = global_path[1](
             space.forward,
             space.backward,
             first.as_bytes(),
             second.as_bytes(),
             penalties,
-            FREE_START,
-            FREE_START,
             limit,
             moves,
-            True,
             ceiling,
             band,
             ties,
         )
     else:
-        cost = solve[2](
+        cost = global_path[2](
             space.forward2,
             space.backward2,
             first.as_bytes(),
             second.as_bytes(),
             penalties,
-            FREE_START,
-            FREE_START,
             limit,
             moves,
-            True,
             ceiling,
             band,
             ties,
@@ -2213,6 +2239,53 @@ def cigar_within[
     if cost < 0:
         return None
     return AffineCigar(cost * penalties.scale, cigar_of(first, second, moves^, cost, penalties, eqx))
+
+
+def global_path[
+    pieces: Int
+](
+    mut forward_search: Optional[Wavefront[pieces]],
+    mut backward_search: Optional[Wavefront[pieces]],
+    first: Span[UInt8, _],
+    second: Span[UInt8, _],
+    penalties: Penalties,
+    limit: Int,
+    mut moves: List[UInt8],
+    ceiling: Int = Int.MAX,
+    band: Band = Band(),
+    ties: Ties = Ties.LEFT,
+) -> Int:
+    """`solve` of a whole global alignment, appending an optimal path's moves right to left and returning its
+    cost, or -1 past `ceiling` or outside `band`. A pair whose searches project a full sweep of the matrix
+    finishing first, the whole matrix open and its flags within `limit`'s bytes, takes the sweep in
+    differences instead (see `differences`), which picks the same path by the same rule."""
+    var columns = len(first)
+    var rows = len(second)
+    var sweepable = (
+        band.covers(columns, rows)
+        and difference_bits[pieces](penalties) > 0
+        and path_bytes(columns, rows) <= limit * KEPT_BYTES
+    )
+    var cost = solve[pieces](
+        forward_search,
+        backward_search,
+        first,
+        second,
+        penalties,
+        FREE_START,
+        FREE_START,
+        limit,
+        moves,
+        True,
+        ceiling,
+        band,
+        ties,
+        sweepable,
+    )
+    if cost != SWEEP_INSTEAD:
+        return cost
+    cost = swept_path[pieces](first, second, penalties, ties, moves)
+    return cost if cost <= ceiling else -1
 
 
 def cigar_of(
