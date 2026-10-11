@@ -17,6 +17,8 @@ alignment whose reward folds into the costs (see `rewarded_alignment`).
 """
 
 
+from std.sys import size_of
+
 from .common import SubstitutionDType
 from .cigar import reversed_list, cigar_counts, cigar_matches, cigar_runs, reversed_cigar, reversed_text, text_of
 from .errors import AlignmentError
@@ -66,6 +68,19 @@ def best_end[
     )
 
 
+comptime STRIP_BYTES = 16 * 1024
+"""What a strip of a sweep's rows may hold, half the 32 KB first-level data cache of the smallest core it runs
+on, the rest left to the row above, the letters and the stack."""
+
+
+def strip_rows[dtype: DType, width: Int, pieces: Int]() -> Int:
+    """The rows of a strip of a sweep (see `swept_cells`): as many as the strip's diagonals, three of scores and
+    two of each gap layer, and its letters fit in `STRIP_BYTES`, in whole steps. Swept whole, a 16 kbp pair took
+    0.82 ns a cell where 1 kbp took 0.14, its diagonals missing the first cache on 72% of loads (Skylake-X)."""
+    var per_row = (3 + 4 * pieces) * size_of[dtype]() + 1
+    return max(width, STRIP_BYTES // per_row // width * width)
+
+
 def swept_cells[
     pieces: Int, dtype: DType, width: Int, transposed: Bool, kind: Int, columns_kept: Bool, compared: Bool
 ](
@@ -113,8 +128,6 @@ def swept_cells[
     var down_end = ends.second_end if transposed else ends.first_end
     var across_start = Int.MAX if local else (ends.first_begin if transposed else ends.second_begin)
     var across_end = ends.first_end if transposed else ends.second_end
-    var sweep = AntiDiagonals[dtype, width, pieces](down_letters, across_letters, LOW)
-    var cells = sweep.cells()
     # A gap's first letter pays the opening and its extension, each further letter the extension: a
     # gap down the lanes is of the lanes' letters, the reference's a deletion's, across them the other's.
     var down_opening = costs.opening if transposed else costs.deletion_opening
@@ -193,20 +206,27 @@ def swept_cells[
 
     @inline(.always)
     def ending(
-        diagonal: Int, last_row: Value, last_column: Value, mut best: Int, mut best_row: Int, mut best_diagonal: Int
+        diagonal: Int,
+        first_row: Int,
+        last_row: Int,
+        on_last_row: Value,
+        on_last_column: Value,
+        mut best: Int,
+        mut best_row: Int,
+        mut best_diagonal: Int,
     ) {imm rows, imm columns, imm across_end, imm down_end, imm highest}:
-        """The ends on anti-diagonal `diagonal`, its cells on the last row and the last column given: those
-        within the letters free there, the one on the highest diagonal, the reference's letters less the
-        query's, or with `highest` false the lowest, on a tie."""
+        """The ends on anti-diagonal `diagonal` among rows `first_row ..= last_row`, its cells on the last row
+        and the last column given: those within the letters free there, the one on the highest diagonal, the
+        reference's letters less the query's, or with `highest` false the lowest, on a tie."""
         for side in range(2):
             var row = rows if side == 0 else diagonal - columns
-            if row < 0 or row > rows or diagonal - row < 0 or diagonal - row > columns:
+            if row < first_row or row > last_row or diagonal - row < 0 or diagonal - row > columns:
                 continue
             if side == 0 and columns - (diagonal - row) > across_end:
                 continue
             if side == 1 and rows - row > down_end:
                 continue
-            var value = Int(last_row if side == 0 else last_column)
+            var value = Int(on_last_row if side == 0 else on_last_column)
             # The reference's letters less the query's, from the lanes' row and the rest of the anti-diagonal.
             var lean = (diagonal - 2 * row) if transposed else (2 * row - diagonal)
             var best_lean = (best_diagonal - 2 * best_row) if transposed else (2 * best_row - best_diagonal)
@@ -216,78 +236,133 @@ def swept_cells[
                 best_row = row
                 best_diagonal = diagonal
 
-    # Diagonal one, beside the origin: a letter of either sequence against nothing.
-    cells.one_back[unsafe_offset=0] = edge(1, across_start, False)
-    cells.one_back[unsafe_offset=1] = edge(1, down_start, True)
-    comptime if not anywhere_end:
-        ending(1, cells.filled(rows), cells.filled(max(1 - columns, 0)), best, best_row, best_diagonal)
-    for diagonal in range(2, rows + columns + 1):
-        var low = max(1, diagonal - columns)
-        var high = min(rows, diagonal - 1)
-        var lag = columns - diagonal
-        var row = low
-        # Each lane's best on this diagonal, and the step it came at, the later on a tie.
-        var top = nothing
-        var top_step = zero
-        var step = Value(0)
-        while row <= high:
-            var score = cells.step[local, transposed](row, lag, substitute, gaps)
-            comptime if anywhere_end:
-                # Lanes past the diagonal's last row hold no cell.
-                var counted = score
-                if row + width - 1 > high:
-                    counted = lane_index.lt(Lanes(Value(high - row + 1))).select(score, nothing)
-                comptime if columns_kept:
-                    var at = column_best.unsafe_ptr().unsafe_offset((columns - diagonal + row) if transposed else row)
-                    at.unsafe_store(max(at.unsafe_load[width=width](), counted))
-                var later = counted.gt(top) if transposed else counted.ge(top)
-                top = later.select(counted, top)
-                top_step = later.select(Lanes(step), top_step)
-                step += 1
-            row += width
-        comptime if anywhere_end:
-            # The diagonal's best, placed at its furthest row, when it meets the best so far.
-            var most = Int(top.reduce_max())
-            var placed = most > 0 and most >= best
-            if placed or (zdrop >= 0 and most < best):
-                var furthest = 0 if not transposed else Int.MAX
-                comptime for lane in range(width):
-                    if Int(top[lane]) == most:
-                        var at = low + Int(top_step[lane]) * width + lane
-                        furthest = min(furthest, at) if transposed else max(furthest, at)
-                if placed:
-                    best = most
-                    best_row = furthest
-                    best_diagonal = diagonal
-                else:
-                    # A Z-drop: how far the diagonal's best has fallen, a gap's slack between them.
-                    var lean = (diagonal - 2 * furthest) if transposed else (2 * furthest - diagonal)
-                    var best_lean = (best_diagonal - 2 * best_row) if transposed else (2 * best_row - best_diagonal)
-                    if best - most > zdrop + slack * abs(lean - best_lean):
-                        dropped = True
-                        break
-        # The border cells of this diagonal, written after the lanes that may have run over them: free
-        # within the letters free there, past them a gap. No interior cell reads a border's gap layers.
-        if diagonal <= columns:
-            cells.current[unsafe_offset=0] = edge(diagonal, across_start, False)
-            cells.deletes[unsafe_offset=0] = LOW
-            comptime if two:
-                cells.deletes2[unsafe_offset=0] = LOW
-        if diagonal <= rows:
-            cells.current[unsafe_offset=diagonal] = edge(diagonal, down_start, True)
-            cells.inserts[unsafe_offset=diagonal] = LOW
-            comptime if two:
-                cells.inserts2[unsafe_offset=diagonal] = LOW
-        cells.advance()
+    # The rows go in strips that stay in the core's first cache (see `strip_rows`), each swept by anti-diagonal
+    # from the row above it, which the strip before leaves in `top`: its scores, and its deletion layers, which
+    # a gap runs on through. A Z-drop judges a whole anti-diagonal at once, so it takes the rows in one strip.
+    var strip = rows if zdrop >= 0 else strip_rows[dtype, width, pieces]()
+    var top = List[Value](length=columns + 1 + width, fill=LOW)
+    var top_deletes = List[Value](length=columns + 1 + width, fill=LOW)
+    var top_deletes2 = List[Value](length=columns + 1 + width if two else 0, fill=LOW)
+    var top_cells = top.unsafe_ptr()
+    var top_delete_cells = top_deletes.unsafe_ptr()
+    var top_delete2_cells = top_deletes2.unsafe_ptr()
+    for column in range(columns + 1):
+        top_cells[unsafe_offset=column] = edge(column, across_start, False)
+    for strip_start in range(0, rows, strip):
+        var height = min(strip, rows - strip_start)
+        var strip_end = strip_start + height
+        var below = strip_end < rows
+        var sweep = AntiDiagonals[dtype, width, pieces](down_letters[strip_start:strip_end], across_letters, LOW)
+        var cells = sweep.cells()
+        # The strip's own diagonal one: the row above's first two cells, and its first row's first cell.
+        cells.two_back[unsafe_offset=0] = top_cells[unsafe_offset=0]
+        cells.one_back[unsafe_offset=0] = top_cells[unsafe_offset=1]
+        cells.deletes_back[unsafe_offset=0] = top_delete_cells[unsafe_offset=1]
+        comptime if two:
+            cells.deletes2_back[unsafe_offset=0] = top_delete2_cells[unsafe_offset=1]
+        cells.one_back[unsafe_offset=1] = edge(strip_start + 1, down_start, True)
         comptime if not anywhere_end:
             ending(
-                diagonal,
-                cells.filled(rows),
-                cells.filled(max(diagonal - columns, 0)),
+                strip_start + 1,
+                strip_start,
+                strip_end,
+                cells.filled(min(rows - strip_start, height)),
+                cells.filled(max(1 - columns, 0)),
                 best,
                 best_row,
                 best_diagonal,
             )
+        for local_diagonal in range(2, height + columns + 1):
+            # The anti-diagonal's place in the whole matrix, and its rows in the strip's.
+            var diagonal = strip_start + local_diagonal
+            var low = max(1, local_diagonal - columns)
+            var high = min(height, local_diagonal - 1)
+            var lag = columns - local_diagonal
+            var row = low
+            # Each lane's best on this diagonal, and the step it came at, the later on a tie.
+            var best_lanes = nothing
+            var best_step = zero
+            var step = Value(0)
+            while row <= high:
+                var score = cells.step[local, transposed](row, lag, substitute, gaps)
+                comptime if anywhere_end:
+                    # Lanes past the diagonal's last row hold no cell.
+                    var counted = score
+                    if row + width - 1 > high:
+                        counted = lane_index.lt(Lanes(Value(high - row + 1))).select(score, nothing)
+                    comptime if columns_kept:
+                        var whole_row = strip_start + row
+                        var at = column_best.unsafe_ptr().unsafe_offset(
+                            (columns - diagonal + whole_row) if transposed else whole_row
+                        )
+                        at.unsafe_store(max(at.unsafe_load[width=width](), counted))
+                    var later = counted.gt(best_lanes) if transposed else counted.ge(best_lanes)
+                    best_lanes = later.select(counted, best_lanes)
+                    best_step = later.select(Lanes(step), best_step)
+                    step += 1
+                row += width
+            comptime if anywhere_end:
+                # The diagonal's best, placed at its furthest row, when it meets the best so far: a higher score,
+                # or as high on a later diagonal, or on the same one, a strip apart, at a further row.
+                var most = Int(best_lanes.reduce_max())
+                if most > 0 and most >= best or (zdrop >= 0 and most < best):
+                    var furthest = 0 if not transposed else Int.MAX
+                    comptime for lane in range(width):
+                        if Int(best_lanes[lane]) == most:
+                            var at = strip_start + low + Int(best_step[lane]) * width + lane
+                            furthest = min(furthest, at) if transposed else max(furthest, at)
+                    var further = (furthest < best_row) if transposed else (furthest > best_row)
+                    var placed = most > 0 and (
+                        most > best
+                        or (most == best and (diagonal > best_diagonal or (diagonal == best_diagonal and further)))
+                    )
+                    if placed:
+                        best = most
+                        best_row = furthest
+                        best_diagonal = diagonal
+                    elif zdrop >= 0 and most < best:
+                        # A Z-drop: how far the diagonal's best has fallen, a gap's slack between them.
+                        var lean = (diagonal - 2 * furthest) if transposed else (2 * furthest - diagonal)
+                        var best_lean = (best_diagonal - 2 * best_row) if transposed else (2 * best_row - best_diagonal)
+                        if best - most > zdrop + slack * abs(lean - best_lean):
+                            dropped = True
+                            break
+            # The strip's last row, on this diagonal past its first column, for the strip below, if any.
+            var bottom_column = local_diagonal - height
+            if below and bottom_column >= 1 and bottom_column <= columns:
+                top_cells[unsafe_offset=bottom_column] = cells.current[unsafe_offset=height]
+                top_delete_cells[unsafe_offset=bottom_column] = cells.deletes[unsafe_offset=height]
+                comptime if two:
+                    top_delete2_cells[unsafe_offset=bottom_column] = cells.deletes2[unsafe_offset=height]
+            # The border cells of this diagonal, written after the lanes that may have run over them: the row
+            # above the strip, and its first column, free within the letters free there, past them a gap. No
+            # interior cell reads the first column's gap layers.
+            if local_diagonal <= columns:
+                cells.current[unsafe_offset=0] = top_cells[unsafe_offset=local_diagonal]
+                cells.deletes[unsafe_offset=0] = top_delete_cells[unsafe_offset=local_diagonal]
+                comptime if two:
+                    cells.deletes2[unsafe_offset=0] = top_delete2_cells[unsafe_offset=local_diagonal]
+            if local_diagonal <= height:
+                cells.current[unsafe_offset=local_diagonal] = edge(diagonal, down_start, True)
+                cells.inserts[unsafe_offset=local_diagonal] = LOW
+                comptime if two:
+                    cells.inserts2[unsafe_offset=local_diagonal] = LOW
+            cells.advance()
+            comptime if not anywhere_end:
+                ending(
+                    diagonal,
+                    strip_start,
+                    strip_end,
+                    cells.filled(min(rows - strip_start, height)),
+                    cells.filled(max(local_diagonal - columns, 0)),
+                    best,
+                    best_row,
+                    best_diagonal,
+                )
+        if dropped:
+            break
+        # The next strip's corner: this strip's last row's first cell.
+        top_cells[unsafe_offset=0] = edge(strip_end, down_start, True)
     comptime if columns_kept:
         var length = len(reference)
         kept = List[Int](length=length + 1, fill=0)
