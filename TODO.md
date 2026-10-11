@@ -308,6 +308,17 @@ the difference sweep's case (2026-10-10, Skylake-X).
   anti-diagonals and sweeps each stretch again, rather than taking the linear-space path, which breaks ties
   its own way.
 - [x] **The difference sweep in place, its traceback in stretches** (see "Divergent pairs at affine costs").
+- [x] **The unit-cost band's edges within `max_memory`.** The band kept every tile's left edge for the
+  traceback, 175 MB of growth on a 1 Mbp pair at 20% (QuickEd's set), past the 80 MB the README promised;
+  QuickEd splits Hirschberg's way past 16 MB, which breaks ties per piece. Now the round keeps every
+  edge while they fit, then every K-th, K doubling, with room for one stretch of the widest; the
+  traceback sweeps a stretch again from the last kept edge, every step the round's own, so the CIGAR is
+  the same byte for byte (`band.retrace`). The edge buffers grow by doubling to a quarter of the budget
+  and then to all of it at once, as a list's doubling held both buffers at once, up to twice the budget.
+  One pair to a process on the Skylake-X, the four 1 Mbp pairs at 20%: 175, 99, 143 and 146 MB to 133,
+  99, 124 and 113 MB, 3.35 to 3.64 s; at 10% they fit, unchanged. 600 CIGARs under caps from 0 to 1 GB
+  equal the uncapped ones; with no memory at all the pairs take about twice the time. The rest of the
+  growth is the profile and the seeds, which grow with the length, not the cost.
 - [-] **The wavefront's kept fronts, fresh memory each call.** `align` builds its searches anew each call,
   as the library keeps no state of its own, so its kept fronts come from the allocator each time. Measured
   on fresh 5 kbp pairs 15% apart from a fresh process: the first three calls 8.4, 6.2 and 4.3 ms, then 3.5,

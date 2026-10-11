@@ -1138,10 +1138,11 @@ struct Trail(Movable):
     carried into it (see `Resume`), and the vertical differences down that edge. A few words per tile
     rather than every column, so recording costs a copy per tile, not the matrix.
 
-    The edges are kept within `budget` words. While they fit in half of it every tile keeps its edge;
-    past that only every `stride`-th does, the stride doubling as the round goes, and the traceback
-    sweeps a stretch again from the kept edge before it, keeping its edges in the other half (see
-    `band.retrace`). Kept edges form a stack in tile order, so the traceback, going right to left,
+    The edges are kept within `budget` words. While they fit every tile keeps its edge; past that only
+    every `stride`-th does, the stride doubling as the round goes, and the traceback sweeps a stretch
+    again from the kept edge before it, keeping the stretch's edges in what the budget leaves (see
+    `band.retrace`). The round keeps room for one stretch, `stride` of its widest edges, and fills the
+    rest, so as few stretches as the budget allows are swept again. Kept edges form a stack in tile order, so the traceback, going right to left,
     releases each tile's from the top once traced.
     """
 
@@ -1160,6 +1161,8 @@ struct Trail(Movable):
     """The most edge words kept at once, `Int.MAX` for no limit."""
     var stride: Int
     """While recording, the tiles a kept edge stands for: only tiles at a multiple of it keep theirs."""
+    var widest: Int
+    """The most words a recorded tile's edge has taken."""
     var start_threshold: Int
     """The bound the round started on, which sets its tiles' width (see `Band`)."""
     var adapt: Bool
@@ -1181,6 +1184,7 @@ struct Trail(Movable):
         self.edge_minus = List[UInt64](capacity=room)
         self.budget = budget
         self.stride = 1
+        self.widest = 0
         self.start_threshold = 0
         self.adapt = False
 
@@ -1196,6 +1200,7 @@ struct Trail(Movable):
         self.edge_plus.clear()
         self.edge_minus.clear()
         self.stride = 1
+        self.widest = 0
         self.start_threshold = start_threshold
         self.adapt = adapt
 
@@ -1214,7 +1219,8 @@ struct Trail(Movable):
         frontier: Frontier,
     ):
         """A tile's left edge, read from the frontier just before the tile is swept, kept when the tile
-        falls on the stride, which doubles once the kept edges pass half the budget."""
+        falls on the stride, which doubles once the kept edges and room for a stretch of the widest pass
+        the budget."""
         var tile = len(self.first_columns)
         self.first_columns.append(first_column)
         self.end_columns.append(end_column)
@@ -1223,9 +1229,10 @@ struct Trail(Movable):
         self.anchors.append(anchor)
         self.resumes.append(resume)
         self.offsets.append(-1)
+        self.widest = max(self.widest, end - top)
         if tile % self.stride == 0:
             self.keep(tile, frontier)
-            while len(self.edge_plus) > self.budget // 2 and self.stride < tile:
+            while len(self.edge_plus) > self.budget - self.stride * self.widest and self.stride < tile:
                 self.thin()
 
     def keep(mut self, tile: Int, frontier: Frontier):
@@ -1233,9 +1240,23 @@ struct Trail(Movable):
         span the words the tile recorded."""
         var top = self.tops[tile]
         var end = self.ends[tile]
+        self.make_room(end - top)
         self.offsets[tile] = len(self.edge_plus)
         self.edge_plus.extend(Span(frontier.vertical_plus)[top:end])
         self.edge_minus.extend(Span(frontier.vertical_minus)[top:end])
+
+    def make_room(mut self, count: Int):
+        """Room for `count` more edge words, grown as a list grows, doubling, until the edges pass a quarter
+        of the budget, and then to the whole budget at once: doubling past that, the buffer and the copy
+        the list grows through would hold up to twice the budget at once."""
+        var needed = len(self.edge_plus) + count
+        if needed <= self.edge_plus.capacity():
+            return
+        var room = max(needed, 2 * self.edge_plus.capacity())
+        if room > self.budget // 4:
+            room = max(needed, self.budget)
+        self.edge_plus.reserve(room)
+        self.edge_minus.reserve(room)
 
     def thin(mut self):
         """Doubles the stride, dropping every kept edge off it and closing the gaps."""
