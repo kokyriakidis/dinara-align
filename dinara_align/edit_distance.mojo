@@ -43,7 +43,7 @@ struct EditSpace(Movable):
     two-ended search's rings, kept from pair to pair so a warm worker allocates nothing, where each
     pair's own were a third of a short read's time and, on many threads, contended in the allocator."""
 
-    var profile: Optional[Profile]
+    var profile: Profile
     var first_back: List[UInt8]
     var second_back: List[UInt8]
     var ahead: FrontPair
@@ -51,7 +51,7 @@ struct EditSpace(Movable):
 
     def __init__(out self):
         """Nothing profiled yet: the first pair does."""
-        self.profile = None
+        self.profile = Profile()
         self.first_back = List[UInt8]()
         self.second_back = List[UInt8]()
         self.ahead = FrontPair()
@@ -77,11 +77,8 @@ def edit_distance(first: String, second: String, mut space: EditSpace) raises Al
     matrix, the whole matrix is swept instead; a short pair's band covers it from the start, so the
     diagonal transition gives way straight to the sweep once it would cost more.
     """
-    if space.profile:
-        space.profile.value().reset(first, second)
-    else:
-        space.profile = Profile(first, second)
-    ref profile = space.profile.value()
+    space.profile.reset(first, second)
+    ref profile = space.profile
     if profile.columns == 0 or profile.rows == 0:
         return profile.columns + profile.rows
     # A short pair's band would sweep its whole matrix (see `SHORT_BAND_COLUMNS`), so past what that
@@ -127,6 +124,20 @@ comptime EDGE_WORD_BYTES = 16
 def edit_cigar(
     first: String, second: String, eqx: Bool = True, ties: Ties = Ties.LEFT, max_memory: Int = Int.MAX
 ) raises AlignmentError -> EditCigar:
+    """The global edit distance between two sequences and an optimal alignment as a CIGAR string (see the
+    overload taking an `EditSpace`)."""
+    var space = EditSpace()
+    return edit_cigar(first, second, space, eqx, ties, max_memory)
+
+
+def edit_cigar(
+    first: String,
+    second: String,
+    mut space: EditSpace,
+    eqx: Bool = True,
+    ties: Ties = Ties.LEFT,
+    max_memory: Int = Int.MAX,
+) raises AlignmentError -> EditCigar:
     """The global edit distance between two sequences, and an optimal alignment as a CIGAR string, `=`
     and `X` for matches and substitutions, or with `eqx` false `M` for both (see `EditCigar`).
 
@@ -138,11 +149,13 @@ def edit_cigar(
 
     A band keeps its tiles' edges for the traceback within `max_memory` bytes, sweeping stretches again
     past that (see `band.retrace`): the same CIGAR, for one more sweep of the band, or a few under a cap
-    far below the band's edges."""
+    far below the band's edges. The profile is `space`'s, kept from pair to pair as `edit_distance`
+    keeps it."""
     # The search's rule places every edit as far right as it goes; over the reversed pair that is as far
     # left over the pair itself.
     var reverse = ties == Ties.LEFT
-    var profile = Profile(first, second, reverse)
+    space.profile.reset(first, second, reverse)
+    ref profile = space.profile
     var settled = settle(profile, max_memory // EDGE_WORD_BYTES)
     if not settled.banded:
         return EditCigar(settled.distance, diagonal_cigar(profile, settled.fronts, settled.distance, reverse, eqx))

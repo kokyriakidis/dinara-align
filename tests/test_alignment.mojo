@@ -3094,7 +3094,7 @@ def test_aligner_matches_the_functions() raises:
     var all_costs: List[Costs] = [Costs.edit(), Costs.affine(4, 6, 2), Costs.two_piece(4, 6, 2, 24, 1)]
     var modes: List[Mode] = [Mode.GLOBAL, Mode.INFIX, Mode.PREFIX]
     for trial in range(120):
-        var reference = random_sequence(0, [40, 600, 12, 250][trial % 4], DNA_ALPHABET)
+        var reference = random_sequence(0, [40, 600, 12, 250, 3000][trial % 5], DNA_ALPHABET)
         var query = mutated(reference, [0.0, 0.02, 0.1][trial % 3], 8) if trial % 7 else random_sequence(
             0, 300, DNA_ALPHABET
         )

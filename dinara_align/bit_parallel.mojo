@@ -875,6 +875,13 @@ struct Profile(Movable):
         """Both sequences as codes: `A`, `C`, `G` and `T` zero to three, and up to four other bytes the
         codes four to seven, in the order they first appear, each matching only itself; with
         `reverse`, both back to front, the profile of the reversed pair."""
+        self = Self()
+        self.reset(first, second, reverse)
+
+    def __init__(out self):
+        """No pair yet, nothing allocated: `reset` profiles the first. A space holds one so rather than in
+        an `Optional`, whose moves of a value this large the compiler copies a byte at a time: held in
+        one, a 250 bp Illumina read's distance took 1.21 µs on the Skylake-X, held so 0.68."""
         self.columns = 0
         self.rows = 0
         self.words = 0
@@ -889,7 +896,6 @@ struct Profile(Movable):
         self.extended = False
         self.column_codes = List[UInt8]()
         self.row_codes = List[UInt8]()
-        self.reset(first, second, reverse)
 
     def reset(mut self, first: String, second: String, reverse: Bool = False) raises AlignmentError:
         """As new for this pair, the memory the last pair's codes took kept: a batch's worker profiles

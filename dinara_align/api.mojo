@@ -572,7 +572,7 @@ def least_costly(
         try:
             var scale = costs.unit_scale()
             if ends.first_begin == 0 and ends.first_end == 0:
-                var whole = edit_cigar(reference, query, eqx, ties, kept_bytes(limit))
+                var whole = edit_cigar(reference, query, space.edit, eqx, ties, kept_bytes(limit))
                 var cost = whole.distance * scale
                 return Alignment(cost, -cost, whole.cigar, 0, columns, 0, rows)
             var hit: EditHit
@@ -589,7 +589,7 @@ def least_costly(
             else:
                 hit = edit_search(query, reference, ends.first_begin == 0, ties)
             var part = text_of(reference.as_bytes()[hit.start : hit.end])
-            var found = edit_cigar(part, query, eqx, ties, kept_bytes(limit))
+            var found = edit_cigar(part, query, space.edit, eqx, ties, kept_bytes(limit))
             var cost = found.distance * scale
             return Alignment(cost, -cost, found.cigar, hit.start, hit.end, 0, rows)
         except error:
