@@ -48,7 +48,9 @@ memory-bound lookups, so the wider the vectors beside the scalar core, the less 
 narrow is worth beside the setup they cost. On an M2, two 64-bit lanes to a NEON register, 40 percent,
 about one edit in fifteen bases on real reads; on a Skylake-X at a fixed 3.3 GHz, eight to an AVX-512
 register, its seeds' setup twice as slow as the M2's and its band no slower, 20 percent, short of which
-the long reads ran faster on exact seeds. Four lanes, AVX2, are between the two and unmeasured."""
+the long reads ran faster on exact seeds. Four lanes, AVX2, are between the two: built for Haswell on
+the same Skylake-X (2026-10-10), 20 and 30 percent ran ont-500k and genvar within 0.5% of each other
+and 40 percent ont-500k 6% slower, so 30 it is."""
 
 
 comptime INEXACT_CHAINED_SPREAD = 20

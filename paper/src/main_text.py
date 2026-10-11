@@ -118,8 +118,8 @@ BODY = [
  'enters the next through a lane rotation [@Wozniak1997; @GrootKoerkamp2024b]. Every column then waits for the '
  'rotation of the previous one, and A*PA2 processes two four-lane vectors together to overlap these waits. On '
  'AVX-512, where a vector holds eight words, dinara-align interleaves two eight-word groups, the lower lagging ten '
- 'columns behind the upper, so that the instructions of each group fill the latency of the other; on AVX2 and NEON a '
- 'single group was faster. Bands of two or three words, in which every operation lies on the critical path, are '
+ 'columns behind the upper, so that the instructions of each group fill the latency of the other; with narrower '
+ 'vectors a single group is used. Bands of two or three words, in which every operation lies on the critical path, are '
  'computed in general-purpose registers, whose operations have lower latency. On AVX-512 the sweep requires about '
  '2.4 cycles per word and column.'),
 ('sub', 'Band bounds from agreeing estimates'),
@@ -314,9 +314,10 @@ BODY = [
  'regrouped recurrence nor the per-lane band certificate depends on the implementation, and both apply directly to '
  'other bit-parallel and inter-sequence aligners.'),
 ('p',
- 'The study has several limitations. First, all reported measurements were taken on a single processor; the NEON '
- 'configuration was measured only during development, on an Apple M2, and the AVX2 threshold for inexact seeds was '
- 'interpolated rather than measured. Second, some thresholds were chosen using workloads that also appear in the '
+ 'The study has several limitations. First, the evaluation covers a single x86 processor with AVX-512. The AVX2 '
+ 'configuration was measured only for its inexact-seed threshold, built for Haswell on the same machine (20 and 30% '
+ 'equal within 0.5%, 40% up to 6% slower), and the NEON configuration, which the library also supports, is not '
+ 'evaluated here. Second, some thresholds were chosen using workloads that also appear in the '
  'evaluation; in particular, the AVX-512 threshold for inexact seeds was lowered from 40 to 20% after measurements '
  'on the uniform 100 kbp pairs of [#fig:sweeps]a, so results on those pairs may overstate performance on unseen '
  'data. Third, as in the A*PA2 protocol, most configurations were run once, and on the Skylake-X some running times '
