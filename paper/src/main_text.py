@@ -11,21 +11,23 @@ AUTHORS = [("Konstantinos Kyriakidis", "kkyriaki@ucsc.edu"), ("Benedict Paten", 
 AFFILIATION = "UC Santa Cruz Genomics Institute, Santa Cruz, CA, USA"
 
 ABSTRACT = [('Motivation',
-  'Exact pairwise alignment is now fast enough for most workloads, yet no single exact aligner is fastest across '
-  'them: diagonal-transition methods win on short and near-identical pairs, seeded band doubling on long nanopore '
-  'reads, and SIMD methods on batches of short pairs. Which algorithm wins depends on the length, divergence and '
-  'cost model of each pair, and on how each algorithm maps onto the processor.'),
+  'Pairwise alignment underlies read mapping, genome assembly, variant calling and pangenome construction. '
+  'Heuristic aligners can miss or misplace alignments with large indels or clustered errors, whereas exact '
+  'aligners return an optimal alignment whatever the data, which makes their results reproducible and a '
+  'reference for evaluating heuristics. Yet no single exact aligner is fastest across workloads: diagonal '
+  'transition wins on short and near-identical pairs, seeded band '
+  'doubling on long nanopore reads, and SIMD methods on batches of short pairs.'),
  ('Results',
   'We present dinara-align, an exact aligner that chooses its algorithm per pair, making every choice by a rule '
   'that either provably preserves optimality or bounds the work it can waste. A gap-affine alignment starts with '
   'one search and adds a second only when its measured work exceeds what two would need, which we prove loses no '
-  'optimal alignment; searches give up on a projection only after spending a fixed share of the alternative\'s '
-  'cost; batches of short pairs are aligned in narrow bands certified per vector lane; and inexact seed neighbours '
-  'are inserted without search, with a proof that pruning is unchanged. Every engine returns the same alignment '
-  'among equally optimal ones. On an Intel Skylake-X processor, dinara-align had the lowest mean time of the exact '
-  'aligners tested on all 24 datasets of the A*PA2 and QuickEd benchmarks, including Illumina and PacBio HiFi '
-  'reads of HG002: up to 2.4 times faster than A*PA2 on ultra-long nanopore reads, 2.0 and 5.2 times faster than WFA on '
-  'Illumina and HiFi reads, and 1.1 to 3.8 times faster than WFA and BiWFA at gap-affine costs.'),
+  'optimal alignment; searches abandon a projection only after spending a fixed share of the alternative\'s cost; '
+  'short pairs are batched in narrow bands certified per vector lane; and inexact seed neighbours are inserted '
+  'without search, provably leaving pruning unchanged. Every engine returns the same alignment among equally '
+  'optimal ones. On an Intel Skylake-X processor, dinara-align was the fastest exact aligner tested on all 24 '
+  'datasets of the A*PA2 and QuickEd benchmarks, including Illumina and PacBio HiFi reads of HG002: up to 2.4 '
+  'times faster than A*PA2 on ultra-long nanopore reads, 2.0 and 5.2 times faster than WFA on Illumina and HiFi '
+  'reads, and 1.1 to 3.8 times faster than WFA and BiWFA at gap-affine costs.'),
  ('Availability and implementation',
   'dinara-align is free software under the Mozilla Public License 2.0, available at '
   'https://github.com/kokyriakidis/dinara-align with C, C++, Python and command-line interfaces.'),
@@ -41,7 +43,8 @@ BODY = [
  'pair of 500 kbp reads fills \\(2.5 \\times 10^{11}\\) cells.'),
 ('p',
  'Heuristic aligners compute only part of the matrix, a band, a window or the cells before a drop in score, and '
- 'lose the guarantee of optimality. Exact aligners instead skip only those cells that provably cannot lie on an '
+ 'lose the guarantee of optimality: their result depends on these cut-offs, and alignments with large indels or '
+ 'clustered errors can be missed or misplaced. Exact aligners instead skip only those cells that provably cannot lie on an '
  'optimal path, so that their running time depends on the distance between the sequences rather than on the '
  'product of their lengths.'),
 ('p',
