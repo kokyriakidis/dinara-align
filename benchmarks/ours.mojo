@@ -251,6 +251,9 @@ def seq_mode() raises:
 
     A tool named `name:x,o,e` aligns at affine costs instead, as WFA counts them: a mismatch `x` and a
     gap of `k` letters `o + k e`, on one thread, with a CIGAR as the rivals' traceback hands back.
+
+    A tool named with `distance` gives the edit distance alone, no traceback, for the rivals that give
+    no alignment.
     """
     var tool = String(argv()[2])
     var affine = False
@@ -306,6 +309,8 @@ def seq_mode() raises:
             var cost: Int
             if affine:
                 cost = align(first, second, Costs.affine(mismatch, opening, extension)).cost
+            elif "distance" in tool:
+                cost = distance(first, second)
             else:
                 # A CIGAR, as every rival's traceback hands back, rather than the two gapped rows.
                 cost = align(first, second).cost

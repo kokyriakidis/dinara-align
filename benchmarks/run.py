@@ -71,6 +71,10 @@ RIVALS = {
     # The free-end, extension and two-piece rivals of `mode_bench.py`: Edlib v1.2.7, and KSW2.
     "edlib": ("https://github.com/Martinsos/edlib", "ec2310eda1841ab48c14cd3d866778a4f5eb1491"),
     "ksw2": ("https://github.com/lh3/ksw2", "289609bd9e5381a13b16239d0a7703f1ff03f9ca"),
+    # Bound-and-align (Doblas et al., Bioinformatics 2025): `pa_bench.py` and `quicked_bench.py`, x86-64 only.
+    "QuickEd": ("https://github.com/maxdoblas/QuickEd", "2b1d44b8204a17fa0752fbe0b69b081c86a56e10"),
+    # Striped bit-vector and difference-recurrence kernels (Shao and Ruan, Bioinformatics 2024): `pa_bench.py`, x86-64 only.
+    "bsalign": ("https://github.com/ruanjue/bsalign", "1707aabea62f03eca77bdc059c5a02ccb7f9c0fa"),
 }
 """Each rival's repository and the commit its numbers were taken at."""
 

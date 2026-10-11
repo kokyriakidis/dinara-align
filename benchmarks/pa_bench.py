@@ -26,7 +26,9 @@ pairs both aligned, and against the costs A*PA2's published results recorded for
 disagreement fails the run.
 
 The aligners are the evaluation's exact ones: Edlib, BiWFA, A*PA, A*PA2-simple and A*PA2-full, with
-its parameters, and WFA2-lib's WFA keeping every front, under a memory cap (see `MEMORY_CAP`). Like
+its parameters, and WFA2-lib's WFA keeping every front, under a memory cap (see `MEMORY_CAP`); and on
+x86-64 QuickEd, published since, its default bound-and-align (see `quicked_runner`), and BSAlign's
+striped bit-vector edit distance with its band off (see `bsalign_runners`), under the same cap. Like
 the evaluation, the times here are wall-clock on one thread; dinara-align also runs as a batch, every
 pair of the sample in one call on the same one thread, as the library runs, whose column is the batch's
 time over its pairs: a throughput, where the others are latencies.
@@ -92,7 +94,8 @@ grows with the square of the distance, past any machine's memory on the longest 
 and faster than a budget of seconds stops it."""
 
 CAPPED = ("wfa",)
-"""The tools run under `MEMORY_CAP`."""
+"""The tools run under `MEMORY_CAP`, with BSAlign's (see `bsalign_runners`), whose traceback keeps the
+whole matrix."""
 
 KEPT = CACHE / "pa-bench-rivals.json"
 """The rivals' results from earlier runs, by tool, sample, budget and binary."""
@@ -107,9 +110,12 @@ def dinara(threads: str) -> str:
     return f"dinara-align (bit-parallel, {threads})"
 
 
-def tools(dataset: str, ours: Path, astarpa: Path, wrapper: Path) -> list[tuple[str, Path, str]]:
-    """Each column's runner and the tool name it is given, as the evaluation ran them on a dataset."""
-    return [
+def tools(
+    dataset: str, ours: Path, astarpa: Path, wrapper: Path, quicked: Path | None = None, bsalign: tuple | None = None
+) -> list[tuple[str, Path, str]]:
+    """Each column's runner and the tool name it is given, as the evaluation ran them on a dataset, and
+    QuickEd's and BSAlign's where they build."""
+    chosen = [
         (dinara("1 thread"), ours, dinara("1 thread")),
         (dinara("batch, 1 thread"), ours, dinara("batch, 1 thread")),
         ("a*pa2-full", astarpa, "a*pa2-full"),
@@ -119,18 +125,66 @@ def tools(dataset: str, ours: Path, astarpa: Path, wrapper: Path) -> list[tuple[
         ("biwfa", wrapper, "biwfa"),
         ("wfa", wrapper, "wfa"),
     ]
+    if quicked is not None:
+        chosen.append(("quicked", quicked, "quicked"))
+    if bsalign is not None:
+        chosen.append(("bsalign", bsalign[0], "bsalign-edit"))
+    return chosen
 
 
-def affine_tools(costs: str, ours: Path, wrapper: Path) -> list[tuple[str, Path, str]]:
+def quicked_runner() -> Path | None:
+    """QuickEd's runner (`quicked/runner.c`) against its library at the pinned commit, or None where it
+    does not build: its sources take x86 vector extensions. Built for `run.CPU` as every tool is."""
+    if platform.machine().lower() not in ("x86_64", "amd64"):
+        return None
+    source = fetch("QuickEd")
+    build = CACHE / "target-quicked"
+    configure = ["cmake", "-S", str(source), "-B", str(build), "-DCMAKE_BUILD_TYPE=Release"]
+    # Its bundled Edlib still asks for a CMake older than 3.5, which current CMake refuses without this.
+    configure.append("-DCMAKE_POLICY_VERSION_MINIMUM=3.5")
+    if run.CPU != "native":
+        configure.append("-DQUICKED_NONATIVE=ON")
+    subprocess.run(configure, check=True, capture_output=True)
+    subprocess.run(["cmake", "--build", str(build), "-j", "4", "--target", "quicked"], check=True, capture_output=True)
+    binary = build / "quicked-runner"
+    subprocess.run(
+        ["cc", "-O3", run.c_cpu_flag(), f"-I{source}", f"-I{source / 'quicked'}", str(HERE / "quicked" / "runner.c"),
+         str(source / "lib" / "libquicked.a"), "-lm", "-o", str(binary)],
+        check=True,
+    )
+    return binary
+
+
+def bsalign_runners() -> tuple[Path, Path] | None:
+    """BSAlign's runners (`bsalign/runner.c`) at the pinned commit, its edit distance's and its affine
+    alignment's, or None where they do not build: its kernels are x86 vector code. The edit one is built for
+    `run.CPU` as every tool is; the affine kernel stops on AVX2, so its runner keeps to SSE4.2, as BSAlign's
+    own build does by default."""
+    if platform.machine().lower() not in ("x86_64", "amd64"):
+        return None
+    source = fetch("bsalign")
+    build = CACHE / "target-bsalign"
+    build.mkdir(exist_ok=True)
+    common = ["cc", "-O3", run.c_cpu_flag(), "-mpopcnt", "-D_GNU_SOURCE", f"-I{source}", str(HERE / "bsalign" / "runner.c")]
+    libraries = ["-lm", "-lz", "-lpthread"]
+    edit, affine = build / "edit-runner", build / "affine-runner"
+    subprocess.run([*common, *libraries, "-o", str(edit)], check=True)
+    subprocess.run([*common, "-mno-avx", *libraries, "-o", str(affine)], check=True)
+    return edit, affine
+
+
+def affine_tools(costs: str, ours: Path, wrapper: Path, bsalign: tuple | None = None) -> list[tuple[str, Path, str]]:
     """The columns at affine costs `x,o,e`, as WFA counts them: the exact aligners that take them, KSW2's
-    SSE kernels on x86-64 alone, and dinara-align's batch, one call on one thread, beside its pairs one at
-    a time."""
+    SSE kernels and BSAlign's on x86-64 alone, and dinara-align's batch, one call on one thread, beside its
+    pairs one at a time."""
     batch = "dinara-align (batch, 1 thread)"
     chosen = [("dinara-align (1 thread)", ours, f"dinara-align:{costs}"), (batch, ours, f"{batch}:{costs}")]
     chosen.append(("wfa", wrapper, f"wfa:{costs}"))
     chosen.append(("biwfa", wrapper, f"biwfa:{costs}"))
     if platform.machine().lower() in ("x86_64", "amd64"):
         chosen.append(("ksw2", wrapper, f"ksw2:{costs}"))
+    if bsalign is not None:
+        chosen.append(("bsalign", bsalign[1], f"bsalign:{costs}"))
     return chosen
 
 
@@ -282,7 +336,7 @@ def run_tool(binary: Path, tool: str, path: Path, budget: float) -> tuple[list[t
     command = [str(binary), "seq", tool, str(budget), str(path)]
     if timed:
         command = [str(TIMER), "-f", "peak %M", *command]
-    capped = tool in CAPPED
+    capped = tool in CAPPED or tool.startswith("bsalign")
 
     def limit() -> None:
         """Caps the runner's address space at `MEMORY_CAP`, run in the child before it starts."""
@@ -352,6 +406,12 @@ def identity(binary: Path) -> str:
     another CPU starts afresh. Results kept before the CPU counted were for the baseline one, and none
     of them match.
     """
+    if binary.parent.name == "target-quicked":
+        source = (HERE / "quicked" / "runner.c").read_bytes()
+        return f"{RIVALS['QuickEd'][1][:12]}-{hashlib.sha1(source).hexdigest()[:12]}-{run.CPU}"
+    if binary.parent.name == "target-bsalign":
+        source = (HERE / "bsalign" / "runner.c").read_bytes()
+        return f"{RIVALS['bsalign'][1][:12]}-{hashlib.sha1(source).hexdigest()[:12]}-{run.CPU}"
     crate = "astarpa" if "astarpa" in binary.parent.parent.name else "pa-wrapper"
     rival = "astar-pairwise-aligner" if crate == "astarpa" else "pa-bench"
     source = (HERE / crate / "src" / "main.rs").read_bytes() + (HERE / crate / "Cargo.lock").read_bytes()
@@ -482,6 +542,8 @@ def main() -> None:
         sys.exit("A*PA needs `rustup` for its pinned nightly; pass --install-rust")
     fetch("astar-pairwise-aligner")
     astarpa = cargo_runner("astarpa", nightly)
+    quicked = quicked_runner()
+    bsalign = bsalign_runners()
 
     kept = load_kept() if not options.fresh else {}
 
@@ -492,8 +554,8 @@ def main() -> None:
     def chosen(dataset: str) -> list[tuple[str, Path, str]]:
         """The columns for `dataset`: the affine ones when `--affine` asks, else the unit-cost ones."""
         if options.affine:
-            return affine_tools(options.affine, ours, wrapper)
-        return tools(dataset, ours, astarpa, wrapper)
+            return affine_tools(options.affine, ours, wrapper, bsalign)
+        return tools(dataset, ours, astarpa, wrapper, quicked, bsalign)
 
     columns = [column for column, _, _ in chosen("")]
     lines = [
