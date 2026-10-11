@@ -13,8 +13,7 @@ AFFILIATION = "UC Santa Cruz Genomics Institute, Santa Cruz, CA, USA"
 ABSTRACT = [('Motivation',
   'Pairwise alignment underlies read mapping, genome assembly, variant calling and pangenome construction. '
   'Heuristic aligners can miss or misplace alignments with large indels or clustered errors, whereas exact '
-  'aligners return an optimal alignment whatever the data, which makes their results reproducible and a '
-  'reference for evaluating heuristics. Yet no single exact aligner is fastest across workloads: diagonal '
+  'aligners always return an optimal alignment, a reproducible result and a reference for evaluating heuristics. Yet no single exact aligner is fastest across workloads: diagonal '
   'transition wins on short and near-identical pairs, seeded band '
   'doubling on long nanopore reads, and SIMD methods on batches of short pairs.'),
  ('Results',
@@ -23,8 +22,8 @@ ABSTRACT = [('Motivation',
   'one search and adds a second only when its measured work exceeds what two would need, which we prove loses no '
   'optimal alignment; searches abandon a projection only after spending a fixed share of the alternative\'s cost; '
   'short pairs are batched in narrow bands certified per vector lane; and inexact seed neighbours are inserted '
-  'without search, provably leaving pruning unchanged. Every engine returns the same alignment among equally '
-  'optimal ones. On an Intel Skylake-X processor, dinara-align was the fastest of the exact aligners compared on '
+  'without search, provably losing none that pruning keeps. Under costs, every engine returns the same alignment '
+  'among equally optimal ones. On an Intel Skylake-X processor, dinara-align was the fastest of the exact aligners compared on '
   'every dataset, from 250 bp reads to 1 Mbp pairs and from 0 to 20% divergence: up to 2.4 '
   'times faster than A*PA2 on ultra-long nanopore reads, 2.0 and 5.2 times faster than WFA on Illumina and HiFi '
   'reads, and 1.1 to 3.8 times faster than WFA and BiWFA at gap-affine costs.'),
@@ -89,12 +88,18 @@ BODY = [
   'within a narrow band that the lane certifies optimal (Proposition 1), adapting the speculate-and-verify '
   'approach of SeedEx [@Fujiki2020] to software.',
  '**Direct neighbour construction for the seed heuristic** (Section 3.5). Inexact neighbours of exact seed '
-  'matches are inserted without search, leaving local pruning provably unchanged (Lemma 1).',
- '**One alignment whichever engine computes it** (Sections 3.1 and 3.7). All engines follow one rule among '
-  'equally optimal alignments, and a traceback past the memory limit recomputes stretches from recorded state '
-  'rather than splitting the pair.',
+  'matches are inserted without search, and every neighbour that local pruning would keep is provably among them '
+  '(Lemma 1), so the heuristic remains a lower bound.',
+ '**One alignment whichever engine computes it** (Sections 3.1 and 3.7). Under costs, every engine follows the '
+  'same rule among equally optimal alignments, and a unit-cost band past the memory limit recomputes stretches of '
+  'its traceback from recorded state rather than splitting the pair, so its alignment is the same under any '
+  'memory limit.',
  '**Engines arranged for the processor** (Sections 3.2, 3.4 and 3.11): gathered diagonal transition, an '
-  'interleaved bit-parallel sweep with a shorter dependency chain, and no per-pair constant costs on short reads.']),
+  'interleaved bit-parallel sweep with a shorter dependency chain, and fewer constant costs per pair on short '
+  'reads.',
+ '**One library for every mode and cost model** ([#tab:engines]): global, ends-free, extension and local '
+  'alignment under unit, gap-affine, two-piece and substitution-matrix costs, for single pairs and batches, '
+  'through C, C++, Python and command-line interfaces.']),
 ('p',
  'We evaluate dinara-align on the A*PA2 and QuickEd benchmarks, to which we add real Illumina and PacBio HiFi '
  'reads paired with the genome they came from. Sections 2 to 5 give the background, the methods, the results and '
@@ -248,9 +253,10 @@ BODY = [
  'diagonal [@Ukkonen1985], so \\(h(e(\\mu)) \\le 1 + h(e(\\nu))\\) and \\(c(\\mu)+h(e(\\mu)) \\le c(\\nu)+h(e(\\nu))\\). In '
  'both cases the pruning test value of \\(\\nu\\) is at least that of \\(\\mu\\). \\(\\square\\)'),
 ('p',
- 'Neighbours sharing the start therefore raise the layer of that start by the chain length available from their '
- 'ends, and neighbours sharing the end are placed one layer below it, without a search or a pruning test of '
- 'their own.'),
+ 'Every neighbour that local pruning would keep is therefore inserted; one it would have discarded can only '
+ 'lower the heuristic, which remains a lower bound, so the alignment stays exact. Neighbours sharing the start '
+ 'raise the layer of that start by the chain length available from their ends, and neighbours sharing the end '
+ 'are placed one layer below it, without a search or a pruning test of their own.'),
 ('sub', 'Certified bands for inter-sequence batches'),
 ('p',
  'Batches of short pairs are aligned with one pair per vector lane [@Rognes2011; @Rahn2018], first in saturating '
