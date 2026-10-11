@@ -109,7 +109,8 @@ typedef struct {
  * left, as minimap2 does, or with `right_ties` nonzero right, WFA2-lib's CIGAR byte for byte. A
  * `max_memory` above zero bounds the bytes of fronts an alignment keeps for its traceback, about 80 MB
  * by default; past it the pair is split, its cost still the least and the tie rule followed within
- * each piece. A null pointer is no band, no cap, `=` and `X`, indels left, the default memory.
+ * each piece, or at unit costs stretches of the band are swept again, the same CIGAR. A null pointer
+ * is no band, no cap, `=` and `X`, indels left, the default memory.
  */
 typedef struct {
     int64_t band_low;   /* The lowest diagonal a move may reach; INT64_MIN for no bound. */

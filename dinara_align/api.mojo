@@ -136,7 +136,9 @@ def align(
     its memory stays bounded: the fronts it keeps for the traceback, the bulk of it, stay within
     `max_memory` bytes, past which the pair is split where an optimal path crosses and each piece
     aligned alone (see `gap_affine.solve`), the cost still the least, the tie rule followed within each
-    piece. The sweeps and the bit-parallel search keep a few rows, or a band's edges, whatever the cap.
+    piece. At unit costs the bit-parallel band keeps its tiles' edges for the traceback within
+    `max_memory` too, past which it sweeps stretches of the band again from the edges it kept, the same
+    alignment byte for byte (see `band.retrace`). The sweeps keep a few rows whatever the cap.
     """
     var found = aligned_within(reference, query, costs, mode, band, Int.MAX, ties, eqx, max_memory // KEPT_BYTES)
     if not found:
@@ -570,7 +572,7 @@ def least_costly(
         try:
             var scale = costs.unit_scale()
             if ends.first_begin == 0 and ends.first_end == 0:
-                var whole = edit_cigar(reference, query, eqx, ties)
+                var whole = edit_cigar(reference, query, eqx, ties, kept_bytes(limit))
                 var cost = whole.distance * scale
                 return Alignment(cost, -cost, whole.cigar, 0, columns, 0, rows)
             var hit: EditHit
@@ -587,7 +589,7 @@ def least_costly(
             else:
                 hit = edit_search(query, reference, ends.first_begin == 0, ties)
             var part = text_of(reference.as_bytes()[hit.start : hit.end])
-            var found = edit_cigar(part, query, eqx, ties)
+            var found = edit_cigar(part, query, eqx, ties, kept_bytes(limit))
             var cost = found.distance * scale
             return Alignment(cost, -cost, found.cigar, hit.start, hit.end, 0, rows)
         except error:

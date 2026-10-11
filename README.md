@@ -30,7 +30,9 @@ and Python, and as a command-line aligner.
   local scores and alignments under a substitution table, and global unit-cost distances, also run on
   NVIDIA GPUs and Apple silicon.
 - **Bounded memory.** Every alignment keeps its traceback within a memory limit (`max_memory`, 80 MB
-  by default), splitting a large problem where an optimal path crosses, as BiWFA does.
+  by default): the wavefront splits a large problem where an optimal path crosses, as BiWFA does, and
+  the unit-cost band keeps some of its edges and sweeps the stretches between them again, the same
+  CIGAR either way.
 
 ## How it works
 

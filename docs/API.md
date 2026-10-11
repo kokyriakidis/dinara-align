@@ -109,7 +109,9 @@ alphabet. The wavefront's work grows with the square of the cost rather than wit
 its memory stays bounded: the fronts it keeps for the traceback, the bulk of it, stay within
 `max_memory` bytes, past which the pair is split where an optimal path crosses and each piece
 aligned alone (see `gap_affine.solve`), the cost still the least, the tie rule followed within each
-piece. The sweeps and the bit-parallel search keep a few rows, or a band's edges, whatever the cap.
+piece. At unit costs the bit-parallel band keeps its tiles' edges for the traceback within
+`max_memory` too, past which it sweeps stretches of the band again from the edges it kept, the same
+alignment byte for byte (see `band.retrace`). The sweeps keep a few rows whatever the cap.
 
 ```mojo
 def align(reference: String, query: String, costs: Costs = Costs.edit(), mode: Mode = Mode.GLOBAL, *, max_cost: Int, band: Band = Band(), ties: Ties = Ties.LEFT, eqx: Bool = True, max_memory: Int = Int(83886080)) -> Optional[Alignment]

@@ -13,12 +13,14 @@ rather than doubled (see `band_doubling`).
 from std.math import ceildiv
 
 from .bit_parallel import (
+    ALL_ONES,
     BAND_COLUMNS,
     Edge,
     Frontier,
     LANES,
     NARROW_COLUMNS,
     Profile,
+    Resume,
     Sweep,
     tile_bounds,
     Trail,
@@ -47,6 +49,7 @@ from .seeds import (
     SeedHeuristic,
     SHORT_SEEDS,
 )
+from .traceback import TileTracer
 
 
 comptime NARROW_BAND = 1024
@@ -145,9 +148,7 @@ struct Band(Movable):
         """The column just past the tile's last."""
         return self.bounds[tile + 1]
 
-    def prepare[
-        record: Bool, seeded: Bool
-    ](mut self, tile: Int, mut trail: Trail, mut heuristic: SeedHeuristic) -> Bool:
+    def prepare[seeded: Bool](mut self, tile: Int, mut heuristic: SeedHeuristic) -> Bool:
         """Sets the tile's words and readies its edge; false, with `outcome` set, when no word is left."""
         var first_column = self.bounds[tile]
         var end_column = self.bounds[tile + 1]
@@ -189,10 +190,59 @@ struct Band(Movable):
         if self.end_word <= self.top:
             self.outcome = Round(-1, first_column, self.threshold, -1)
             return False
-        comptime if record:
-            trail.record(first_column, end_column, self.top, self.end_word, self.anchor, self.frontier)
         self.frontier.restart_horizontal(width)
         return True
+
+    def record(self, tile: Int, mut trail: Trail):
+        """The prepared tile's left edge and what the band carries into it, into the trail."""
+        trail.record(
+            self.bounds[tile],
+            self.bounds[tile + 1],
+            self.top,
+            self.end_word,
+            self.anchor,
+            Resume(self.deepest, self.floor, self.threshold, self.extra, self.checkpoint),
+            self.frontier,
+        )
+
+    def resume(mut self, trail: Trail, tile: Int, swept_end: Int):
+        """The band as the trail recorded it, prepared for the tile, whose edge must be kept: its words
+        and anchor, what it carried in, and the edge's differences back in the frontier.
+
+        The frontier's other words must be as the round left them there: those above the top are never
+        read again, and those past the end were never swept, so hold the border's `+1` down, which the
+        words an earlier sweep of this band took past the end, up to `swept_end`, get back."""
+        var top = trail.tops[tile]
+        var end = trail.ends[tile]
+        for word in range(end, swept_end):
+            self.frontier.vertical_plus[word] = ALL_ONES
+            self.frontier.vertical_minus[word] = 0
+        var carried = trail.resumes[tile]
+        self.top = top
+        self.end_word = end
+        self.anchor = trail.anchors[tile]
+        self.deepest = carried.deepest
+        self.floor = carried.floor
+        self.threshold = carried.threshold
+        self.extra = carried.extra
+        self.checkpoint = carried.checkpoint
+        var offset = trail.offsets[tile]
+        var plus = self.frontier.vertical_plus.unsafe_ptr()
+        var minus = self.frontier.vertical_minus.unsafe_ptr()
+        for word in range(end - top):
+            plus[unsafe_offset=top + word] = trail.edge_plus[offset + word]
+            minus[unsafe_offset=top + word] = trail.edge_minus[offset + word]
+        self.frontier.restart_horizontal(self.bounds[tile + 1] - self.bounds[tile])
+
+    def sweep_tile(mut self, mut profile: Profile, tile: Int):
+        """Sweeps the prepared tile's words."""
+        self.tile_sweep(tile).words(
+            profile.symbols(self.first_column(tile), self.end_column(tile)),
+            self.top,
+            self.end_word,
+            self.first_column(tile),
+            self.end_column(tile),
+        )
 
     def tile_sweep(self, tile: Int) -> Sweep:
         """The sweep for one tile, its horizontal edge starting at the tile's first column."""
@@ -310,29 +360,87 @@ def pruned_distance[
     the whole matrix: along the top row, then down the right edge. Each tile sweeps exactly the
     words the band reaches.
 
-    With `record`, every tile's left edge goes into `trail` before the tile is swept, for the
-    traceback; without, the trail is untouched. Each tile matches on as many planes as its own symbols
+    With `record`, every tile goes into `trail` before it is swept, for the traceback, its left edge
+    kept within the trail's budget (see `Trail`); without, the trail is untouched. Each tile matches on as many planes as its own symbols
     need (see `Profile.symbols`). `seeded` says whether `heuristic` has seeds (see `SeedHeuristic.bound`).
 
     With `adapt`, the round re-aims its bound as it goes (see `Band.check`), and a distance is exact
     only within the bound it ends on.
     """
     comptime if record:
-        trail.clear()
+        trail.clear(threshold, adapt)
     var band = Band(profile, threshold, adapt)
     for tile in range(band.tiles()):
-        if not band.prepare[record, seeded](tile, trail, heuristic):
+        if not band.prepare[seeded](tile, heuristic):
             return band.outcome
-        band.tile_sweep(tile).words(
-            profile.symbols(band.first_column(tile), band.end_column(tile)),
-            band.top,
-            band.end_word,
-            band.first_column(tile),
-            band.end_column(tile),
-        )
+        comptime if record:
+            band.record(tile, trail)
+        band.sweep_tile(profile, tile)
         if not band.finish[seeded](tile, heuristic):
             return band.outcome
     return band.result()
+
+
+def replay[
+    seeded: Bool
+](mut profile: Profile, mut trail: Trail, mut heuristic: SeedHeuristic, tile: Int, mut band: Band, mut swept_end: Int):
+    """Keeps the tile's left edge, and some before it, by sweeping the round again from the last kept
+    edge before it (see `Trail.replay_stride`).
+
+    The band resumes as the trail recorded it there, and every step it takes from then on is the
+    round's own, pruning, bounds re-aimed at checkpoints and all, since each depends only on the
+    band's state and the scores it sweeps: so each tile's edge comes out as the round left it, and
+    the traceback over it the same path.
+
+    `band` is the round's, swept again from stretch to stretch, its frontier's words swept so far
+    ending at `swept_end`."""
+    var start = trail.last_kept(tile)
+    var stride = trail.replay_stride(start, tile)
+    band.resume(trail, start, swept_end)
+    for step in range(start, tile):
+        band.sweep_tile(profile, step)
+        var swept = band.finish[seeded](step, heuristic)
+        swept = swept and band.prepare[seeded](step + 1, heuristic)
+        debug_assert(
+            swept and band.top == trail.tops[step + 1] and band.end_word == trail.ends[step + 1],
+            "a band swept again strays from its round",
+        )
+        if step + 1 == tile or (step + 1 - start) % stride == 0:
+            trail.keep(step + 1, band.frontier)
+    swept_end = max(swept_end, band.end_word)
+
+
+def retrace(
+    mut profile: Profile,
+    mut trail: Trail,
+    mut heuristic: SeedHeuristic,
+    start_column: Int,
+    start_row: Int,
+    score: Int,
+    mut moves: List[UInt8],
+):
+    """An optimal path from `(start_column, start_row)`, scoring `score`, back to the origin, as moves
+    right to left, traced over the trail's tiles from the last (see `TileTracer`).
+
+    A tile whose edge the round did not keep is swept again from the last kept edge before it first
+    (see `replay`), and each traced tile's edge is released, so the edges kept stay within the trail's
+    budget, or for a budget below what any stretch can do with, as close as halving the stretch at a
+    time allows. The path is the same either way, edge for edge."""
+    var tracer = TileTracer(start_column, start_row, score)
+    # The band to sweep stretches again with, built for the first.
+    var band = Optional[Band](None)
+    var swept_end = 0
+    for tile in range(trail.tiles() - 1, -1, -1):
+        if not trail.kept(tile):
+            if not band:
+                band = Band(profile, trail.start_threshold, trail.adapt)
+            if heuristic.seeds > 0:
+                replay[True](profile, trail, heuristic, tile, band.value(), swept_end)
+            else:
+                replay[False](profile, trail, heuristic, tile, band.value(), swept_end)
+        tracer.trace(profile, trail, tile, moves)
+        trail.release(tile)
+    tracer.finish(moves)
 
 
 comptime SHORT_AIM = 17

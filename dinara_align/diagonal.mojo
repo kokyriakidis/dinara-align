@@ -996,7 +996,7 @@ def grow_to(profile: Profile, mut ahead: DiagonalFronts, behind: DiagonalFronts,
 
 
 def trace_diagonals(profile: Profile, fronts: DiagonalFronts, distance: Int, mut moves: List[UInt8]):
-    """The optimal path `diagonal_transition` found, as moves right to left, like `trace_back`.
+    """The optimal path `diagonal_transition` found, as moves right to left, like `band.retrace`.
 
     From the corner, each score's front is undone: the matches it slid over, then the edit that
     reached its start from the furthest front of one score less, which `best_source` finds again.

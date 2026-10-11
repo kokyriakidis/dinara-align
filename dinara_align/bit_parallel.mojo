@@ -1119,12 +1119,30 @@ def full_distance(mut profile: Profile) -> Int:
     return profile.columns + frontier.down_right_edge(profile.rows)
 
 
-struct Trail(Movable):
-    """The left edge of every tile a round swept, which is all the traceback needs to retrace it.
+@fieldwise_init
+struct Resume(ImplicitlyCopyable, TrivialRegisterPassable):
+    """What a band carries into a tile beyond its words and anchor, enough to sweep on from there again
+    (see `Band.resume`)."""
 
-    Per tile: its columns, the band's words, the score at the band's top on the left edge, and the
-    vertical differences down that edge. A few words per tile rather than every column, so recording
-    costs a copy per tile, not the matrix.
+    var deepest: Int
+    var floor: Int
+    var threshold: Int
+    var extra: Int
+    var checkpoint: Int
+
+
+struct Trail(Movable):
+    """The left edges of the tiles a round swept, which is all the traceback needs to retrace it.
+
+    Per tile: its columns, the band's words, the score at the band's top on the left edge, what the band
+    carried into it (see `Resume`), and the vertical differences down that edge. A few words per tile
+    rather than every column, so recording costs a copy per tile, not the matrix.
+
+    The edges are kept within `budget` words. While they fit in half of it every tile keeps its edge;
+    past that only every `stride`-th does, the stride doubling as the round goes, and the traceback
+    sweeps a stretch again from the kept edge before it, keeping its edges in the other half (see
+    `band.retrace`). Kept edges form a stack in tile order, so the traceback, going right to left,
+    releases each tile's from the top once traced.
     """
 
     var first_columns: List[Int]
@@ -1133,44 +1151,155 @@ struct Trail(Movable):
     var ends: List[Int]
     var anchors: List[Int]
     """The score at the left edge's top, row `tops[tile] * WORD_BITS`."""
+    var resumes: List[Resume]
     var offsets: List[Int]
-    """Where each tile's edge words start in `edge_plus` and `edge_minus`."""
+    """Where each tile's edge words start in `edge_plus` and `edge_minus`, or -1 when not kept."""
     var edge_plus: List[UInt64]
     var edge_minus: List[UInt64]
+    var budget: Int
+    """The most edge words kept at once, `Int.MAX` for no limit."""
+    var stride: Int
+    """While recording, the tiles a kept edge stands for: only tiles at a multiple of it keep theirs."""
+    var start_threshold: Int
+    """The bound the round started on, which sets its tiles' width (see `Band`)."""
+    var adapt: Bool
+    """Whether the round re-aimed its bound at checkpoints (see `Band.check`)."""
 
-    def __init__(out self, columns: Int = 0):
-        """Room for a round over `columns` columns in its narrowest tiles, a vector's words each."""
+    def __init__(out self, columns: Int = 0, budget: Int = Int.MAX):
+        """Room for a round over `columns` columns in its narrowest tiles, a vector's words each, its
+        edges kept within `budget` words."""
         var tiles = columns // NARROW_COLUMNS + 2
         self.first_columns = List[Int](capacity=tiles)
         self.end_columns = List[Int](capacity=tiles)
         self.tops = List[Int](capacity=tiles)
         self.ends = List[Int](capacity=tiles)
         self.anchors = List[Int](capacity=tiles)
+        self.resumes = List[Resume](capacity=tiles)
         self.offsets = List[Int](capacity=tiles)
-        self.edge_plus = List[UInt64](capacity=tiles * LANES)
-        self.edge_minus = List[UInt64](capacity=tiles * LANES)
+        var room = min(tiles * LANES, budget)
+        self.edge_plus = List[UInt64](capacity=room)
+        self.edge_minus = List[UInt64](capacity=room)
+        self.budget = budget
+        self.stride = 1
+        self.start_threshold = 0
+        self.adapt = False
 
-    def clear(mut self):
-        """Empties the trail for a new round, keeping its buffers."""
+    def clear(mut self, start_threshold: Int, adapt: Bool):
+        """Empties the trail for a new round, starting on `start_threshold`, keeping its buffers."""
         self.first_columns.clear()
         self.end_columns.clear()
         self.tops.clear()
         self.ends.clear()
         self.anchors.clear()
+        self.resumes.clear()
         self.offsets.clear()
         self.edge_plus.clear()
         self.edge_minus.clear()
+        self.stride = 1
+        self.start_threshold = start_threshold
+        self.adapt = adapt
 
-    def record(mut self, first_column: Int, end_column: Int, top: Int, end: Int, anchor: Int, frontier: Frontier):
-        """A tile's left edge, read from the frontier just before the tile is swept."""
+    def tiles(self) -> Int:
+        """The tiles recorded."""
+        return len(self.first_columns)
+
+    def record(
+        mut self,
+        first_column: Int,
+        end_column: Int,
+        top: Int,
+        end: Int,
+        anchor: Int,
+        resume: Resume,
+        frontier: Frontier,
+    ):
+        """A tile's left edge, read from the frontier just before the tile is swept, kept when the tile
+        falls on the stride, which doubles once the kept edges pass half the budget."""
+        var tile = len(self.first_columns)
         self.first_columns.append(first_column)
         self.end_columns.append(end_column)
         self.tops.append(top)
         self.ends.append(end)
         self.anchors.append(anchor)
-        self.offsets.append(len(self.edge_plus))
+        self.resumes.append(resume)
+        self.offsets.append(-1)
+        if tile % self.stride == 0:
+            self.keep(tile, frontier)
+            while len(self.edge_plus) > self.budget // 2 and self.stride < tile:
+                self.thin()
+
+    def keep(mut self, tile: Int, frontier: Frontier):
+        """The tile's left edge onto the top of the kept stack, read from the frontier, whose band must
+        span the words the tile recorded."""
+        var top = self.tops[tile]
+        var end = self.ends[tile]
+        self.offsets[tile] = len(self.edge_plus)
         self.edge_plus.extend(Span(frontier.vertical_plus)[top:end])
         self.edge_minus.extend(Span(frontier.vertical_minus)[top:end])
+
+    def thin(mut self):
+        """Doubles the stride, dropping every kept edge off it and closing the gaps."""
+        self.stride *= 2
+        var written = 0
+        var plus = self.edge_plus.unsafe_ptr()
+        var minus = self.edge_minus.unsafe_ptr()
+        for tile in range(len(self.offsets)):
+            var offset = self.offsets[tile]
+            if offset < 0:
+                continue
+            if tile % self.stride != 0:
+                self.offsets[tile] = -1
+                continue
+            var count = self.ends[tile] - self.tops[tile]
+            for word in range(count):
+                plus[unsafe_offset=written + word] = plus[unsafe_offset=offset + word]
+                minus[unsafe_offset=written + word] = minus[unsafe_offset=offset + word]
+            self.offsets[tile] = written
+            written += count
+        self.edge_plus.resize(written, 0)
+        self.edge_minus.resize(written, 0)
+
+    def kept(self, tile: Int) -> Bool:
+        """Whether the tile's edge is on the stack."""
+        return self.offsets[tile] >= 0
+
+    def last_kept(self, before: Int) -> Int:
+        """The last tile before `before` whose edge is kept; the first tile always is, unless released."""
+        var tile = before - 1
+        while self.offsets[tile] < 0:
+            tile -= 1
+        return tile
+
+    def release(mut self, tile: Int):
+        """Pops the tile's edge, the top of the stack, once traced."""
+        self.edge_plus.resize(self.offsets[tile], 0)
+        self.edge_minus.resize(self.offsets[tile], 0)
+        self.offsets[tile] = -1
+
+    def replay_stride(self, start: Int, tile: Int) -> Int:
+        """Which tiles a sweep again from kept tile `start` to `tile` keeps: `tile`, and every one a
+        multiple of the stride returned past `start`.
+
+        All of them when they fit in what the budget leaves; else the least stride whose edges fit
+        in half of that, leaving the rest for the stretches between, but at most half the stretch, so
+        each sweep again at least halves what is left to sweep.
+        """
+        var left = self.budget - len(self.edge_plus)
+        var length = tile - start
+        var cap = max(1, length // 2)
+        var stride = 1
+        var room = left
+        while stride < cap:
+            var words = self.ends[tile] - self.tops[tile]
+            var step = start + stride
+            while step < tile:
+                words += self.ends[step] - self.tops[step]
+                step += stride
+            if words <= room:
+                break
+            room = left // 2
+            stride *= 2
+        return min(stride, cap)
 
 
 struct Edge(Movable):

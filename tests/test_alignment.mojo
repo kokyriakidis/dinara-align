@@ -2177,6 +2177,28 @@ def test_edit_ties_follow_a_fixed_rule() raises:
         assert_equal(align(first, second, max_cost=left.cost).value().cigar, left.cigar)
     # A gap in a run of repeats: at its left end by default, at its right end under WFA2-lib's rule.
     assert_equal(align("ACGTTTTACG", "ACGTTTACG").cigar, "3=1D6=")
+
+
+def test_edit_alignment_under_a_memory_cap_is_the_same() raises:
+    """A band that may keep only some of its tiles' edges, or none past the first, sweeps stretches again
+    for the rest, and traces the very alignment it traces with all of them kept, by either tie rule,
+    globally and placed as an infix."""
+    seed(67)
+    for trial in range(24):
+        var first = random_sequence(1000, [4000, 20000][trial % 2], DNA_ALPHABET)
+        var second = mutate(first, [0.1, 0.2, 0.3][trial % 3])
+        var ties = Ties.LEFT if trial % 4 < 2 else Ties.RIGHT
+        var whole = align(first, second, ties=ties)
+        for cap in [0, 4096, 1 << 16, 1 << 20]:
+            var capped = align(first, second, ties=ties, max_memory=cap)
+            assert_equal(capped.cost, whole.cost)
+            assert_equal(capped.cigar, whole.cigar, String("trial ", trial, " under ", cap, " bytes"))
+        if trial % 3 == 0:
+            var window = random_sequence(500, 2000, DNA_ALPHABET) + first + random_sequence(500, 2000, DNA_ALPHABET)
+            var placed = align(window, second, mode=Mode.INFIX, ties=ties)
+            var tight = align(window, second, mode=Mode.INFIX, ties=ties, max_memory=4096)
+            assert_equal(tight.cigar, placed.cigar)
+            assert_equal(tight.reference_start, placed.reference_start)
     assert_equal(align("ACGTTTTACG", "ACGTTTACG", ties=Ties.RIGHT).cigar, "6=1D3=")
 
 

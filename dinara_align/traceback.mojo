@@ -5,7 +5,7 @@
 # commit bf2e14e), by Ragnar Groot Koerkamp and Pesho Ivanov, itself translated from Edlib.
 """
 An optimal alignment from a band's recorded tile edges, retraced a tile at a time from the corner by
-WFA2-lib's rule for ties (see `trace_back`), and written out as two gapped rows or as a CIGAR.
+WFA2-lib's rule for ties (see `TileTracer`), and written out as two gapped rows or as a CIGAR.
 """
 
 from std.bit import count_trailing_zeros
@@ -544,38 +544,59 @@ def window_segment[
     return row
 
 
-def trace_back(profile: Profile, trail: Trail, start_column: Int, start_row: Int, score: Int, mut moves: List[UInt8]):
-    """An optimal path from `(start_column, start_row)`, scoring `score`, back to the origin, as moves right to left.
+struct TileTracer(Movable):
+    """An optimal path traced back over a band's tiles one at a time from the last, as moves right to
+    left (see `band.retrace`).
 
-    One tile at a time from the last: each segment ends at a left-edge row whose recorded score is
-    exact, because it plus the segment's cost is the exact score it started from, so the next tile
-    starts from a known score. Each tile is traced by WFA2-lib's rule, by a forward wavefront across it
-    (see `forward_segment`), or, when that would cost too much, swept again and traced cell by cell
-    (see `window_segment`): the same path either way, whichever band found the distance.
+    Each segment ends at a left-edge row whose recorded score is exact, because it plus the segment's
+    cost is the exact score it started from, so the next tile starts from a known score. Each tile is
+    traced by WFA2-lib's rule, by a forward wavefront across it (see `forward_segment`), or, when that
+    would cost too much, swept again and traced cell by cell (see `window_segment`): the same path
+    either way, whichever band found the distance.
     """
-    var edge = Edge()
-    var fronts = TileFronts()
-    var buffers = Recompute()
-    var column = start_column
-    var row = start_row
-    var current = score
-    for tile in range(len(trail.first_columns) - 1, -1, -1):
+
+    var edge: Edge
+    var fronts: TileFronts
+    var buffers: Recompute
+    var start_column: Int
+    var score: Int
+    var column: Int
+    var row: Int
+    var current: Int
+
+    def __init__(out self, start_column: Int, start_row: Int, score: Int):
+        """A trace from `(start_column, start_row)`, scoring `score`."""
+        self.edge = Edge()
+        self.fronts = TileFronts()
+        self.buffers = Recompute()
+        self.start_column = start_column
+        self.score = score
+        self.column = start_column
+        self.row = start_row
+        self.current = score
+
+    def trace(mut self, profile: Profile, trail: Trail, tile: Int, mut moves: List[UInt8]):
+        """Traces the tile, the one left of where the trace stands, whose edge must be kept."""
         var first_column = trail.first_columns[tile]
-        edge.load(trail, tile, profile.rows)
+        self.edge.load(trail, tile, profile.rows)
         # The tile's share of the distance, by its share of the columns: its wavefront may climb three
         # times that, or `WAVEFRONT_FLOOR`, before the tile is recomputed instead.
-        var share = ceildiv(score * (column - first_column), max(start_column, 1))
+        var share = ceildiv(self.score * (self.column - first_column), max(self.start_column, 1))
         var limit = max(WAVEFRONT_FLOOR, 3 * share)
-        var left = forward_segment(profile, edge, first_column, column, row, current, limit, fronts, moves)
+        var left = forward_segment(
+            profile, self.edge, first_column, self.column, self.row, self.current, limit, self.fronts, moves
+        )
         if left < 0:
-            left = recomputed_segment(profile, trail, tile, column, row, current, buffers, moves)
+            left = recomputed_segment(profile, trail, tile, self.column, self.row, self.current, self.buffers, moves)
         # Exact, since it plus the segment's cost is the exact score the segment started from.
-        current = edge.score(left)
-        column = first_column
-        row = left
-    # The first column is the border: the rest of the way up is gaps against the second sequence.
-    for _ in range(row):
-        moves.append(UP)
+        self.current = self.edge.score(left)
+        self.column = first_column
+        self.row = left
+
+    def finish(self, mut moves: List[UInt8]):
+        """The first column is the border: the rest of the way up is gaps against the second sequence."""
+        for _ in range(self.row):
+            moves.append(UP)
 
 
 @fieldwise_init

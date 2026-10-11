@@ -17,7 +17,7 @@ Each pair runs on one thread; `distances` and `alignments` in `api` spread a bat
 at a time.
 """
 
-from .band import band_doubling, band_start
+from .band import band_doubling, band_start, retrace
 from .bit_parallel import FIRST_SENTINEL, full_distance, LEFT, Profile, SECOND_SENTINEL, Trail, UP
 from .diagonal import (
     SHORT_BAND_COLUMNS,
@@ -35,7 +35,7 @@ from .diagonal import (
 )
 from .errors import AlignmentError
 from .modes import Ties
-from .traceback import cigar_string, diagonal_cigar, EditPath, trace_back
+from .traceback import cigar_string, diagonal_cigar, EditPath
 
 
 struct EditSpace(Movable):
@@ -120,8 +120,12 @@ struct EditCigar(Copyable, Movable, Writable):
     var cigar: String
 
 
+comptime EDGE_WORD_BYTES = 16
+"""Bytes a kept edge word takes in a band's trail: its `+` and `-` masks."""
+
+
 def edit_cigar(
-    first: String, second: String, eqx: Bool = True, ties: Ties = Ties.LEFT
+    first: String, second: String, eqx: Bool = True, ties: Ties = Ties.LEFT, max_memory: Int = Int.MAX
 ) raises AlignmentError -> EditCigar:
     """The global edit distance between two sequences, and an optimal alignment as a CIGAR string, `=`
     and `X` for matches and substitutions, or with `eqx` false `M` for both (see `EditCigar`).
@@ -130,12 +134,16 @@ def edit_cigar(
     alignment (see `Ties`): by default every edit as far left as it goes, indels placed as minimap2
     places them, or with `Ties.RIGHT` as far right, WFA2-lib's edit CIGAR byte for byte; whichever of
     the searches below found the distance. A distance diagonal transition found has its CIGAR written
-    straight from the fronts, a run at a time (see `diagonal_cigar`)."""
+    straight from the fronts, a run at a time (see `diagonal_cigar`).
+
+    A band keeps its tiles' edges for the traceback within `max_memory` bytes, sweeping stretches again
+    past that (see `band.retrace`): the same CIGAR, for one more sweep of the band, or a few under a cap
+    far below the band's edges."""
     # The search's rule places every edit as far right as it goes; over the reversed pair that is as far
     # left over the pair itself.
     var reverse = ties == Ties.LEFT
     var profile = Profile(first, second, reverse)
-    var settled = settle(profile)
+    var settled = settle(profile, max_memory // EDGE_WORD_BYTES)
     if not settled.banded:
         return EditCigar(settled.distance, diagonal_cigar(profile, settled.fronts, settled.distance, reverse, eqx))
     var path = oriented(settled^, profile.columns, profile.rows, reverse)
@@ -172,7 +180,7 @@ struct Settled(Movable):
         return self.moves^
 
 
-def settle(mut profile: Profile) raises AlignmentError -> Settled:
+def settle(mut profile: Profile, budget: Int = Int.MAX) raises AlignmentError -> Settled:
     """The global edit distance between a profile's two sequences, and what an optimal alignment by
     WFA2-lib's rule for ties is traced from: from the corner back, an edit into each cell whenever one
     is optimal, a substitution before a base of the first sequence alone before one of the second.
@@ -182,7 +190,8 @@ def settle(mut profile: Profile) raises AlignmentError -> Settled:
     the distance while it is cheaper than a band, and the forward fronts then grow on to it, pruned to
     the diagonals an optimal path passes (see `grow_to`), to be traced back the same way. A pair too
     far apart for either goes to band doubling, recording each tile's left edge in the round that
-    succeeds, and each tile is traced by the same rule (see `trace_back`).
+    succeeds, or within `budget` words only some, and each tile is traced by the same rule (see
+    `band.retrace`).
     """
     var columns = profile.columns
     var rows = profile.rows
@@ -210,7 +219,7 @@ def settle(mut profile: Profile) raises AlignmentError -> Settled:
     var probe = meeting.probe
     var trusted = True
     var heuristic = band_start(profile, meeting.probe, probe, trusted)
-    var trail = Trail(columns)
+    var trail = Trail(columns, budget)
     var distance = band_doubling[True](profile, False, probe, trail, heuristic, trusted)
-    trace_back(profile, trail, columns, rows, distance, moves)
+    retrace(profile, trail, heuristic, columns, rows, distance, moves)
     return Settled(distance, DiagonalFronts(reserve=False), moves^, True)
