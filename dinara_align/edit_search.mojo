@@ -32,14 +32,17 @@ comptime SEARCH_START = 64
 falls within it."""
 
 
-def last_row_scores[free_start: Bool](mut profile: Profile, latest: Bool = False) -> Tuple[Int, Int]:
+def last_row_scores[
+    free_start: Bool
+](mut profile: Profile, latest: Bool = False, first_bound: Int = SEARCH_START) -> Tuple[Int, Int]:
     """The least score along the pattern's last row and the first column it falls in, or with `latest`
     the last, the pattern down the rows, the text across the columns; with `free_start`, the top row is
     free, a match starting anywhere in the text, else it is the global border.
 
     As Edlib searches: a bound guessed and doubled, each try sweeping only the band of rows some score
     within it can still reach (see `banded_last_row`), until the least score falls within the bound,
-    or the bound covers every row and the band the whole matrix.
+    or the bound covers every row and the band the whole matrix. `first_bound` is the first guess,
+    the distance itself when a caller already knows it.
     """
     if profile.rows == 0:
         # The last row is the top: free, every column scoring nothing, or the border, the first alone.
@@ -48,7 +51,7 @@ def last_row_scores[free_start: Bool](mut profile: Profile, latest: Bool = False
         # One column, the whole pattern against nothing; the planes are never built for no text.
         return (profile.rows, 0)
     profile.build_planes()
-    var bound = SEARCH_START
+    var bound = max(first_bound, 1)
     while True:
         var found = banded_last_row[free_start](profile, bound, latest)
         if found[0] <= bound or bound >= profile.rows:
@@ -66,6 +69,11 @@ def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int, latest: 
     """`last_row_scores` swept only where a score within `bound` can still lie, Ukkonen's cutoff: its
     least score and first column, or with `latest` its last, when that score is within the bound, else
     some score above it; and -1, or the distance a checkpoint projected when it gave the try up.
+
+    With `free_start`, a try that fails projects the distance from the deepest row its band kept within
+    the bound: edits spread along the pattern put that row at about `bound * rows / distance`. A read at
+    10% in a window of reference, under the first bound of 64, keeps about two thirds of its rows, so its
+    retry aims at the distance rather than doubling: a 10 kbp read at 5% took four or five doublings.
 
     Without `free_start`, at an eighth, a quarter and half of the pattern's length across the text, the
     least score down the band has climbed about in proportion to the columns crossed, so scaled to the
@@ -108,6 +116,8 @@ def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int, latest: 
     var top = 0
     var anchor = 0
     var checkpoint = 0
+    # The deepest row any tile's right edge kept within the bound, for a free start's projection.
+    var deepest = 0
     var first_column = 0
     while first_column < columns:
         comptime if not free_start:
@@ -187,6 +197,7 @@ def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int, latest: 
             least = min(least, max((top + running - WORD_BITS) // 2, 0))
             if (top + running - WORD_BITS) // 2 <= bound:
                 reach = min((word + 1) * WORD_BITS, rows)
+        deepest = max(deepest, reach)
         comptime if not free_start:
             # Nothing on the right edge within the bound: every later cell is reached across it, so none
             # is within the bound either, and the try has failed. A free start begins anew anywhere.
@@ -199,6 +210,9 @@ def banded_last_row[free_start: Bool](mut profile: Profile, bound: Int, latest: 
                 if estimate - check_margin(estimate, passed) // 2 > bound:
                     return (bound + 1, 0, estimate)
         first_column = end_column
+    comptime if free_start:
+        if best > bound and 0 < deepest < rows:
+            return (best, best_column, bound * rows // deepest)
     return (best, best_column, -1)
 
 
@@ -225,7 +239,7 @@ def edit_search(
         var start = length - found[1]
         var tail = text_of(text.as_bytes()[start:])
         var forward = Profile(tail, pattern)
-        var end_found = last_row_scores[False](forward)
+        var end_found = last_row_scores[False](forward, first_bound=found[0])
         return EditHit(found[0], start, start + end_found[1])
     var forward = Profile(text, pattern)
     var latest = ties == Ties.LEFT
@@ -235,5 +249,5 @@ def edit_search(
     var found = last_row_scores[True](forward, True)
     var end = found[1]
     var backward = Profile(reversed_text(text.as_bytes()[0:end]), reversed_text(pattern.as_bytes()))
-    var start_found = last_row_scores[False](backward)
+    var start_found = last_row_scores[False](backward, first_bound=found[0])
     return EditHit(found[0], end - start_found[1], end)

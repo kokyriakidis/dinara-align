@@ -213,13 +213,24 @@ Ideas from the work the paper cites, each checked (2026-10-10, M2 unless noted).
   and miniwfa (Li) save traceback memory, not time; the GPU, FPGA and in-memory designs (WFA-GPU,
   eWFA, GeneTEK, Scrooge, GenASM, RAPIDx) carry no idea to the CPU paths beyond what is here. Nothing
   promised a gain past the builds' noise. Left.
-- [ ] **Sassy's text-direction tiling for the infix and prefix modes** (Beeloo and Groot Koerkamp,
-  Bioinformatics 2026). Sassy splits the text into four chunks searched in independent SIMD lanes, its
-  bit-vectors along the text rather than the pattern, so no lane waits on another's rotation; it reports
-  4 to 15 times Edlib's speed for patterns up to 1,000 bp. dinara-align's unit-cost infix runs 2 times
-  Edlib (135 against 270 µs, a 1 kbp read in a 3 kbp window): a kernel of Sassy's shape could take that
-  mode severalfold, exact as Sassy is, the minimum found by raising k. A mode of its own, not the main
-  benchmarks; not built.
+- [x] **The infix search's retries aimed, as the global band's are.** Measured beside Sassy (2026-10-10,
+  M2): a free-start search failing its first bound of 64 only doubled, a 1 kbp read at 10% taking two
+  sweeps and a 10 kbp read at 5% four or five, where one at the right bound costs half (35 against 67
+  µs, 1.29 against 2.88 ms). A failed try now projects the distance from the deepest row its band kept
+  within the bound, edits spread along the pattern putting that row near `bound * rows / distance`, and
+  the retry aims past it; the sweep for the start, which knows the distance, begins there. The 10 kbp
+  infix aligns in 1.99 ms where it took 3.39, the 1 kbp one and the prefix mode 3 to 4% faster; tests,
+  400,000 fuzz cases and WFA2-lib's regression set agree.
+- [ ] **Short patterns in long texts, the text split across lanes** (Sassy, Beeloo and Groot Koerkamp,
+  Bioinformatics 2026). Sassy itself is slower here than dinara-align's infix (M2, search only): a 1
+  kbp read at 10% in 3 kbp 204 µs with k doubling and 121 with k given, against 80; a 10 kbp read at 5%
+  in 30 kbp 13.4 and 7.8 ms against 1.8. Its speed is a small k: given the distance, a 30 bp pattern
+  at 5% in 100 kbp takes 68 µs and a 100 bp one in 10 kbp 12, where dinara-align takes 667 and 97, and
+  with k doubled from 64 Sassy takes 775 and 99. A pattern of one word runs the infix sweep's scalar
+  last-word step a column at a time, about 6.7 ns a column. Sassy's idea that carries over: the same
+  pattern word in every lane, each lane a stretch of the text overlapping the next by twice the
+  pattern's length so every match lies whole in one, exact; with the first bound from the pattern's
+  length rather than 64. Not built.
 - [-] **The other aligners since 2023, read for ideas** (2026-10-10). Sassy2 (2026) puts many short
   patterns in SIMD lanes behind a suffix filter: at its reported 6 Gbp/s a pattern a thread, the inexact
   seeds' 40,000 16-mers against a 650 kbp read would take about 4 s, where the hashed halves take about 30
