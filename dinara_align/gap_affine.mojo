@@ -72,6 +72,7 @@ from .errors import AlignmentError, ErrorKind
 from .modes import Anchor, Band, Costs, Ties, Mode
 from .slides import GATHERED_SLIDES, gathered_slides, slide
 from .traceback import cigar_string, EditPath
+from .diagonal import GIVE_UP_SHARE
 from .differences import difference_bits, path_bytes, swept_cost, swept_path
 
 comptime Slot = MutPointer[Int32, MutUntrackedOrigin]
@@ -136,14 +137,16 @@ def along_first(layer: Int) -> Bool:
     return (layer - 1) % 2 == 0
 
 
-comptime CELLS_PER_STEP = 10
+comptime CELLS_PER_STEP = 7
 """Cells of the full sweep in differences (see `differences`) that one diagonal step of the fronts costs
 about as much as: the exchange rate by which the wavefront judges a sweep would finish first. Measured, not
 derived, since a step's slide along the matches is as long as the pair's runs make it. On the Skylake-X,
 over 1 to 10 kbp pairs 10 to 30% apart at affine costs (4, 6, 2), a step took 1.7 to 2.6 ns and a cell,
 its flag, the kept diagonals and the walk included, 0.18 to 0.24 ns: 9.4 to 12 cells a step near where the
-two cross, at 15 to 20% apart, on 1 to 5 kbp pairs, and 7 on 10 kbp ones. No answer depends on it: both
-give the same cost and the same alignment, so a rate off by half hands a pair over a little early or late."""
+two cross, at 15 to 20% apart, on 1 to 5 kbp pairs, and 7 on 10 kbp ones. The 10 kbp rate, as 10 handed
+QuickEd's 10 kbp pairs at 20% to a sweep that took a fifth longer than their wavefronts, and unrelated
+pairs of 1 to 5 kbp lose 5% to it. No answer depends on it: both give the same cost and the same
+alignment."""
 
 comptime MET = 0
 """`bidirectional`'s answer when the searches proved where an optimal path splits."""
@@ -1557,10 +1560,17 @@ def bidirectional[
         if give_up and spent >= next_check:
             next_check = spent + CHECK_STRIDE
             # The fronts widen with the cost, so the work grows with its square; projected from how
-            # far across the two furthest anti-diagonals have come together.
+            # far across the two furthest anti-diagonals have come together. Real reads gather their
+            # errors at the ends, where the searches start, so an early projection runs high: on ONT
+            # reads of 10 kbp, 2.8 times the cost and 8 times the work, and handed pairs to a sweep
+            # that took up to eight times their wavefront. As diagonal transition gives up on its own
+            # projection (see `diagonal.GIVE_UP_SHARE`), the search gives up only once its work has
+            # reached a share of the sweep's, which bounds what a doomed search wastes to that share.
+            var work = forward.work + backward.work
+            if work * GIVE_UP_SHARE < budget:
+                continue
             var projected = spent * letters // max(forward.furthest + backward.furthest, 1)
             var ratio = Float64(projected) / Float64(spent)
-            var work = forward.work + backward.work
             if Float64(work) * (ratio * ratio - 1.0) > Float64(budget - work):
                 return SWEEP
 

@@ -288,6 +288,13 @@ unless noted; BSAlign and QuickEd are x86-only).
   0.36 and 0.45. On the Skylake-X, `align` at (4, 6, 2): unrelated 1, 2 and 5 kbp pairs 1.50, 5.3 and 32.9
   ms to 0.28, 0.87 and 4.8; at 30% 0.57, 2.2 and 16.4 to 0.28, 0.88 and 4.7; `distance` 2 to 14 times
   faster; pairs under 15% apart unchanged. The exchange rate is `CELLS_PER_STEP`, measured.
+  That handover cost ONT reads half their time: their errors gather at the ends, where the searches start,
+  so the first projection ran 2.8 times the cost, 8 times the work, and handed reads to sweeps of up to
+  eight times their wavefront (ont-10k at (4, 6, 2), 1.54 to 2.33 ms a read; ont-50k 20.8 to 30.5 ms). Now
+  the search gives up only once its work has reached a 24th of the sweep's, as diagonal transition gives
+  up on its own projection, and the rate is the one measured at 10 kbp, 7, as 10 lost QuickEd's 10 kbp
+  pairs at 20% a fifth: ont-10k and ont-50k back to 1.55 and 21.0 ms, the 10 kbp pairs at 20% 24.1 to 20.0
+  ms, the unrelated ones 5% slower than with the handover as it was, four times faster than without it.
 
 ## Memory locality
 
