@@ -120,6 +120,10 @@ struct EditCigar(Copyable, Movable, Writable):
     var distance: Int
     var cigar: String
 
+    def take_cigar(deinit self) -> String:
+        """The CIGAR, moved out rather than copied, the rest given up."""
+        return self.cigar^
+
 
 comptime EDGE_WORD_BYTES = 16
 """Bytes a kept edge word takes in a band's trail: its `+` and `-` masks."""

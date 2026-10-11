@@ -36,6 +36,7 @@ from dinara_align import (
     search,
 )
 from dinara_align.api import (
+    aligned,
     aligned_within,
     alignment_from_lanes,
     alignments_in_lanes,
@@ -251,9 +252,9 @@ def align_into(
             asked.max_memory // KEPT_BYTES,
             space,
         )
-        if not found:
+        if not aligned(found):
             return ABOVE_MAX if capped else OUTSIDE_BAND
-        return written(found.value(), alignment)
+        return written(found, alignment)
     except error:
         return failure(error)
 

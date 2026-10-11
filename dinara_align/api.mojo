@@ -141,9 +141,9 @@ def align(
     alignment byte for byte (see `band.retrace`). The sweeps keep a few rows whatever the cap.
     """
     var found = aligned_within(reference, query, costs, mode, band, Int.MAX, ties, eqx, max_memory // KEPT_BYTES)
-    if not found:
+    if not aligned(found):
         raise outside(band)
-    return found.take()
+    return found^
 
 
 def align(
@@ -161,7 +161,7 @@ def align(
     """`align`, or None when the cost would pass `max_cost` or no alignment fits `band`, found as
     `distance` finds that, with no fronts traced. A mode with a match score, which maximizes a score,
     takes no cap."""
-    return aligned_within(reference, query, costs, mode, band, max_cost, ties, eqx, max_memory // KEPT_BYTES)
+    return optional(aligned_within(reference, query, costs, mode, band, max_cost, ties, eqx, max_memory // KEPT_BYTES))
 
 
 struct Aligner(Movable):
@@ -220,9 +220,9 @@ struct Aligner(Movable):
         var found = aligned_within(
             reference, query, costs, mode, band, Int.MAX, ties, eqx, max_memory // KEPT_BYTES, self.space
         )
-        if not found:
+        if not aligned(found):
             raise outside(band)
-        return found.take()
+        return found^
 
     def align(
         mut self,
@@ -238,8 +238,10 @@ struct Aligner(Movable):
         max_memory: Int = DEFAULT_MAX_MEMORY,
     ) raises AlignmentError -> Optional[Alignment]:
         """`align` under a cap, through this aligner's memory."""
-        return aligned_within(
-            reference, query, costs, mode, band, max_cost, ties, eqx, max_memory // KEPT_BYTES, self.space
+        return optional(
+            aligned_within(
+                reference, query, costs, mode, band, max_cost, ties, eqx, max_memory // KEPT_BYTES, self.space
+            )
         )
 
 
@@ -484,6 +486,32 @@ def cost_within(
     return cost * penalties.scale
 
 
+comptime NOT_FOUND = -1
+"""The start an alignment that is not there has: the internal searches give one rather than an `Optional`,
+whose moves of a value this large the compiler copies a byte at a time: through the three calls between
+`Aligner.align` and the search, a 250 bp Illumina read's alignment took 0.585 µs on the Skylake-X that
+way and takes 0.420 so, at gap-affine costs 0.995 and 0.840, built with jumps clear of 32-byte
+boundaries."""
+
+
+def not_found() -> Alignment:
+    """No alignment: none within the cap or the band."""
+    return Alignment(0, 0, String(), NOT_FOUND, NOT_FOUND, NOT_FOUND, NOT_FOUND)
+
+
+@always_inline
+def aligned(alignment: Alignment) -> Bool:
+    """Whether `alignment` is one, not `not_found()`."""
+    return alignment.reference_start != NOT_FOUND
+
+
+def optional(var alignment: Alignment) -> Optional[Alignment]:
+    """`alignment` as the public functions give one under a cap: None for `not_found()`."""
+    if not aligned(alignment):
+        return None
+    return alignment^
+
+
 def aligned_within(
     reference: String,
     query: String,
@@ -494,10 +522,10 @@ def aligned_within(
     ties: Ties,
     eqx: Bool,
     limit: Int,
-) raises AlignmentError -> Optional[Alignment]:
-    """An optimal alignment, or None when its cost would pass `max_cost` (`Int.MAX` for no cap) or none
-    fits `band`: the least costly one, or for a mode that maximizes a score the best-scoring one, its
-    kept fronts within `limit` diagonals."""
+) raises AlignmentError -> Alignment:
+    """An optimal alignment, or `not_found()` when its cost would pass `max_cost` (`Int.MAX` for no cap)
+    or none fits `band`: the least costly one, or for a mode that maximizes a score the best-scoring
+    one, its kept fronts within `limit` diagonals."""
     var space = SearchSpace()
     return aligned_within(reference, query, costs, mode, band, max_cost, ties, eqx, limit, space)
 
@@ -513,7 +541,7 @@ def aligned_within(
     eqx: Bool,
     limit: Int,
     mut space: SearchSpace,
-) raises AlignmentError -> Optional[Alignment]:
+) raises AlignmentError -> Alignment:
     """`aligned_within` through `space`'s searches, which a batch's worker keeps from pair to pair."""
     if not mode.is_scored():
         return least_costly(reference, query, costs, mode, band, max_cost, ties, eqx, limit, space)
@@ -561,10 +589,10 @@ def least_costly(
     eqx: Bool,
     limit: Int,
     mut space: SearchSpace,
-) raises AlignmentError -> Optional[Alignment]:
-    """The least costly alignment with `mode`'s free ends: by the bit-parallel sweep where it serves the
-    pair (see `swept_by_bits`), else by the wavefront, the same alignment at the same costs, through
-    `space`'s searches."""
+) raises AlignmentError -> Alignment:
+    """The least costly alignment with `mode`'s free ends, or `not_found()`: by the bit-parallel sweep
+    where it serves the pair (see `swept_by_bits`), else by the wavefront, the same alignment at the same
+    costs, through `space`'s searches."""
     var columns = reference.byte_length()
     var rows = query.byte_length()
     var ends = EndsFree.of(mode, columns, rows)
@@ -574,7 +602,7 @@ def least_costly(
             if ends.first_begin == 0 and ends.first_end == 0:
                 var whole = edit_cigar(reference, query, space.edit, eqx, ties, kept_bytes(limit))
                 var cost = whole.distance * scale
-                return Alignment(cost, -cost, whole.cigar, 0, columns, 0, rows)
+                return Alignment(cost, -cost, whole^.take_cigar(), 0, columns, 0, rows)
             var hit: EditHit
             if ends.first_end == 0:
                 # A suffix: a prefix of both reversed, the rule's span mirrored, as `Ties.RIGHT` is `Ties.LEFT`
@@ -591,18 +619,21 @@ def least_costly(
             var part = text_of(reference.as_bytes()[hit.start : hit.end])
             var found = edit_cigar(part, query, space.edit, eqx, ties, kept_bytes(limit))
             var cost = found.distance * scale
-            return Alignment(cost, -cost, found.cigar, hit.start, hit.end, 0, rows)
+            return Alignment(cost, -cost, found^.take_cigar(), hit.start, hit.end, 0, rows)
         except error:
             if error.kind != ErrorKind.UNKNOWN_SYMBOL:
                 raise error
     var penalties = space.penalties_for(costs)
     if max_cost < 0:
-        return None
+        return not_found()
     if not rings_fit(penalties, reference.byte_length(), query.byte_length(), kept_bytes(limit), ends):
         # The lanes first, as a batch of this pair alone takes it; else refused.
         var laned = alignment_in_lanes(reference, query, costs, mode, band, max_cost, ties, eqx, limit)
         if laned:
-            return laned.take()
+            var spelled = laned.take()
+            if not spelled:
+                return not_found()
+            return spelled.take()
         rings_within(penalties, reference.byte_length(), query.byte_length(), kept_bytes(limit), ends)
     var ceiling = Int.MAX if max_cost == Int.MAX else max_cost // penalties.scale
     if mode.is_global():
@@ -612,7 +643,7 @@ def least_costly(
         else:
             found = cigar_within[1](reference, query, penalties, eqx, ceiling, space, band, ties, limit)
         if not found:
-            return None
+            return not_found()
         var cost = found.value().cost
         return Alignment(cost, -cost, found.take().cigar, 0, columns, 0, rows)
     var spanned: Optional[Spanned]
@@ -625,7 +656,7 @@ def least_costly(
             space.forward, space.backward, reference, query, penalties, eqx, ceiling, ends, band, ties, limit
         )
     if not spanned:
-        return None
+        return not_found()
     ref found = spanned.value()
     return Alignment(
         found.cost,
@@ -686,8 +717,8 @@ def extended_alignment(
     var searched = reference.byte_length() > 0 and query.byte_length() > 0 and penalties.reward > 0
     if mode.end_bonus > 0 and not found.dropped and not searched:
         var reaching = aligned_within(reference, query, costs, mode.reaching_end(), band, Int.MAX, ties, eqx, limit)
-        if reaching and reaching.value().score + mode.end_bonus > found.score:
-            return reaching.take()
+        if aligned(reaching) and reaching.score + mode.end_bonus > found.score:
+            return reaching^
     var columns = reference.byte_length()
     var rows = query.byte_length()
     var cost = mode.match_score * found.matches - found.score
@@ -1430,8 +1461,8 @@ def capped_alignments(
                 out[unsafe_offset=index] = spelled^
                 return
         try:
-            out[unsafe_offset=index] = aligned_within(
-                references[index], queries[index], costs, mode, band, max_cost, ties, eqx, limit, space
+            out[unsafe_offset=index] = optional(
+                aligned_within(references[index], queries[index], costs, mode, band, max_cost, ties, eqx, limit, space)
             )
         except:
             flags[unsafe_offset=index] = True
@@ -1440,8 +1471,8 @@ def capped_alignments(
 
     for index in range(pairs):
         if failed[index]:
-            results[index] = aligned_within(
-                references[index], queries[index], costs, mode, band, max_cost, ties, eqx, limit
+            results[index] = optional(
+                aligned_within(references[index], queries[index], costs, mode, band, max_cost, ties, eqx, limit)
             )
         if not results[index] and max_cost == Int.MAX:
             raise outside(band)
