@@ -586,6 +586,26 @@ def test_bit_parallel_edit_distance_matches_the_full_matrix() raises:
     assert_equal(distance("ACGT", "ACGTNRYKM"), 5)
 
 
+def test_reversed_profile_codes() raises:
+    """A profile of the reversed pair, coded back to front in the same pass, holds the forward profile's
+    codes turned around, at every length about a chunk's, bases alone and with symbols past `ACGT`,
+    which are numbered in the order they first appear front to back either way."""
+    seed(23)
+    var alphabets: List[String] = ["ACGT", "ACGTN", "ACGTNRYK"]
+    for alphabet in alphabets:
+        for length in range(41):
+            var first = random_sequence(length, length, alphabet)
+            var second = random_sequence(max(length - 3, 0), length + 3, alphabet)
+            var forward = Profile(first, second)
+            var backward = Profile(first, second, True)
+            assert_equal(backward.extended, forward.extended)
+            for column in range(length):
+                assert_equal(backward.column_codes[column], forward.column_codes[length - 1 - column])
+            var rows = second.byte_length()
+            for row in range(rows):
+                assert_equal(backward.row_codes[row], forward.row_codes[rows - 1 - row])
+
+
 def test_bit_parallel_symbols_past_acgt() raises:
     """Bytes past `ACGT` are symbols of their own, each matching only itself, up to four of them.
 
