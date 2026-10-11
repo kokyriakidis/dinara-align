@@ -1,11 +1,11 @@
 """Figure data, from benchmarks/README.md's unit-cost run over QuickEd's simulated sets (2026-10-11, the
-Skylake-X, dinara-align at `dc980d7`, a 30 s budget). Times in ms per alignment.
+Skylake-X, dinara-align at `036e12b`, a 30 s budget). Times in ms per alignment.
 
 A value is [ms] or [ms, 1] where the tool finished only some pairs; None where it finished none."""
 
 DIVERGENCE_X = [1, 5, 10, 20]
 DIVERGENCE = {
-    "dinara-align": [[1.5], [5.02], [7.21], [16.0]],
+    "dinara-align": [[1.5], [5.1], [7.28], [15.7]],
     "A*PA2-full": [[7.53], [8.45], [13.9], [36.7]],
     "A*PA2-simple": [[3.26], [14.9], [27.6], [56.8]],
     "A*PA": [[7.76], [14.4], [48.3], None],
@@ -16,7 +16,7 @@ DIVERGENCE = {
 LENGTH_X = [10, 100, 500, 1000]
 LENGTH = {
     5: {
-        "dinara-align": [[0.269], [5.02], [31.0], [64.1]],
+        "dinara-align": [[0.267], [5.1], [31.4], [65.0]],
         "A*PA2-full": [[0.797], [8.45], [45.0], [118.0]],
         "A*PA2-simple": [[0.288], [14.9], [214.0], [818.0]],
         "A*PA": [[1.08], [14.4], [83.1], [183.0]],
@@ -25,7 +25,7 @@ LENGTH = {
         "WFA": [[0.508], [55.0], [1480.0], None],
         "QuickEd": [[1.25], [24.0], [401.0], [1440.0]]},
     20: {
-         "dinara-align": [[0.519], [16.0], [254.0], [901.0]],
+         "dinara-align": [[0.512], [15.7], [255.0], [892.0]],
          "A*PA2-full": [[1.44], [36.7], [545.0], [2020.0]],
          "A*PA2-simple": [[1.02], [56.8], [901.0], [3520.0]],
          "A*PA": [[205.0], None, None, None],

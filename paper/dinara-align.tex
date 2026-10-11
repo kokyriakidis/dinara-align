@@ -38,7 +38,7 @@
 {\small $^{*}$To whom correspondence should be addressed: kkyriaki@ucsc.edu, bpaten@ucsc.edu}\par\bigskip
 \fbox{\begin{minipage}{0.97\textwidth}\small
 \noindent\textbf{Motivation:} Exact pairwise alignment of long sequencing reads remains computationally demanding. Band doubling over bit-parallel blocks, the wavefront algorithm and A* with seed heuristics have greatly reduced the number of cells an exact aligner must compute. A large part of the remaining running time depends on how the computation maps onto the processor: loop-carried dependency chains, memory-bound table lookups, and bounds and thresholds that are poorly matched to the input or the hardware.\par
-\noindent\textbf{Results:} We present dinara-align, an exact pairwise aligner built on algorithmic changes that address these bottlenecks: a direct construction of the neighbours of exact seed matches that provably preserves local pruning, diagonal transition vectorised across diagonals, band bounds accepted only when independent estimates agree, and per-pair optimality certificates for banded inter-sequence batches, together with a bit-parallel sweep arranged for instruction latency. On an Intel Skylake-X processor, dinara-align had the lowest mean running time among the exact aligners tested on all 22 datasets of the A*PA2 and QuickEd benchmarks, aligning ultra-long nanopore reads in 118~ms on average, compared with 283~ms for A*PA2-full, and was 6.7 times faster than QuickEd in the geometric mean. It was 1.7 to 3.8 times faster than WFA and BiWFA at gap-affine costs and computed global scores for 500{,}000 short-read pairs on one core 4.6 times faster than WFA2-lib.\par
+\noindent\textbf{Results:} We present dinara-align, an exact pairwise aligner built on algorithmic changes that address these bottlenecks: a direct construction of the neighbours of exact seed matches that provably preserves local pruning, diagonal transition vectorised across diagonals, band bounds accepted only when independent estimates agree, and per-pair optimality certificates for banded inter-sequence batches, together with a bit-parallel sweep arranged for instruction latency. On an Intel Skylake-X processor, dinara-align had the lowest mean running time among the exact aligners tested on all 24 datasets of the A*PA2 and QuickEd benchmarks, real Illumina and PacBio HiFi reads among them, aligning ultra-long nanopore reads in 118~ms on average, compared with 283~ms for A*PA2-full, and HiFi reads 5.2 times faster than WFA, and was 8.0 times faster than QuickEd in the geometric mean. It was 1.1 to 3.8 times faster than WFA and BiWFA at gap-affine costs and computed global scores for 500{,}000 short-read pairs on one core 4.6 times faster than WFA2-lib.\par
 \noindent\textbf{Availability and implementation:} dinara-align is free software under the Mozilla Public License 2.0, available at \url{https://github.com/kokyriakidis/dinara-align} with C, C++, Python and command-line interfaces.\par
 \noindent\textbf{Contact:} kkyriaki@ucsc.edu, bpaten@ucsc.edu\par
 \noindent\textbf{Supplementary information:} Supplementary data are available at \emph{Bioinformatics} online.\par
@@ -222,7 +222,7 @@ S = \tfrac12\bigl(a(n+m) - C\bigr),\\ C = 2(a-b)\,X + \sum_{\text{gaps}} \bigl(2
 
 where \(X\) is the number of mismatches, so the wavefront computes score-maximising alignments. The cost also bounds the band in which the alignment must be stored. Each gapped letter contributes at least \(2e+a\) to \(C\), and an alignment that deviates by \(t\) diagonals from both the main and the end diagonal contains at least \(2t\) gapped letters; hence only diagonals within \(C/(2(2e+a))\) of them can contain an optimal alignment. For a 1~kbp pair at 5\% divergence, this stores 137 diagonals instead of 1{,}000. Local alignment first locates the end of the optimal alignment with a forward sweep, as in SSW \citep{Zhao2013ssw}, and then extends a wavefront backwards from that end, stopping at the first cell that attains the maximal score; this avoids the correction pass that striped layouts may need when long alignments score highly \citep{Farrar2007striped}.
 
-The bidirectional wavefront keeps, for every cost and diagonal, the furthest column and one byte naming the source of each layer, five bytes per diagonal, and traces the alignment through these fronts from where the two searches met; a pair whose fronts would exceed the memory limit is split where an optimal path crosses, as in BiWFA. A pair that ends within the costs the forward search can hold is finished by that search alone, before the backward one starts, which saved a third of the time of short reads at 1\% errors, and a cost without traceback stops as soon as its best lies within one of the costs both searches have checked against the start of the other. A global pair whose projected work exceeds that of a full sweep in difference recurrences \citep{Suzuki2018diff}, in 8-bit lanes, is handed to that sweep once the wavefront has spent one twenty-fourth of it; the sweep stores the predecessor flags of Section 3.1, so the alignment is the same, and unrelated pairs of 5~kbp aligned in 4.8~ms instead of 32.9~ms.
+The bidirectional wavefront keeps, for every cost and diagonal, the furthest column and one byte naming the source of each layer, five bytes per diagonal, and traces the alignment through these fronts from where the two searches met; a pair whose fronts would exceed the memory limit is split where an optimal path crosses, as in BiWFA. A pair that ends within the costs one search can hold is finished by that search alone, before the other starts: for a distance the forward search, which saved a third of the time of short reads at 1\% errors; for an alignment the search the traceback reads, traced straight back from the end. Two searches must each pass half the cost and a margin, the widest opening and the dearest move, before they may stop, so a pair of cost d costs them about 2W((d + margin)/2), W(c) being the diagonals a search steps to cost c, and one search W(d); that search therefore grows alone while the W it has measured stays within twice its value at (c + margin)/2, which hands over at about 2.4 margins where fronts widen with the cost and never where the sequences bound them, and the handover loses no meeting. On 250~bp Illumina reads at gap-affine costs, starting with one search took an alignment from 2.41 to 1.52~\textmu s, and growing it by measured work saved a further 5\%; and a cost without traceback stops as soon as its best lies within one of the costs both searches have checked against the start of the other. A global pair whose projected work exceeds that of a full sweep in difference recurrences \citep{Suzuki2018diff}, in 8-bit lanes, is handed to that sweep once the wavefront has spent one twenty-fourth of it; the sweep stores the predecessor flags of Section 3.1, so the alignment is the same, and unrelated pairs of 5~kbp aligned in 4.8~ms instead of 32.9~ms.
 
 Under a general substitution matrix, anti-diagonals are computed in 16-bit lanes while the scores provably fit \citep{Wozniak1997}, a strip of rows of at most 16~KB at a time, so that the rows a strip reads stay in the first-level cache; this took local alignment of 10~kbp against 12~kbp from 50.0 to 17.4~ms. A global alignment is traced in a band of diagonals that grows, at most fourfold per step, until the score it yields proves that every optimal path lies inside it, so a pair close to its diagonal takes one sweep of about its own cells rather than a sweep of the matrix for its score: 1~kbp pairs at 10\% divergence aligned in about 200~\textmu s instead of 544~\textmu s. A band whose decisions would exceed the memory limit keeps every \(k\)-th anti-diagonal and computes each stretch again for the traceback.
 
@@ -238,14 +238,14 @@ A differential fuzzer compares every mode, cost model, band, cost limit and tie 
 
 \subsection{Experimental setup}
 
-All measurements were taken on an Intel Core i9-7900X (Skylake-X, AVX-512), its ten cores fixed at 3.3~GHz with turbo boost and hyper-threading disabled, with dinara-align compiled by Mojo 1.1.0 \citep{Modular2025mojo} at commit \texttt{dc980d7} (gap-affine costs and batches at \texttt{289bcf0}, whose code those workloads share) and every tool compiled for the native instruction set. We combined the protocols of A*PA2 \citep{GrootKoerkamp2024astarpa2} and QuickEd \citep{Doblas2025quicked}: the real datasets of A*PA2, nanopore reads of about 1, 10, 50 and 500~kbp, the last also with genetic variation, and SARS-CoV-2 genomes, and the simulated datasets of QuickEd, random sequences of 10~kbp to 1~Mbp with 1, 5, 10 and 20\% errors, each sampled to about 2~Mbp and at least four pairs (Supplementary Table S5). Each tool aligned each pair once, with traceback, on one pinned core, within 30~s per sample. The exact aligners compared are A*PA2-full and A*PA2-simple, A*PA \citep{GrootKoerkamp2024astarpa}, Edlib \citep{Sosic2017edlib}, WFA and BiWFA \citep{MarcoSola2021wfa,MarcoSola2023biwfa}, QuickEd, BSAlign \citep{Shao2024bsalign}, KSW2 \citep{Li2018minimap2}, parasail \citep{Daily2016parasail} and SSW \citep{Zhao2013ssw}, each on the workloads it supports; every cost agreed with those of every other tool and with the published A*PA2 results.
+All measurements were taken on an Intel Core i9-7900X (Skylake-X, AVX-512), its ten cores fixed at 3.3~GHz with turbo boost and hyper-threading disabled, with dinara-align compiled by Mojo 1.1.0 \citep{Modular2025mojo} at commit \texttt{036e12b} (gap-affine costs at \texttt{a6d9166}, the other alignment modes and batches at \texttt{289bcf0}) and every tool compiled for the native instruction set. We combined the protocols of A*PA2 \citep{GrootKoerkamp2024astarpa2} and QuickEd \citep{Doblas2025quicked}: the real datasets of A*PA2, nanopore reads of about 1, 10, 50 and 500~kbp, the last also with genetic variation, and SARS-CoV-2 genomes; real Illumina 2$\times$250~bp and PacBio HiFi reads, the two technologies QuickEd adds, here reads of HG002 from Genome in a Bottle \citep{Zook2016giab} covering one region of chromosome 20, each mapped by minimap2 \citep{Li2018minimap2} to both haplotypes of HG002's own assembly \citep{Hansen2025hg002} and paired with the stretch it covers, so that a pair differs by sequencing errors alone; and the simulated datasets of QuickEd, random sequences of 10~kbp to 1~Mbp with 1, 5, 10 and 20\% errors, each sampled to about 2~Mbp and at least four pairs (Supplementary Table S5). Each tool aligned each pair once, with traceback, on one pinned core, within 30~s per sample, through one aligner object per sample, as every tool's benchmark runner keeps one. The exact aligners compared are A*PA2-full and A*PA2-simple, A*PA \citep{GrootKoerkamp2024astarpa}, Edlib \citep{Sosic2017edlib}, WFA and BiWFA \citep{MarcoSola2021wfa,MarcoSola2023biwfa}, QuickEd, BSAlign \citep{Shao2024bsalign}, KSW2 \citep{Li2018minimap2}, parasail \citep{Daily2016parasail} and SSW \citep{Zhao2013ssw}, each on the workloads it supports; every cost agreed with those of every other tool and with the published A*PA2 results.
 
 \subsection{Speed and memory}
 
-dinara-align had the lowest mean time per alignment of the exact aligners on every workload (Table~\ref{tab:unit}; Table~\ref{tab:affine}). On the nanopore reads it was 1.3 to 2.6 times faster than the fastest alternative, and on the simulated pairs 1.1 to 2.3 times (Fig.~\ref{fig:sweeps}): 100~kbp pairs at 1, 5, 10 and 20\% errors took 1.5, 5.0, 7.2 and 16.0~ms, against 7.5, 8.5, 13.9 and 36.7~ms for A*PA2-full and 12.5, 24.0, 39.0 and 62.8~ms for QuickEd, and its narrowest margin was on 10~kbp pairs at 5\%, 0.269 against 0.288~ms for A*PA2-simple. Over all 22 datasets QuickEd took 3.0 to 22.5 times as long, 6.7 times in the geometric mean. At gap-affine costs dinara-align was 1.7 to 3.8 times faster than WFA and BiWFA wherever a tool completed a dataset, and it completed more of the long pairs than any other tool; in the other modes it was 1.0 to 22 times faster than the fastest tool offering the same mode, the one tie lying within the variation between builds. Global scores of 500{,}000 short-read pairs took 230~ms on one core and 27~ms on ten at (1, 2, 1), 4.6 and 4.3 times faster than WFA2-lib.
+dinara-align had the lowest mean time per alignment of the exact aligners on every workload (Table~\ref{tab:unit}; Table~\ref{tab:affine}). On the nanopore reads it was 1.4 to 2.4 times faster than the fastest alternative, on the Illumina and HiFi reads 2.0 and 5.2 times faster than WFA, the fastest of the others there, and on the simulated pairs 1.1 to 2.6 times (Fig.~\ref{fig:sweeps}): 100~kbp pairs at 1, 5, 10 and 20\% errors took 1.5, 5.1, 7.3 and 15.7~ms, against 7.5, 8.4, 13.9 and 36.7~ms for A*PA2-full and 12.5, 24.0, 39.0 and 62.8~ms for QuickEd, and its narrowest margin was on 10~kbp pairs at 5\%, 0.267 against 0.288~ms for A*PA2-simple. Over all 24 datasets QuickEd took 3.0 to 75 times as long, 8.0 times in the geometric mean. At gap-affine costs dinara-align was 1.1 to 3.8 times faster than WFA and BiWFA wherever a tool completed a dataset, its narrowest margin on the Illumina reads, 1.45 against 1.55~\textmu s for WFA, and it completed more of the long pairs than any other tool; in the other modes it was 1.0 to 22 times faster than the fastest tool offering the same mode, the one tie lying within the variation between builds. Global scores of 500{,}000 short-read pairs took 230~ms on one core and 27~ms on ten at (1, 2, 1), 4.6 and 4.3 times faster than WFA2-lib.
 
 \begin{table*}[t]
-\caption{Unit-cost alignment of the A*PA2 real datasets by every exact aligner: mean time per alignment in ms, traceback included, and below it the peak resident memory of the run in MB, as QuickEd reports it. t.o. marks a tool that completed no pair within 30~s and o.o.m. one the 8~GB limit stopped. The simulated datasets are in Fig. 2 and Supplementary Table S4.}\label{tab:unit}
+\caption{Unit-cost alignment of the real datasets by every exact aligner: mean time per alignment in ms, traceback included, and below it the peak resident memory of the run in MB, as QuickEd reports it. t.o. marks a tool that completed no pair within 30~s and o.o.m. one the 8~GB limit stopped. The simulated datasets are in Fig. 2 and Supplementary Table S4.}\label{tab:unit}
 \centering\footnotesize
 \setlength{\tabcolsep}{4pt}
 \resizebox{\textwidth}{!}{\begin{tabular}{@{}lrrrrrrrrrr@{}}
@@ -253,19 +253,23 @@ dinara-align had the lowest mean time per alignment of the exact aligners on eve
 Dataset & dinara-align & A*PA2-full & A*PA2-simple & A*PA & QuickEd & Edlib & BiWFA & WFA & BSAlign & KSW2 \\
 \midrule
 \emph{Mean time per alignment} &  &  &  &  &  &  &  &  &  &  \\
-ont-1k (0.8~kbp) & \textbf{0.023} & 0.081 & 0.048 & 0.612 & 0.075 & 0.124 & 0.044 & 0.031 & 0.119 & 0.539 \\
-ont-10k (3.6~kbp) & \textbf{0.157} & 0.391 & 0.247 & 15.3 & 0.688 & 1.09 & 0.741 & 0.599 & 1.30 & 13.1 \\
-ont-50k (9.6~kbp) & \textbf{0.590} & 1.27 & 0.944 & 263 & 2.31 & 6.14 & 7.43 & 6.38 & 12.3 & 167 \\
+ont-1k (830~bp) & \textbf{0.021} & 0.081 & 0.048 & 0.612 & 0.075 & 0.124 & 0.044 & 0.031 & 0.119 & 0.539 \\
+ont-10k (3.6~kbp) & \textbf{0.156} & 0.391 & 0.247 & 15.3 & 0.688 & 1.09 & 0.741 & 0.599 & 1.30 & 13.1 \\
+ont-50k (9.6~kbp) & \textbf{0.580} & 1.27 & 0.944 & 263 & 2.31 & 6.14 & 7.43 & 6.38 & 12.3 & 167 \\
 ont-500k (642~kbp) & \textbf{118} & 283 & 687 & t.o. & 847 & 5{,}000 & 6{,}330 & o.o.m. & t.o. & o.o.m. \\
 ont-500k-genvar (663~kbp) & \textbf{156} & 225 & 511 & t.o. & 1{,}390 & 5{,}230 & 6{,}200 & o.o.m. & t.o. & o.o.m. \\
-SARS-CoV-2 (30~kbp) & \textbf{0.285} & 2.00 & 0.728 & 6.49 & 3.90 & 8.18 & 0.909 & 0.987 & 47.1 & 68.5 \\
+SARS-CoV-2 (30~kbp) & \textbf{0.286} & 2.00 & 0.728 & 6.49 & 3.90 & 8.18 & 0.909 & 0.987 & 47.1 & 68.5 \\
+Illumina (248~bp) & \textbf{0.000576} & 0.014 & 0.00410 & 0.014 & 0.016 & 0.023 & 0.00204 & 0.00112 & 0.021 & 0.012 \\
+PacBio HiFi (14~kbp) & \textbf{0.013} & 0.977 & 0.259 & 1.05 & 0.950 & 3.35 & 0.086 & 0.066 & 12.2 & 3.09 \\
 \emph{Peak resident memory (MB)} &  &  &  &  &  &  &  &  &  &  \\
 ont-1k & 14 & 5 & 5 & 6 & 2 & 7 & 7 & 8 & 2 & 7 \\
 ont-10k & 16 & 6 & 6 & 39 & 6 & 8 & 8 & 39 & 25 & 72 \\
-ont-50k & 20 & 8 & 7 & 858 & 18 & 8 & 10 & 187 & 423 & 650 \\
-ont-500k & 67 & 89 & 90 & t.o. & 26 & 15 & 29 & o.o.m. & t.o. & o.o.m. \\
-ont-500k-genvar & 63 & 57 & 55 & t.o. & 27 & 16 & 27 & o.o.m. & t.o. & o.o.m. \\
+ont-50k & 19 & 8 & 7 & 858 & 18 & 8 & 10 & 187 & 423 & 650 \\
+ont-500k & 64 & 89 & 90 & t.o. & 26 & 15 & 29 & o.o.m. & t.o. & o.o.m. \\
+ont-500k-genvar & 64 & 57 & 55 & t.o. & 27 & 16 & 27 & o.o.m. & t.o. & o.o.m. \\
 SARS-CoV-2 & 18 & 7 & 6 & 19 & 15 & 8 & 9 & 26 & 215 & 151 \\
+Illumina & 13 & 5 & 5 & 5 & 2 & 7 & 7 & 7 & 2 & 7 \\
+PacBio HiFi & 13 & 7 & 6 & 6 & 4 & 8 & 8 & 9 & 127 & 21 \\
 \bottomrule
 \end{tabular}}
 \end{table*}
@@ -278,18 +282,20 @@ SARS-CoV-2 & 18 & 7 & 6 & 19 & 15 & 8 & 9 & 26 & 215 & 151 \\
 \toprule
 Dataset & dinara-align & WFA & BiWFA & BSAlign & KSW2 \\
 \midrule
-ont-1k & \textbf{0.112} & 0.186 & 0.304 & 0.336 & 1.10 \\
-ont-10k & \textbf{1.71} & 4.80 & 5.84 & 7.84 & 29.8 \\
-ont-50k & \textbf{22.0} & 63.5 & 54.9 & 87.0 & 343$^{81/104}$ \\
+ont-1k & \textbf{0.105} & 0.188 & 0.308 & 0.336 & 1.10 \\
+ont-10k & \textbf{1.60} & 4.89 & 5.86 & 7.84 & 30.0 \\
+ont-50k & \textbf{21.5} & 63.4 & 54.9 & 87.0 & 341$^{81/104}$ \\
 ont-500k & t.o. & o.o.m. & t.o. & o.o.m. & o.o.m. \\
-ont-500k-genvar & \textbf{21{,}700$^{1/4}$} & o.o.m. & t.o. & o.o.m. & o.o.m. \\
-SARS-CoV-2 & \textbf{0.737} & 2.06 & 1.79 & 341 & 88.4 \\
-10~kbp, 1\% & \textbf{0.208} & 0.461 & 0.650 & 37.0 & 21.3 \\
-10~kbp, 5\% & \textbf{2.32} & 7.05 & 8.72 & 37.0 & 97.5 \\
-10~kbp, 10\% & \textbf{7.18} & 22.7 & 27.3 & 37.3 & 204 \\
-10~kbp, 20\% & \textbf{20.6} & 65.2 & 75.2 & 37.4 & 374$^{81/99}$ \\
-100~kbp, 1\% & \textbf{14.0} & 39.7 & 39.0 & o.o.m. & 2{,}440 \\
-100~kbp, 5\% & \textbf{337} & 811 & 715 & o.o.m. & 9{,}250$^{3/9}$ \\
+ont-500k-genvar & \textbf{22{,}000$^{1/4}$} & o.o.m. & t.o. & o.o.m. & o.o.m. \\
+SARS-CoV-2 & \textbf{0.710} & 2.05 & 1.78 & 341 & 87.9 \\
+Illumina & \textbf{0.00145} & 0.00155 & 0.00281 & 0.054 & 0.013 \\
+PacBio HiFi & \textbf{0.095} & 0.227 & 0.231 & 86.0 & 9.72 \\
+10~kbp, 1\% & \textbf{0.199} & 0.416 & 0.646 & 37.0 & 21.3 \\
+10~kbp, 5\% & \textbf{2.32} & 7.14 & 8.72 & 37.0 & 96.1 \\
+10~kbp, 10\% & \textbf{7.06} & 23.1 & 27.1 & 37.3 & 202 \\
+10~kbp, 20\% & \textbf{20.1} & 66.0 & 75.1 & 37.4 & 375$^{81/99}$ \\
+100~kbp, 1\% & \textbf{11.9} & 39.9 & 39.0 & o.o.m. & 2{,}420 \\
+100~kbp, 5\% & \textbf{331} & 808 & 714 & o.o.m. & 9{,}170$^{3/9}$ \\
 \bottomrule
 \end{tabular}
 \end{table*}
@@ -308,11 +314,11 @@ SARS-CoV-2 & \textbf{0.737} & 2.06 & 1.79 & 341 & 88.4 \\
 \draw (3.316,0) -- (3.316,-0.06) node[below,font=\scriptsize] {10\%};
 \draw (7.000,0) -- (7.000,-0.06) node[below,font=\scriptsize] {20\%};
 \node[font=\small] at (3.50,-0.75) {errors (\%), 100\,kbp pairs};
-\draw[dinara] plot coordinates {(0.000,0.247) (1.474,0.981) (3.316,1.201) (7.000,1.686)};
+\draw[dinara] plot coordinates {(0.000,0.247) (1.474,0.991) (3.316,1.207) (7.000,1.674)};
 \draw[dinara,solid,fill=.] (0.000,0.247) circle (1.1pt);
-\draw[dinara,solid,fill=.] (1.474,0.981) circle (1.1pt);
-\draw[dinara,solid,fill=.] (3.316,1.201) circle (1.1pt);
-\draw[dinara,solid,fill=.] (7.000,1.686) circle (1.1pt);
+\draw[dinara,solid,fill=.] (1.474,0.991) circle (1.1pt);
+\draw[dinara,solid,fill=.] (3.316,1.207) circle (1.1pt);
+\draw[dinara,solid,fill=.] (7.000,1.674) circle (1.1pt);
 \draw[apafull] plot coordinates {(0.000,1.228) (1.474,1.298) (3.316,1.600) (7.000,2.191)};
 \draw[apafull,solid,fill=.] (0.000,1.228) circle (1.1pt);
 \draw[apafull,solid,fill=.] (1.474,1.298) circle (1.1pt);
@@ -361,11 +367,11 @@ SARS-CoV-2 & \textbf{0.737} & 2.06 & 1.79 & 341 & 88.4 \\
 \draw (5.946,0) -- (5.946,-0.06) node[below,font=\scriptsize] {500\,kbp};
 \draw (7.000,0) -- (7.000,-0.06) node[below,font=\scriptsize] {1\,Mbp};
 \node[font=\small] at (3.50,-0.75) {length, 20\% errors};
-\draw[dinara] plot coordinates {(0.000,0.601) (3.500,1.851) (5.946,2.860) (7.000,3.322)};
-\draw[dinara,solid,fill=.] (0.000,0.601) circle (1.1pt);
-\draw[dinara,solid,fill=.] (3.500,1.851) circle (1.1pt);
-\draw[dinara,solid,fill=.] (5.946,2.860) circle (1.1pt);
-\draw[dinara,solid,fill=.] (7.000,3.322) circle (1.1pt);
+\draw[dinara] plot coordinates {(0.000,0.596) (3.500,1.845) (5.946,2.861) (7.000,3.318)};
+\draw[dinara,solid,fill=.] (0.000,0.596) circle (1.1pt);
+\draw[dinara,solid,fill=.] (3.500,1.845) circle (1.1pt);
+\draw[dinara,solid,fill=.] (5.946,2.861) circle (1.1pt);
+\draw[dinara,solid,fill=.] (7.000,3.318) circle (1.1pt);
 \draw[apafull] plot coordinates {(0.000,0.973) (3.500,2.154) (5.946,3.139) (7.000,3.616)};
 \draw[apafull,solid,fill=.] (0.000,0.973) circle (1.1pt);
 \draw[apafull,solid,fill=.] (3.500,2.154) circle (1.1pt);
@@ -408,7 +414,7 @@ SARS-CoV-2 & \textbf{0.737} & 2.06 & 1.79 & 341 & 88.4 \\
 \caption{Unit-cost alignment of QuickEd's simulated pairs, mean time per alignment on a logarithmic scale. (a) 100~kbp pairs by error rate. (b) Pairs at 20\% errors by length (5\% in the interactive version); lines end where a tool completed no pair within 30~s, and hollow points mark tools that completed only some pairs. dinara-align had the lowest mean time at every length and error rate.}\label{fig:sweeps}
 \end{figure*}
 
-An alignment of an ultra-long read increased peak memory by at most 51~MB, against 82~MB for A*PA2-full, and of a 1~Mbp pair at 20\% errors by at most 126~MB, against 184~MB, its traceback held within the default limit of 80~MB (Section 3.7; Supplementary Table S6); QuickEd stayed near 25~MB. On short reads dinara-align's peak is higher than the others' (Table~\ref{tab:unit}), its runtime alone taking about 13~MB.
+An alignment of an ultra-long read increased peak memory by at most 48~MB, against 82~MB for A*PA2-full, and of a 1~Mbp pair at 20\% errors by at most 123~MB, against 184~MB, its traceback held within the default limit of 80~MB (Section 3.7; Supplementary Table S6); QuickEd stayed near 25~MB. On short reads dinara-align's peak is higher than the others' (Table~\ref{tab:unit}), its runtime alone taking about 13~MB.
 
 \subsection{Effect of each technique}
 
@@ -447,6 +453,7 @@ The study has several limitations:
   \item The evaluation covers a single x86 processor with AVX-512; the AVX2 configuration was measured only for its inexact-seed threshold, and the NEON configuration is not evaluated here.
   \item Some thresholds were chosen using workloads that also appear in the evaluation; in particular, the AVX-512 thresholds for inexact seeds, the share of chained seeds (lowered from 40 to 20\%) and the length from which they are used (raised from 64 to 128~kbp), were set after measurements on uniform 100~kbp pairs like those of Fig.~\ref{fig:sweeps}a, so results on those pairs may overstate performance on unseen data.
   \item As in the A*PA2 protocol, each pair was aligned once, and on the Skylake-X some running times varied by up to one third between builds that did not change the code involved, which we attribute to code alignment effects in the instruction decoder; the ablation controls for this, the comparison with other tools does not.
+  \item The Illumina and HiFi datasets come from one region of chromosome 20, 20 and 200~kbp long, and keep only reads minimap2 maps to HG002 with at most a tenth clipped, so they leave out reads from repeats and structural variants.
   \item The ablation switches off one technique at a time against the full configuration, so it does not separate interactions between techniques.
   \item Release builds target the baseline processor of each platform, so the AVX-512 code paths require a build for the host processor.
 \end{enumerate}

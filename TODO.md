@@ -196,6 +196,13 @@ answers held to the copies it replaces by the tests, and a hot path benchmarked 
   genvar reads aligned 25% faster (146 to 110 ms) and ont-500k's distance 30% slower: `INEXACT_CHAINED`
   rebuilds the seeds inexact on reads where the exact ones would win. Find what tells the two apart
   before touching the gate; a cutoff moved for one dataset is a tuned knob.
+- [ ] **The batch on HiFi reads at gap-affine costs.** `alignments` takes 806 µs a pair on the pacbio-hifi
+  sample at (4, 6, 2), where one `Aligner` takes 95 µs a pair; at unit costs the batch keeps pace (16.5
+  against 12.6 µs). Profile where the batch's time goes on 14 kbp pairs before changing anything.
+- [ ] **Gap-affine pairs costing 33 to 64 on short reads.** On the Illumina sample at (4, 6, 2) these 40
+  pairs take 10.6 µs to WFA's 9.6, where the first search hands over to two (see
+  `gap_affine.traced_alone`); its model of the two searches leaves out their setup and the far side's
+  grow-on, so it hands over a little early. Count those in from what the searches measure, not a factor.
 ## From the paper's literature check
 
 Ideas from the work the paper cites, each checked (2026-10-10, M2 unless noted).
