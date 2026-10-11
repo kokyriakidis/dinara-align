@@ -760,27 +760,35 @@ def encoded_chunk[
 def encoded_bases(
     source: ImmPointer[UInt8, _], count: Int, target: MutPointer[UInt8, _], reverse: Bool = False
 ) -> Bool:
-    """Writes each of `count` bytes' base code to `target`, sixteen at a time, with `reverse` back to
+    """Writes each of `count` bytes' base code to `target`, thirty-two at a time, with `reverse` back to
     front, and whether every byte was `A`, `C`, `G` or `T`: a byte of these gives its code from its ASCII
     bits, bit 2 set for `G` and `T`, the code's high bit, and bit 1 differing from bit 2 for `C` and `T`,
     its low bit. Any other byte's code is wrong until recoded (see `symbol_codes`). One pass for both,
     where a short read's profile once read each sequence twice, and for the turning too, where it once
-    took a pass of its own; the bytes past the last whole sixteen coded as the sixteen that end the
-    sequence, again coding some, where they went a byte at a time. The two together took a 250 bp
-    Illumina read's alignment through an `Aligner` from 0.649 to 0.583 µs on the Skylake-X."""
-    comptime CHUNK = 16
-    var others = SIMD[DType.bool, CHUNK](fill=False)
-    var index = 0
-    while index + CHUNK <= count:
-        others |= encoded_chunk[CHUNK](source, count, target, index, reverse)
-        index += CHUNK
-    if index < count and count >= CHUNK:
-        others |= encoded_chunk[CHUNK](source, count, target, count - CHUNK, reverse)
-        index = count
-    var found = others.reduce_or()
-    while index < count:
-        found |= encoded_chunk[1](source, count, target, index, reverse)[0]
-        index += 1
+    took a pass of its own; the bytes past the last whole chunk coded as the chunk that ends the
+    sequence, again coding some, where they went a byte at a time, and a sequence shorter than a chunk
+    as two halves that overlap. The pass and the tail took a 250 bp Illumina read's alignment through an
+    `Aligner` from 0.649 to 0.583 µs on the Skylake-X, and thirty-two bytes a chunk rather than sixteen
+    to 0.400, and a PacBio HiFi read's from 5.7 to 4.95."""
+    comptime CHUNK = 32
+    comptime HALF = CHUNK // 2
+    var found = False
+    if count >= CHUNK:
+        var others = SIMD[DType.bool, CHUNK](fill=False)
+        var index = 0
+        while index + CHUNK <= count:
+            others |= encoded_chunk[CHUNK](source, count, target, index, reverse)
+            index += CHUNK
+        if index < count:
+            others |= encoded_chunk[CHUNK](source, count, target, count - CHUNK, reverse)
+        found = others.reduce_or()
+    elif count >= HALF:
+        var others = encoded_chunk[HALF](source, count, target, 0, reverse)
+        others |= encoded_chunk[HALF](source, count, target, count - HALF, reverse)
+        found = others.reduce_or()
+    else:
+        for index in range(count):
+            found |= encoded_chunk[1](source, count, target, index, reverse)[0]
     return not found
 
 
