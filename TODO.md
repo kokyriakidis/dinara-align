@@ -157,15 +157,18 @@ answers held to the copies it replaces by the tests, and a hot path benchmarked 
   `-D ABLATE_...=1`): the regrouped recurrence, the second AVX-512 group, gathered slides, the agreement
   rule, neighbours put in from their exact match, and the batch's certified band. Every switched build
   passes the test suite and returns the same costs on every dataset. `pixi run bench-ablation` builds all
-  seven and times them alternately, pinned. On the Skylake-X (2026-10-10, three rounds, the baseline
-  within 1.4% between rounds) switching off the neighbours cost the long reads 11 and 19% and 100 kbp
-  pairs at 10 to 15% 13%; the gathers 16 to 25% on the 1 kbp reads, SARS-CoV-2 and pairs at 1%; the
-  agreement rule 17% on ont-10k and 5% on SARS-CoV-2, nothing on the long reads, where the seeds set the
-  first bound; the certified band 2.9 and 3.1 times on the short-read batch; the regrouped recurrence and
-  the paired groups 4 and 6% on the long reads. A second, independent set of builds (the runner's own,
-  one round) reproduced every effect over 15% but gave 1 and 3% for the recurrence and the pairing on the
-  long reads and 6 to 8% for the neighbours on 100 kbp pairs: under about 6%, an effect is within the
-  builds' code-alignment swings. In the paper's Results ("Effect of each technique").
+  of them and times them alternately, pinned. Plain builds moved the smaller effects by several percent
+  from one set of builds to the next (4 and 6% against 1 and 3% for the recurrence and the pairing), the
+  Skylake-X's penalty on jumps crossing 32-byte boundaries; the runner now assembles Mojo's own assembly
+  with `clang -mbranches-within-32B-boundaries` and links it as `mojo build` does (`mitigated_build`), and
+  a baseline built so from another source file ran within 0.7% of it on every sample. So built
+  (2026-10-10, three rounds, the baseline within 1.2% between rounds): switching off the neighbours cost
+  the long reads 9 and 16% and 100 kbp pairs at 10 to 15% 9 to 10%; the gathers 13 to 24% on the 1 kbp
+  reads, SARS-CoV-2 and pairs at 1%; the agreement rule 18% on ont-10k and 6% on SARS-CoV-2, nothing on
+  the long reads, where the seeds set the first bound; the paired groups 4 to 5% on the long reads;
+  the regrouped recurrence 1 to 2% (the runner's own builds, one round, agreed within a point), its 14 to 8 cycles a word mattering only to the few narrow bands; the
+  certified band 2.9 and 3.1 times on the short-read batch (its harness, carrying GPU kernels, built as
+  usual). In the paper's Results ("Effect of each technique").
 
 ## From the paper's literature check
 

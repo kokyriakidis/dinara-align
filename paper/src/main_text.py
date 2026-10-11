@@ -18,10 +18,10 @@ ABSTRACT = [('Motivation',
   'are poorly matched to the input or the hardware.'),
  ('Results',
   'We present dinara-align, an exact pairwise aligner built on algorithmic changes that address these bottlenecks: a '
-  "regrouping of Myers' bit-parallel recurrence that shortens its loop-carried dependency chain, band bounds "
-  'accepted only when independent estimates agree, diagonal transition vectorised across diagonals, a direct '
-  'construction of the neighbours of exact seed matches that provably preserves local pruning, and per-pair '
-  'optimality certificates for banded inter-sequence batches. On an Intel Skylake-X processor, dinara-align had the '
+  'direct construction of the neighbours of exact seed matches that provably preserves local pruning, diagonal '
+  'transition vectorised across diagonals, band bounds accepted only when independent estimates agree, and per-pair '
+  'optimality certificates for banded inter-sequence batches, together with a bit-parallel sweep arranged for '
+  'instruction latency. On an Intel Skylake-X processor, dinara-align had the '
   'lowest mean running time among the exact aligners tested in 33 of the 34 configurations of the A*PA2 benchmark, '
   'aligning ultra-long nanopore reads in 104 ms on average, compared with 176 ms for A*PA2-full. It was 1.7 to 3.2 '
   'times faster than WFA at gap-affine costs and computed global scores for 500,000 short-read pairs on one core 4.5 '
@@ -55,24 +55,25 @@ BODY = [
  'compute the full matrix or a fixed band, so their running time grows with its size rather than with the distance.'),
 ('p',
  'In the exact methods, a large part of the remaining running time is determined by how the computation maps onto '
- 'the processor. The bit-parallel sweep carries a dependency from each column to the next, so its speed is set by '
- 'the latency of that chain rather than by its number of operations. Band doubling spends whole rounds when its '
- 'bound is far from the distance. The seed heuristic is built by scalar lookups in tables larger than the caches. '
- "Batches of short pairs are vectorised across pairs, but each pair's full matrix is computed. Here we present "
+ 'the processor. The seed heuristic is built by scalar lookups in tables larger than the caches. Diagonal '
+ 'transition extends one diagonal at a time. Band doubling spends whole rounds when its bound is far from the '
+ "distance. Batches of short pairs are vectorised across pairs, but each pair's full matrix is computed. And the "
+ 'bit-parallel sweep carries a dependency from each column to the next, so its speed is set by the latency of that '
+ 'chain rather than by its number of operations. Here we present '
  'dinara-align, an exact aligner whose algorithms address these bottlenecks. Our contributions are:'),
 ('list',
- ["**A shorter critical path for Myers' recurrence.** Two Boolean identities remove two operations from the "
-  'loop-carried dependency chain of the bit-parallel step; on AVX-512, two staggered groups of words are '
-  'interleaved, extending the instruction-level parallelism of A*PA2.',
-  '**Band bounds from agreeing estimates.** A band-doubling bound is extrapolated from partial progress only when '
-  'two independent estimates agree.',
+ ['**Direct neighbour construction for the seed heuristic.** The inexact neighbours of an exact seed match are '
+  'inserted without search, and we prove that this preserves the outcome of local pruning (Lemma 1).',
   '**Gathered diagonal transition.** Diagonal transition and the gap-affine wavefront extend eight diagonals per '
   'step using gather instructions.',
-  '**Direct neighbour construction for the seed heuristic.** The inexact neighbours of an exact seed match are '
-  'inserted without search, and we prove that this preserves the outcome of local pruning (Lemma 1).',
+  '**Band bounds from agreeing estimates.** A band-doubling bound is extrapolated from partial progress only when '
+  'two independent estimates agree.',
   '**Certified bands for inter-sequence batches.** Each short pair is aligned in one vector lane within a narrow '
   'band whose optimality is certified per lane by a lower bound on the cost of any path that leaves it (Proposition '
-  '1), adapting the speculate-and-verify approach of the SeedEx accelerator [@Fujiki2020] to software batches.']),
+  '1), adapting the speculate-and-verify approach of the SeedEx accelerator [@Fujiki2020] to software batches.',
+  "**A latency-aware bit-parallel sweep.** On AVX-512, two staggered groups of words are interleaved, extending the "
+  "instruction-level parallelism of A*PA2, and two Boolean identities shorten the loop-carried chain of Myers' "
+  'step; the two are worth 4 to 5% and 1 to 2% on the ultra-long reads.']),
 ('sec', 'Methods'),
 ('sub', 'Problem definition and overview'),
 ('p',
@@ -289,26 +290,30 @@ BODY = [
  'To measure what each technique contributes, dinara-align was built with one technique switched off at a time, '
  'everything else unchanged, and every build aligned the A*PA2 samples with traceback and scored the short-read '
  'batch. The builds alternated within each of three rounds, pinned to one core, and we report the median against '
- 'the build with every technique on; the baseline varied by at most 1.4% between rounds, and every build returned '
- 'the same costs on every dataset ([#tab:ablation]). Constructing the neighbours of exact seed matches directly '
- 'contributed most on long, divergent pairs: without it, the ultra-long reads took 11% and 19% longer and the '
- '100 kbp pairs at 10 and 15% divergence 13% longer. Interleaving two groups of bit-parallel words and the regrouped '
- 'recurrence each contributed 4 to 6% on the ultra-long reads and on the most divergent uniform pairs. Gathered '
- 'diagonal transition contributed most where diagonal transition does most of the work, on the 1 kbp reads, the '
- 'SARS-CoV-2 genomes and near-identical 100 kbp pairs (16 to 25%). The agreement rule for extrapolated bounds '
- 'mattered on the 10 kbp reads (17%) and the SARS-CoV-2 genomes (5%), and not on the ultra-long reads, where the '
- 'seed heuristic sets the first bound. Without the certified band, the batch took 2.9 and 3.1 times as long at '
- 'affine and unit costs. Effects below about 6% are of the order of the variation between builds that we attribute '
- 'to code alignment (Section 4): a second, independent set of builds reproduced every effect above 15% but gave 1% '
- 'for the regrouped recurrence and 3% for the paired groups on the ultra-long reads, and 6 to 8% for the seed '
- 'neighbours on the 100 kbp pairs.'),
+ 'the build with every technique on ([#tab:ablation]). Because the Skylake-X penalises jumps that cross 32-byte '
+ 'boundaries, the position of a loop after a rebuild can move the running time by several percent; the alignment '
+ 'builds were therefore assembled with branches kept clear of those boundaries '
+ '(`-mbranches-within-32B-boundaries`). A baseline built in this way from a different source file ran within 0.7% '
+ 'of the baseline on every dataset, the baseline varied by at most 1.2% between rounds, and every build returned '
+ 'the same costs on every dataset. Constructing the neighbours of exact seed matches directly contributed most on '
+ 'long, divergent pairs: without it, the ultra-long reads took 9% and 16% longer and the 100 kbp pairs at 10 and 15% '
+ 'divergence 9 to 10% longer. Interleaving two groups of bit-parallel words contributed 4 to 5% on the ultra-long '
+ 'reads, over this and a second, independent set of builds; the regrouped recurrence, although it shortens a single '
+ 'word\'s step from 14 to 8 cycles, contributed 1 to 2%, '
+ 'because bands narrow enough to be bound by that step make up a small part of the work. Gathered diagonal '
+ 'transition contributed 13 to 24% where diagonal transition does most of the work, on the 1 kbp reads, the '
+ 'SARS-CoV-2 genomes and near-identical 100 kbp pairs. The agreement rule for extrapolated bounds mattered on the '
+ '10 kbp reads (18%) and the SARS-CoV-2 genomes (6%), and not on the ultra-long reads, where the seed heuristic '
+ 'sets the first bound. Without the certified band, the short-read batch took 2.9 and 3.1 times as long at affine '
+ 'and unit costs.'),
 ('table', 'ablation'),
 ('sec', 'Discussion'),
 ('p',
  'The algorithms in dinara-align build on those of earlier exact aligners; the gains come from changes to how these '
  'algorithms use the processor. Two observations stand out. First, on long pairs the techniques that reduce work '
  'outside the inner loop contributed more than those that speed it up: constructing seed neighbours directly saved '
- 'up to 19%, against 4 to 6% each for the two changes to the bit-parallel sweep ([#tab:ablation]). Second, as the '
+ 'up to 16%, against 4 to 5% for interleaving bit-parallel groups and 1 to 2% for the regrouped recurrence '
+ '([#tab:ablation]). Second, as the '
  'inner loops become faster, the scalar, memory-bound construction of the seed heuristic dominates: on 100 kbp pairs at 10% divergence it accounts for 58% of the '
  'running time and is the main cost in the one configuration in which A*PA2-full remained faster. Neither the '
  'regrouped recurrence nor the per-lane band certificate depends on the implementation, and both apply directly to '
@@ -322,7 +327,8 @@ BODY = [
  'on the uniform 100 kbp pairs of [#fig:sweeps]a, so results on those pairs may overstate performance on unseen '
  'data. Third, as in the A*PA2 protocol, most configurations were run once, and on the Skylake-X some running times '
  'varied by up to one third between builds that did not change the code involved, which we attribute to code '
- 'alignment effects in the instruction decoder. Fourth, the ablation switches off one technique at a time against '
+ 'alignment effects in the instruction decoder; the ablation controls for this, the comparison with other tools does '
+ 'not. Fourth, the ablation switches off one technique at a time against '
  'the full configuration, so it does not separate interactions between techniques. Finally, release builds target the '
  'baseline processor of each platform, so the AVX-512 code paths require a build for the host processor.'),
 ('p',
@@ -352,19 +358,19 @@ TABLES = {
     ["Batches of short pairs", "Inter-sequence vectorisation (SWIPE, SeqAn, parasail)", "Certified per-lane bands (2.6)"],
   ]},
 "ablation": {
-  "caption": "Effect of each technique: median time with all techniques on (ms per alignment; per batch of 500,000 pairs for the short reads), and the change when one technique is switched off, over three alternating rounds on the Skylake-X. Every configuration returned the same costs.",
+  "caption": "Effect of each technique: median time with all techniques on (ms per alignment; per batch of 500,000 pairs for the short reads), and the change when one technique is switched off, over three alternating rounds on the Skylake-X, with branches kept clear of 32-byte boundaries. Every configuration returned the same costs.",
   "header": ["Dataset", "All on", "Regrouped recurrence", "Paired groups", "Gathers", "Agreement rule", "Seed neighbours", "Certified band"],
   "align": "lrrrrrrr",
   "rows": [
-    ["ont-500k", "97.8", "+4.2%", "+6.1%", "+2.5%", "−0.4%", "**+11.4%**", ""],
-    ["ont-500k-genvar", "135.7", "+4.3%", "+6.5%", "+2.3%", "−0.3%", "**+19.0%**", ""],
-    ["ont-1k", "0.021", "+1.0%", "+0.2%", "**+17.2%**", "−0.1%", "+0.4%", ""],
-    ["ont-10k", "0.152", "0.0%", "+1.4%", "+7.0%", "**+17.3%**", "+1.0%", ""],
-    ["SARS-CoV-2", "0.198", "−0.7%", "−0.5%", "**+15.9%**", "+4.5%", "−0.9%", ""],
-    ["100 kbp, 1%", "0.978", "−0.1%", "+0.1%", "**+24.5%**", "−0.9%", "+0.7%", ""],
-    ["100 kbp, 5%", "4.52", "+0.3%", "+0.4%", "+2.2%", "0.0%", "−0.1%", ""],
-    ["100 kbp, 10%", "10.3", "+1.9%", "+2.6%", "+3.9%", "+0.1%", "**+13.0%**", ""],
-    ["100 kbp, 15%", "10.85", "+3.6%", "+4.5%", "+6.8%", "0.0%", "**+13.3%**", ""],
+    ["ont-500k", "96.5", "+0.9%", "**+4.3%**", "−0.1%", "−0.3%", "**+9.0%**", ""],
+    ["ont-500k-genvar", "134.1", "+1.1%", "**+4.2%**", "−0.1%", "−0.2%", "**+16.0%**", ""],
+    ["ont-1k", "0.021", "−0.4%", "−0.5%", "**+14.1%**", "−0.4%", "−0.3%", ""],
+    ["ont-10k", "0.151", "−1.3%", "+0.9%", "+3.5%", "**+17.5%**", "+0.1%", ""],
+    ["SARS-CoV-2", "0.195", "−0.5%", "+0.2%", "**+13.1%**", "**+5.5%**", "+0.3%", ""],
+    ["100 kbp, 1%", "0.971", "−0.4%", "0.0%", "**+24.2%**", "−0.1%", "+0.1%", ""],
+    ["100 kbp, 5%", "4.39", "−0.3%", "−0.6%", "−0.2%", "+0.1%", "−0.6%", ""],
+    ["100 kbp, 10%", "10.1", "−0.7%", "−0.2%", "+0.8%", "+0.1%", "**+10.4%**", ""],
+    ["100 kbp, 15%", "10.65", "0.0%", "+1.1%", "+2.4%", "+0.3%", "**+9.4%**", ""],
     ["Short reads, affine", "232", "", "", "", "", "", "**+187%**"],
     ["Short reads, unit", "212", "", "", "", "", "", "**+214%**"],
   ]},
