@@ -1,22 +1,11 @@
 # To do
 
-`[x]` done, `[~]` partly done, `[-]` tried or weighed and left, with why; `[ ]` open.
+`[ ]` open; `[-]` tried or weighed and left, with why, so it is not tried again. Finished work is in the
+git history and `CHANGELOG.md`.
 
 Where the time still goes in a single-threaded alignment, profiled on the Skylake-X (3.3 GHz,
 pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
 
-- [x] **Band rounds that fail (about 1 s of the band's 6.5 s).** A retry now aims a quarter of the
-  estimated climb past its estimate, not half: genvar 2% and ont-500k 7.5% faster on the Skylake-X.
-  Lowering later rounds' bounds at checkpoints, as the first round does, never ended on some reads. The sweep itself runs near the
-  hardware's limit for Myers' recurrence, about 2.4 cycles a word-column on AVX-512, so the band
-  only gets faster by sweeping fewer cells. On genvar 16% of the band's word-columns go to rounds
-  that fail and are retried (7% on ont-500k), three to six rounds a pair. What is left of them is
-  an upper bound to aim at, tried and left below (see "An upper bound on the distance").
-- [x] **Wider vectors on AVX-512.** A sweep there now runs two eight-lane groups at a time, one under
-  the other in one loop: genvar 7% and ont-500k 5% faster on the Skylake-X, the sample sets within
-  noise (measured best of five beside the owner's jobs). One sixteen-lane group did about as well on
-  the long reads but cost up to 2% on short divergent pairs; on the M2 both were slower, so NEON and
-  AVX2 keep one group.
 - [-] **Three eight-lane groups at a time on AVX-512.** llvm-mca puts the paired sweep's steady loop at
   24 cycles a column against a throughput bound of 11, latency-bound on each column's lane rotation,
   and a third group, which still fits AVX-512's 32 registers unspilled, at 30 cycles for three: 15%
@@ -60,138 +49,21 @@ pinned) over all 48 reads of ont-500k-genvar, about 10 s in all.
     the entries a batch ahead of their tests, a two-stage pipeline, found the same matches and was
     1 to 2% slower there and neutral on the M2: the entries were not late. Local pruning has no hot
     spot, its time spread over the fronts' steps and `leftmost`'s lookups. Left.
-- [x] **Traceback (about 0.9 s).** Retracing the final round's tiles from their recorded left
-  edges. Since this was profiled, each tile is traced by a forward search over one window of
-  diagonals, eight at a time, its recompute reusing its buffers (`6108666`, `5a0e514`, `38837f2`,
-  `d2492b3`, `5e76145`): on the M2 (2026-10-09) `forward_segment` is 65 of 3,900 samples aligning
-  genvar and 122 of 5,600 on ont-500k, about 2%, the recompute too rare to show.
-- [x] **The inexact seeds' neighbour windows (12 to 21% on the long reads).** An exact match's windows a
-  base shorter and longer were left out of the inexact seeds, and without them the heuristic overestimated,
-  by an edit a seed on crafted pairs; keeping them (2026-10-09) made genvar and ont-500k 12% slower on the
-  M2 and 12 and 21% on the i9-7900X. They are always real matches, so the scan leaves them out again and an
-  exact match, once kept, puts its four into the layers itself, with no scan and no search of their own;
-  local pruning drops none that its exact match passes (2026-10-10). The M2 aligns ont-500k and genvar 4
-  and 6% faster than with them scanned, 100 kbp pairs at 10 to 15% 4 to 6%. Checking the bound at every
-  cell of random pairs against the true cost found it still over by one edit on optimal paths of 1 to 2%
-  of pairs: an exact match whose end lay a diagonal past the pair's end was dropped, and local pruning
-  dropped the neighbour that stood in for it. Such a match now chains to the end for its one edit of
-  excess (`chained_layer`), and 2,200 random pairs, both seed kinds, read under the cost at every cell.
-  No distance had come out wrong: an overestimate of one costs the band a round, not the answer.
-  On the i9-7900X (`ebe290f`) ont-500k and genvar align in 104 and 144 ms where they took 112 and 165,
-  and 100 kbp pairs at 9 to 15% 8 to 10% faster, A\*PA2-full now ahead at 10% alone (10.5 against 11 ms).
-- [x] **The M2's two lost rows.** 100 kbp pairs at 6 and 7% divergence lost to A*PA2-full there, the
-  M2's 40% cutoff rebuilding inexact seeds that did not pay on spread errors. A pair whose two
-  projections agree, as spread errors' do, now rebuilds only below 20%: 3.75 and 3.92 ms against
-  A*PA2-full's 5.25 and 5.0, at a cost of 1 to 2.5% on the M2's real long reads, still well ahead.
 
-## Consolidation
+## Kept apart on purpose
 
-What the library computes twice, from four audits on 2026-10-08 (DP sweeps, cost types, batch plumbing,
-traceback and text helpers). Each item shares one implementation, every copy's optimizations kept, its
-answers held to the copies it replaces by the tests, and a hot path benchmarked before and after.
+Copies the consolidation of 2026-10-08 left separate, and why.
 
-### Phase 1: copies that no longer agree
-
-- [x] One batch core, `api.distances_in_lanes`, `alignments_in_lanes`, `alignment_from_lanes`, `each_pair` and
-  `longest_first` over `Texts`, for the API's batches and the C API's: C now deals pairs longest first and
-  takes the same memory budget. Bytes 0xFE and 0xFF stay C's to refuse: a `String` never holds them.
-- [x] `Scoring` alignments honour `max_memory` (`fronts_within`), not `HISTORY_LIMIT`.
-- [x] The GPU distances' host fallback over the threads asked for. Left: `search` copying the query a
-  reference, about a millisecond for 20,000, which sharing would need a per-pair path over any texts for.
-- [x] Latent: `cigar_of`'s room with a free mismatch, `band_flags` reading a table, one `looked_up` for
-  `byte_lookup` (which fell short under 16 lanes), `joined_cigar` merging neighbours.
-
-### Phase 2: shared leaf helpers
-
-- [x] Byte reversal: `cigar.reverse_bytes`, `reversed_into`, `reversed_list`, `append_reversed`,
-  `reversed_text` in place of six copies.
-- [x] CIGARs: one `CigarWriter` (in `cigar`) for `GappedAlignment.cigar`, `joined_cigar` and the tracebacks;
-  one walk, `cigar_counts`, for `cigar_matches`, `Alignment.counts` and `costs_of_cigar`.
-- [x] Move codes: `gap_affine`'s defined from `bit_parallel`'s, the lanes' mask and layers from
-  `gap_affine`'s (`layer_bit`, `gap_layer`).
-- [x] Constants in `common`: `UNREACHED`, `NEGATIVE_INFINITY` for `NOWHERE`, the sentinel bytes; `Band.covers_any`,
-  `Band.clamped` and `ANY_LENGTH` for the bindings' and the API's own spellings.
-- [x] `common.code_table` for five tables, `raise_unknown` for three loops, `EndsFree.of` for three clamps,
-  `Alignment.mirrored`, `matches_along`, `AffineGapCosts.run`, `text_of`, `StringTexts.of` throughout.
-- [x] Tests: `reversed_text` from the library. Kept apart on purpose: the fuzzer's and the tests'
-  `reversed_cigar`, `rescore`, `priced`, `cigar_of_moves`, which check the library rather than share it.
-
-### Phase 3: one cost model
-
-- [x] `affine_penalties`, `affine2p_penalties`, `extension_penalties` through the `Costs` factories and
-  `penalties_of`/`rewarded_penalties`, and since removed, the tests calling those directly; one uniform-table check (`substitutions.uniform_pair`); `Scoring.penalties`
-  for five calls; `LaneCosts.of_penalties` for three; `table_extremes` for the table scans.
-- [x] One 16-bit fit rule, `scored.fits_16_bits`, behind `narrow_enough` and `table_fits`; `Costs.dearest_step`
-  and `Costs.cheapest_extension`, which the sweep's Z-drop now takes as the wavefront's does.
+- Kept apart: the fuzzer's and the tests' `reversed_cigar`, `rescore`, `priced` and `cigar_of_moves`,
+  which check the library rather than share its code.
 - Kept: `Scoring.gaps` an `AffineGapCosts`, a public field; `scaled_penalties`' raw positivity and
   `wavefront_penalties`' folded one, two rules on purpose: a table may score a mismatch above zero.
-
-### Phase 4: engines
-
-- [x] One span rule, `scored.started_span`, for `Costs`' and `Scoring`'s free ends; one sweep dispatcher,
-  `scored.sweep`, for `swept`, `local_scores` and `tabulated_end`; one front scan, `gap_affine.front_best`,
-  for the extension's three.
-- [x] The cost lanes 64 bytes a group, several registers where the CPU's are narrower: on the M2 1 kbp
-  distances 1.8 times as fast.
-- [x] One Gotoh recurrence, `anti_diagonals.gotoh_lanes`, for `gotoh_cell` and the three vector sweeps.
-- [x] One anti-diagonal sweep, `anti_diagonals`: its letters, its rolling diagonals in registers
-  (`DiagonalCells`), its step and its 16-bit rule, for `swept_cells`, `reach_back` and `vector_sweep_bands`,
-  each keeping its borders and what it watches for; `vector_align`, which keeps its band whole, shares the
-  letters and the recurrence. `reach_back` and the halves now take 16-bit lanes while they fit: on the M2 a
-  `Scoring`'s 1 kbp local alignment 1.2 times as fast, its linear-space global one 1.4 times. The score
-  sweeps came out 2 to 5% slower on the M2 at 1 kbp, in 32-bit lanes, their inner loops instruction for
-  instruction the old ones.
-- [x] One row fill and one walk, now in `gotoh.mojo`, `fill_rows` and `walk`, for `serial_align`,
-  `solve_rectangle`, `sweep_bands` (over two rolling rows) and `reconstruct`; read unchecked, the
-  linear-space global alignment 1.2 to 1.4 times as fast.
-- [x] One source rule, `diagonal.furthest_source`, for `best_source` and `grow_to`; one checkpoint rule,
-  `band.checkpoints_passed` and `check_margin`, and one score down a run of words, `Frontier.climb`, for
-  `Band` and `edit_search`.
 - Kept apart: `step_front` from `grow_to`, which grows only the diagonals the backward fronts keep and
   slides only those, and from `forward_segment`, whose substitutions stop at the tile's end; `edit_search`
   from `Band`, a free start, the last row read every column and a bound by words rather than rows.
 
-## Paper
+## Open
 
-- [x] **A controlled ablation.** Build switches turn each technique off alone (`dinara_align/ablation.mojo`,
-  `-D ABLATE_...=1`): the regrouped recurrence, the second AVX-512 group, gathered slides, the agreement
-  rule, neighbours put in from their exact match, and the batch's certified band. Every switched build
-  passes the test suite and returns the same costs on every dataset. `pixi run bench-ablation` builds all
-  of them and times them alternately, pinned. Plain builds moved the smaller effects by several percent
-  from one set of builds to the next (4 and 6% against 1 and 3% for the recurrence and the pairing), the
-  Skylake-X's penalty on jumps crossing 32-byte boundaries; the runner now assembles Mojo's own assembly
-  with `clang -mbranches-within-32B-boundaries` and links it as `mojo build` does (`mitigated_build`), and
-  a baseline built so from another source file ran within 0.7% of it on every sample. So built
-  (2026-10-10, three rounds, the baseline within 1.2% between rounds): switching off the neighbours cost
-  the long reads 9 and 16% and 100 kbp pairs at 10 to 15% 9 to 10%; the gathers 13 to 24% on the 1 kbp
-  reads, SARS-CoV-2 and pairs at 1%; the agreement rule 18% on ont-10k and 6% on SARS-CoV-2, nothing on
-  the long reads, where the seeds set the first bound; the paired groups 4 to 5% on the long reads;
-  the regrouped recurrence 1 to 2% (the runner's own builds, one round, agreed within a point), its 14 to 8 cycles a word mattering only to the few narrow bands; the
-  certified band 2.9 and 3.1 times on the short-read batch (its harness, carrying GPU kernels, built as
-  usual). In the paper's Results ("Effect of each technique").
-- [x] **The paper's results on the new protocol.** The paper and its supplement now give the run of
-  `bench.py` over A*PA2's real datasets and QuickEd's simulated ones (2026-10-11, the Skylake-X, `dc980d7`, a
-  30 s budget, with medians), gap-affine costs and batches at `289bcf0`, the modes, and the ablation measured
-  again at `dc980d7`. The figure plots QuickEd's sets by error rate and by length, QuickEd beside the others;
-  the supplement describes the divergent-pair handover, the traceback within `max_memory`, the single tile
-  width and the threshold sweep, and lists every dataset's mean and median; the approximate aligners and
-  A*PA2's 16-point uniform sweep are left out. Both PDFs build with no errors or undefined references.
-- [x] **Affine memory past the kept fronts' cap.** At (4, 6, 2) an alignment's peak grew by 144 MB on an
-  ont-500k-genvar read and 112 MB on 100 kbp pairs at 20%, past the 80 MB the kept fronts stay within. A
-  100 kbp pair at 20% grows 115, 73, 42 and 33 MB under `max_memory` of 80, 40, 10 and 2 MB: the fronts fill
-  the cap, and about 31 MB beside them is the searches' rings, which grow with the cost, not its square,
-  and which `ORDINARY_WINDOW` leaves out of the memory allowed by design. Not a leak; the README says so.
-- [x] **A*PA2-simple on QuickEd's 10 kbp pairs at 5%**: 288 against 329 µs a pair, the one dataset of the
-  22 where a rival was faster. The band took 64-column tiles under a bound of 1,024, a rule from the first
-  commit never measured since; with 256-column tiles throughout, 254 µs (`bit_parallel.BAND_COLUMNS`).
-- [x] **Every tuning constant halved and doubled** (2026-10-11, on the Skylake-X, 41 constants, 83 builds,
-  each timed on 17 unit-cost samples, align and distance, or 8 affine ones, a baseline every six builds,
-  its spread 1.2% in the median). About thirty moved no sample past 3% either way. Most of the rest trade
-  one dataset against another (`DOUBLING_START`, `PROBE_START`, `AGREEMENT`, `GIVE_UP_SHARE`,
-  `SEED_COLUMNS`), left as they are. One was stale: `INEXACT_COLUMNS`, from which seeds match within one
-  edit, at 64 kbp handed QuickEd's 100 kbp pairs at 10% to inexact seeds that cost them a third of their
-  time since the band took wide tiles; on AVX-512 it is now 128 kbp, measured to pay from between 100 and
-  500 kbp.
 - [ ] **ont-500k-genvar and the inexact seeds.** With no seeds matching within one edit below 1 Mbp, the
   genvar reads aligned 25% faster (146 to 110 ms) and ont-500k's distance 30% slower: `INEXACT_CHAINED`
   rebuilds the seeds inexact on reads where the exact ones would win. Find what tells the two apart
@@ -223,13 +95,15 @@ distance) in a scratch build, before anything is built:
   it saves 27% on 1 Mbp at 20%, 12% ont-50k, 7% 100 kbp at 20%, 6% ont-10k, 5% HiFi, ~0 elsewhere; with
   1.15 d about half of that or none. QuickEd's windowed bound deviates 1-6% on ONT, 5% HiFi, up to 15%
   (its paper's Table 1; to check). Worth it only for a U within ~5% that costs far less than it saves.
+  A beam as U was tried and left (see "An upper bound on the distance").
 - [ ] **Gap-heuristic pruning of the near-identical diagonal transition** (POASTA, A*PA's `dt.rs`): with
   U = d, keeping only |k - delta| <= U - s saves 24% on 10 kbp at 1%, 13% ont-1k, 8% HiFi. Without U it
   needs A* order, whose fronts depend on their own neighbours towards delta and would serialize the
   gathered extension; the same holds for the one-search gap-affine phase. Find an exact U or a vector
   form first.
-- [ ] **Incremental doubling** (A*PA2-full): ceiling 6-7% on long ONT reads, ~0 elsewhere (see above).
-- [x] **The batch certificate, strengthened by edit distance** (after SeedEx's edit-distance check): a
+- [ ] **Incremental doubling** (A*PA2-full): ceiling 6-7% on long ONT reads, ~0 elsewhere; blocked on an
+  exactness proof (see "From the paper's literature check").
+- [-] **The batch certificate, strengthened by edit distance** (after SeedEx's edit-distance check): a
   path off the band has an insertion gap and a deletion gap, and its mismatches and gapped letters are at
   least ED, so it costs at least max(L, 2o + min(x, e) ED). Measured and dropped: of 500,000 Illumina
   pairs at (1, 2, 1), 70,519 are swept again, 59 of about 300 ms; the bound proves 578 of them. 65% of
@@ -282,14 +156,6 @@ Ideas from the work the paper cites, each checked (2026-10-10, M2 unless noted).
   and miniwfa (Li) save traceback memory, not time; the GPU, FPGA and in-memory designs (WFA-GPU,
   eWFA, GeneTEK, Scrooge, GenASM, RAPIDx) carry no idea to the CPU paths beyond what is here. Nothing
   promised a gain past the builds' noise. Left.
-- [x] **The infix search's retries aimed, as the global band's are.** Measured beside Sassy (2026-10-10,
-  M2): a free-start search failing its first bound of 64 only doubled, a 1 kbp read at 10% taking two
-  sweeps and a 10 kbp read at 5% four or five, where one at the right bound costs half (35 against 67
-  µs, 1.29 against 2.88 ms). A failed try now projects the distance from the deepest row its band kept
-  within the bound, edits spread along the pattern putting that row near `bound * rows / distance`, and
-  the retry aims past it; the sweep for the start, which knows the distance, begins there. The 10 kbp
-  infix aligns in 1.99 ms where it took 3.39, the 1 kbp one and the prefix mode 3 to 4% faster; tests,
-  400,000 fuzz cases and WFA2-lib's regression set agree.
 - [ ] **Short patterns in long texts, the text split across lanes** (Sassy, Beeloo and Groot Koerkamp,
   Bioinformatics 2026). Sassy itself is slower here than dinara-align's infix (M2, search only): a 1
   kbp read at 10% in 3 kbp 204 µs with k doubling and 121 with k given, against 80; a 10 kbp read at 5%
@@ -306,8 +172,9 @@ Ideas from the work the paper cites, each checked (2026-10-10, M2 unless noted).
   ms. SeqMatcher (J. Supercomputing 2025) packs sequences to two bits with AVX-512: building the profile
   is 1.5% of a SARS-CoV-2 alignment and does not show on the 1 kbp reads (perf, Skylake-X), so packing has
   nothing to win; its banded mode is a fixed threshold, 3 to 10% less accurate. BSAlign's striped sweep
-  with an active F loop claims 2 times other SIMD aligners; measured since, see "Rivals' implementations"
-  below. FILTR (2026) chooses a wavefront or an
+  with an active F loop claims 2 times other SIMD aligners; measured since as a benchmark column, its
+  affine alignment 3 to 4.6 times slower than dinara-align's on the ONT sets and its edit distance 5 to 170
+  times. FILTR (2026) chooses a wavefront or an
   anti-diagonal schedule by divergence, as the quarter-matrix rule does; Medlib's (2025) threshold mode
   is `max_cost`'s early stop; hashed longest-common-extension queries (Ding et al., ESA 2023) are
   probabilistic, so not taken; composition and q-gram lower bounds (certified-alignment) are far looser
@@ -324,78 +191,11 @@ Ideas from the work the paper cites, each checked (2026-10-10, M2 unless noted).
   it wrong, a round could accept a distance too high. It would also change every bit-parallel kernel's
   top word, which reads `+1` from above. Worth taking up only with that proof in hand.
 
-## Rivals' implementations of ideas dinara-align has, measured
-
-Each rival built at a pinned commit and run as the benchmarks run every aligner (2026-10-10, Skylake-X
-unless noted; BSAlign and QuickEd are x86-only).
-
-- [x] **BSAlign** (Shao and Ruan, Bioinformatics 2024), its striped kernels with the band off, so exact:
-  now a column of `pa_bench.py`. Its edit distance fills the whole matrix, 5 times slower than
-  dinara-align on ont-1k, 8 on ont-10k and 170 on SARS-CoV-2; its affine alignment (4, 6, 2), 8-bit
-  difference recurrences with an active F loop, 3 to 4.6 times slower on the ONT sets and 3 times faster
-  than KSW2. Its kernel fills about 0.38 ns a cell with the traceback, where the Gotoh sweep under a
-  table took 0.55 ns for the score alone in 32-bit lanes, which led to four changes, each holding CIGARs
-  byte for byte: the 16-bit bound charges the straight path, not every letter the dearest move; the
-  unreachable cell sits 4096 above 16 bits' least, not a quarter of the way down; the banded traceback
-  keeps each cell's decision, a byte, not three 32-bit scores; and the band proves itself from its own
-  score rather than after a sweep of the whole matrix for it. table-global went from 544 to 253 us on
-  the Skylake-X with the first and third, and to about 157 on the M2 with all four.
-- [x] **QuickEd** (Doblas et al., Bioinformatics 2025), bound-and-align beside the band doubling: on its
-  own simulated sets, 10,000 pairs of 10 kbp take dinara-align 0.3, 2.9 and 3.7 s at 1, 5 and 10% where
-  QuickEd takes 6.1, 12.6 and 19.9; see `quicked_bench.py`.
-- [x] **Parallel output-sensitive edit distance** (Ding et al., ESA 2023), its BFS-Hash and BFS-SA on one
-  thread, distance only against dinara-align's with its traceback: 40 to 150 times slower on 100 kbp
-  and 1 Mbp pairs at 1 and 5%, its design point, and about 100 times on divergent pairs.
-- [x] **Divergent pairs at affine costs.** The wavefront's work grows with the cost times the length,
-  so where BSAlign's 8-bit matrix took 1.5 ms for unrelated 2 kbp pairs the wavefront took 4.6. Now the
-  wavefront hands a pair over once its projected work passes a full sweep in difference recurrences
-  (Suzuki and Kasahara 2018), 8-bit lanes at any length, that keeps each cell's flag by the lanes' rule
-  for the wavefront's ties, so the alignment is the same byte for byte (see `differences`). Its traceback
-  keeps every few anti-diagonals and sweeps each stretch again, memory the square root of the matrix's:
-  a byte a cell faulted in fresh pages that cost more than the sweep. Each diagonal is swept in place
-  from the last row up, which kept 5 and 10 kbp pairs at 0.18 to 0.24 ns a cell where two diagonals took
-  0.36 and 0.45. On the Skylake-X, `align` at (4, 6, 2): unrelated 1, 2 and 5 kbp pairs 1.50, 5.3 and 32.9
-  ms to 0.28, 0.87 and 4.8; at 30% 0.57, 2.2 and 16.4 to 0.28, 0.88 and 4.7; `distance` 2 to 14 times
-  faster; pairs under 15% apart unchanged. The exchange rate is `CELLS_PER_STEP`, measured.
-  That handover cost ONT reads half their time: their errors gather at the ends, where the searches start,
-  so the first projection ran 2.8 times the cost, 8 times the work, and handed reads to sweeps of up to
-  eight times their wavefront (ont-10k at (4, 6, 2), 1.54 to 2.33 ms a read; ont-50k 20.8 to 30.5 ms). Now
-  the search gives up only once its work has reached a 24th of the sweep's, as diagonal transition gives
-  up on its own projection, and the rate is the one measured at 10 kbp, 7, as 10 lost QuickEd's 10 kbp
-  pairs at 20% a fifth: ont-10k and ont-50k back to 1.55 and 21.0 ms, the 10 kbp pairs at 20% 24.1 to 20.0
-  ms, the unrelated ones 5% slower than with the handover as it was, four times faster than without it.
-
 ## Memory locality
 
 Sweeps whose working set outgrew the first-level cache, or whose traceback faulted in fresh pages, found by
 the difference sweep's case (2026-10-10, Skylake-X).
 
-- [x] **The anti-diagonal score sweeps in strips.** Each anti-diagonal restreamed every row of seven
-  diagonals, so past some 2,000 rows each pass reloaded them from the second-level cache: local sweeps 0.14
-  ns a cell at 1 kbp, 0.39 at 8 kbp, 0.82 at 16 kbp, 72% of first-level loads missing. Now the rows go in
-  strips of 16 KB (`anti_diagonals.strip_rows`), each from the row above it, which the strip before leaves:
-  the local, free-end and extension sweeps (a Z-drop, which judges whole anti-diagonals, keeps one strip),
-  the sweep back from a local end (`reach_back`), and the linear-space halves. Local sweeps run 0.12 ns a
-  cell from 4 to 8 kbp; local-long 50.0 to 17.4 ms; long local table alignments 2.5 times faster; every
-  score, end and CIGAR the same.
-- [x] **The banded traceback in place.** Two diagonals of scores and one of each gap layer, the newest
-  overwriting the oldest from the last row up, not three of each: divergent table pairs 18 to 37% faster
-  (10 kbp at 30%, 75.5 to 47.7 ms). A band whose decisions would pass the memory allowed keeps a few
-  anti-diagonals and sweeps each stretch again, rather than taking the linear-space path, which breaks ties
-  its own way.
-- [x] **The difference sweep in place, its traceback in stretches** (see "Divergent pairs at affine costs").
-- [x] **The unit-cost band's edges within `max_memory`.** The band kept every tile's left edge for the
-  traceback, 175 MB of growth on a 1 Mbp pair at 20% (QuickEd's set), past the 80 MB the README promised;
-  QuickEd splits Hirschberg's way past 16 MB, which breaks ties per piece. Now the round keeps every
-  edge while they fit, then every K-th, K doubling, with room for one stretch of the widest; the
-  traceback sweeps a stretch again from the last kept edge, every step the round's own, so the CIGAR is
-  the same byte for byte (`band.retrace`). The edge buffers grow by doubling to half the budget and
-  then to all of it at once: doubling on, the copy held the old buffer beside the new, up to twice the
-  budget (145 MB on the first pair below); jumping already at a quarter cost pairs that fit 6 MB and 3%.
-  One pair to a process on the Skylake-X, the four 1 Mbp pairs at 20%: 175, 99, 143 and 146 MB to 133,
-  99, 124 and 113 MB, 3.35 to 3.64 s; at 10% they fit, unchanged. 600 CIGARs under caps from 0 to 1 GB
-  equal the uncapped ones; with no memory at all the pairs take about twice the time. The rest of the
-  growth is the profile and the seeds, which grow with the length, not the cost.
 - [-] **The wavefront's kept fronts, fresh memory each call.** `align` builds its searches anew each call,
   as the library keeps no state of its own, so its kept fronts come from the allocator each time. Measured
   on fresh 5 kbp pairs 15% apart from a fresh process: the first three calls 8.4, 6.2 and 4.3 ms, then 3.5,
@@ -407,38 +207,9 @@ the difference sweep's case (2026-10-10, Skylake-X).
 Its limitations and future work (curiouscoding.nl/posts/astarpa2/#discussion), and where dinara-align
 stands on each.
 
-- [x] **Symbols beyond `ACGT`.** The edit distance takes `ACGT` and up to four other bytes, `N`
-  among them, each matching only itself, through a third bit plane its own kernels read, at no cost
-  to bases alone. Such a pair now takes seeds too: a seed holding an `N` goes uncounted, matching
-  nowhere and charging nothing, and the second sequence reads its `N` as a base for the seeds alone,
-  which only adds matches. With one `N` a read, scattered ones or a 100- or 5000-base run in both,
-  the 500 kbp reads align 2.5 to 3 times faster on the M2 and 1.4 to 1.7 times on the Skylake-X,
-  and 100 kbp pairs up to twice as fast on the M2, at the same costs and bases alone unchanged
-  within noise. Folding the first sequence's `N` too was as fast on short runs but flooded a long
-  run with matches, a run of `A` against a run of `A`, up to 800 times slower.
-- [x] **Seeds on ont-50k's reads with an `N`, on x86.** They cost about 6% there, and not for the
-  `N`: on AVX-512 seeds lost on every pair below about 85 kbp, real reads of 16 to 64 kbp aligning
-  18% faster without them and uniform 30 kbp pairs at 5% 38% faster. Seeds now start at 86 kbp on AVX-512 and nowhere
-  shorter on the projection; AVX2 broke even on those reads and the M2 gained 9%, so both keep the
-  16 kbp gate. Exact seeds' matching also checks a filter of 32 bits a seed before its half-full hash
-  table, so nearly every window that matches nothing costs one predictable test: matching took 87 ms
-  of the M2's 320 mid-length reads and takes 32. On the Skylake-X, mid-length reads 17% faster, with
-  an `N` 14%, 30 kbp pairs 18 to 40%, 100 kbp at 5% 10%, ont-500k 3%.
-- [x] **The cost of an `N`.** ont-50k's reads with one `N` took 12% longer than without on the
-  Skylake-X, and not mostly in the sweep: coding such a pair went byte by byte, five times as slow,
-  and its third plane was built a bit at a time, four times the planes' cost. Both now go sixteen
-  bytes or eight rows at a time, only chunks holding a symbol past `ACGT` byte by byte, and each tile
-  matches on no more planes than its own symbols need (see `Profile.symbols`): two where neither its
-  columns nor any row holds one, the rows' third plane as a mask where only rows do. Reads with an
-  `N` 7 to 9% faster on both machines, 5 to 7% over clean ones on ont-50k on the Skylake-X.
-- [x] **Semi-global and open-ended alignment.** Every cost model takes every mode (`Mode`): global, a
-  query inside a reference (Edlib's infix), at its start or end, any free ends as WFA's ends-free mode
-  allows, and an extension from either end; the CIGAR spans the aligned parts, their bounds beside it.
-  At unit costs the infix and prefix modes sweep a band as Edlib does, a bound doubled and only the
-  rows some score within it can still reach (Ukkonen's cutoff): 10 kbp in 100 kbp in 13 ms on the M2,
-  100 kbp in 1 Mbp in 0.75 s, against 21 ms and 2 s for the whole matrix; the other modes, a band or a
-  cap take the wavefront at the same costs. Still open: a first bound from an estimate instead of 64,
-  and a seed heuristic for the search.
+- [ ] **The infix and prefix searches' first bound and seeds.** At unit costs they sweep a band as Edlib
+  does, a bound doubled from 64 with Ukkonen's cutoff; still open: a first bound from an estimate instead
+  of 64, and a seed heuristic for the search.
 - [-] **Traceback while sweeping, to save memory** (as TALCO does). Feasible, and left (2026-10-06):
   every few tiles the traces from the band's top and bottom kept rows, deterministic and unable to
   cross without meeting, would settle the alignment behind where they meet and free the tile edges
@@ -479,9 +250,3 @@ stands on each.
   real dataset. An affine heuristic is also looser: a seed broken by one edit may have cost a
   mismatch, so it charges `min(x, o + e)` while the edit may cost more, and its fronts would trim
   less.
-- [x] **Low divergence (below 2%)** was A*PA2's weak spot against BiWFA; the diagonal transition
-  before any band now beats BiWFA and WFA there (146 µs against 302 and 605 at 0%, 100 kbp).
-- [x] **The seeds' setup** was A*PA2's other limitation. Exact matching is filtered, seeds holding an
-  `N` are handled, and AVX-512 builds skip seeds below 86 kbp where they do not pay, but it is still a
-  third or more of a long read's alignment on the Skylake-X (see above), where every idea listed
-  has now been tried.

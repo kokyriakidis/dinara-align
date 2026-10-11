@@ -17,8 +17,10 @@ Licensed under the Mozilla Public License 2.0 (see LICENSE and NOTICE).
   kinds, as WFA2-lib's ends-free and extension and abPOA's local: any free ends, with the presets
   global, infix, prefix, suffix and overlap, and a reward for every match when asked; an extension
   from either end with an optional Z-drop and end bonus; and local.
-- Unit costs by A\*PA2's bit-parallel band doubling with its seed heuristic; every other cost model by
-  a gap-affine wavefront from both ends after BiWFA; local alignment, overlaps and rewarded free
+- Unit costs by A\*PA2's bit-parallel band doubling with its seed heuristic, near-identical pairs by
+  diagonal transition first; every other cost model by a gap-affine wavefront, one search alone while it
+  steps fewer diagonals than two would, as it measures them, then from both ends after BiWFA, the
+  alignment the same either way; local alignment, overlaps and rewarded free
   ends by an anti-diagonal sweep in 16-bit lanes while the scores fit, one sweep for every score, a
   local alignment's start and a linear-space traceback's halves; all exact, every alignment's memory
   bounded (`max_memory`): costs so dear that a search's fronts could pass it are refused, and under a
@@ -61,4 +63,7 @@ Licensed under the Mozilla Public License 2.0 (see LICENSE and NOTICE).
   costs, tables, modes, bands, caps, tie rules and memory budgets.
 - WFA2-lib's regression set (`pixi run test-wfa`), byte for byte under `Ties.RIGHT`.
 - Continuous integration on x86-64 and AArch64 Linux and Apple silicon.
-- Benchmarks build every tool for the same CPU, named in each table.
+- Benchmarks build every tool for the same CPU, named in each table, and run each through one aligner
+  a file, as each tool's own runner keeps one: A\*PA2's and QuickEd's datasets, and real Illumina and
+  PacBio HiFi reads of HG002 from Genome in a Bottle, each against the stretch of HG002's own assembly
+  it maps to (`benchmarks/giab.py`).
