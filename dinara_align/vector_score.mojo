@@ -20,6 +20,7 @@ from .anti_diagonals import (
     gap_layer,
     row_letters,
     straight_deficit,
+    unreachable,
 )
 from .gotoh import AffineGapCosts, AlignmentMode, Decision, GapRun, GappedAlignment, Layer, advance, serial_align
 from .substitutions import SubstitutionLookup, table_extremes
@@ -171,8 +172,7 @@ def traced_band[
     """`vector_align` in `width` lanes of `dtype`, which hold every score of the band."""
     comptime Lanes = SIMD[dtype, width]
     comptime Value = Scalar[dtype]
-    # Unreachable: below every score the lanes hold, with a move to spare (see `fits_16_bits`).
-    comptime LOW = Value.MIN // 4
+    comptime LOW = unreachable[dtype]()
     var rows = len(first)
     var columns = len(second)
     var open = Int(gaps.open)

@@ -81,26 +81,36 @@ def straight_deficit(substitution: Int, first_letter: Int, further_letter: Int, 
     return first_letter + max(substitution, further_letter) * max(rows, columns)
 
 
+@always_inline
+def unreachable[dtype: DType]() -> Scalar[dtype]:
+    """A sweep's unreachable cell, a gap layer's no path enters or a cell outside a band: 16 bits' 4096 above
+    their least, so a move added to it stays inside them, and below every score they hold (see
+    `fits_16_bits`); wider lanes' a quarter of their least, below every score `lane_bits` lets them hold."""
+    comptime if dtype == DType.int16:
+        return Scalar[dtype].MIN + 4096
+    return Scalar[dtype].MIN // 4
+
+
 def fits_16_bits[floored: Bool](reward: Int, dearest: Int, deficit: Int, rows: Int, columns: Int) -> Bool:
     """Whether every score of a sweep fits 16 bits, a pair earning at most `reward`, a move costing at most
     `dearest`, and no cell's best falling more than `deficit` below zero (see `straight_deficit`). None
     passes the reward of the shorter sequence matched throughout. A `floored` sweep's, a local alignment's,
     none falls further below zero than the dearest single move, as each cell takes the best of its moves
     from cells of zero or more; any other's no gap layer falls more than a move below its cell's deficit,
-    nor a cell plus its pair's score. A gap's sentinel, a quarter of the way down, stays below them all
-    with a move to spare.
+    nor a cell plus its pair's score. So every score stays above `unreachable`'s cell and a reward added to
+    it, which no score falls to, and adding a move to one stays inside the lanes.
 
-    The deficit once charged every letter of both the dearest move, which sent a global sweep of two 1 kbp
-    sequences to 32 bits."""
+    The deficit once charged every letter of both the dearest move, and the unreachable cell sat a quarter
+    of the way down, which sent a global sweep of two 1 kbp sequences to 32 bits."""
     var fits = reward * (min(rows, columns) + 1) < 32000 and dearest < 4000
     comptime if not floored:
-        fits = fits and deficit + 2 * dearest < 8000
+        fits = fits and deficit + 2 * dearest + reward < 28000
     return fits
 
 
 def lane_bits[floored: Bool](reward: Int, dearest: Int, deficit: Int, rows: Int, columns: Int) -> Int:
-    """The narrowest lanes, 16, 32 or 64 bits, every score of a sweep fits (see `fits_16_bits`): 32 bits'
-    bounds are 16 bits' scaled to them, a sentinel a quarter of the way down."""
+    """The narrowest lanes, 16, 32 or 64 bits, every score of a sweep fits (see `fits_16_bits`): wider ones'
+    bounds a quarter of their range, their unreachable cell a quarter of the way down (see `unreachable`)."""
     if fits_16_bits[floored](reward, dearest, deficit, rows, columns):
         return 16
     var fits = reward * (min(rows, columns) + 1) < 1 << 30 and dearest < 1 << 27

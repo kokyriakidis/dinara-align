@@ -31,7 +31,7 @@ from .gap_affine import (
     traced_extension,
 )
 from .modes import Alignment, Anchor, Band, Costs, Ties
-from .anti_diagonals import AntiDiagonals, GapLanes, lane_bits, straight_deficit
+from .anti_diagonals import AntiDiagonals, GapLanes, lane_bits, straight_deficit, unreachable
 from .substitutions import SubstitutionLookup
 
 
@@ -97,7 +97,7 @@ def swept_cells[
     diagonal, read once it is done."""
     comptime Lanes = SIMD[dtype, width]
     comptime Value = Scalar[dtype]
-    comptime LOW = Value.MIN // 4
+    comptime LOW = unreachable[dtype]()
     # The lanes run along the shorter sequence, so the sweep's rows stay in the core's own cache:
     # along the reference, or with `transposed` along the query.
     var down_letters = query if transposed else reference
