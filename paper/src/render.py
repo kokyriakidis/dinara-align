@@ -32,6 +32,8 @@ FULL = {
  "Wozniak1997": ["Wozniak,A.", "Using video-oriented instructions to speed up sequence comparison.", "Comput. Appl. Biosci., 13, 145–150.", "10.1093/bioinformatics/13.2.145"],
  "Farrar2007": ["Farrar,M.", "Striped Smith–Waterman speeds database searches six times over other SIMD implementations.", "Bioinformatics, 23, 156–161.", "10.1093/bioinformatics/btl582"],
  "Zhao2013": ["Zhao,M., Lee,W.-P., Garrison,E.P. and Marth,G.T.", "SSW library: an SIMD Smith–Waterman C/C++ library for use in genomic applications.", "PLoS One, 8, e82138.", "10.1371/journal.pone.0082138"],
+ "Doblas2025": ["Doblas,M., Lostes-Cazorla,O., Aguado-Puig,Q. et al.", "QuickEd: high-performance exact sequence alignment based on bound-and-align.", "Bioinformatics, 41, btaf112.", "10.1093/bioinformatics/btaf112"],
+ "Shao2024": ["Shao,H. and Ruan,J.", "BSAlign: a library for nucleotide sequence alignment.", "Genomics, Proteomics & Bioinformatics, 22, qzae025.", "10.1093/gpbjnl/qzae025"],
  "Suzuki2018": ["Suzuki,H. and Kasahara,M.", "Introducing difference recurrence relations for faster semi-global alignment of long sequences.", "BMC Bioinformatics, 19, 45.", "10.1186/s12859-018-2014-8"],
  "Li2018": ["Li,H.", "Minimap2: pairwise alignment for nucleotide sequences.", "Bioinformatics, 34, 3094–3100.", "10.1093/bioinformatics/bty191"],
  "Daily2016": ["Daily,J.", "Parasail: SIMD C library for global, semi-global, and local pairwise sequence alignments.", "BMC Bioinformatics, 17, 81.", "10.1186/s12859-016-0930-z"],
@@ -120,7 +122,7 @@ def inline_tex(text, bibkeys):
         t = re.sub(r"\*\*(.+?)\*\*", r"\\textbf{\1}", t)
         t = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"\\emph{\1}", t)
         t = re.sub(r"\^([\w/]+)", r"$^{\1}$", t)
-        for a, b in (("µs", "\\textmu s"), ("×", "$\\times$"), ("≤", "$\\le$"), ("→", "$\\to$"), ("≈", "$\\approx$"),
+        for a, b in (("µs", "\\textmu s"), ("×", "$\\times$"), ("≤", "$\\le$"), ("→", "$\\to$"), ("≈", "$\\approx$"), ("−", "$-$"),
                      ("“", "``"), ("”", "''"), ("’", "'"), ("A*PA", "A*PA")):
             t = t.replace(a, b)
         t = re.sub(r"(\d),(\d{3})", r"\1{,}\2", t)
@@ -176,12 +178,12 @@ def html_figure(key, caption, num, tabs, figs, refs):
     assert key == "sweeps", key
     return f'''<figure id="fig-{key}">
   <div class="panel"><div class="panel-label">a</div>
-    <div class="fig-box chart-wrap"><svg class="chart" id="chart-divergence" viewBox="0 0 760 360" role="img" aria-label="Time per alignment by divergence"></svg></div>
+    <div class="fig-box chart-wrap"><svg class="chart" id="chart-divergence" viewBox="0 0 760 360" role="img" aria-label="Time per alignment by error rate"></svg></div>
     <div class="legend" id="legend-divergence"></div></div>
   <div class="panel"><div class="panel-label">b</div>
     <div class="controls" role="group" aria-label="Divergence">
-      <button type="button" id="len-5" aria-pressed="false">5% divergence</button>
-      <button type="button" id="len-15" aria-pressed="true">15% divergence</button></div>
+      <button type="button" id="len-5" aria-pressed="false">5% errors</button>
+      <button type="button" id="len-20" aria-pressed="true">20% errors</button></div>
     <div class="fig-box chart-wrap"><svg class="chart" id="chart-length" viewBox="0 0 760 360" role="img" aria-label="Time per alignment by length"></svg></div>
     <div class="legend" id="legend-length"></div></div>
   {cap}
@@ -364,14 +366,14 @@ def tikz_line_plot(series, xs, xlog, width, height, ymin, ymax, xticks, xlabel, 
 def tex_figure(key, caption, bibkeys):
     import charts_data as D
     styles = {"dinara-align": "dinara", "A*PA2-full": "apafull", "A*PA2-simple": "apasimple", "A*PA": "apa",
-              "Edlib": "edlib", "BiWFA": "biwfa", "WFA": "wfa"}
+              "Edlib": "edlib", "BiWFA": "biwfa", "WFA": "wfa", "QuickEd": "quicked"}
     legend = ("\\begin{tikzpicture}[font=\\scriptsize]\n" + "\n".join(
-        f"\\draw[{s}] ({k * 2.9:.2f},0) -- ({k * 2.9 + 0.5:.2f},0) node[right,black] {{{n}}};" for k, (n, s) in enumerate(styles.items())) + "\n\\end{tikzpicture}")
+        f"\\draw[{s}] ({k * 2.6:.2f},0) -- ({k * 2.6 + 0.5:.2f},0) node[right,black] {{{n}}};" for k, (n, s) in enumerate(styles.items())) + "\n\\end{tikzpicture}")
     assert key == "sweeps", key
-    a = tikz_line_plot(D.DIVERGENCE, list(range(16)), False, 7.0, 4.2, 0.01, 1000, [(d, f"{d}\\%") for d in range(0, 16, 3)],
-                       "divergence (\\%), 100\\,kbp pairs", styles)
-    b = tikz_line_plot(D.LENGTH15, [3, 10, 30, 100, 300, 1000], True, 7.0, 4.2, 0.01, 100000,
-                       [(x, (f"{x}\\,kbp" if x < 1000 else "1\\,Mbp")) for x in [3, 10, 30, 100, 300, 1000]], "length, 15\\% divergence", styles)
+    a = tikz_line_plot(D.DIVERGENCE, D.DIVERGENCE_X, False, 7.0, 4.2, 1, 1000, [(d, f"{d}\\%") for d in D.DIVERGENCE_X],
+                       "errors (\\%), 100\\,kbp pairs", styles)
+    b = tikz_line_plot(D.LENGTH20, D.LENGTH_X, True, 7.0, 4.2, 0.1, 10000,
+                       [(x, (f"{x}\\,kbp" if x < 1000 else "1\\,Mbp")) for x in D.LENGTH_X], "length, 20\\% errors", styles)
     return (f"\\begin{{figure*}}[t]\n\\centering\n\\begin{{minipage}}{{0.49\\textwidth}}\\centering\\textbf{{a}}\\par\\resizebox{{\\linewidth}}{{!}}{{\\begin{{tikzpicture}}\n{a}\n\\end{{tikzpicture}}}}\\end{{minipage}}\\hfill"
             f"\\begin{{minipage}}{{0.49\\textwidth}}\\centering\\textbf{{b}}\\par\\resizebox{{\\linewidth}}{{!}}{{\\begin{{tikzpicture}}\n{b}\n\\end{{tikzpicture}}}}\\end{{minipage}}\n"
             f"\\par\\medskip\\resizebox{{\\linewidth}}{{!}}{{{legend}}}\n\\caption{{{inline_tex(caption, bibkeys)}}}\\label{{fig:{key}}}\n\\end{{figure*}}\n")
@@ -401,6 +403,7 @@ TEX_PREAMBLE = r"""\usepackage[a4paper,margin=1.8cm,columnsep=0.7cm]{geometry}
   edlib/.style={thick, orange!85!black},
   biwfa/.style={thick, red!75!black, dashed},
   wfa/.style={thick, green!50!black},
+  quicked/.style={thick, brown!70!black, dash dot},
 }
 """
 

@@ -1,7 +1,8 @@
-/* Charts: one log-scale line chart, drawn to scale from the published tables (benchmarks/README.md, ebe290f). */
+/* Charts: log-scale line charts, drawn to scale from benchmarks/README.md's run over QuickEd's simulated sets. */
 const TOOLS = [
   ["dinara-align", "--c-dinara", 3.2, ""], ["A*PA2-full", "--c-apafull", 1.8, ""], ["A*PA2-simple", "--c-apasimple", 1.8, "6 4"],
   ["A*PA", "--c-apa", 1.8, "2 3"], ["Edlib", "--c-edlib", 1.8, ""], ["BiWFA", "--c-biwfa", 1.8, "6 4"], ["WFA", "--c-wfa", 1.8, ""],
+  ["QuickEd", "--c-quicked", 1.8, "8 3 2 3"],
 ];
 /*DATA*/
 
@@ -80,23 +81,23 @@ function legend(container, names, styles, hidden, redraw) {
 const STYLES = Object.fromEntries(TOOLS.map(([n, t, w, d]) => [n, [t, w, d]]));
 const toPairs = s => Object.fromEntries(Object.entries(s).map(([k, v]) => [k, v.map(x => x == null ? null : Array.isArray(x) ? x : [x])]));
 const divHidden = new Set(), lenHidden = new Set();
-let lenRate = 15;
+let lenRate = 20;
 function drawAll() {
-  lineChart(document.getElementById("chart-divergence"), { xs: DIVERGENCE.x, xLog: false, xLabel: "divergence (%)", xTickEvery: 1,
-    xTick: x => x + "%", series: toPairs(DIVERGENCE.series), styles: STYLES, hidden: divHidden, yMin: 0.01, yMax: 1000, top: "dinara-align",
+  lineChart(document.getElementById("chart-divergence"), { xs: DIVERGENCE.x, xLog: false, xLabel: "errors (%), 100 kbp pairs", xTickEvery: 1,
+    xTick: x => x + "%", series: toPairs(DIVERGENCE.series), styles: STYLES, hidden: divHidden, yMin: 1, yMax: 1000, top: "dinara-align",
     tooltipTitle: x => "100 kbp at " + x + "%" });
-  lineChart(document.getElementById("chart-length"), { xs: LENGTH_X, xLog: true, xLabel: "length (kbp), " + lenRate + "% divergence",
-    xTick: x => x >= 1000 ? "1 Mbp" : x + " kbp", series: LENGTH[lenRate], styles: STYLES, hidden: lenHidden, yMin: 0.01, yMax: 100000, top: "dinara-align",
+  lineChart(document.getElementById("chart-length"), { xs: LENGTH_X, xLog: true, xLabel: "length, " + lenRate + "% errors",
+    xTick: x => x >= 1000 ? "1 Mbp" : x + " kbp", series: LENGTH[lenRate], styles: STYLES, hidden: lenHidden, yMin: 0.1, yMax: 10000, top: "dinara-align",
     tooltipTitle: x => (x >= 1000 ? "1 Mbp" : x + " kbp") + " at " + lenRate + "%" });
 }
 function drawLegends() {
   legend(document.getElementById("legend-divergence"), Object.keys(DIVERGENCE.series), STYLES, divHidden, drawAll);
-  legend(document.getElementById("legend-length"), Object.keys(LENGTH[15]), STYLES, lenHidden, drawAll);
+  legend(document.getElementById("legend-length"), Object.keys(LENGTH[20]), STYLES, lenHidden, drawAll);
 }
 document.getElementById("len-5").addEventListener("click", () => { lenRate = 5; setRate(); });
-document.getElementById("len-15").addEventListener("click", () => { lenRate = 15; setRate(); });
+document.getElementById("len-20").addEventListener("click", () => { lenRate = 20; setRate(); });
 function setRate() { document.getElementById("len-5").setAttribute("aria-pressed", String(lenRate === 5));
-  document.getElementById("len-15").setAttribute("aria-pressed", String(lenRate === 15)); drawAll(); }
+  document.getElementById("len-20").setAttribute("aria-pressed", String(lenRate === 20)); drawAll(); }
 drawLegends(); drawAll();
 // Theme changes swap the token colours the charts read.
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { drawLegends(); drawAll(); });

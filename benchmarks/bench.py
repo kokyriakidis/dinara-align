@@ -45,6 +45,7 @@ import json
 import math
 import os
 import random
+import statistics
 import subprocess
 import sys
 import zipfile
@@ -384,6 +385,7 @@ def main() -> None:
         "| :-- | --: | --: | --: |",
     ]
     time_lines = [f"| dataset | pairs | {head} | agree |", f"| :-- | --: | {rule} | :-: |"]
+    median_lines = [f"| dataset | pairs | {head} |", f"| :-- | --: | {rule} |"]
     total_lines = [f"| dataset | pairs | {head} |", f"| :-- | --: | {rule} |"]
     speed_lines = [f"| dataset | {' | '.join(rivals)} |", f"| :-- | {' | '.join('--:' for _ in rivals)} |"]
     memory_lines = [f"| dataset | {head} |", f"| :-- | {rule} |"]
@@ -394,7 +396,7 @@ def main() -> None:
     for name, files in datasets:
         path, facts = sample(name, files, bases, published)
         pairs, whole = facts["pairs"], facts["of"]
-        times, totals, grown, peaks, seen = [], [], [], [], []
+        times, medians, totals, grown, peaks, seen = [], [], [], [], [], []
         measured = {}
         for column, binary, tool in chosen(name):
             print(f"{name}: {column} ...", file=sys.stderr, flush=True)
@@ -406,14 +408,18 @@ def main() -> None:
             if not rows:
                 marker = {harness.MEMORY: "o.o.m.", harness.FAILED: "failed"}.get(status, f"t.o. ({options.budget:g} s)")
                 times.append(marker)
+                medians.append(marker)
                 totals.append(marker)
                 continue
             mean = sum(row[0] for row in rows) / len(rows)
+            median = statistics.median(row[0] for row in rows)
             if len(rows) == pairs:
                 times.append(duration(mean))
+                medians.append(duration(median))
             else:
                 why = "o.o.m. after " if status == harness.MEMORY else ""
                 times.append(f"{duration(mean)} ({why}{len(rows)}/{pairs})")
+                medians.append(f"{duration(median)} ({why}{len(rows)}/{pairs})")
             if status == harness.MEMORY:
                 totals.append("o.o.m.")
             else:
@@ -450,6 +456,7 @@ def main() -> None:
             cells.append(f"{ratio:.1f}×" if ratio < 100 else f"{ratio:.0f}×")
         speed_lines.append(f"| {name} | " + " | ".join(cells) + " |")
         time_lines.append(f"| {name} | {pairs} of {whole} | " + " | ".join(times) + f" | {'✓' if agree else '✗'} |")
+        median_lines.append(f"| {name} | {pairs} of {whole} | " + " | ".join(medians) + " |")
         total_lines.append(f"| {name} | {whole} | " + " | ".join(totals) + " |")
         memory_lines.append(f"| {name} | " + " | ".join(grown) + " |")
         peak_lines.append(f"| {name} | " + " | ".join(peaks) + " |")
@@ -458,9 +465,11 @@ def main() -> None:
             scaling.append({
                 "length": length,
                 "error": rate,
+                "pairs": pairs,
                 "seconds_per_pair": {
                     column: sum(row[0] for row in rows) / len(rows) for column, (rows, _) in measured.items() if rows
                 },
+                "finished": {column: len(rows) for column, (rows, _) in measured.items()},
             })
         print(time_lines[-1], file=sys.stderr, flush=True)
         KEPT.write_text(json.dumps(kept))
@@ -482,6 +491,8 @@ def main() -> None:
         + "a tool aligned before it was stopped counted; t.o. a tool its budget stopped before a pair, o.o.m. one the\n"
         + "8 GB memory cap stopped (A*PA2's view):\n\n"
         + "\n".join(time_lines)
+        + "\n\nMedian time per alignment over the same pairs (A*PA2's supplement):\n\n"
+        + "\n".join(median_lines)
         + "\n\nTotal over each whole dataset, its mean time per pair times its pairs, ≈ where the sample is not the\n"
         + "whole (QuickEd's Table 2 and S3):\n\n"
         + "\n".join(total_lines)

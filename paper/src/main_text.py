@@ -22,10 +22,10 @@ ABSTRACT = [('Motivation',
   'transition vectorised across diagonals, band bounds accepted only when independent estimates agree, and per-pair '
   'optimality certificates for banded inter-sequence batches, together with a bit-parallel sweep arranged for '
   'instruction latency. On an Intel Skylake-X processor, dinara-align had the '
-  'lowest mean running time among the exact aligners tested in 33 of the 34 configurations of the A*PA2 benchmark, '
-  'aligning ultra-long nanopore reads in 104 ms on average, compared with 176 ms for A*PA2-full. It was 1.7 to 3.2 '
-  'times faster than WFA at gap-affine costs and computed global scores for 500,000 short-read pairs on one core 4.5 '
-  'times faster than WFA2-lib.'),
+  'lowest mean running time among the exact aligners tested on all 22 datasets of the A*PA2 and QuickEd benchmarks, '
+  'aligning ultra-long nanopore reads in 118 ms on average, compared with 283 ms for A*PA2-full, and was 6.7 times '
+  'faster than QuickEd in the geometric mean. It was 1.7 to 3.8 times faster than WFA and BiWFA at gap-affine costs '
+  'and computed global scores for 500,000 short-read pairs on one core 4.6 times faster than WFA2-lib.'),
  ('Availability and implementation',
   'dinara-align is free software under the Mozilla Public License 2.0, available at '
   'https://github.com/kokyriakidis/dinara-align with C, C++, Python and command-line interfaces.'),
@@ -73,7 +73,8 @@ BODY = [
   '1), adapting the speculate-and-verify approach of the SeedEx accelerator [@Fujiki2020] to software batches.',
   "**A latency-aware bit-parallel sweep.** On AVX-512, two staggered groups of words are interleaved, extending the "
   "instruction-level parallelism of A*PA2, and two Boolean identities shorten the loop-carried chain of Myers' "
-  'step; the two are worth 4 to 5% and 1 to 2% on the ultra-long reads.']),
+  'step; the two are worth 4.5 to 5% and 1 to 2% on the ultra-long reads, and 11.5% and 4% on 100 kbp pairs at '
+  '20% errors.']),
 ('sec', 'Methods'),
 ('sub', 'Problem definition and overview'),
 ('p',
@@ -91,7 +92,7 @@ BODY = [
  'diagonal transition alone. Gap-affine costs use the bidirectional wavefront of WFA and BiWFA [@MarcoSola2021; '
  '@MarcoSola2023]. A short diagonal-transition search estimates the distance, and the estimate, the length and the '
  'cost model select the algorithm. The thresholds were set from measurements on each instruction set and are fixed '
- 'at compile time (Supplementary Section S1).'),
+ 'at compile time; each was checked again by halving and doubling it (Supplementary Section S1).'),
 ('table', 'engines'),
 ('sub', "A shorter critical path for Myers' recurrence"),
 ('p',
@@ -234,98 +235,112 @@ BODY = [
 ('p',
  'All measurements were taken on an Intel Core i9-7900X (Skylake-X, AVX-512) with ten cores fixed at 3.3 GHz, turbo '
  'boost and hyper-threading disabled, and 91 GB of memory, running Ubuntu 26.04. dinara-align is implemented in Mojo '
- '[@Modular] and was compiled with Mojo 1.1.0 at commit `ebe290f`; all tools were compiled for the native '
- 'instruction set. The exact aligners compared are A*PA2-full and A*PA2-simple [@GrootKoerkamp2024b], A*PA '
- '[@GrootKoerkamp2024a], Edlib [@Sosic2017], WFA and BiWFA [@MarcoSola2021; @MarcoSola2023], KSW2 [@Li2018; '
- '@Suzuki2018], parasail [@Daily2016], SSW [@Zhao2013], abPOA [@Gao2021] and hyalite [@hyalite]. Every cost was '
- 'compared with those of every other tool and with the costs recorded in the published A*PA2 results; no '
- 'discrepancies occurred.'),
+ '[@Modular] and was compiled with Mojo 1.1.0 at commit `dc980d7`, and for gap-affine costs and batches at '
+ '`289bcf0`, whose code those workloads share; all tools were compiled for the native instruction set. The exact '
+ 'aligners compared are A*PA2-full and A*PA2-simple [@GrootKoerkamp2024b], A*PA [@GrootKoerkamp2024a], Edlib '
+ '[@Sosic2017], WFA and BiWFA [@MarcoSola2021; @MarcoSola2023], QuickEd [@Doblas2025], BSAlign [@Shao2024], KSW2 '
+ '[@Li2018; @Suzuki2018], parasail [@Daily2016] and SSW [@Zhao2013]. Every cost was compared with those of every '
+ 'other tool, and on the A*PA2 datasets with the costs recorded in the published A*PA2 results; no discrepancies '
+ 'occurred.'),
 ('p',
- 'For unit costs we followed the A*PA2 protocol [@GrootKoerkamp2024b]: one single-threaded job at a time, pinned to '
- 'one core, each pair aligned once with traceback, and a time limit of 20 s per sample, after which only the '
- 'completed pairs are reported. The datasets are those of A*PA2: nanopore reads of about 1, 10 and 50 kbp, '
- 'ultra-long reads over 500 kbp with and without genetic variation, SARS-CoV-2 genomes, and uniform-error pairs '
- 'regenerated from the original random seed. We report the mean wall-clock time per alignment, excluding input, and '
- 'the increase in peak resident memory during an alignment, measured with `getrusage`. As in A*PA2, each sample was '
- 'run once; the one configuration in which dinara-align was not the fastest was repeated five times. Other workloads '
- 'were timed in-process after a warm-up, as the fastest of twenty batches of about 10 ms, or once for calls of 0.1 s '
- 'or longer; short-read batches as the faster of two passes.'),
+ 'We combined the protocols of A*PA2 [@GrootKoerkamp2024b] and QuickEd [@Doblas2025]. The datasets are the real '
+ 'datasets of A*PA2, nanopore reads of about 1, 10, 50 and 500 kbp, the last also against a reference with genetic '
+ 'variation, and SARS-CoV-2 genomes, and the simulated datasets of QuickEd, random sequences of 10 kbp, 100 kbp, '
+ '500 kbp and 1 Mbp with 1, 5, 10 and 20% uniformly distributed errors (Supplementary Table S5). Each dataset was '
+ 'sampled in a fixed random order to about 2 Mbp of sequence and at least four pairs, the same sample for every '
+ 'tool. One single-threaded job ran at a time, pinned to one core; each tool aligned the pairs of a sample once '
+ 'each, with traceback, within 30 s per sample, after which only the completed pairs are reported, and tools whose '
+ 'memory grows with the matrix or the square of the distance ran under an 8 GB limit. We report the mean and median '
+ 'wall-clock time per alignment, excluding input, the increase in peak resident memory during an alignment, '
+ 'measured with `getrusage` as in A*PA2, and the peak resident memory of the process, as in QuickEd. Gap-affine '
+ 'costs used the same samples and protocol. The other modes and the short-read batches were timed in-process as '
+ 'the faster of two passes over each workload.'),
 ('sub', 'Edit distance'),
 ('p',
  'On the real datasets, dinara-align had the lowest mean and median time among the exact aligners ([#tab:real]; '
  'Supplementary Table S4). It aligned the 1 kbp reads in 23 µs, compared with 31 µs for WFA, required about two '
- 'thirds of the time of A*PA2-simple on the 10 and 50 kbp reads, and aligned the ultra-long reads in 104 and 144 ms, '
- 'compared with 176 and 210 ms for A*PA2-full. The approximate aligners WFA-adaptive [@MarcoSola2021] and Block '
- 'Aligner [@Liu2023] were slower than dinara-align on every dataset.'),
+ 'thirds of the time of A*PA2-simple on the 10 and 50 kbp reads (157 against 247 µs and 590 against 944 µs), and '
+ 'aligned the ultra-long reads in 118 and 156 ms, compared with 283 and 225 ms for A*PA2-full and 847 ms and 1.39 s '
+ 'for QuickEd.'),
 ('table', 'real'),
 ('p',
- 'On uniform 100 kbp pairs ([#fig:sweeps]a), dinara-align required 4.4 to 6.8 ms between 2 and 8% divergence and '
- '10.4 to 12.3 ms from 9 to 15%, where A*PA2-full required up to 18 ms. A*PA2-full was faster only at 10% divergence '
- '(10.5 versus 11.0 ms; in five repeated runs, 10.43–10.49 versus 11.02–11.06 ms). With increasing length '
- '([#fig:sweeps]b), dinara-align aligned 1 Mbp pairs at 15% divergence in 265 ms, compared with 1.33 s for '
- 'A*PA2-full and 2.07 s for A*PA.'),
+ 'On the simulated datasets ([#fig:sweeps]; Supplementary Table S4), dinara-align was the fastest at every length '
+ 'and error rate. On 100 kbp pairs it required 1.5, 5.0, 7.2 and 16.0 ms at 1, 5, 10 and 20% errors, compared with '
+ '7.5, 8.5, 13.9 and 36.7 ms for A*PA2-full and 12.5, 24.0, 39.0 and 62.8 ms for QuickEd, and on 1 Mbp pairs at 20% '
+ 'errors 901 ms, compared with 2.02 s for A*PA2-full and 4.8 s for QuickEd. Its narrowest margin was on 10 kbp pairs '
+ 'at 5%, 269 against 288 µs for A*PA2-simple. Over the 22 datasets, on the pairs both completed, A*PA2-full took 1.3 '
+ 'to 22.3 times as long as dinara-align (2.5 in the geometric mean), A*PA2-simple 1.1 to 12.8 times (3.2) and '
+ 'QuickEd 3.0 to 22.5 times (6.7).'),
 ('figure', 'sweeps'),
 ('p',
- 'On the ultra-long reads, an alignment increased peak memory by 51 MB without and 37 MB with genetic variation, '
- 'compared with 81 and 48 MB for A*PA2-full and 82 and 32 MB for A*PA2-simple; on 1 Mbp pairs at 15% divergence, by '
- '55 MB, compared with 86 to 149 MB for A*PA and A*PA2. On shorter inputs dinara-align generally used more memory '
- 'than the most economical tool, for example 13 MB against 2.3 MB for Edlib on 300 kbp pairs at 5% divergence, and '
- 'its runtime occupies about 13 MB, compared with 3 to 5 MB for the other tools.'),
+ 'On the ultra-long reads, an alignment increased peak memory by at most 51 MB without and 37 MB with genetic '
+ 'variation, compared with 82 and 48 MB for A*PA2-full and 82 and 32 MB for A*PA2-simple; on 1 Mbp pairs at 20% '
+ 'errors, by at most 126 MB, compared with 184 and 192 MB for A*PA2-full and A*PA2-simple, the tile boundaries kept '
+ 'for the traceback staying within the default limit of 80 MB (Supplementary Section S1). QuickEd, which splits its '
+ 'traceback recursively above 16 MB, stayed near 25 MB on every dataset, and Edlib below 8 MB. On shorter inputs '
+ 'dinara-align generally used more memory than the most economical tool, and its runtime occupies about 13 MB, '
+ 'compared with 2 to 8 MB for the other tools.'),
 ('sub', 'Gap-affine costs, other modes and batches'),
 ('p',
- 'At the WFA costs (4, 6, 2), dinara-align was 1.7 to 3.2 times faster than WFA on every dataset that any tool '
- 'completed, and was the only aligner to complete all 104 reads of the 50 kbp dataset within the time limit '
- '([#tab:affine]). In each of the 14 workloads covering local, overlap, infix, prefix, extension, two-piece and '
- 'substitution-matrix alignment, it was faster than the fastest alternative, by factors from 1.1 to 10.6 '
- '(Supplementary Table S2).'),
+ 'At the WFA costs (4, 6, 2), dinara-align was 1.7 to 3.8 times faster than WFA and BiWFA on every dataset that any '
+ 'tool completed, 2.7 and 2.6 times in the geometric mean, and it completed more of the long pairs than any other '
+ 'tool: 8 of the 10 pairs of 100 kbp at 20% errors, against 4 for BiWFA ([#tab:affine]; Supplementary Table S3). No '
+ 'tool completed a pair of 1 Mbp beyond 1% errors within 30 s. In each of the 14 workloads covering local, overlap, '
+ 'infix, prefix, extension, two-piece and substitution-matrix alignment, it was at least as fast as the fastest '
+ 'alternative, by factors from 1.0 to 22 (Supplementary Table S2); in the one tie, infix alignment at (4, 6, 2), its '
+ 'time varies between 3.0 and 3.9 ms from build to build with the placement of one loop, for the same instructions.'),
 ('table', 'affine'),
 ('p',
  'Following the short-read case study of Accelign [@Kallenborn2026], we computed global scores for 500,000 pairs of '
  '148 bp reads with 1% error against reference segments of similar length ([#tab:batch]). Under gap-affine costs '
- '(mismatch 1, gap \\(2+k\\)), dinara-align required 0.47 µs per pair on one core, compared with 2.12 µs for '
- 'WFA2-lib, and 26 ms for the whole batch on ten cores, compared with 115 ms.'),
+ '(mismatch 1, gap \\(2+k\\)), dinara-align required 0.46 µs per pair on one core, compared with 2.12 µs for '
+ 'WFA2-lib, and 27 ms for the whole batch on ten cores, compared with 116 ms.'),
 ('table', 'batch'),
 ('sub', 'Effect of each technique'),
 ('p',
  'To measure what each technique contributes, dinara-align was built with one technique switched off at a time, '
- 'everything else unchanged, and every build aligned the A*PA2 samples with traceback and scored the short-read '
+ 'everything else unchanged, and every build aligned samples of the A*PA2 real datasets and of the 100 kbp '
+ 'simulated pairs with traceback, the ultra-long reads ten times the usual sample, and scored the short-read '
  'batch. The builds alternated within each of three rounds, pinned to one core, and we report the median against '
  'the build with every technique on ([#tab:ablation]). Because the Skylake-X penalises jumps that cross 32-byte '
  'boundaries, the position of a loop after a rebuild can move the running time by several percent; the alignment '
  'builds were therefore assembled with branches kept clear of those boundaries '
  '(`-mbranches-within-32B-boundaries`). A baseline built in this way from a different source file ran within 0.7% '
- 'of the baseline on every dataset, the baseline varied by at most 1.2% between rounds, and every build returned '
- 'the same costs on every dataset. Constructing the neighbours of exact seed matches directly contributed most on '
- 'long, divergent pairs: without it, the ultra-long reads took 9% and 16% longer and the 100 kbp pairs at 10 and 15% '
- 'divergence 9 to 10% longer. Interleaving two groups of bit-parallel words contributed 4 to 5% on the ultra-long '
- 'reads, over this and a second, independent set of builds; the regrouped recurrence, although it shortens a single '
- 'word\'s step from 14 to 8 cycles, contributed 1 to 2%, '
- 'because bands narrow enough to be bound by that step make up a small part of the work. Gathered diagonal '
- 'transition contributed 13 to 24% where diagonal transition does most of the work, on the 1 kbp reads, the '
- 'SARS-CoV-2 genomes and near-identical 100 kbp pairs. The agreement rule for extrapolated bounds mattered on the '
- '10 kbp reads (18%) and the SARS-CoV-2 genomes (6%), and not on the ultra-long reads, where the seed heuristic '
- 'sets the first bound. Without the certified band, the short-read batch took 2.9 and 3.1 times as long at affine '
- 'and unit costs.'),
+ 'of the baseline on every dataset, and every build returned the same costs on every dataset. Constructing the '
+ 'neighbours of exact seed matches directly contributed most on the ultra-long reads, which without it took 9% and '
+ '16% longer; on 100 kbp pairs, which now take exact seeds on AVX-512, it made no difference. Interleaving two '
+ 'groups of bit-parallel words contributed 4.5 to 5% on the ultra-long reads and 11.5% on 100 kbp pairs at 20% '
+ 'errors, whose bands are widest; the regrouped recurrence, although it shortens a single word\'s step from 14 to 8 '
+ 'cycles, contributed 1 to 4%, because bands narrow enough to be bound by that step make up a small part of the '
+ 'work. Gathered diagonal transition contributed 13 to 27% where diagonal transition does most of the work, on the '
+ '1 kbp reads, the SARS-CoV-2 genomes and 100 kbp pairs at 1% errors. The agreement rule for extrapolated bounds '
+ 'mattered on the 10 kbp reads (22%) and the SARS-CoV-2 genomes (5%), and not on the ultra-long reads, where the '
+ 'seed heuristic sets the first bound. Without the certified band, the short-read batch took 2.9 and 3.2 times as '
+ 'long at affine and unit costs.'),
 ('table', 'ablation'),
 ('sec', 'Discussion'),
 ('p',
  'The algorithms in dinara-align build on those of earlier exact aligners; the gains come from changes to how these '
  'algorithms use the processor. Two observations stand out. First, on long pairs the techniques that reduce work '
  'outside the inner loop contributed more than those that speed it up: constructing seed neighbours directly saved '
- 'up to 16%, against 4 to 5% for interleaving bit-parallel groups and 1 to 2% for the regrouped recurrence '
- '([#tab:ablation]). Second, as the '
- 'inner loops become faster, the scalar, memory-bound construction of the seed heuristic dominates: on 100 kbp pairs at 10% divergence it accounts for 58% of the '
- 'running time and is the main cost in the one configuration in which A*PA2-full remained faster. Neither the '
- 'regrouped recurrence nor the per-lane band certificate depends on the implementation, and both apply directly to '
- 'other bit-parallel and inter-sequence aligners.'),
+ 'up to 16%, against 4.5 to 11.5% for interleaving bit-parallel groups and 1 to 4% for the regrouped recurrence '
+ '([#tab:ablation]). Second, thresholds that encode a cost model go stale as the code around them changes. A tile '
+ 'width for narrow bands, kept from the first version, and the length from which seeds match with one edit cost '
+ '10 kbp pairs at 5% a fifth and 100 kbp pairs at 10% a third of their running time, and a projection that handed '
+ 'divergent gap-affine pairs to a full sweep slowed nanopore reads by half, until every threshold was measured '
+ 'again by halving and doubling it (Supplementary Section S1). Such a sweep belongs in the evaluation of any aligner '
+ 'whose choice of algorithm depends on fixed thresholds. Neither the regrouped recurrence nor the per-lane band '
+ 'certificate depends on the implementation, and both apply directly to other bit-parallel and inter-sequence '
+ 'aligners.'),
 ('p',
  'The study has several limitations. First, the evaluation covers a single x86 processor with AVX-512. The AVX2 '
  'configuration was measured only for its inexact-seed threshold, built for Haswell on the same machine (20 and 30% '
  'equal within 0.5%, 40% up to 6% slower), and the NEON configuration, which the library also supports, is not '
  'evaluated here. Second, some thresholds were chosen using workloads that also appear in the '
- 'evaluation; in particular, the AVX-512 threshold for inexact seeds was lowered from 40 to 20% after measurements '
- 'on the uniform 100 kbp pairs of [#fig:sweeps]a, so results on those pairs may overstate performance on unseen '
- 'data. Third, as in the A*PA2 protocol, most configurations were run once, and on the Skylake-X some running times '
+ 'evaluation; in particular, the AVX-512 thresholds for inexact seeds, the share of chained seeds (lowered from 40 '
+ 'to 20%) and the length from which they are used (raised from 64 to 128 kbp), were set after measurements on '
+ 'uniform 100 kbp pairs like those of [#fig:sweeps]a, so results on those pairs may overstate performance on unseen '
+ 'data. Third, as in the A*PA2 protocol, each pair was aligned once, and on the Skylake-X some running times '
  'varied by up to one third between builds that did not change the code involved, which we attribute to code '
  'alignment effects in the instruction decoder; the ablation controls for this, the comparison with other tools does '
  'not. Fourth, the ablation switches off one technique at a time against '
@@ -351,67 +366,69 @@ TABLES = {
   "align": "lll",
   "wrap": [1, 2],
   "rows": [
-    ["Unit costs, long pairs", "Band doubling over bit-parallel tiles with the gap-chaining seed heuristic (A*PA2)", "Regrouped recurrence, staggered groups (2.2); agreeing bounds (2.3); neighbour construction (2.5)"],
+    ["Unit costs, long pairs", "Band doubling over bit-parallel tiles with the gap-chaining seed heuristic (A*PA2)", "Regrouped recurrence, staggered groups (2.2); agreeing bounds (2.3); neighbour construction (2.5); traceback within a memory limit (S1)"],
     ["Unit costs, similar pairs", "Diagonal transition (WFA, BiWFA)", "Gathered extension (2.4)"],
-    ["Gap-affine, two-piece", "Bidirectional wavefront (WFA, BiWFA)", "Gathered extension (2.4); score-derived band (2.7)"],
+    ["Gap-affine, two-piece", "Bidirectional wavefront (WFA, BiWFA); full sweep in difference recurrences for divergent pairs (Suzuki and Kasahara)", "Gathered extension (2.4); score-derived band (2.7); handover gated on work spent (S1)"],
     ["Substitution matrices, local", "Anti-diagonal vector sweep; end-first local alignment (SSW)", "Backward wavefront from the best end (2.7)"],
     ["Batches of short pairs", "Inter-sequence vectorisation (SWIPE, SeqAn, parasail)", "Certified per-lane bands (2.6)"],
   ]},
 "ablation": {
-  "caption": "Effect of each technique: median time with all techniques on (ms per alignment; per batch of 500,000 pairs for the short reads), and the change when one technique is switched off, over three alternating rounds on the Skylake-X, with branches kept clear of 32-byte boundaries. Every configuration returned the same costs.",
+  "caption": "Effect of each technique: median time with all techniques on (ms per alignment; per batch of 500,000 pairs for the short reads), and the change when one technique is switched off, over three alternating rounds on the Skylake-X at commit `dc980d7`, with branches kept clear of 32-byte boundaries. Every configuration returned the same costs.",
   "header": ["Dataset", "All on", "Regrouped recurrence", "Paired groups", "Gathers", "Agreement rule", "Seed neighbours", "Certified band"],
   "align": "lrrrrrrr",
   "rows": [
-    ["ont-500k", "96.5", "+0.9%", "**+4.3%**", "−0.1%", "−0.3%", "**+9.0%**", ""],
-    ["ont-500k-genvar", "134.1", "+1.1%", "**+4.2%**", "−0.1%", "−0.2%", "**+16.0%**", ""],
-    ["ont-1k", "0.021", "−0.4%", "−0.5%", "**+14.1%**", "−0.4%", "−0.3%", ""],
-    ["ont-10k", "0.151", "−1.3%", "+0.9%", "+3.5%", "**+17.5%**", "+0.1%", ""],
-    ["SARS-CoV-2", "0.195", "−0.5%", "+0.2%", "**+13.1%**", "**+5.5%**", "+0.3%", ""],
-    ["100 kbp, 1%", "0.971", "−0.4%", "0.0%", "**+24.2%**", "−0.1%", "+0.1%", ""],
-    ["100 kbp, 5%", "4.39", "−0.3%", "−0.6%", "−0.2%", "+0.1%", "−0.6%", ""],
-    ["100 kbp, 10%", "10.1", "−0.7%", "−0.2%", "+0.8%", "+0.1%", "**+10.4%**", ""],
-    ["100 kbp, 15%", "10.65", "0.0%", "+1.1%", "+2.4%", "+0.3%", "**+9.4%**", ""],
-    ["Short reads, affine", "232", "", "", "", "", "", "**+187%**"],
-    ["Short reads, unit", "212", "", "", "", "", "", "**+214%**"],
+    ["ont-500k", "98.8", "+1.1%", "**+4.5%**", "+0.5%", "−0.2%", "**+8.9%**", ""],
+    ["ont-500k-genvar", "136.0", "+1.9%", "**+5.0%**", "+0.4%", "0.0%", "**+16.4%**", ""],
+    ["ont-1k", "0.021", "+0.2%", "+0.3%", "**+14.9%**", "0.0%", "+0.7%", ""],
+    ["ont-10k", "0.145", "−0.6%", "+1.2%", "**+6.4%**", "**+22.2%**", "+0.1%", ""],
+    ["SARS-CoV-2", "0.197", "−0.9%", "+0.2%", "**+13.4%**", "**+4.9%**", "−0.5%", ""],
+    ["100 kbp, 1%", "1.10", "−1.4%", "+0.4%", "**+26.5%**", "−0.1%", "−1.0%", ""],
+    ["100 kbp, 5%", "4.61", "−0.6%", "−0.2%", "+0.1%", "0.0%", "+0.2%", ""],
+    ["100 kbp, 10%", "6.72", "+0.3%", "+3.4%", "+1.9%", "+0.5%", "−0.2%", ""],
+    ["100 kbp, 20%", "15.0", "**+4.1%**", "**+11.5%**", "+3.9%", "−2.9%", "0.0%", ""],
+    ["Short reads, affine", "232", "", "", "", "", "", "**+188%**"],
+    ["Short reads, unit", "213", "", "", "", "", "", "**+215%**"],
   ]},
 "real": {
-  "caption": "Unit-cost alignment of the A*PA2 real datasets: mean time per alignment, traceback included. Superscripts give the number of pairs completed within 20 s where not all were; a dash marks a tool that completed none.",
-  "header": ["Dataset", "dinara-align", "A*PA2-full", "A*PA2-simple", "A*PA", "Edlib", "BiWFA", "WFA"],
-  "align": "lrrrrrrr",
+  "caption": "Unit-cost alignment of the A*PA2 real datasets: mean time per alignment, traceback included. Superscripts give the number of pairs completed within 30 s where not all were; a dash marks a tool that completed none, o.o.m. one the 8 GB limit stopped.",
+  "header": ["Dataset", "dinara-align", "A*PA2-full", "A*PA2-simple", "A*PA", "Edlib", "BiWFA", "WFA", "QuickEd"],
+  "align": "lrrrrrrrr",
   "rows": [
-    ["ont-1k (0.8 kbp)", "**23 µs**", "81 µs", "48 µs", "612 µs", "126 µs", "44 µs", "31 µs"],
-    ["ont-10k (3.6 kbp)", "**163 µs**", "391 µs", "247 µs", "15.3 ms", "1.1 ms", "753 µs", "595 µs"],
-    ["ont-50k (9.5 kbp)", "**587 µs**", "1.27 ms", "944 µs", "190 ms^81/104", "6.1 ms", "7.43 ms", "6.37 ms"],
-    ["ont-500k (638 kbp)", "**104 ms**", "176 ms", "537 ms", "–", "4.99 s^4/15", "19.8 s^1/15", "–"],
-    ["genvar (651 kbp)", "**144 ms**", "210 ms", "624 ms", "–", "5.23 s^4/15", "6.36 s^3/15", "–"],
-    ["SARS-CoV-2 (30 kbp)", "**279 µs**", "2.00 ms", "728 µs", "6.49 ms", "8.15 ms", "895 µs", "983 µs"],
+    ["ont-1k (0.8 kbp)", "**23 µs**", "81 µs", "48 µs", "612 µs", "124 µs", "44 µs", "31 µs", "75 µs"],
+    ["ont-10k (3.6 kbp)", "**157 µs**", "391 µs", "247 µs", "15.3 ms", "1.09 ms", "741 µs", "599 µs", "688 µs"],
+    ["ont-50k (9.6 kbp)", "**590 µs**", "1.27 ms", "944 µs", "263 ms", "6.14 ms", "7.43 ms", "6.38 ms", "2.31 ms"],
+    ["ont-500k (642 kbp)", "**118 ms**", "283 ms", "687 ms", "–", "5.00 s", "6.33 s", "o.o.m.", "847 ms"],
+    ["genvar (663 kbp)", "**156 ms**", "225 ms", "511 ms", "–", "5.23 s", "6.20 s", "o.o.m.", "1.39 s"],
+    ["SARS-CoV-2 (30 kbp)", "**285 µs**", "2.00 ms", "728 µs", "6.49 ms", "8.18 ms", "909 µs", "987 µs", "3.90 ms"],
   ]},
 "affine": {
-  "caption": "Gap-affine alignment at costs (4, 6, 2): mean time per alignment with a 5 s budget per sample. Superscripts give the number of pairs completed where not all were.",
-  "header": ["Dataset", "dinara-align", "WFA", "BiWFA", "KSW2"],
-  "align": "lrrrr",
+  "caption": "Gap-affine alignment at costs (4, 6, 2): mean time per alignment with a 30 s budget per sample. Superscripts give the number of pairs completed where not all were; o.o.m. marks a tool the 8 GB limit stopped.",
+  "header": ["Dataset", "dinara-align", "WFA", "BiWFA", "KSW2", "BSAlign"],
+  "align": "lrrrrr",
   "rows": [
-    ["ont-1k", "**112 µs**", "186 µs", "304 µs", "1.1 ms"],
-    ["ont-10k", "**1.68 ms**", "4.8 ms", "5.84 ms", "30.8 ms^163/277"],
-    ["ont-50k", "**21.2 ms**", "68.4 ms^82/104", "57.3 ms^90/104", "367 ms^16/104"],
-    ["SARS-CoV-2", "**755 µs**", "2.06 ms", "1.79 ms", "88.4 ms"],
-    ["10 kbp, 5%", "**2.17 ms**", "6.36 ms", "8.02 ms", "97.1 ms^52/99"],
-    ["10 kbp, 15%", "**12.2 ms**", "38.5 ms", "44.8 ms", "203 ms^25/99"],
+    ["ont-1k", "**112 µs**", "186 µs", "304 µs", "1.10 ms", "336 µs"],
+    ["ont-10k", "**1.71 ms**", "4.80 ms", "5.84 ms", "29.8 ms", "7.84 ms"],
+    ["ont-50k", "**22.0 ms**", "63.5 ms", "54.9 ms", "343 ms^81/104", "87.0 ms"],
+    ["SARS-CoV-2", "**737 µs**", "2.06 ms", "1.79 ms", "88.4 ms", "341 ms"],
+    ["10 kbp, 5%", "**2.32 ms**", "7.05 ms", "8.72 ms", "97.5 ms", "37.0 ms"],
+    ["10 kbp, 20%", "**20.6 ms**", "65.2 ms", "75.2 ms", "374 ms^81/99", "37.4 ms"],
+    ["100 kbp, 1%", "**14.0 ms**", "39.7 ms", "39.0 ms", "2.44 s", "o.o.m."],
+    ["100 kbp, 5%", "**337 ms**", "811 ms", "715 ms", "9.25 s^3/9", "o.o.m."],
   ]},
 "batch": {
   "caption": "Global scores of 500,000 short-read pairs; each time is the whole call.",
   "header": ["Costs", "Threads", "dinara-align", "WFA2-lib", "KSW2", "parasail", "Edlib"],
   "align": "llrrrrr",
   "rows": [
-    ["Affine (1, 2, 1)", "1", "**233 ms**", "1.06 s", "10.9 s", "21.7 s", "–"],
-    ["Unit", "1", "**212 ms**", "450 ms", "–", "–", "2.0 s"],
-    ["Affine (1, 2, 1)", "10", "**26 ms**", "115 ms", "1.18 s", "2.34 s", "–"],
-    ["Unit", "10", "**26 ms**", "48 ms", "–", "–", "223 ms"],
+    ["Affine (1, 2, 1)", "1", "**230 ms**", "1.06 s", "10.9 s", "21.7 s", "–"],
+    ["Unit", "1", "**212 ms**", "450 ms", "–", "–", "2.00 s"],
+    ["Affine (1, 2, 1)", "10", "**27 ms**", "116 ms", "1.21 s", "2.32 s", "–"],
+    ["Unit", "10", "**29 ms**", "64 ms", "–", "–", "216 ms"],
   ]},
 }
 
 FIGURES = {
-"sweeps": "Unit-cost alignment of uniform pairs, mean time per alignment on a logarithmic scale. (a) 100 kbp pairs by divergence; dinara-align had the lowest mean time at every divergence except 10%. (b) Pairs at 15% divergence by length; lines end where a tool completed no pair within 20 s, and hollow points mark tools that completed only some pairs.",
+"sweeps": "Unit-cost alignment of QuickEd's simulated pairs, mean time per alignment on a logarithmic scale. (a) 100 kbp pairs by error rate. (b) Pairs at 20% errors by length (5% in the interactive version); lines end where a tool completed no pair within 30 s, and hollow points mark tools that completed only some pairs. dinara-align had the lowest mean time at every length and error rate.",
 }
 
 REFS = {
@@ -423,7 +440,7 @@ REFS = {
  "Daily2016": ("Daily", "2016"), "Liu2023": ("Liu and Steinegger", "2023"), "Rognes2011": ("Rognes", "2011"),
  "Rahn2018": ("Rahn et al.", "2018"), "Kallenborn2026": ("Kallenborn et al.", "2026"), "Modular": ("Modular Inc.", "2026"),
  "Lattner2021": ("Lattner et al.", "2021"), "Eizenga2022": ("Eizenga and Paten", "2022"), "hyalite": ("Ferguson", "2026"),
- "Gao2021": ("Gao et al.", "2021"), "Gibrat2018": ("Gibrat", "2018"), "Fujiki2020": ("Fujiki et al.", "2020"),
+ "Gao2021": ("Gao et al.", "2021"), "Doblas2025": ("Doblas et al.", "2025"), "Shao2024": ("Shao and Ruan", "2024"), "Gibrat2018": ("Gibrat", "2018"), "Fujiki2020": ("Fujiki et al.", "2020"),
 }
 # The bibliography keys these map to in references.bib.
 BIBKEYS = {
@@ -433,5 +450,5 @@ BIBKEYS = {
  "Farrar2007": "Farrar2007striped", "Zhao2013": "Zhao2013ssw", "Suzuki2018": "Suzuki2018diff", "Li2018": "Li2018minimap2",
  "Daily2016": "Daily2016parasail", "Liu2023": "Liu2023blockaligner", "Rognes2011": "Rognes2011swipe", "Rahn2018": "Rahn2018seqan",
  "Kallenborn2026": "Kallenborn2026accelign", "Modular": "Modular2025mojo", "Lattner2021": "Lattner2021mlir",
- "Eizenga2022": "Eizenga2022wfalm", "hyalite": "hyalite", "Gao2021": "Gao2021abpoa", "Gibrat2018": "Gibrat2018band", "Fujiki2020": "Fujiki2020seedex",
+ "Eizenga2022": "Eizenga2022wfalm", "hyalite": "hyalite", "Gao2021": "Gao2021abpoa", "Doblas2025": "Doblas2025quicked", "Shao2024": "Shao2024bsalign", "Gibrat2018": "Gibrat2018band", "Fujiki2020": "Fujiki2020seedex",
 }

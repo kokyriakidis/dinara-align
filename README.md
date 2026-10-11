@@ -55,11 +55,11 @@ and how to reproduce them.
 | :-- | --: | :-- |
 | ONT reads, mean 0.8 kbp (ont-1k), edit distance | **23 µs** | WFA2-lib, 31 µs |
 | ONT reads, mean 3.6 kbp (ont-10k), edit distance | **157 µs** | A\*PA2-simple, 247 µs |
-| ONT reads, mean 9.6 kbp (ont-50k), edit distance | **584 µs** | A\*PA2-simple, 944 µs |
-| ONT reads, mean 640 kbp (ont-500k), edit distance | **119 ms** | A\*PA2-full, 283 ms |
-| SARS-CoV-2 genomes, 30 kbp, edit distance | **279 µs** | A\*PA2-simple, 728 µs |
-| 100 kbp pairs at 10% errors (QuickEd), edit distance | **7.22 ms** | A\*PA2-full, 13.9 ms; QuickEd, 39 ms |
-| 1 Mbp pairs at 20% errors (QuickEd), edit distance | **897 ms** | A\*PA2-full, 2.02 s; QuickEd, 4.8 s |
+| ONT reads, mean 9.6 kbp (ont-50k), edit distance | **590 µs** | A\*PA2-simple, 944 µs |
+| ONT reads, mean 640 kbp (ont-500k), edit distance | **118 ms** | A\*PA2-full, 283 ms |
+| SARS-CoV-2 genomes, 30 kbp, edit distance | **285 µs** | A\*PA2-simple, 728 µs |
+| 100 kbp pairs at 10% errors (QuickEd), edit distance | **7.21 ms** | A\*PA2-full, 13.9 ms; QuickEd, 39 ms |
+| 1 Mbp pairs at 20% errors (QuickEd), edit distance | **901 ms** | A\*PA2-full, 2.02 s; QuickEd, 4.8 s |
 | ONT reads, mean 3.6 kbp (ont-10k), gap-affine (4, 6, 2) | **1.71 ms** | WFA2-lib, 4.8 ms |
 | local alignment, 1 kbp read in a 10 kbp window | **1.36 ms** | SSW, 3.15 ms |
 | overlap of two 2 kbp reads | **724 µs** | parasail, 15.4 ms |

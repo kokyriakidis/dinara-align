@@ -15,6 +15,7 @@
   --c-edlib: #c48a00;
   --c-biwfa: #00896a;
   --c-wfa: #5f6b77;
+  --c-quicked: #7a5cc4;
   --serif: "Literata", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
   --sans: "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif;
   --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -26,7 +27,7 @@
     --paper: #12171c; --ink: #e3e9ee; --ink-soft: #a5b2bd; --rule: #2c3640; --tint: #1b232b;
     --accent: #6cb6e0; --flag: #f0a35e;
     --c-dinara: #ff8a3d; --c-apafull: #4aa3e0; --c-apasimple: #8fcdf2; --c-apa: #e08cc0;
-    --c-edlib: #e8b730; --c-biwfa: #3ec29d; --c-wfa: #9aa6b2;
+    --c-edlib: #e8b730; --c-biwfa: #3ec29d; --c-wfa: #9aa6b2; --c-quicked: #b39cf0;
     color-scheme: dark;
   }
 }
@@ -34,7 +35,7 @@
   --paper: #12171c; --ink: #e3e9ee; --ink-soft: #a5b2bd; --rule: #2c3640; --tint: #1b232b;
   --accent: #6cb6e0; --flag: #f0a35e;
   --c-dinara: #ff8a3d; --c-apafull: #4aa3e0; --c-apasimple: #8fcdf2; --c-apa: #e08cc0;
-  --c-edlib: #e8b730; --c-biwfa: #3ec29d; --c-wfa: #9aa6b2;
+  --c-edlib: #e8b730; --c-biwfa: #3ec29d; --c-wfa: #9aa6b2; --c-quicked: #b39cf0;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }

@@ -8,6 +8,17 @@ _changes = next(b for b in _OLD if b[0] == "table")
 _LABELS = {"Prefix search gives up a doomed try": "Prefix search abandons a try that cannot succeed"}
 for _row in _changes[3]:
     _row[1] = _LABELS.get(_row[1], _row[1])
+# The changes since the change record, each measured on the Skylake-X when it was made.
+_changes[3].extend([
+    ["c5aee28", "Table global alignment traced in bands that prove themselves", "table-global 544 → about 200 µs", "Skylake-X"],
+    ["691f43a", "Divergent gap-affine pairs handed to a full sweep in difference recurrences", "unrelated 1, 2, 5 kbp at (4, 6, 2) 1.50, 5.3, 32.9 → 0.28, 0.87, 4.8 ms", "Skylake-X"],
+    ["64be0ec", "Anti-diagonal sweeps a 16 KB strip of rows at a time", "local, 10 kbp against 12 kbp 50.0 → 17.4 ms", "Skylake-X"],
+    ["ffbf46e", "Banded traceback, local end search and linear-space halves in place", "divergent table pairs 18 to 37% faster", "Skylake-X"],
+    ["94bf719", "Unit-cost traceback within the memory limit, stretches swept again", "1 Mbp at 20%: peak growth 175 → 133 MB a pair; 3.35 → 3.64 s for four", "Skylake-X"],
+    ["289bcf0", "Gap-affine handover only after a 24th of the sweep's work", "ont-10k at (4, 6, 2) 2.33 → 1.55 ms; ont-50k 30.5 → 21.0 ms", "Skylake-X"],
+    ["ea3f09e", "256-column tiles for every band", "10 kbp at 5% 318 → 254 µs; ont-10k 161 → 147 µs", "Skylake-X"],
+    ["dc980d7", "Inexact seeds from 128 kbp on AVX-512", "100 kbp at 10% 10.3 → 6.8 ms", "Skylake-X"],
+])
 
 BODY = [
 ("p", "This supplement provides implementation details, per-change measurements and additional results that the main "
@@ -16,18 +27,30 @@ BODY = [
  "and Sections S4 and S5 describe robustness measures and approaches that were evaluated and not adopted. Unless "
  "stated otherwise, the measurements in Sections S1, S2, S4 and S5 were taken when each change was introduced, on "
  "the machine indicated, and compare the change with the preceding version; the results in the main text and in "
- "Section S3 were obtained at commit `ebe290f`. Two machines were used: an Intel Core i9-7900X (Skylake-X, AVX-512) "
- "and an Apple M2 (NEON)."),
+ "Section S3 were obtained on the Skylake-X at commit `dc980d7`, and for gap-affine costs and batches at `289bcf0`, "
+ "whose code those workloads share. Two machines were used: an Intel Core i9-7900X (Skylake-X, AVX-512) and an "
+ "Apple M2 (NEON)."),
 
 ("sec", "Implementation details"),
 ("sub", "Unit costs"),
 ("p", "**Engine selection.** The diagonal transition receives a step budget proportional to the cost of the band it "
  "would replace; on the Skylake-X a step costs about 1.3 ns and a band column about 6 ns. Inexact seeds replace exact "
  "seeds when fewer than 20, 30 or 40% of exact seeds chain on AVX-512, AVX2 and NEON, respectively: the wider the "
- "vector unit, the cheaper the bit-parallel band relative to the scalar construction of inexact seeds. In the "
- "gap-affine engine, a pair whose wavefront is expected to cover more than a quarter of its matrix is assigned to "
- "the anti-diagonal sweep, a wavefront step costing about 1.5 ns and a sweep cell about 0.4 ns. All thresholds are "
- "fixed at compile time for each instruction set, so that no dispatch occurs at run time."),
+ "vector unit, the cheaper the bit-parallel band relative to the scalar construction of inexact seeds. All "
+ "thresholds are fixed at compile time for each instruction set, so that no dispatch occurs at run time."),
+("p", "**Divergent pairs at gap-affine costs.** The wavefront's work grows with the cost times the length, so on "
+ "unrelated 2 kbp pairs it took 4.6 ms where the 8-bit difference sweep of BSAlign took 1.5 ms. A global pair with "
+ "the whole matrix open is therefore handed to a full sweep in difference recurrences (Suzuki and Kasahara, 2018), in 8-bit lanes "
+ "at any length, once its projected work exceeds the sweep's, at seven sweep cells per wavefront step, the rate "
+ "measured at 10 kbp. The sweep keeps each cell's predecessor flag under the tie rule of the wavefront, so the "
+ "alignment is identical byte for byte, and for the traceback it keeps every \\(k\\)-th anti-diagonal, \\(k\\) the "
+ "square root of the anti-diagonals times the bytes a cell takes, and sweeps each stretch again. Each anti-diagonal "
+ "is swept in place from the last row up. On unrelated pairs of 1, 2 and 5 kbp at (4, 6, 2) alignment took 0.28, "
+ "0.87 and 4.8 ms instead of 1.50, 5.3 and 32.9 ms. The projection extrapolates the cost from how far the two "
+ "wavefronts have advanced, which on nanopore reads, whose errors gather at the ends, ran up to 2.8 times too high "
+ "in cost and 8 times in work, and handed reads to sweeps that took up to eight times longer than their wavefront: "
+ "the 10 kbp reads took 2.33 ms instead of 1.55. As for the diagonal transition, the projection is now trusted only "
+ "once the wavefront's work has reached one twenty-fourth of the sweep's."),
 ("p", "**Register and memory layout of the sweep.** An empty inline-assembly barrier prevents the compiler from "
  "reassociating the regrouped recurrence back to its original form. Vertical differences remain in registers across "
  "a word's columns, and the horizontal differences of successive columns are stored at distinct addresses, so that "
@@ -39,7 +62,26 @@ BODY = [
  "containing `N` 7 to 9% faster on both machines. A seed that contains `N` is not counted, so that pairs containing "
  "`N` can still use seeds; this made the ultra-long reads 2.5 to 3 times faster on the M2 and 1.4 to 1.7 times faster "
  "on the Skylake-X."),
-("p", "**Tile width.** Tiles are 256 columns wide, as in A*PA2, or 64 columns wide in bands of fewer than 1,024 rows."),
+("p", "**Tile width.** Tiles are 256 columns wide, as in A*PA2, whatever the height of the band. Earlier versions "
+ "used tiles of 64 columns in bands bounded below 1,024, a rule kept from the first version on an argument never "
+ "measured: narrower tiles cut the slope a band adds across each tile, but each tile is pruned, recorded and traced "
+ "back on its own. With one width, 10 kbp pairs at 5% divergence aligned in 254 µs instead of 318, the 10 kbp "
+ "nanopore reads in 147 instead of 161 µs, and every other dataset but one in the same time or up to 6.5% faster; "
+ "10 kbp pairs at 1%, settled mostly by the diagonal transition, were within 3%."),
+("p", "**Traceback within a memory limit.** The traceback reads the left boundary of every tile, which the band "
+ "records: on 1 Mbp pairs at 20% errors, up to 175 MB. The band keeps every boundary while they fit within the "
+ "memory limit of the alignment, 80 MB by default, and otherwise only every \\(k\\)-th, \\(k\\) doubling as the "
+ "round proceeds, leaving room for one stretch of the widest boundaries. Each tile also records the state the band "
+ "carries into it: its words, the score at its top, the deepest kept row and its score, and the bound. The "
+ "traceback, from the last tile back, sweeps a stretch again from the last kept boundary before a tile it lacks; "
+ "every step of the sweep depends only on that state and the scores it computes, so each boundary is recovered "
+ "exactly and the alignment is the same byte for byte, unlike the Hirschberg split of QuickEd (Doblas et al., 2025), which breaks ties "
+ "within each half. Kept boundaries form a stack in tile order and are released as they are traced. The boundary "
+ "buffers grow by doubling up to half the limit and then to the whole of it at once, since doubling further would "
+ "hold the old buffer and its copy together, up to twice the limit. On the four 1 Mbp pairs at 20% errors, measured "
+ "one per process, an alignment grew the peak memory by 133, 98, 124 and 113 MB instead of 175, 99, 143 and 146 MB, "
+ "in 3.64 s instead of 3.35 s for the four, and pairs whose boundaries fit were unchanged. With no memory at all, "
+ "alignments took about twice the time."),
 ("p", "**Accepting an extrapolation.** The diagonal-transition estimate is abandoned once it has spent one "
  "twenty-fourth of the cost of the cheapest band. An extrapolation sets the band only when the single-wavefront "
  "extrapolation from the first edits and the extrapolation of the longer search agree to within one third; "
@@ -50,7 +92,7 @@ BODY = [
 ("p", "When they were introduced, these rules reduced the mean time on the ultra-long reads with genetic variation "
  "from 4.33 s, with 13 of 15 reads completed within the time limit, to 754 ms. At the evaluated commit the seed "
  "heuristic sets the first bound on long reads, and switching the agreement test off changes the ultra-long reads "
- "by less than 1% but slows the 10 kbp reads by 17% (main text, Effect of each technique)."),
+ "by less than 1% but slows the 10 kbp reads by 22% (main text, Effect of each technique)."),
 ("p", "**Retries with seeds.** When seeds are used, a retry sets the bound one quarter of the extrapolated increase "
  "beyond the estimate; with one half, a round had failed after 90% of the columns of a 527 kbp read. A seeded round "
  "that fails within the first eighth of its columns does not extrapolate; instead, its margin over the heuristic "
@@ -86,8 +128,17 @@ BODY = [
  "about 86 kbp: below that length, the Skylake-X aligned real reads of 16 to 64 kbp 14% faster without seeds, and "
  "uniform 30 kbp pairs at 5% divergence 30% faster, whereas at 100 kbp seeds reduced the time by 7 to 24%. With AVX2 "
  "and NEON, seeds are used from 16 kbp. For pairs whose two extrapolations agree, as with uniform errors, the "
- "inexact-seed threshold is 20% on every platform, and from 64 kbp an extrapolated error rate of at least one edit "
- "in ten bases selects inexact seeds directly."),
+ "inexact-seed threshold is 20% on every platform, and an extrapolated error rate of at least one edit in ten bases "
+ "selects inexact seeds directly from 128 kbp on AVX-512 and from 64 kbp with narrower vectors: once every band "
+ "used 256-column tiles, 100 kbp pairs at 10% aligned in 6.8 ms on exact seeds against 10.3 ms on inexact ones on "
+ "the Skylake-X, while 500 kbp pairs at 10 and 20% ran 7 to 10% slower without inexact seeds."),
+("p", "**Every threshold measured again.** Each of the 41 thresholds that select an algorithm or bound a search, "
+ "from the step budgets of the diagonal transition to the seed gates and the traceback's limits, was halved and "
+ "doubled in turn, and each of the 83 builds was timed on 17 unit-cost samples, with and without traceback, or on 8 "
+ "gap-affine ones, with the unchanged build timed after every six; its spread was 1.2% in the median. About thirty "
+ "thresholds moved no sample by more than 3% either way, and most of the others traded one dataset against "
+ "another, such as the first bound of an untrusted band, or the agreement and give-up rules for extrapolations, "
+ "and were left as they were. One was stale: the length from which inexact seeds are used, above."),
 ("p", "**Interleaving.** llvm-mca estimates the interleaved AVX-512 loop at 24 cycles per column, against a "
  "throughput bound of 11, so the loop remains limited by the lane rotation. A third group still fits in the 32 "
  "AVX-512 registers, and llvm-mca predicted 15% fewer cycles per group, but the measured time changed by less than "
@@ -99,7 +150,8 @@ BODY = [
  "code, so that a single load provides both. A lookup tests each candidate window with a branch-free expression. "
  "Together with considering only seeds that can still chain to the end, these steps reduced the inexact setup on "
  "the ultra-long reads with genetic variation from 5.02 to 2.90 s in total. On 100 kbp pairs at 10% divergence, "
- "seed construction still accounts for 58% of the running time on the Skylake-X."),
+ "inexact-seed construction accounted for 58% of the running time on the Skylake-X; there exact seeds now win "
+ "(Measured thresholds, above)."),
 ("p", "**Admissibility check and correction.** Comparing the heuristic with the true remaining cost at every cell of "
  "random pairs showed that an earlier version of our implementation overestimated the remaining cost by one on "
  "optimal paths in 1 to 2% of pairs. The cause was a filter that discarded matches whose gap to the end of the pair "
@@ -212,15 +264,14 @@ BODY = [
 ("sec", "Additional results"),
 ("p", "Table S2 gives the results for the other alignment modes, each compared on one pinned thread of the Skylake-X "
  "with the aligners that support the same mode. Table S3 gives the complete gap-affine comparison at costs "
- "(4, 6, 2). At 5% divergence, dinara-align aligned uniform pairs of 3 kbp to 1 Mbp in 42 µs, 284 µs, 941 µs, "
- "4.85 ms, 19.4 ms and 63.3 ms, compared with 174 µs, 788 µs, 2.45 ms, 8.22 ms, 27.6 ms and 125 ms for A*PA2-full."),
+ "(4, 6, 2). Table S4 gives the mean and median time per alignment at unit costs on every dataset, and Table S5 "
+ "the samples. The approximate aligners of the A*PA2 benchmark, WFA-adaptive and Block Aligner, are no longer "
+ "run. KSW2 and BSAlign, which ran out of time or memory on most datasets of 500 kbp and more, are in the "
+ "benchmark's own tables (benchmarks/README.md in the repository)."),
 ("table", "modes"),
 ("table", "affine_full"),
-("p", "Table S4 gives the mean and median time per alignment on the real datasets of the A*PA2 benchmark, including "
- "the two approximate aligners of that benchmark, WFA-adaptive and Block Aligner, run with its parameters. For each "
- "approximate aligner, the percentage of optimal alignments is given beside its time, computed against an exact "
- "alignment at the same costs."),
-("table", "real_full"),
+("table", "unit_full"),
+("table", "datasets"),
 
 ("sec", "Robustness"),
 ("p", "Three changes address inputs on which the running time had been disproportionate:"),
@@ -257,59 +308,114 @@ BODY = [
 TABLES = {
 "modes": {
   "label": "S2",
-  "caption": "Other modes: mean time per pair on one thread. Every tool's scores agree on every pair.",
+  "caption": "Other modes: mean time per pair on one pinned thread, the faster of two passes. Every tool's costs or scores agree on every pair.",
   "header": ["Workload", "dinara-align", "Next fastest"],
   "align": "lrl",
   "wrap": [0],
   "rows": [
-    ["Local, 600 short noisy pairs (20–700 bp)", "**32 µs**", "SSW 52 µs"],
-    ["Local, 1 kbp read at 10% in a 10 kbp window", "**1.40 ms**", "SSW 3.19 ms"],
-    ["Local, 10 kbp at 5% against 12 kbp", "**50.5 ms**", "SSW 85.0 ms"],
-    ["Overlap of 2 kbp reads by 0.5–1.5 kbp", "**2.15 ms**", "parasail 15.3 ms"],
-    ["Infix with a reward, 1 kbp read in a 3 kbp window", "**1.40 ms**", "parasail 14.8 ms"],
-    ["Infix at unit costs, 1 kbp read in a 3 kbp window", "**135 µs**", "Edlib 270 µs"],
-    ["Infix at unit costs, 10 kbp read in a 30 kbp window", "**3.14 ms**", "Edlib 13.4 ms"],
-    ["Prefix at unit costs, 1 kbp read against 2 kbp", "**43 µs**", "WFA2-lib 47 µs"],
-    ["Infix at (4, 6, 2), 1 kbp read in a 3 kbp window", "**3.00 ms**", "WFA2-lib 4.10 ms"],
-    ["Extension, match 2 at (4, 6, 2)", "**726 µs**", "KSW2 2.07 ms"],
-    ["Extension with an end bonus of 50", "**158 µs**", "KSW2 1.23 ms"],
-    ["Two-piece gaps (4, 6, 2, 24, 1), 5 kbp", "**8.44 ms**", "WFA2-lib 15.9 ms"],
-    ["Table, global, 1 kbp at 10%", "**542 µs**", "parasail 2.94 ms"],
-    ["Table, local, 1 kbp read in a 10 kbp window", "**2.45 ms**", "SSW 3.27 ms"],
+    ["Infix at unit costs, 1 kbp read at 10% in a 3 kbp window", "**132 µs**", "Edlib 273 µs"],
+    ["Infix at unit costs, 10 kbp read at 5% in a 30 kbp window", "**2.01 ms**", "Edlib 13.6 ms"],
+    ["Prefix at unit costs, 1 kbp read against 2 kbp", "**44 µs**", "WFA2-lib 47 µs"],
+    ["Infix at (4, 6, 2), 1 kbp read in a 3 kbp window", "**3.93 ms**", "WFA2-lib 3.94 ms"],
+    ["Extension, match 2 at (4, 6, 2)", "**734 µs**", "KSW2 2.06 ms"],
+    ["Extension with an end bonus of 50", "**166 µs**", "KSW2 1.23 ms"],
+    ["Two-piece gaps (4, 6, 2, 24, 1), 5 kbp at 5%", "**8.3 ms**", "WFA2-lib 15.9 ms"],
+    ["Table, global, 1 kbp at 10%", "**198 µs**", "parasail 2.92 ms"],
+    ["Table, local, 1 kbp read in a 10 kbp window", "**1.91 ms**", "SSW 3.27 ms"],
+    ["Local, 600 short noisy pairs (20–700 bp)", "**32 µs**", "SSW 51 µs"],
+    ["Local, 1 kbp read at 10% in a 10 kbp window", "**1.36 ms**", "SSW 3.15 ms"],
+    ["Local, 10 kbp at 5% against 12 kbp", "**17.5 ms**", "SSW 85.1 ms"],
+    ["Overlap of 2 kbp reads by 0.5–1.5 kbp", "**724 µs**", "parasail 15.4 ms"],
+    ["Infix with a reward, 1 kbp read in a 3 kbp window", "**693 µs**", "parasail 15.2 ms"],
   ]},
 "affine_full": {
   "label": "S3",
-  "caption": "Gap-affine alignment at costs (4, 6, 2), all datasets: mean time per alignment with a 5 s budget per sample. Superscripts give the pairs finished where not all were; no tool finished any pair of the ultra-long reads or of 1 Mbp pairs, nor of 300 kbp at 15%.",
-  "header": ["Dataset", "dinara-align", "WFA", "BiWFA", "KSW2"],
-  "align": "lrrrr",
+  "fit": True,
+  "caption": "Gap-affine alignment at costs (4, 6, 2), all datasets: mean time per alignment with a 30 s budget per sample. Superscripts give the pairs completed where not all were; a dash marks a tool that completed none within 30 s, o.o.m. one the 8 GB limit stopped.",
+  "header": ["Dataset", "dinara-align", "WFA", "BiWFA", "KSW2", "BSAlign"],
+  "align": "lrrrrr",
   "rows": [
-    ["ont-1k", "**112 µs**", "186 µs", "304 µs", "1.1 ms"],
-    ["ont-10k", "**1.68 ms**", "4.8 ms", "5.84 ms", "30.8 ms^163/277"],
-    ["ont-50k", "**21.2 ms**", "68.4 ms^82/104", "57.3 ms^90/104", "367 ms^16/104"],
-    ["SARS-CoV-2", "**755 µs**", "2.06 ms", "1.79 ms", "88.4 ms"],
-    ["3 kbp, 5%", "**283 µs**", "579 µs", "913 µs", "6.12 ms"],
-    ["10 kbp, 5%", "**2.17 ms**", "6.36 ms", "8.02 ms", "97.1 ms^52/99"],
-    ["30 kbp, 5%", "**18.1 ms**", "56 ms", "62.7 ms", "1.35 s^4/33"],
-    ["100 kbp, 5%", "**304 ms**", "754 ms^7/10", "643 ms^8/10", "–"],
-    ["300 kbp, 5%", "**3.07 s^1/4**", "–", "–", "–"],
-    ["3 kbp, 15%", "**1.26 ms**", "3.6 ms", "5.08 ms", "18.7 ms^268/333"],
-    ["10 kbp, 15%", "**12.2 ms**", "38.5 ms", "44.8 ms", "203 ms^25/99"],
-    ["30 kbp, 15%", "**151 ms**", "385 ms^13/33", "372 ms^14/33", "2.48 s^2/33"],
-    ["100 kbp, 15%", "**2.02 s^2/9**", "–", "4.19 s^1/9", "–"],
+    ["ont-1k", "**112 µs**", "186 µs", "304 µs", "1.1 ms", "336 µs"],
+    ["ont-10k", "**1.71 ms**", "4.8 ms", "5.84 ms", "29.8 ms", "7.84 ms"],
+    ["ont-50k", "**22 ms**", "63.5 ms", "54.9 ms", "343 ms^81/104", "87 ms"],
+    ["ont-500k", "–", "o.o.m.", "–", "o.o.m.", "o.o.m."],
+    ["ont-500k-genvar", "**21.7 s^1/4**", "o.o.m.", "–", "o.o.m.", "o.o.m."],
+    ["SARS-CoV-2", "**737 µs**", "2.06 ms", "1.79 ms", "88.4 ms", "341 ms"],
+    ["10 kbp, 1%", "**208 µs**", "461 µs", "650 µs", "21.3 ms", "37 ms"],
+    ["10 kbp, 5%", "**2.32 ms**", "7.05 ms", "8.72 ms", "97.5 ms", "37 ms"],
+    ["10 kbp, 10%", "**7.18 ms**", "22.7 ms", "27.3 ms", "204 ms", "37.3 ms"],
+    ["10 kbp, 20%", "**20.6 ms**", "65.2 ms", "75.2 ms", "374 ms^81/99", "37.4 ms"],
+    ["100 kbp, 1%", "**14 ms**", "39.7 ms", "39 ms", "2.44 s", "o.o.m."],
+    ["100 kbp, 5%", "**337 ms**", "811 ms", "715 ms", "9.25 s^3/9", "o.o.m."],
+    ["100 kbp, 10%", "**1.19 s**", "o.o.m.", "2.43 s", "17.5 s^1/10", "o.o.m."],
+    ["100 kbp, 20%", "**3.62 s^8/10**", "o.o.m.", "7.34 s^4/10", "o.o.m.", "o.o.m."],
+    ["500 kbp, 1%", "**490 ms**", "1.29 s", "942 ms", "o.o.m.", "o.o.m."],
+    ["500 kbp, 5%", "**9.92 s^3/4**", "o.o.m.", "19.4 s^1/4", "o.o.m.", "o.o.m."],
+    ["500 kbp, 10%", "–", "o.o.m.", "–", "o.o.m.", "o.o.m."],
+    ["500 kbp, 20%", "–", "o.o.m.", "–", "o.o.m.", "o.o.m."],
+    ["1 Mbp, 1%", "**2.32 s**", "o.o.m.", "3.92 s", "o.o.m.", "o.o.m."],
+    ["1 Mbp, 5%", "–", "o.o.m.", "–", "o.o.m.", "o.o.m."],
+    ["1 Mbp, 10%", "–", "o.o.m.", "–", "o.o.m.", "o.o.m."],
+    ["1 Mbp, 20%", "–", "o.o.m.", "–", "o.o.m.", "o.o.m."],
   ]},
-"real_full": {
+"unit_full": {
   "label": "S4",
   "fit": True,
-  "caption": "Real datasets of the A*PA2 benchmark: mean time per alignment, with the median in parentheses. Superscripts give the number of pairs completed within 20 s where not all were; a dash marks a tool that completed none. For the approximate aligners (*), the percentage of optimal alignments is given.",
-  "header": ["Dataset", "dinara-align", "A*PA2-full", "A*PA2-simple", "A*PA", "Edlib", "BiWFA", "WFA", "WFA-adaptive*", "Block Aligner*"],
-  "align": "lrrrrrrrrr",
+  "caption": "Unit costs, all datasets: mean time per alignment, with the median in parentheses, traceback included, a 30 s budget per sample. Superscripts give the pairs completed where not all were, the median over those; a dash marks a tool that completed none, o.o.m. one the 8 GB limit stopped.",
+  "header": ["Dataset", "dinara-align", "A*PA2-full", "A*PA2-simple", "A*PA", "Edlib", "BiWFA", "WFA", "QuickEd"],
+  "align": "lrrrrrrrr",
   "rows": [
-    ["ont-1k", "**23 µs (23 µs)**", "81 µs (89 µs)", "48 µs (54 µs)", "612 µs (556 µs)", "126 µs (120 µs)", "44 µs (46 µs)", "31 µs (32 µs)", "41 µs (42 µs), 93%", "41 µs (47 µs), 85%"],
-    ["ont-10k", "**163 µs (111 µs)**", "391 µs (264 µs)", "247 µs (177 µs)", "15.3 ms (3.29 ms)", "1.1 ms (579 µs)", "753 µs (284 µs)", "595 µs (223 µs)", "385 µs (172 µs), 61%", "198 µs (141 µs), 61%"],
-    ["ont-50k", "**587 µs (242 µs)**", "1.27 ms (513 µs)", "944 µs (307 µs)", "190 ms (10.5 ms)^81/104", "6.1 ms (2.02 ms)", "7.43 ms (875 µs)", "6.37 ms (722 µs)", "2.32 ms (459 µs), 52%", "657 µs (319 µs), 61%"],
-    ["ont-500k", "**104 ms (83.8 ms)**", "176 ms (113 ms)", "537 ms (371 ms)", "–", "4.99 s (3.04 s)^4/15", "19.8 s (19.8 s)^1/15", "–", "989 ms (629 ms), 53%", "728 ms (714 ms)"],
-    ["ont-500k-genvar", "**144 ms (114 ms)**", "210 ms (177 ms)", "624 ms (506 ms)", "–", "5.23 s (5.2 s)^4/15", "6.36 s (7.57 s)^3/15", "–", "533 ms (273 ms), 7%", "836 ms (647 ms), 0% of 1"],
-    ["SARS-CoV-2", "**279 µs (188 µs)**", "2.00 ms (2.07 ms)", "728 µs (662 µs)", "6.49 ms (2.07 ms)", "8.15 ms (7.72 ms)", "895 µs (446 µs)", "983 µs (359 µs)", "611 µs (353 µs), 97%", "2.51 ms (2.3 ms), 30%"],
+    ["ont-1k", "**23 µs (23 µs)**", "81 µs (89 µs)", "48 µs (54 µs)", "612 µs (556 µs)", "124 µs (118 µs)", "44 µs (46 µs)", "31 µs (32 µs)", "75 µs (73 µs)"],
+    ["ont-10k", "**157 µs (107 µs)**", "391 µs (264 µs)", "247 µs (177 µs)", "15.3 ms (3.29 ms)", "1.09 ms (569 µs)", "741 µs (278 µs)", "599 µs (225 µs)", "688 µs (451 µs)"],
+    ["ont-50k", "**590 µs (224 µs)**", "1.27 ms (513 µs)", "944 µs (307 µs)", "263 ms (9.26 ms)", "6.14 ms (2.05 ms)", "7.43 ms (872 µs)", "6.38 ms (726 µs)", "2.31 ms (1.05 ms)"],
+    ["ont-500k", "**118 ms (71.1 ms)**", "283 ms (110 ms)", "687 ms (398 ms)", "–", "5 s (3.05 s)", "6.33 s (2.19 s)", "o.o.m.", "847 ms (585 ms)"],
+    ["ont-500k-genvar", "**156 ms (154 ms)**", "225 ms (196 ms)", "511 ms (564 ms)", "–", "5.23 s (5.2 s)", "6.2 s (6.63 s)", "o.o.m.", "1.39 s (1.32 s)"],
+    ["SARS-CoV-2", "**285 µs (169 µs)**", "2 ms (2.07 ms)", "728 µs (662 µs)", "6.49 ms (2.07 ms)", "8.18 ms (7.74 ms)", "909 µs (456 µs)", "987 µs (362 µs)", "3.9 ms (4.27 ms)"],
+    ["10 kbp, 1%", "**33 µs (27 µs)**", "729 µs (724 µs)", "160 µs (156 µs)", "564 µs (560 µs)", "3.22 ms (3.21 ms)", "92 µs (88 µs)", "66 µs (58 µs)", "611 µs (609 µs)"],
+    ["10 kbp, 5%", "**269 µs (244 µs)**", "797 µs (794 µs)", "288 µs (285 µs)", "1.08 ms (1.07 ms)", "3.79 ms (3.8 ms)", "642 µs (635 µs)", "508 µs (495 µs)", "1.25 ms (1.24 ms)"],
+    ["10 kbp, 10%", "**354 µs (357 µs)**", "726 µs (714 µs)", "450 µs (439 µs)", "3.26 ms (3.23 ms)", "4.56 ms (4.55 ms)", "2.26 ms (2.26 ms)", "1.81 ms (1.66 ms)", "1.99 ms (2.01 ms)"],
+    ["10 kbp, 20%", "**519 µs (481 µs)**", "1.44 ms (1.44 ms)", "1.02 ms (1.01 ms)", "205 ms (203 ms)", "5.93 ms (5.93 ms)", "7.33 ms (7.32 ms)", "5.32 ms (5.11 ms)", "1.55 ms (1.56 ms)"],
+    ["100 kbp, 1%", "**1.5 ms (1.16 ms)**", "7.53 ms (7.27 ms)", "3.26 ms (3.14 ms)", "7.76 ms (7.53 ms)", "57.6 ms (57.4 ms)", "3.71 ms (3.47 ms)", "4.05 ms (4.28 ms)", "12.5 ms (12.8 ms)"],
+    ["100 kbp, 5%", "**5.02 ms (4.8 ms)**", "8.45 ms (8.11 ms)", "14.9 ms (14.7 ms)", "14.4 ms (14.8 ms)", "146 ms (146 ms)", "63.3 ms (63.2 ms)", "55 ms (51.2 ms)", "24 ms (23.8 ms)"],
+    ["100 kbp, 10%", "**7.21 ms (7 ms)**", "13.9 ms (13.3 ms)", "27.6 ms (27.5 ms)", "48.3 ms (45.8 ms)", "247 ms (247 ms)", "218 ms (219 ms)", "182 ms (170 ms)", "39 ms (38.9 ms)"],
+    ["100 kbp, 20%", "**16 ms (15.8 ms)**", "36.7 ms (36 ms)", "56.8 ms (56.6 ms)", "–", "446 ms (446 ms)", "695 ms (695 ms)", "551 ms (510 ms)", "62.8 ms (62.7 ms)"],
+    ["500 kbp, 1%", "**33.9 ms (31.8 ms)**", "42.7 ms (41.3 ms)", "72.3 ms (72.2 ms)", "41.2 ms (39.2 ms)", "670 ms (670 ms)", "80.8 ms (79.4 ms)", "74.8 ms (63.8 ms)", "124 ms (124 ms)"],
+    ["500 kbp, 5%", "**31 ms (29.8 ms)**", "45 ms (44.4 ms)", "214 ms (213 ms)", "83.1 ms (82.5 ms)", "2.28 s (2.28 s)", "1.56 s (1.56 s)", "1.48 s (1.25 s)", "401 ms (400 ms)"],
+    ["500 kbp, 10%", "**67.4 ms (63.4 ms)**", "119 ms (117 ms)", "425 ms (424 ms)", "406 ms (406 ms)", "4.38 s (4.38 s)", "5.45 s (5.45 s)", "5.05 s (4.25 s)", "711 ms (711 ms)"],
+    ["500 kbp, 20%", "**254 ms (254 ms)**", "545 ms (545 ms)", "901 ms (896 ms)", "–", "8.52 s^3/4 (8.52 s)", "18 s^1/4 (18 s)", "o.o.m.", "1.24 s (1.24 s)"],
+    ["1 Mbp, 1%", "**60.2 ms (56.5 ms)**", "89.1 ms (87 ms)", "253 ms (253 ms)", "97.3 ms (93.3 ms)", "2.38 s (2.38 s)", "366 ms (364 ms)", "391 ms (353 ms)", "398 ms (398 ms)"],
+    ["1 Mbp, 5%", "**64.1 ms (61.6 ms)**", "118 ms (117 ms)", "818 ms (815 ms)", "183 ms (182 ms)", "8.67 s^3/4 (8.67 s)", "6.35 s (6.35 s)", "o.o.m.", "1.44 s (1.44 s)"],
+    ["1 Mbp, 10%", "**184 ms (185 ms)**", "369 ms (366 ms)", "1.65 s (1.64 s)", "978 ms (980 ms)", "17.3 s^1/4 (17.3 s)", "22.2 s^1/4 (22.2 s)", "o.o.m.", "2.65 s (2.65 s)"],
+    ["1 Mbp, 20%", "**901 ms (701 ms)**", "2.02 s (2.01 s)", "3.52 s (3.5 s)", "–", "–", "–", "o.o.m.", "4.8 s (4.8 s)"],
+  ]},
+"datasets": {
+  "label": "S5",
+  "caption": "The samples: pairs in each sample of the dataset, their lengths and their divergence, the edit distance over the longer sequence, as QuickEd's Table S1 describes its datasets.",
+  "header": ["Dataset", "Pairs", "Length, min / mean / max (bp)", "Divergence, min / mean / max (%)"],
+  "align": "lrrr",
+  "rows": [
+    ["ont-1k", "1221 of 12477", "42 / 830 / 1,089", "0 / 11 / 21"],
+    ["ont-10k", "277 of 5000", "342 / 3,643 / 9,791", "4 / 13 / 20"],
+    ["ont-50k", "104 of 10000", "360 / 9,633 / 42,626", "4 / 12 / 19"],
+    ["ont-500k", "4 of 50", "553,834 / 642,465 / 683,520", "4 / 7 / 13"],
+    ["ont-500k-genvar", "4 of 48", "594,436 / 662,980 / 861,994", "5 / 7 / 10"],
+    ["SARS-CoV-2", "33 of 10000", "29,244 / 29,746 / 29,864", "0 / 1 / 7"],
+    ["10 kbp, 1%", "100 of 10000", "10,000 / 10,003 / 10,023", "1 / 1 / 1"],
+    ["10 kbp, 5%", "99 of 10000", "10,000 / 10,008 / 10,045", "5 / 5 / 5"],
+    ["10 kbp, 10%", "100 of 10000", "10,000 / 10,008 / 10,056", "9 / 9 / 9"],
+    ["10 kbp, 20%", "99 of 10000", "10,000 / 10,014 / 10,095", "17 / 17 / 17"],
+    ["100 kbp, 1%", "9 of 1000", "100,000 / 100,013 / 100,035", "1 / 1 / 1"],
+    ["100 kbp, 5%", "9 of 1000", "100,000 / 100,028 / 100,123", "5 / 5 / 5"],
+    ["100 kbp, 10%", "10 of 1000", "100,000 / 100,039 / 100,120", "9 / 9 / 9"],
+    ["100 kbp, 20%", "10 of 1000", "100,000 / 100,040 / 100,155", "17 / 17 / 17"],
+    ["500 kbp, 1%", "4 of 200", "500,000 / 500,038 / 500,103", "1 / 1 / 1"],
+    ["500 kbp, 5%", "4 of 200", "500,016 / 500,088 / 500,178", "5 / 5 / 5"],
+    ["500 kbp, 10%", "4 of 200", "500,000 / 500,052 / 500,105", "9 / 9 / 9"],
+    ["500 kbp, 20%", "4 of 200", "500,000 / 500,055 / 500,220", "17 / 17 / 17"],
+    ["1 Mbp, 1%", "4 of 100", "1,000,000 / 1,000,034 / 1,000,107", "1 / 1 / 1"],
+    ["1 Mbp, 5%", "4 of 100", "1,000,185 / 1,000,301 / 1,000,551", "5 / 5 / 5"],
+    ["1 Mbp, 10%", "4 of 100", "1,000,000 / 1,000,054 / 1,000,120", "9 / 9 / 9"],
+    ["1 Mbp, 20%", "4 of 100", "1,000,000 / 1,000,166 / 1,000,355", "17 / 17 / 17"],
   ]},
 "changes": {
   "label": "S1",
