@@ -486,6 +486,7 @@ def compare(options) -> str:
         "| :-- | --: | --: | --: | --: | :-: | :-- |",
     ]
     everything = {}
+    changed = []
     for name, path, facts in samples(options):
         runs = {base_label: [], head_label: []}
         for round in range(options.rounds):
@@ -519,8 +520,49 @@ def compare(options) -> str:
             f"{low:.3f}–{high:.3f} | {verdict} |"
         )
         everything[name] = {"times": times, "costs": costs[base_label], "lengths": facts["lengths"][:finished]}
+        if verdict in ("faster", "slower"):
+            changed.append((abs(ratio - 1), name, path))
+    if changed and not perf_ready():
+        lines += ["", "## Where the instructions changed", "",
+                  f"For the {min(len(changed), options.explain)} datasets that moved most: each build's instructions and"
+                  " cycles (user space, the runner's start left out, the median of three runs), then instructions"
+                  " sampled by function in each, the functions whose share moved most first. Equal instructions"
+                  " and unequal cycles say layout or the memory system; more instructions say the code itself.", ""]
+        for _, name, path in sorted(changed, reverse=True)[: options.explain]:
+            lines += explain(name, path, binaries, base_label, head_label, tool, options)
     write(f"profile-compare-{base_label}-{head_label}", "\n".join(lines) + "\n", everything)
     return "\n".join(lines) + "\n"
+
+
+def explain(name: str, path: Path, binaries: dict, base_label: str, head_label: str, tool: str, options) -> list[str]:
+    """One dataset's instructions and cycles in each build, and its instructions by function in each, the
+    functions whose count moved most first."""
+    command = lambda label: [str(binaries[label]), "seq", tool, str(options.budget), str(path)]
+    lines = [f"### {name}", "", "| build | instructions | cycles | IPC |", "| :-- | --: | --: | --: |"]
+    totals = {}
+    for label in (base_label, head_label):
+        runs = [perf_stat(command(label), START_DELAY_MS) for _ in range(3)]
+        instructions = statistics.median(run.get("instructions", 0) for run in runs)
+        cycles = statistics.median(run.get("cycles", 0) for run in runs)
+        totals[label] = instructions
+        lines.append(f"| {label} | {instructions:,.0f} | {cycles:,.0f} | {instructions / max(cycles, 1):.2f} |")
+    if totals[base_label]:
+        lines.append(f"| change | {100 * (totals[head_label] / totals[base_label] - 1):+.2f}% | | |")
+    by_function = {}
+    for label in (base_label, head_label):
+        data = BUILDS / f"explain-{label}-{name}.data"
+        subprocess.run(["perf", "record", "-q", "-D", str(START_DELAY_MS), "-e", "instructions:u", "-c", "200003",
+                        "-o", str(data), "--", *command(label)], capture_output=True)
+        for share, symbol in perf_top(data, "sym", 60):
+            # The function's name without the parameters Mojo spells into it, which a new argument changes.
+            key = re.sub(r"\[.*$", "", symbol.split()[-1])[:90]
+            by_function.setdefault(key, {})[label] = by_function.get(key, {}).get(label, 0) + share * totals[label] / 100
+    moved = sorted(by_function.items(), key=lambda item: -abs(item[1].get(head_label, 0) - item[1].get(base_label, 0)))
+    lines += ["", f"| function | instructions, {base_label} | instructions, {head_label} | change |", "| :-- | --: | --: | --: |"]
+    for key, counts in moved[:12]:
+        before, after = counts.get(base_label, 0), counts.get(head_label, 0)
+        lines.append(f"| `{key}` | {before:,.0f} | {after:,.0f} | {after - before:+,.0f} |")
+    return lines + [""]
 
 
 # endregion compare
@@ -1311,6 +1353,8 @@ def main() -> None:
                         help="perf: the samples one pair at a time (default), the short-read batch, or the modes")
     parser.add_argument("--annotate", type=int, default=3, help="perf: hottest functions shown by instruction")
     parser.add_argument("--unmitigated", action="store_true", help="compare: plain builds, jumps not kept clear")
+    parser.add_argument("--explain", type=int, default=3,
+                        help="compare: datasets that moved whose instructions are broken down by function (default 3)")
     parser.add_argument("--core", type=int, default=2, help="the core every run is pinned to on Linux (default 2)")
     parser.add_argument("--force", action="store_true", help="time even when the machine is not quiet")
     parser.add_argument("--cpu", default="native", help="the CPU every tool is built for (default: the host's)")
