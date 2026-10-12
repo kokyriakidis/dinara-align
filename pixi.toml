@@ -47,6 +47,8 @@ bench-ablation = "python3 benchmarks/ablation.py"
 # and supplement.py; `pixi run paper-tables <results dir>` first fills their benchmark tables from bench.py's results.
 paper = "python3 tools/paper/render.py"
 paper-tables = "python3 tools/paper/tables.py"
+# Pushes the committed paper/ to the Overleaf project behind the `overleaf` remote; see tools/paper/sync-overleaf.sh.
+paper-sync = "bash tools/paper/sync-overleaf.sh"
 # Builds a program on dinara-align into a folder that runs without pixi or Mojo, for a baseline CPU:
 # `pixi run bundle <program.mojo> [out-dir] [target-cpu]`; see `scripts/bundle.sh`.
 bundle = "bash scripts/bundle.sh"
