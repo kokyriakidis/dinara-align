@@ -9,6 +9,7 @@ pixi run bench                       # unit costs, every dataset, 5 s a tool a d
 pixi run bench --affine 4,6,2        # gap-affine costs as WFA counts them: mismatch, opening, extension
 pixi run bench --only ont l10000.    # the datasets whose names hold one of these
 pixi run bench --budget 30           # the budget the tables below ran with
+pixi run bench --repeats 3           # every tool three times a dataset, the rounds alternating
 pixi run bench --fresh               # the rivals too, rather than their kept results
 pixi run bench-modes                 # local, overlap, infix, prefix, extension, two-piece, tables
 pixi run bench-batch                 # 500,000 short reads, on one core and on every core
@@ -19,6 +20,11 @@ Each writes its tables to the terminal and to `.cache/results/`: `bench.md` and 
 with every table below and more (the totals over each whole dataset among them), `bench-exact.json` and
 `bench-affine-4-6-2-exact.json` with every tool's unrounded figures, from which the paper's tables are
 written, `bench-scaling.json` for its charts, `modes.md` and `batch-results.md`.
+
+The tables below are the run the paper reports, kept in `results/2026-10-11/`: every tool timed again in
+one session (`--budget 30 --fresh --repeats 3`), a pair's time its median over three alternating rounds
+and a tool credited with the pairs it finished in every round; the modes and the batches are each the
+median of three runs.
 
 ## What Runs
 
@@ -56,8 +62,8 @@ aligner: each tool's time is the faster of two passes over a workload, its mean 
 
 All tables were measured on an Intel Core i9-7900X (Skylake-X, AVX-512), ten cores at a fixed 3.3 GHz,
 turbo boost and hyper-threading off, 91 GB, Ubuntu 26.04, on the otherwise idle machine, every tool on one
-core pinned with `taskset` unless a row says otherwise, dinara-align at `036e12b`, the affine table at `a6d9166`, the
-other modes and the short reads at `289bcf0`; Rust nightly
+core pinned with `taskset` unless a row says otherwise, dinara-align at `87d365f`
+for every table but the ablation (`dc980d7`); Rust nightly
 2026-08-14, GCC 15.2, Mojo 1.1.0.
 
 ## Datasets
@@ -65,10 +71,10 @@ other modes and the short reads at `289bcf0`; Rust nightly
 A\*PA2's real datasets, as pa-bench releases them: Oxford Nanopore reads of about 1, 10, 50 and 500 kbp,
 the 500 kbp ones of CHM13 and, in ont-500k-genvar, of another individual, which adds genetic variation
 (QuickEd's MiniION-a and MiniION-b), and
-SARS-CoV-2 genomes. Real Illumina and PacBio HiFi reads, the two technologies QuickEd adds (`giab.py`):
-Genome in a Bottle's HG002 reads of one region of chromosome 20, its 2x250 bp Illumina reads of
-chr20:40.00-40.02 Mbp and its Sequel II HiFi reads of chr20:40.0-40.2 Mbp, streamed from GIAB's GRCh38
-alignments, each read mapped by minimap2 to both haplotypes of HG002's own assembly, the T2T HG002 Q100
+SARS-CoV-2 genomes. Real Illumina, PacBio HiFi and PromethION reads, the technologies QuickEd adds
+(`giab.py`): Genome in a Bottle's HG002 reads, its 2x250 bp Illumina reads of chr20:40.00-40.02 Mbp, its
+Sequel II HiFi reads of chr20:40.0-40.2 Mbp and UCSC's ultra-long PromethION reads of chr12:80.0-80.5 Mbp
+of 10 kbp or more (ont-promethion, as QuickEd's PromethION set), streamed from GIAB's GRCh38 alignments, each read mapped by minimap2 to both haplotypes of HG002's own assembly, the T2T HG002 Q100
 v1.1, and paired with the stretch it covers, so a pair differs by sequencing errors alone; reads clipped
 past a tenth are left out. The assembly's chromosome 20 is cut from `DINARA_HG002` if that names a local
 copy of `hg002v1.1.fasta`, else streamed from its S3 release; samtools and minimap2 come through
@@ -86,6 +92,7 @@ they cover the lengths and divergences of A\*PA2's synthetic sets. Over each sam
 | sars-cov-2 | 33 of 10000 | 29,244 / 29,746 / 29,864 | 0 / 1 / 7 |
 | illumina-250 | 4032 of 5992 | 77 / 248 / 251 | 0 / 0 / 10 |
 | pacbio-hifi | 69 of 890 | 10,956 / 14,372 / 22,816 | 0 / 0 / 1 |
+| ont-promethion | 22 of 584 | 10,362 / 44,631 / 155,664 | 4 / 10 / 20 |
 | l10000.n10000.e1 | 100 of 10000 | 10,000 / 10,003 / 10,023 | 1 / 1 / 1 |
 | l10000.n10000.e5 | 99 of 10000 | 10,000 / 10,008 / 10,045 | 5 / 5 / 5 |
 | l10000.n10000.e10 | 100 of 10000 | 10,000 / 10,008 / 10,056 | 9 / 9 / 9 |
@@ -109,82 +116,84 @@ Edit distance with its alignment, a 30 s budget a tool a dataset. Mean time per 
 
 | dataset | pairs | dinara-align (bit-parallel, 1 thread) | dinara-align (bit-parallel, batch, 1 thread) | a*pa2-full | a*pa2-simple | a*pa | edlib | biwfa | wfa | ksw2 | quicked | bsalign | agree |
 | :-- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | :-: |
-| ont-1k | 1221 of 12477 | 21.1 µs | 21.4 µs | 80.6 µs | 48 µs | 612 µs | 124 µs | 44.3 µs | 31.1 µs | 539 µs | 74.8 µs | 119 µs | ✓ |
-| ont-10k | 277 of 5000 | 156 µs | 150 µs | 391 µs | 247 µs | 15.3 ms | 1.09 ms | 741 µs | 599 µs | 13.1 ms | 688 µs | 1.3 ms | ✓ |
-| ont-50k | 104 of 10000 | 580 µs | 561 µs | 1.27 ms | 944 µs | 263 ms | 6.14 ms | 7.43 ms | 6.38 ms | 167 ms | 2.31 ms | 12.3 ms | ✓ |
-| ont-500k | 4 of 50 | 118 ms | 119 ms | 283 ms | 687 ms | t.o. (30 s) | 5 s | 6.33 s | o.o.m. | o.o.m. | 847 ms | failed | ✓ |
-| ont-500k-genvar | 4 of 48 | 156 ms | 157 ms | 225 ms | 511 ms | t.o. (30 s) | 5.23 s | 6.2 s | o.o.m. | o.o.m. | 1.39 s | failed | ✓ |
-| sars-cov-2 | 33 of 10000 | 286 µs | 253 µs | 2 ms | 728 µs | 6.49 ms | 8.18 ms | 909 µs | 987 µs | 68.5 ms | 3.9 ms | 47.1 ms | ✓ |
-| illumina-250 | 4032 of 5992 | 0.576 µs | 0.798 µs | 14.5 µs | 4.1 µs | 13.7 µs | 23.3 µs | 2.04 µs | 1.12 µs | 12.4 µs | 16.5 µs | 20.6 µs | ✓ |
-| pacbio-hifi | 69 of 890 | 12.6 µs | 15.4 µs | 977 µs | 259 µs | 1.05 ms | 3.35 ms | 86.1 µs | 65.9 µs | 3.09 ms | 950 µs | 12.2 ms | ✓ |
-| l10000.n10000.e1 | 100 of 10000 | 25.8 µs | 27.2 µs | 729 µs | 160 µs | 564 µs | 3.22 ms | 92.5 µs | 65.7 µs | 6.31 ms | 611 µs | 5.55 ms | ✓ |
-| l10000.n10000.e5 | 99 of 10000 | 267 µs | 267 µs | 797 µs | 288 µs | 1.08 ms | 3.79 ms | 642 µs | 508 µs | 21.4 ms | 1.25 ms | 5.59 ms | ✓ |
-| l10000.n10000.e10 | 100 of 10000 | 355 µs | 354 µs | 726 µs | 450 µs | 3.26 ms | 4.56 ms | 2.26 ms | 1.81 ms | 40.1 ms | 1.99 ms | 5.61 ms | ✓ |
-| l10000.n10000.e20 | 99 of 10000 | 512 µs | 518 µs | 1.44 ms | 1.02 ms | 205 ms | 5.93 ms | 7.33 ms | 5.32 ms | 96.7 ms | 1.55 ms | 5.64 ms | ✓ |
-| l100000.n1000.e1 | 9 of 1000 | 1.5 ms | 1.41 ms | 7.53 ms | 3.26 ms | 7.76 ms | 57.6 ms | 3.71 ms | 4.05 ms | 609 ms | 12.5 ms | 641 ms | ✓ |
-| l100000.n1000.e5 | 9 of 1000 | 5.1 ms | 5.08 ms | 8.45 ms | 14.9 ms | 14.4 ms | 146 ms | 63.3 ms | 55 ms | 4.72 s (6/9) | 24 ms | 643 ms | ✓ |
-| l100000.n1000.e10 | 10 of 1000 | 7.28 ms | 7.17 ms | 13.9 ms | 27.6 ms | 48.3 ms | 247 ms | 218 ms | 182 ms | 9.19 s (3/10) | 39 ms | 631 ms | ✓ |
-| l100000.n1000.e20 | 10 of 1000 | 15.7 ms | 15.9 ms | 36.7 ms | 56.8 ms | t.o. (30 s) | 446 ms | 695 ms | 551 ms | 17.3 s (1/10) | 62.8 ms | 630 ms | ✓ |
-| l500000.n200.e1 | 4 of 200 | 33.5 ms | 35.8 ms | 42.7 ms | 72.3 ms | 41.2 ms | 670 ms | 80.8 ms | 74.8 ms | 24.1 s (1/4) | 124 ms | failed | ✓ |
-| l500000.n200.e5 | 4 of 200 | 31.4 ms | 31.3 ms | 45 ms | 214 ms | 83.1 ms | 2.28 s | 1.56 s | 1.48 s | o.o.m. | 401 ms | failed | ✓ |
-| l500000.n200.e10 | 4 of 200 | 68.4 ms | 68.1 ms | 119 ms | 425 ms | 406 ms | 4.38 s | 5.45 s | 5.05 s | o.o.m. | 711 ms | failed | ✓ |
-| l500000.n200.e20 | 4 of 200 | 255 ms | 252 ms | 545 ms | 901 ms | t.o. (30 s) | 8.52 s (3/4) | 18 s (1/4) | o.o.m. | o.o.m. | 1.24 s | failed | ✓ |
-| l1000000.n100.e1 | 4 of 100 | 59.7 ms | 57.8 ms | 89.1 ms | 253 ms | 97.3 ms | 2.38 s | 366 ms | 391 ms | o.o.m. | 398 ms | failed | ✓ |
-| l1000000.n100.e5 | 4 of 100 | 65 ms | 65.1 ms | 118 ms | 818 ms | 183 ms | 8.67 s (3/4) | 6.35 s | o.o.m. | o.o.m. | 1.44 s | failed | ✓ |
-| l1000000.n100.e10 | 4 of 100 | 183 ms | 184 ms | 369 ms | 1.65 s | 978 ms | 17.3 s (1/4) | 22.2 s (1/4) | o.o.m. | o.o.m. | 2.65 s | failed | ✓ |
-| l1000000.n100.e20 | 4 of 100 | 892 ms | 901 ms | 2.02 s | 3.52 s | t.o. (30 s) | t.o. (30 s) | t.o. (30 s) | o.o.m. | o.o.m. | 4.8 s | failed | ✓ |
+| ont-1k | 1221 of 12477 | 20.8 µs | 21.4 µs | 81 µs | 48.1 µs | 613 µs | 124 µs | 44.2 µs | 31.3 µs | 538 µs | 73.2 µs | 119 µs | ✓ |
+| ont-10k | 277 of 5000 | 154 µs | 151 µs | 393 µs | 247 µs | 15.4 ms | 1.11 ms | 752 µs | 599 µs | 13 ms | 679 µs | 1.3 ms | ✓ |
+| ont-50k | 104 of 10000 | 582 µs | 562 µs | 1.28 ms | 941 µs | 263 ms | 6.11 ms | 7.43 ms | 6.35 ms | 169 ms | 2.31 ms | 12.3 ms | ✓ |
+| ont-500k | 4 of 50 | 118 ms | 118 ms | 284 ms | 688 ms | t.o. (30 s) | 5 s | 6.37 s | o.o.m. | o.o.m. | 848 ms | failed | ✓ |
+| ont-500k-genvar | 4 of 48 | 156 ms | 156 ms | 225 ms | 512 ms | t.o. (30 s) | 5.23 s | 6.18 s | o.o.m. | o.o.m. | 1.39 s | failed | ✓ |
+| sars-cov-2 | 33 of 10000 | 277 µs | 255 µs | 2.01 ms | 727 µs | 6.55 ms | 8.18 ms | 906 µs | 979 µs | 68.6 ms | 3.86 ms | 47 ms | ✓ |
+| illumina-250 | 4032 of 5992 | 0.593 µs | 0.799 µs | 14.5 µs | 4.11 µs | 13.7 µs | 23.4 µs | 2.06 µs | 1.12 µs | 12.4 µs | 16.2 µs | 20.5 µs | ✓ |
+| pacbio-hifi | 69 of 890 | 12.9 µs | 15.7 µs | 980 µs | 259 µs | 1.06 ms | 3.41 ms | 86.5 µs | 66 µs | 3.09 ms | 951 µs | 12.2 ms | ✓ |
+| ont-promethion | 22 of 584 | 3.99 ms | 3.93 ms | 7.02 ms | 6.76 ms | 929 ms | 73.9 ms | 71.1 ms | 79.7 ms | 1.81 s (15/22) | 17.1 ms | 181 ms (failed after 7/22) | ✓ |
+| l10000.n10000.e1 | 100 of 10000 | 25.8 µs | 28.1 µs | 738 µs | 160 µs | 566 µs | 3.25 ms | 92.3 µs | 62.3 µs | 6.31 ms | 614 µs | 5.55 ms | ✓ |
+| l10000.n10000.e5 | 99 of 10000 | 268 µs | 266 µs | 795 µs | 288 µs | 1.08 ms | 3.81 ms | 637 µs | 513 µs | 21.4 ms | 1.26 ms | 5.58 ms | ✓ |
+| l10000.n10000.e10 | 100 of 10000 | 348 µs | 358 µs | 724 µs | 444 µs | 3.23 ms | 4.57 ms | 2.26 ms | 1.84 ms | 40.1 ms | 2.01 ms | 5.61 ms | ✓ |
+| l10000.n10000.e20 | 99 of 10000 | 511 µs | 516 µs | 1.44 ms | 1.01 ms | 204 ms | 5.96 ms | 7.31 ms | 5.34 ms | 98 ms | 1.54 ms | 5.64 ms | ✓ |
+| l100000.n1000.e1 | 9 of 1000 | 1.47 ms | 1.42 ms | 7.53 ms | 3.26 ms | 7.76 ms | 58.1 ms | 3.72 ms | 4.08 ms | 617 ms | 12.5 ms | 642 ms | ✓ |
+| l100000.n1000.e5 | 9 of 1000 | 5.1 ms | 5.09 ms | 8.35 ms | 14.9 ms | 14.1 ms | 147 ms | 63.3 ms | 54.9 ms | 4.77 s (6/9) | 23.9 ms | 642 ms | ✓ |
+| l100000.n1000.e10 | 10 of 1000 | 7.24 ms | 7.16 ms | 13.9 ms | 27.7 ms | 48.4 ms | 247 ms | 218 ms | 182 ms | 9.24 s (3/10) | 39 ms | 629 ms | ✓ |
+| l100000.n1000.e20 | 10 of 1000 | 15.8 ms | 15.8 ms | 36.8 ms | 56.8 ms | t.o. (30 s) | 445 ms | 709 ms | 553 ms | 17.5 s (1/10) | 62.6 ms | 630 ms | ✓ |
+| l500000.n200.e1 | 4 of 200 | 33 ms | 35.4 ms | 43.1 ms | 72.5 ms | 41.2 ms | 669 ms | 82.1 ms | 75.8 ms | 24.4 s (1/4) | 124 ms | failed | ✓ |
+| l500000.n200.e5 | 4 of 200 | 31.2 ms | 31.1 ms | 44.7 ms | 213 ms | 81.7 ms | 2.29 s | 1.55 s | 1.48 s | o.o.m. | 394 ms | failed | ✓ |
+| l500000.n200.e10 | 4 of 200 | 67.8 ms | 68.6 ms | 119 ms | 423 ms | 407 ms | 4.38 s | 5.45 s | 5.02 s | o.o.m. | 699 ms | failed | ✓ |
+| l500000.n200.e20 | 4 of 200 | 253 ms | 251 ms | 544 ms | 898 ms | t.o. (30 s) | 8.53 s (3/4) | 18 s (1/4) | o.o.m. | o.o.m. | 1.24 s | failed | ✓ |
+| l1000000.n100.e1 | 4 of 100 | 61.1 ms | 57.1 ms | 89.2 ms | 253 ms | 96.6 ms | 2.37 s | 365 ms | 392 ms | o.o.m. | 393 ms | failed | ✓ |
+| l1000000.n100.e5 | 4 of 100 | 65 ms | 64.3 ms | 116 ms | 819 ms | 183 ms | 8.83 s (3/4) | 6.35 s | o.o.m. | o.o.m. | 1.44 s | failed | ✓ |
+| l1000000.n100.e10 | 4 of 100 | 185 ms | 185 ms | 368 ms | 1.65 s | 974 ms | 17.3 s (1/4) | 22.3 s (1/4) | o.o.m. | o.o.m. | 2.65 s | failed | ✓ |
+| l1000000.n100.e20 | 4 of 100 | 890 ms | 898 ms | 2.02 s | 3.51 s | t.o. (30 s) | t.o. (30 s) | t.o. (30 s) | o.o.m. | o.o.m. | 4.8 s | failed | ✓ |
 
 Each rival's time over dinara-align's on the pairs both aligned, across the datasets, as QuickEd's text
 summarizes its own:
 
 | rival | least | geometric mean | most | datasets |
 | :-- | --: | --: | --: | --: |
-| a*pa2-full | 1.3× | 3.2× | 77.5× | 24 |
-| a*pa2-simple | 1.1× | 3.7× | 20.6× | 24 |
-| a*pa | 1.2× | 12.6× | 453.8× | 19 |
-| edlib | 5.9× | 32.7× | 266.1× | 23 |
-| biwfa | 2.1× | 12.7× | 111.3× | 23 |
-| wfa | 1.5× | 6.7× | 73.9× | 18 |
-| ksw2 | 21.5× | 213.2× | 1163.7× | 15 |
-| quicked | 3.0× | 8.0× | 75.4× | 24 |
-| bsalign | 5.6× | 51.1× | 966.6× | 14 |
+| a*pa2-full | 1.3× | 3.1× | 76.1× | 25 |
+| a*pa2-simple | 1.1× | 3.6× | 20.1× | 25 |
+| a*pa | 1.2× | 14.6× | 452.1× | 20 |
+| edlib | 6.0× | 32.1× | 264.6× | 24 |
+| biwfa | 2.1× | 13.0× | 109.0× | 24 |
+| wfa | 1.5× | 7.1× | 74.0× | 19 |
+| ksw2 | 20.8× | 229.0× | 1193.1× | 16 |
+| quicked | 3.0× | 7.8× | 73.8× | 25 |
+| bsalign | 5.7× | 52.7× | 943.9× | 15 |
 
 Growth of peak memory aligning a pair, median and largest, as A\*PA2's Table 10 measures it:
 
 | dataset | dinara-align (bit-parallel, 1 thread) | dinara-align (bit-parallel, batch, 1 thread) | a*pa2-full | a*pa2-simple | a*pa | edlib | biwfa | wfa | ksw2 | quicked | bsalign |
 | :-- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |
-| ont-1k | 0.0 / 0.4 MB | — | 0.0 / 0.3 MB | 0.0 / 0.3 MB | 0.0 / 0.2 MB | 0.0 / 0.5 MB | 0.0 / 0.3 MB | 0.0 / 0.5 MB | 0.0 / 0.4 MB | 0.0 / 0.1 MB | 0.0 / 0.2 MB |
-| ont-10k | 0.0 / 0.8 MB | — | 0.0 / 0.7 MB | 0.0 / 0.4 MB | 0.0 / 20 MB | 0.0 / 0.5 MB | 0.0 / 1.0 MB | 0.0 / 6.2 MB | 0.0 / 29 MB | 0.0 / 2.5 MB | 0.0 / 13 MB |
-| ont-50k | 0.0 / 1.8 MB | — | 0.0 / 1.3 MB | 0.0 / 0.6 MB | 0.0 / 410 MB | 0.0 / 0.8 MB | 0.0 / 1.6 MB | 0.0 / 71 MB | 0.0 / 167 MB | 0.0 / 16 MB | 0.0 / 163 MB |
-| ont-500k | 0.0 / 48 MB | — | 0.0 / 82 MB | 0.0 / 82 MB | — | 0.3 / 5.3 MB | 4.5 / 15 MB | — | — | 0.0 / 22 MB | — |
-| ont-500k-genvar | 6.7 / 39 MB | — | 0.0 / 48 MB | 15 / 32 MB | — | 2.2 / 4.8 MB | 6.0 / 12 MB | — | — | 3.0 / 20 MB | — |
-| sars-cov-2 | 0.0 / 2.4 MB | — | 0.0 / 1.8 MB | 0.0 / 0.8 MB | 0.0 / 13 MB | 0.0 / 1.2 MB | 0.0 / 1.6 MB | 0.0 / 15 MB | 0.0 / 97 MB | 0.0 / 7.9 MB | 0.0 / 211 MB |
-| illumina-250 | 0.0 / 0.1 MB | — | 0.0 / 0.2 MB | 0.0 / 0.2 MB | 0.0 / 0.1 MB | 0.0 / 0.1 MB | 0.0 / 0.3 MB | 0.0 / 0.1 MB | 0.0 / 0.1 MB | 0.0 / 0.0 MB | 0.0 / 0.1 MB |
-| pacbio-hifi | 0.0 / 0.4 MB | — | 0.0 / 0.8 MB | 0.0 / 0.4 MB | 0.0 / 0.6 MB | 0.0 / 0.8 MB | 0.0 / 0.6 MB | 0.0 / 0.6 MB | 0.0 / 6.4 MB | 0.0 / 1.0 MB | 0.0 / 32 MB |
-| l10000.n10000.e1 | 0.0 / 0.2 MB | — | 0.0 / 0.9 MB | 0.0 / 0.5 MB | 0.0 / 0.6 MB | 0.0 / 0.6 MB | 0.0 / 0.5 MB | 0.0 / 0.7 MB | 0.0 / 3.2 MB | 0.0 / 0.5 MB | 0.0 / 24 MB |
-| l10000.n10000.e5 | 0.0 / 0.9 MB | — | 0.0 / 0.7 MB | 0.0 / 0.4 MB | 0.0 / 0.6 MB | 0.0 / 0.7 MB | 0.0 / 1.4 MB | 0.0 / 2.1 MB | 0.0 / 11 MB | 0.0 / 1.5 MB | 0.0 / 24 MB |
-| l10000.n10000.e10 | 0.0 / 0.9 MB | — | 0.0 / 0.8 MB | 0.0 / 0.5 MB | 0.0 / 2.4 MB | 0.0 / 0.6 MB | 0.0 / 1.4 MB | 0.0 / 4.3 MB | 0.0 / 20 MB | 0.0 / 2.6 MB | 0.0 / 24 MB |
-| l10000.n10000.e20 | 0.0 / 0.8 MB | — | 0.0 / 0.8 MB | 0.0 / 0.4 MB | 0.0 / 28 MB | 0.0 / 0.6 MB | 0.0 / 1.4 MB | 0.0 / 11 MB | 0.0 / 40 MB | 0.0 / 4.5 MB | 0.0 / 24 MB |
-| l100000.n1000.e1 | 0.0 / 4.9 MB | — | 0.0 / 5.9 MB | 0.0 / 1.9 MB | 0.0 / 4.1 MB | 0.0 / 1.4 MB | 0.0 / 4.0 MB | 3.4 / 5.9 MB | 0.0 / 203 MB | 0.0 / 12 MB | 0.0 / 2388 MB |
-| l100000.n1000.e5 | 0.0 / 3.8 MB | — | 0.0 / 5.5 MB | 0.0 / 2.6 MB | 0.0 / 4.5 MB | 0.0 / 1.4 MB | 0.0 / 2.9 MB | 3.8 / 88 MB | 0.1 / 1555 MB | 0.0 / 11 MB | 0.0 / 2392 MB |
-| l100000.n1000.e10 | 0.1 / 4.4 MB | — | 0.0 / 5.5 MB | 0.0 / 3.3 MB | 0.0 / 18 MB | 0.0 / 1.4 MB | 0.0 / 3.4 MB | 5.1 / 301 MB | 22 / 2986 MB | 0.0 / 17 MB | 0.0 / 2386 MB |
-| l100000.n1000.e20 | 0.0 / 5.2 MB | — | 0.0 / 7.3 MB | 0.0 / 4.7 MB | — | 0.0 / 1.4 MB | 0.0 / 3.6 MB | 2.1 / 955 MB | 5476 / 5476 MB | 0.0 / 8.8 MB | 0.0 / 2392 MB |
-| l500000.n200.e1 | 9.1 / 24 MB | — | 1.0 / 28 MB | 0.1 / 11 MB | 0.0 / 22 MB | 0.7 / 3.4 MB | 3.1 / 13 MB | 8.9 / 100 MB | 7835 / 7835 MB | 0.0 / 18 MB | — |
-| l500000.n200.e5 | 4.5 / 16 MB | — | 0.7 / 26 MB | 0.2 / 19 MB | 2.8 / 23 MB | 0.0 / 4.0 MB | 2.8 / 12 MB | 22 / 2111 MB | — | 0.0 / 19 MB | — |
-| l500000.n200.e10 | 3.4 / 18 MB | — | 0.2 / 30 MB | 0.1 / 30 MB | 5.4 / 76 MB | 0.1 / 4.0 MB | 2.8 / 14 MB | 123 / 7416 MB | — | 0.4 / 13 MB | — |
-| l500000.n200.e20 | 14 / 53 MB | — | 0.1 / 59 MB | 0.3 / 53 MB | — | 0.1 / 4.1 MB | 15 / 15 MB | — | — | 0.6 / 16 MB | — |
-| l1000000.n100.e1 | 7.7 / 37 MB | — | 2.2 / 57 MB | 0.2 / 28 MB | 0.0 / 43 MB | 0.0 / 7.6 MB | 6.8 / 17 MB | 8.8 / 382 MB | — | 0.0 / 25 MB | — |
-| l1000000.n100.e5 | 11 / 30 MB | — | 2.2 / 53 MB | 0.2 / 57 MB | 5.5 / 46 MB | 0.1 / 7.9 MB | 6.7 / 16 MB | — | — | 0.9 / 25 MB | — |
-| l1000000.n100.e10 | 4.3 / 38 MB | — | 0.6 / 67 MB | 0.6 / 100 MB | 13 / 151 MB | 7.9 / 7.9 MB | 19 / 19 MB | — | — | 0.9 / 24 MB | — |
+| ont-1k | 0.0 / 0.1 MB | — | 0.0 / 0.4 MB | 0.0 / 0.3 MB | 0.0 / 0.4 MB | 0.0 / 0.5 MB | 0.0 / 0.3 MB | 0.0 / 0.5 MB | 0.0 / 0.4 MB | 0.0 / 0.1 MB | 0.0 / 0.2 MB |
+| ont-10k | 0.0 / 0.6 MB | — | 0.0 / 0.7 MB | 0.0 / 0.4 MB | 0.0 / 20 MB | 0.0 / 0.5 MB | 0.0 / 1.0 MB | 0.0 / 6.3 MB | 0.0 / 29 MB | 0.0 / 2.5 MB | 0.0 / 13 MB |
+| ont-50k | 0.0 / 1.8 MB | — | 0.0 / 1.4 MB | 0.0 / 0.8 MB | 0.0 / 410 MB | 0.0 / 0.8 MB | 0.0 / 1.7 MB | 0.0 / 71 MB | 0.0 / 167 MB | 0.0 / 16 MB | 0.0 / 163 MB |
+| ont-500k | 0.0 / 48 MB | — | 0.0 / 81 MB | 0.0 / 82 MB | — | 0.2 / 5.3 MB | 4.5 / 15 MB | — | — | 0.0 / 22 MB | — |
+| ont-500k-genvar | 6.6 / 39 MB | — | 0.0 / 49 MB | 15 / 32 MB | — | 2.4 / 4.6 MB | 6.0 / 12 MB | — | — | 4.0 / 19 MB | — |
+| sars-cov-2 | 0.0 / 2.4 MB | — | 0.0 / 2.1 MB | 0.0 / 0.8 MB | 0.0 / 13 MB | 0.0 / 1.2 MB | 0.0 / 1.7 MB | 0.0 / 15 MB | 0.0 / 97 MB | 0.0 / 7.9 MB | 0.0 / 211 MB |
+| illumina-250 | 0.0 / 0.1 MB | — | 0.0 / 0.2 MB | 0.0 / 0.3 MB | 0.0 / 0.1 MB | 0.0 / 0.1 MB | 0.0 / 0.3 MB | 0.0 / 0.1 MB | 0.0 / 0.1 MB | 0.0 / 0.0 MB | 0.0 / 0.1 MB |
+| pacbio-hifi | 0.0 / 0.2 MB | — | 0.0 / 0.9 MB | 0.0 / 0.5 MB | 0.0 / 0.6 MB | 0.0 / 0.8 MB | 0.0 / 0.5 MB | 0.0 / 0.6 MB | 0.0 / 6.4 MB | 0.0 / 1.0 MB | 0.0 / 32 MB |
+| ont-promethion | 0.0 / 3.9 MB | — | 0.0 / 4.6 MB | 0.0 / 2.0 MB | 0.0 / 338 MB | 0.0 / 1.0 MB | 0.0 / 2.6 MB | 0.1 / 639 MB | 0.0 / 3587 MB | 0.0 / 8.5 MB | 0.0 / 1288 MB |
+| l10000.n10000.e1 | 0.0 / 0.1 MB | — | 0.0 / 0.8 MB | 0.0 / 0.4 MB | 0.0 / 0.6 MB | 0.0 / 0.6 MB | 0.0 / 0.6 MB | 0.0 / 0.7 MB | 0.0 / 3.1 MB | 0.0 / 0.5 MB | 0.0 / 24 MB |
+| l10000.n10000.e5 | 0.0 / 0.8 MB | — | 0.0 / 0.7 MB | 0.0 / 0.5 MB | 0.0 / 0.6 MB | 0.0 / 0.7 MB | 0.0 / 1.4 MB | 0.0 / 2.1 MB | 0.0 / 11 MB | 0.0 / 1.5 MB | 0.0 / 24 MB |
+| l10000.n10000.e10 | 0.0 / 0.2 MB | — | 0.0 / 1.0 MB | 0.0 / 0.5 MB | 0.0 / 2.4 MB | 0.0 / 0.6 MB | 0.0 / 1.4 MB | 0.0 / 4.3 MB | 0.0 / 20 MB | 0.0 / 2.6 MB | 0.0 / 24 MB |
+| l10000.n10000.e20 | 0.0 / 0.5 MB | — | 0.0 / 0.8 MB | 0.0 / 0.4 MB | 0.0 / 28 MB | 0.0 / 0.7 MB | 0.0 / 1.4 MB | 0.0 / 11 MB | 0.0 / 40 MB | 0.0 / 4.5 MB | 0.0 / 24 MB |
+| l100000.n1000.e1 | 0.0 / 4.9 MB | — | 0.0 / 6.0 MB | 0.0 / 2.0 MB | 0.0 / 4.1 MB | 0.0 / 1.4 MB | 0.0 / 4.0 MB | 3.4 / 5.9 MB | 0.0 / 203 MB | 0.0 / 12 MB | 0.0 / 2388 MB |
+| l100000.n1000.e5 | 0.0 / 3.9 MB | — | 0.0 / 5.5 MB | 0.0 / 2.6 MB | 0.0 / 4.5 MB | 0.0 / 1.4 MB | 0.0 / 3.0 MB | 3.8 / 88 MB | 0.1 / 1555 MB | 0.0 / 11 MB | 0.0 / 2392 MB |
+| l100000.n1000.e10 | 0.0 / 4.0 MB | — | 0.0 / 5.6 MB | 0.0 / 3.4 MB | 0.0 / 18 MB | 0.0 / 1.4 MB | 0.0 / 3.4 MB | 5.1 / 301 MB | 22 / 2986 MB | 0.0 / 17 MB | 0.0 / 2386 MB |
+| l100000.n1000.e20 | 0.0 / 5.3 MB | — | 0.0 / 7.2 MB | 0.0 / 4.6 MB | — | 0.0 / 1.4 MB | 0.0 / 3.7 MB | 2.1 / 955 MB | 5476 / 5476 MB | 0.0 / 8.8 MB | 0.0 / 2392 MB |
+| l500000.n200.e1 | 9.1 / 23 MB | — | 1.0 / 29 MB | 0.1 / 11 MB | 0.0 / 22 MB | 0.7 / 3.4 MB | 3.1 / 13 MB | 8.9 / 100 MB | 7835 / 7835 MB | 0.0 / 18 MB | — |
+| l500000.n200.e5 | 4.4 / 16 MB | — | 0.7 / 26 MB | 0.2 / 19 MB | 2.9 / 23 MB | 0.0 / 4.0 MB | 2.8 / 12 MB | 22 / 2111 MB | — | 0.0 / 19 MB | — |
+| l500000.n200.e10 | 3.2 / 18 MB | — | 0.2 / 30 MB | 0.1 / 30 MB | 5.4 / 76 MB | 0.1 / 4.0 MB | 2.8 / 14 MB | 123 / 7416 MB | — | 0.4 / 13 MB | — |
+| l500000.n200.e20 | 14 / 53 MB | — | 0.1 / 59 MB | 0.3 / 53 MB | — | 0.0 / 4.0 MB | 15 / 15 MB | — | — | 0.6 / 15 MB | — |
+| l1000000.n100.e1 | 11 / 37 MB | — | 2.0 / 57 MB | 0.2 / 28 MB | 0.0 / 43 MB | 0.1 / 7.6 MB | 6.8 / 17 MB | 8.8 / 382 MB | — | 0.0 / 25 MB | — |
+| l1000000.n100.e5 | 11 / 30 MB | — | 2.2 / 53 MB | 0.2 / 57 MB | 5.6 / 46 MB | 0.0 / 7.9 MB | 6.7 / 16 MB | — | — | 0.9 / 25 MB | — |
+| l1000000.n100.e10 | 4.3 / 39 MB | — | 0.6 / 67 MB | 0.6 / 99 MB | 13 / 151 MB | 7.9 / 7.9 MB | 19 / 19 MB | — | — | 0.9 / 24 MB | — |
 | l1000000.n100.e20 | 14 / 123 MB | — | 0.4 / 184 MB | 2.9 / 192 MB | — | — | — | — | — | 0.1 / 26 MB | — |
 
-- **dinara-align is the fastest on every one of the 24 datasets**, 1.1 to 5.2 times the next fastest exact
-  aligner: 21.1 against WFA's 31.1 µs on ont-1k, 580 against A\*PA2-simple's 944 µs on ont-50k, 118
-  against A\*PA2-full's 283 ms on the 500 kbp reads, 287 against 728 µs on the SARS-CoV-2 genomes, 0.576
-  against WFA's 1.12 µs on the Illumina reads and 12.6 against 65.9 µs on the HiFi reads, and 892 ms
-  against 2.02 s on the 1 Mbp pairs at 20%. The closest is QuickEd's 10 kbp pairs at 5%, 267 against
-  A\*PA2-simple's 288 µs. Against QuickEd itself, the latest of them, 3.0 to 75 times, 8.0 in the
-  geometric mean.
+- **dinara-align is the fastest on every one of the 25 datasets**, 1.1 to 5.1 times the next fastest exact
+  aligner: 20.8 against WFA's 31.3 µs on ont-1k, 582 against A\*PA2-simple's 941 µs on ont-50k, 3.99
+  against 6.76 ms on the PromethION reads, 118 against A\*PA2-full's 284 ms on the 500 kbp reads, 277
+  against 727 µs on the SARS-CoV-2 genomes, 0.593 against WFA's 1.12 µs on the Illumina reads and 12.9
+  against 66.0 µs on the HiFi reads, and 890 ms against 2.02 s on the 1 Mbp pairs at 20%. The closest is
+  QuickEd's 10 kbp pairs at 5%, 268 against A\*PA2-simple's 288 µs. Against QuickEd itself, the latest of
+  them, 3.0 to 74 times, 7.8 in the geometric mean.
 - **Near-identical pairs run diagonal transition**, as WFA does, before any band: one front keeping its
   history for a close pair, two from both ends otherwise, each kept for the traceback. It stays on while
   it costs less than the band would, which at 1 to 3% covers most pairs up to tens of kbp.
@@ -209,49 +218,51 @@ exact aligners that take them, a 30 s budget a tool a dataset:
 
 | dataset | pairs | dinara-align (1 thread) | dinara-align (batch, 1 thread) | wfa | biwfa | ksw2 | bsalign | agree |
 | :-- | --: | --: | --: | --: | --: | --: | --: | :-: |
-| ont-1k | 1221 of 12477 | 105 µs | 106 µs | 188 µs | 308 µs | 1.1 ms | 336 µs | ✓ |
-| ont-10k | 277 of 5000 | 1.6 ms | 1.62 ms | 4.89 ms | 5.86 ms | 30 ms | 7.84 ms | ✓ |
-| ont-50k | 104 of 10000 | 21.5 ms | 21.6 ms | 63.4 ms | 54.9 ms | 341 ms (81/104) | 87 ms | ✓ |
+| ont-1k | 1221 of 12477 | 105 µs | 106 µs | 189 µs | 305 µs | 1.1 ms | 336 µs | ✓ |
+| ont-10k | 277 of 5000 | 1.59 ms | 1.62 ms | 4.86 ms | 5.85 ms | 29.9 ms | 7.83 ms | ✓ |
+| ont-50k | 104 of 10000 | 21.7 ms | 21.8 ms | 63.4 ms | 54.9 ms | 341 ms (81/104) | 86.8 ms | ✓ |
 | ont-500k | 4 of 50 | t.o. (30 s) | t.o. (30 s) | o.o.m. | t.o. (30 s) | o.o.m. | o.o.m. | ✓ |
-| ont-500k-genvar | 4 of 48 | 22 s (1/4) | t.o. (30 s) | o.o.m. | t.o. (30 s) | o.o.m. | o.o.m. | ✓ |
-| sars-cov-2 | 33 of 10000 | 710 µs | 668 µs | 2.05 ms | 1.78 ms | 87.9 ms | 341 ms | ✓ |
-| illumina-250 | 4032 of 5992 | 1.45 µs | 1.84 µs | 1.55 µs | 2.81 µs | 12.8 µs | 53.9 µs | ✓ |
-| pacbio-hifi | 69 of 890 | 95 µs | 806 µs | 227 µs | 231 µs | 9.72 ms | 86 ms | ✓ |
-| l10000.n10000.e1 | 100 of 10000 | 199 µs | 222 µs | 416 µs | 646 µs | 21.3 ms | 37 ms | ✓ |
-| l10000.n10000.e5 | 99 of 10000 | 2.32 ms | 2.33 ms | 7.14 ms | 8.72 ms | 96.1 ms | 37 ms | ✓ |
-| l10000.n10000.e10 | 100 of 10000 | 7.06 ms | 7.03 ms | 23.1 ms | 27.1 ms | 202 ms | 37.3 ms | ✓ |
-| l10000.n10000.e20 | 99 of 10000 | 20.1 ms | 20 ms | 66 ms | 75.1 ms | 375 ms (81/99) | 37.4 ms | ✓ |
-| l100000.n1000.e1 | 9 of 1000 | 11.9 ms | 11.7 ms | 39.9 ms | 39 ms | 2.42 s | o.o.m. | ✓ |
-| l100000.n1000.e5 | 9 of 1000 | 331 ms | 335 ms | 808 ms | 714 ms | 9.17 s (3/9) | o.o.m. | ✓ |
-| l100000.n1000.e10 | 10 of 1000 | 1.16 s | 1.19 s | o.o.m. | 2.43 s | 17.3 s (1/10) | o.o.m. | ✓ |
-| l100000.n1000.e20 | 10 of 1000 | 3.61 s (8/10) | t.o. (30 s) | o.o.m. | 7.36 s (4/10) | o.o.m. | o.o.m. | ✓ |
-| l500000.n200.e1 | 4 of 200 | 477 ms | 476 ms | 1.29 s | 942 ms | o.o.m. | o.o.m. | ✓ |
-| l500000.n200.e5 | 4 of 200 | 9.91 s (3/4) | t.o. (30 s) | o.o.m. | 19.4 s (1/4) | o.o.m. | o.o.m. | ✓ |
+| ont-500k-genvar | 4 of 48 | 27.3 s (1/4) | t.o. (30 s) | o.o.m. | t.o. (30 s) | o.o.m. | o.o.m. | ✓ |
+| sars-cov-2 | 33 of 10000 | 698 µs | 672 µs | 2.06 ms | 1.78 ms | 88.6 ms | 341 ms | ✓ |
+| illumina-250 | 4032 of 5992 | 1.51 µs | 1.81 µs | 1.54 µs | 2.82 µs | 12.8 µs | 53.8 µs | ✓ |
+| pacbio-hifi | 69 of 890 | 92.9 µs | 812 µs | 224 µs | 232 µs | 9.74 ms | 86.1 ms | ✓ |
+| ont-promethion | 22 of 584 | 286 ms | 265 ms | 286 ms (o.o.m. after 7/22) | 576 ms | 2.35 s (7/22) | o.o.m. | ✓ |
+| l10000.n10000.e1 | 100 of 10000 | 195 µs | 218 µs | 409 µs | 649 µs | 21.2 ms | 37 ms | ✓ |
+| l10000.n10000.e5 | 99 of 10000 | 2.37 ms | 2.37 ms | 7.13 ms | 8.73 ms | 97.6 ms | 37.2 ms | ✓ |
+| l10000.n10000.e10 | 100 of 10000 | 7.08 ms | 7.07 ms | 22.8 ms | 27.2 ms | 204 ms | 37.2 ms | ✓ |
+| l10000.n10000.e20 | 99 of 10000 | 19.9 ms | 20.3 ms | 65.5 ms | 75.2 ms | 375 ms (80/99) | 37.5 ms | ✓ |
+| l100000.n1000.e1 | 9 of 1000 | 11.9 ms | 12.1 ms | 39.9 ms | 39 ms | 2.44 s | o.o.m. | ✓ |
+| l100000.n1000.e5 | 9 of 1000 | 357 ms | 340 ms | 810 ms | 715 ms | 9.22 s (3/9) | o.o.m. | ✓ |
+| l100000.n1000.e10 | 10 of 1000 | 1.37 s | 1.26 s | o.o.m. | 2.43 s | 17.4 s (1/10) | o.o.m. | ✓ |
+| l100000.n1000.e20 | 10 of 1000 | 3.94 s (7/10) | t.o. (30 s) | o.o.m. | 7.35 s (4/10) | o.o.m. | o.o.m. | ✓ |
+| l500000.n200.e1 | 4 of 200 | 499 ms | 479 ms | 1.29 s | 942 ms | o.o.m. | o.o.m. | ✓ |
+| l500000.n200.e5 | 4 of 200 | 11.4 s (2/4) | t.o. (30 s) | o.o.m. | 19.4 s (1/4) | o.o.m. | o.o.m. | ✓ |
 | l500000.n200.e10 | 4 of 200 | t.o. (30 s) | t.o. (30 s) | o.o.m. | t.o. (30 s) | o.o.m. | o.o.m. | ✓ |
 | l500000.n200.e20 | 4 of 200 | t.o. (30 s) | t.o. (30 s) | o.o.m. | t.o. (30 s) | o.o.m. | o.o.m. | ✓ |
-| l1000000.n100.e1 | 4 of 100 | 2.3 s | 2.32 s | o.o.m. | 3.94 s | o.o.m. | o.o.m. | ✓ |
+| l1000000.n100.e1 | 4 of 100 | 2.44 s | 2.37 s | o.o.m. | 3.92 s | o.o.m. | o.o.m. | ✓ |
 | l1000000.n100.e5 | 4 of 100 | t.o. (30 s) | t.o. (30 s) | o.o.m. | t.o. (30 s) | o.o.m. | o.o.m. | ✓ |
 | l1000000.n100.e10 | 4 of 100 | t.o. (30 s) | t.o. (30 s) | o.o.m. | t.o. (30 s) | o.o.m. | o.o.m. | ✓ |
 | l1000000.n100.e20 | 4 of 100 | t.o. (30 s) | t.o. (30 s) | o.o.m. | t.o. (30 s) | o.o.m. | o.o.m. | ✓ |
 
 | rival | least | geometric mean | most | datasets |
 | :-- | --: | --: | --: | --: |
-| wfa | 1.1× | 2.5× | 3.3× | 13 |
-| biwfa | 1.7× | 2.6× | 3.8× | 17 |
-| ksw2 | 8.9× | 33.9× | 203.0× | 13 |
-| bsalign | 1.9× | 22.3× | 905.8× | 10 |
+| wfa | 1.0× | 2.6× | 3.4× | 14 |
+| biwfa | 1.6× | 2.5× | 3.8× | 18 |
+| ksw2 | 8.5× | 33.1× | 205.2× | 14 |
+| bsalign | 1.9× | 22.3× | 926.5× | 10 |
 
-- **dinara-align is the fastest on every dataset any tool finished**, 1.1 to 3.8 times WFA and BiWFA, 2.5
-  and 2.6 in the geometric mean: 105 against WFA's 188 µs on ont-1k, 1.60 against 4.89 ms on ont-10k, 21.5
-  against BiWFA's 54.9 ms on ont-50k, 710 µs against 1.78 ms on the SARS-CoV-2 genomes, 95 against 227 µs
-  on the HiFi reads, and 20.1 against BSAlign's 37.4 ms on 10 kbp pairs at 20%, where BSAlign's 8-bit
-  difference sweep, whose time does not depend on the divergence, comes close. The closest is the Illumina
-  reads, 1.45 against WFA's 1.55 µs: a pair that close is aligned by one search, as WFA aligns it, grown
-  alone while it steps no more diagonals than the two searches would, its fronts measured as it grows.
-- **The batch call is slow on HiFi reads at gap-affine costs**, 806 µs a pair against 95 one at a time,
+- **dinara-align is the fastest on every dataset any tool finished, the Illumina reads a tie**: 105 against
+  WFA's 189 µs on ont-1k, 1.62 against 4.86 ms on ont-10k, 21.7 against BiWFA's 54.9 ms on ont-50k, 286
+  against BiWFA's 576 ms on the PromethION reads, where WFA ran out of memory after 7 of 22, 698 µs against
+  1.78 ms on the SARS-CoV-2 genomes, 92.9 against 225 µs on the HiFi reads, and 19.9 against BSAlign's
+  37.5 ms on 10 kbp pairs at 20%, where BSAlign's 8-bit difference sweep, whose time does not depend on the
+  divergence, comes close. On the Illumina reads it takes 1.51 against WFA's 1.54 µs, within the spread of
+  its rounds: a pair that close is aligned by one search, as WFA aligns it, grown alone while it steps no
+  more diagonals than the two searches would, its fronts measured as it grows.
+- **The batch call is slow on HiFi reads at gap-affine costs**, 812 µs a pair against 93 one at a time,
   for a reason not yet found (see `TODO.md`).
-- **It finishes more of the long pairs than anyone**: 8 of the 10 100 kbp pairs at 20% where BiWFA
-  finishes 4, three 500 kbp pairs at 5% to BiWFA's one, and one ont-500k-genvar read. No tool finishes a
+- **It finishes more of the long pairs than anyone**: 7 of the 10 100 kbp pairs at 20% in every round where
+  BiWFA finishes 4, two 500 kbp pairs at 5% to BiWFA's one, and one ont-500k-genvar read. No tool finishes a
   1 Mbp pair past 1% in 30 s: the wavefront's work grows with the square of the cost, and gap-affine costs
   have no seed heuristic here to prune it.
 - **A pair far apart is handed to a full sweep** in difference recurrences (Suzuki and Kasahara), 8-bit
@@ -290,24 +301,25 @@ CIGAR, and every tool's costs or scores must agree on every pair, or the run fai
 
 | workload | dinara-align | Edlib | WFA2-lib | KSW2 | parasail | SSW |
 | :-- | --: | --: | --: | --: | --: | --: |
-| infix-edit | **132 µs** | 273 µs | 1.01 ms | — | — | — |
-| infix-edit-long | **2.01 ms** | 13.6 ms | 54 ms | — | — | — |
-| prefix-edit | **44 µs** | 115 µs | 47 µs | — | — | — |
-| infix-affine | **3.93 ms** | — | 3.94 ms | — | — | — |
-| extension | **734 µs** | — | — | 2.06 ms | — | — |
-| extension-bonus | **166 µs** | — | — | 1.23 ms | — | — |
-| two-piece | **8.3 ms** | — | 15.9 ms | 45.3 ms | — | — |
-| table-global | **198 µs** | — | — | — | 2.92 ms | — |
-| table-local | **1.91 ms** | — | — | — | 5.63 ms | 3.27 ms |
-| local-short | **32 µs** | — | — | — | 66 µs | 51 µs |
-| local-window | **1.36 ms** | — | — | — | 4.73 ms | 3.15 ms |
-| local-long | **17.5 ms** | — | — | — | 292 ms | 85.1 ms |
-| overlap-reads | **724 µs** | — | — | — | 15.4 ms | — |
-| infix-reads | **693 µs** | — | — | — | 15.2 ms | — |
+| infix-edit | **130 µs** | 268 µs | 1.00 ms | — | — | — |
+| infix-edit-long | **2.01 ms** | 13.5 ms | 54.0 ms | — | — | — |
+| prefix-edit | **42.4 µs** | 114 µs | 47.0 µs | — | — | — |
+| infix-affine | **3.92 ms** | — | 3.96 ms | — | — | — |
+| extension | **726 µs** | — | — | 2.06 ms | — | — |
+| extension-bonus | **166 µs** | — | — | 1.24 ms | — | — |
+| two-piece | **8.25 ms** | — | 15.8 ms | 46.9 ms | — | — |
+| table-global | **196 µs** | — | — | — | 2.94 ms | — |
+| table-local | **1.91 ms** | — | — | — | 5.16 ms | 3.28 ms |
+| local-short | **32.0 µs** | — | — | — | 67.2 µs | 51.2 µs |
+| local-window | **1.36 ms** | — | — | — | 4.75 ms | 3.15 ms |
+| local-long | **17.4 ms** | — | — | — | 293 ms | 84.7 ms |
+| overlap-reads | **703 µs** | — | — | — | 15.3 ms | — |
+| infix-reads | **687 µs** | — | — | — | 15.1 ms | — |
 
-- **dinara-align is the fastest on every workload**: twice Edlib on short infixes and 6.8 times
-  on long ones, 2.8 times KSW2 on extension and 7.4 times with an end bonus, 1.9 times WFA2-lib on two-piece
-  gaps, 14.7 times parasail on a table globally, and 4.9 times SSW on the long local pairs.
+- **dinara-align is the fastest on every workload, or tied**: twice Edlib on short infixes and 6.7 times
+  on long ones, 2.8 times KSW2 on extension and 7.5 times with an end bonus, 1.9 times WFA2-lib on two-piece
+  gaps, 15 times parasail on a table globally, and 4.9 times SSW on the long local pairs; the infix at
+  WFA2-lib's costs, 3.92 against 3.96 ms, is a tie.
 - **An end bonus aligns a read to its end when that scores within the bonus of the best stop**, as KSW2's
   `end_bonus` and BWA-MEM's clipping penalty decide, and both choose the same alignment on every read.
 - **Local alignment sweeps by anti-diagonal in 16-bit lanes** while the scores fit, a strip of rows at a
@@ -319,7 +331,7 @@ CIGAR, and every tool's costs or scores must agree on every pair, or the run fai
   alignment is traced in bands that prove themselves, a local one found by its end and start and the span
   between aligned globally.
 - **Some rows move by up to a third between builds that do not touch them**, where a loop lands against
-  the Skylake-X's micro-op cache (Intel's JCC erratum fix). The infix at WFA2-lib's costs, 3.93 ms here,
+  the Skylake-X's micro-op cache (Intel's JCC erratum fix). The infix at WFA2-lib's costs, 3.92 ms here,
   takes 3.01 or 3.92 ms from build to build, the same 6.13 billion instructions either way and 2.0 or 2.6
   billion cycles; read a difference of that size between builds as noise.
 
@@ -341,10 +353,10 @@ packing the batch, copying it over, scoring it and copying back.
 
 | workload | threads | dinara-align | dinara-align GPU | WFA2-lib | KSW2 | parasail | Edlib |
 | :-- | :-- | --: | --: | --: | --: | --: | --: |
-| illumina-affine | one core | **230 ms** | — | 1062 ms | 10.9 s | 21.7 s | — |
-| illumina-edit | one core | **212 ms** | — | 450 ms | — | — | 2002 ms |
-| illumina-affine | 10 cores | **27 ms** | 36 ms | 116 ms | 1211 ms | 2321 ms | — |
-| illumina-edit | 10 cores | **29 ms** | — | 64 ms | — | — | 216 ms |
+| illumina-affine | one core | **231 ms** | — | 1.06 s | 10.9 s | 21.7 s | — |
+| illumina-edit | one core | **212 ms** | — | 450 ms | — | — | 2.00 s |
+| illumina-affine | 10 cores | **29.0 ms** | 35.0 ms | 113 ms | 1.20 s | 2.35 s | — |
+| illumina-edit | 10 cores | **28.0 ms** | — | 49.0 ms | — | — | 209 ms |
 
 - **On the CPU a batch of global distances runs many pairs at once**, one a 16-bit lane of a register, 32
   under AVX-512, over a band of diagonals each pair's own cost proves: a path visiting a diagonal past the
@@ -353,8 +365,8 @@ packing the batch, copying it over, scoring it and copying back.
   does not prove are scored again over every diagonal a cheaper path could visit. Every pair goes first
   into a byte whose additions saturate, 64 to an AVX-512 register, a cost under 255 exact, and a pair whose
   byte saturates into 16 bits after. One core scores a pair in 0.46 µs at the affine costs and 0.42 at
-  unit costs, WFA2-lib in 2.12 and 0.90; switching the certified band off triples the time (see Ablation).
-- **On the GPU the batch takes 36 ms**, most of it the host packing the batch: each pair goes first over a
+  unit costs, WFA2-lib in 2.13 and 0.90; switching the certified band off triples the time (see Ablation).
+- **On the GPU the batch takes 35 ms** (the median of three runs, which varied by half), most of it the host packing the batch: each pair goes first over a
   band of sixteen diagonals, a thread a pair, and the band's score stands where the pair's own cost proves
   it, as on the CPU; the rest are scored whole on the device while the host packs the next chunk.
 

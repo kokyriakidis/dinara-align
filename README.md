@@ -49,26 +49,27 @@ and Python, and as a command-line aligner.
 Mean time per alignment on one core of an Intel Core i9-7900X at a fixed 3.3 GHz, every tool built
 for the machine's instruction set and every tool's answers checked against every other's. A selection
 of the rows in [benchmarks/README.md](benchmarks/README.md), which has the full tables, the datasets
-and how to reproduce them.
+and how to reproduce them; each time is the median of three alternating rounds.
 
 | workload | dinara-align | next fastest exact aligner |
 | :-- | --: | :-- |
-| ONT reads, mean 0.8 kbp (ont-1k), edit distance | **21.1 µs** | WFA2-lib, 31.1 µs |
-| ONT reads, mean 3.6 kbp (ont-10k), edit distance | **156 µs** | A\*PA2-simple, 247 µs |
-| ONT reads, mean 9.6 kbp (ont-50k), edit distance | **580 µs** | A\*PA2-simple, 944 µs |
-| ONT reads, mean 640 kbp (ont-500k), edit distance | **118 ms** | A\*PA2-full, 283 ms |
-| SARS-CoV-2 genomes, 30 kbp, edit distance | **287 µs** | A\*PA2-simple, 728 µs |
-| Illumina 2x250 reads of HG002 against its own assembly, edit distance | **0.576 µs** | WFA2-lib, 1.12 µs |
-| PacBio HiFi reads of HG002, mean 14 kbp, edit distance | **12.6 µs** | WFA2-lib, 65.9 µs |
-| simulated 100 kbp pairs at 10% uniform errors (QuickEd), edit distance | **7.28 ms** | A\*PA2-full, 13.9 ms; QuickEd, 39 ms |
-| simulated 1 Mbp pairs at 20% uniform errors (QuickEd), edit distance | **892 ms** | A\*PA2-full, 2.02 s; QuickEd, 4.8 s |
-| ONT reads, mean 3.6 kbp (ont-10k), gap-affine (4, 6, 2) | **1.60 ms** | WFA2-lib, 4.89 ms |
-| Illumina 2x250 reads of HG002, gap-affine (4, 6, 2) | **1.45 µs** | WFA2-lib, 1.55 µs |
-| PacBio HiFi reads of HG002, gap-affine (4, 6, 2) | **95 µs** | WFA2-lib, 227 µs |
+| ONT reads, mean 0.8 kbp (ont-1k), edit distance | **20.8 µs** | WFA2-lib, 31.3 µs |
+| ONT reads, mean 3.6 kbp (ont-10k), edit distance | **154 µs** | A\*PA2-simple, 247 µs |
+| ONT reads, mean 9.6 kbp (ont-50k), edit distance | **582 µs** | A\*PA2-simple, 941 µs |
+| ultra-long PromethION reads of HG002, mean 45 kbp, edit distance | **3.99 ms** | A\*PA2-simple, 6.76 ms |
+| ONT reads, mean 640 kbp (ont-500k), edit distance | **118 ms** | A\*PA2-full, 284 ms |
+| SARS-CoV-2 genomes, 30 kbp, edit distance | **277 µs** | A\*PA2-simple, 727 µs |
+| Illumina 2x250 reads of HG002 against its own assembly, edit distance | **0.593 µs** | WFA2-lib, 1.12 µs |
+| PacBio HiFi reads of HG002, mean 14 kbp, edit distance | **12.9 µs** | WFA2-lib, 66.0 µs |
+| simulated 100 kbp pairs at 10% uniform errors (QuickEd), edit distance | **7.24 ms** | A\*PA2-full, 13.9 ms; QuickEd, 39.0 ms |
+| simulated 1 Mbp pairs at 20% uniform errors (QuickEd), edit distance | **890 ms** | A\*PA2-full, 2.02 s; QuickEd, 4.8 s |
+| ONT reads, mean 3.6 kbp (ont-10k), gap-affine (4, 6, 2) | **1.59 ms** | WFA2-lib, 4.86 ms |
+| Illumina 2x250 reads of HG002, gap-affine (4, 6, 2) | 1.51 µs | WFA2-lib, 1.54 µs: a tie |
+| PacBio HiFi reads of HG002, gap-affine (4, 6, 2) | **92.9 µs** | WFA2-lib, 225 µs |
 | local alignment, 1 kbp read in a 10 kbp window | **1.36 ms** | SSW, 3.15 ms |
-| overlap of two 2 kbp reads | **724 µs** | parasail, 15.4 ms |
-| extension with an end bonus | **166 µs** | KSW2, 1.23 ms |
-| 500,000 short reads, gap-affine scores, one core | **230 ms** | WFA2-lib, 1.06 s |
+| overlap of two 2 kbp reads | **703 µs** | parasail, 15.3 ms |
+| extension with an end bonus | **166 µs** | KSW2, 1.24 ms |
+| 500,000 short reads, gap-affine scores, one core | **231 ms** | WFA2-lib, 1.06 s |
 
 ## Installation
 
