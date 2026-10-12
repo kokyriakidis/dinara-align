@@ -504,14 +504,16 @@ def diagonal_transition(
                 estimate * estimate * ALIGNED_TWO_ENDED_PERCENT // 100 + switch_setup
             ):
                 return Probe(-1, max(estimate, score + 1), score)
-            # A distance past the ceiling this search can reach: nothing left would settle it.
-            if beyond_reach(estimate, score, PROBE_CEILING):
-                return Probe(-1, max(estimate, score + 1), score)
             # What is left to search, about `estimate² - score²` diagonals, against what a band
-            # would cost; the work already done is spent either way. Only once the search has spent
-            # its share of the cheapest band there could be (see `GIVE_UP_SHARE`).
-            if estimate * estimate - score * score > noisy_budget(
-                step_budget(columns, step_tenths, estimate), score
+            # would cost, or a distance past the ceiling this search can reach, which nothing left would
+            # settle; the work already done is spent either way. Only once the search has spent its share
+            # of the cheapest band there could be (see `GIVE_UP_SHARE`): a projection from edits gathered
+            # at an end overshoots far past any ceiling, which handed SARS-CoV-2 genomes the search
+            # finishes in microseconds to a band four times slower.
+            if (
+                beyond_reach(estimate, score, PROBE_CEILING)
+                or estimate * estimate - score * score
+                > noisy_budget(step_budget(columns, step_tenths, estimate), score)
             ) and score * score * GIVE_UP_SHARE >= step_budget(columns, step_tenths, score):
                 return Probe(-1, max(estimate, score + 1), score)
     return Probe(-1, PROBE_CEILING + 1, PROBE_CEILING)
@@ -898,17 +900,18 @@ def two_ended_gives_up(
     """The two-ended search's projected distance once what is left of it passes the budget, or the
     `ceiling` where that is less, or -1."""
     var estimate = total * (columns + rows) // max(reached, 1)
-    # A distance past what both fronts together can reach: nothing left would settle it. On 500 kbp and 1 Mbp
-    # pairs at 1% the search had run to its budget for distances of 5,000 and 10,000 it could never meet.
-    if beyond_reach(estimate, total, 2 * TWO_ENDED_LIMIT - 1):
-        return max(estimate, total + 1)
     # A ceiling the search's own fallback costs, widened by the projection's noise (see `noisy_budget`),
     # so a projection that overshoots does not give up a search that would have finished cheaper.
     var cap = noisy_budget(ceiling, total) if ceiling != Int.MAX else ceiling
     # What is left, about half of `estimate² - total²` diagonals, against what a band costs.
     # Both fronts' steps, about 0.57 ns per square edit with the overlap check, in one-front steps.
-    if (estimate * estimate - total * total) * TWO_ENDED_PERCENT // 100 > min(
-        step_budget(columns, step_tenths, estimate), cap
+    # Or a distance past what both fronts together can reach, which nothing left would settle: on 500 kbp
+    # and 1 Mbp pairs at 1% the search had run to its budget for distances of 5,000 and 10,000 it could never
+    # meet. Either only once the search has spent its share (see `GIVE_UP_SHARE`), as one front's does.
+    if (
+        beyond_reach(estimate, total, 2 * TWO_ENDED_LIMIT - 1)
+        or (estimate * estimate - total * total) * TWO_ENDED_PERCENT // 100
+        > min(step_budget(columns, step_tenths, estimate), cap)
     ) and total * total * TWO_ENDED_PERCENT // 100 * GIVE_UP_SHARE >= min(
         step_budget(columns, step_tenths, total), cap
     ):
