@@ -48,6 +48,23 @@ from .seeds import (
     SeedHeuristic,
     SHORT_SEEDS,
 )
+from .probes import (
+    BOUND_SUM,
+    CHECKPOINT_GIVE_UPS,
+    DISTANCE,
+    FIRST_BOUND,
+    LAST_BOUND,
+    LAST_ROUND_WORD_COLUMNS,
+    PROBES,
+    REPLAYED_TILES,
+    REPLAYED_WORD_COLUMNS,
+    ROUNDS,
+    Tally,
+    TILES,
+    TRACED_TILES,
+    WIDE_LIFTS,
+    WORD_COLUMNS,
+)
 from .traceback import TileTracer
 
 
@@ -334,7 +351,14 @@ struct Band(Movable):
 
 def pruned_distance[
     record: Bool, seeded: Bool
-](mut profile: Profile, threshold: Int, mut trail: Trail, mut heuristic: SeedHeuristic, adapt: Bool,) -> Round:
+](
+    mut profile: Profile,
+    threshold: Int,
+    mut trail: Trail,
+    mut heuristic: SeedHeuristic,
+    adapt: Bool,
+    mut tally: Tally,
+) -> Round:
     """One round of band doubling with A*PA2-simple's pruning.
 
     Only cells a path of cost at most `threshold` could cross are computed. Ukkonen's band bounds
@@ -360,7 +384,7 @@ def pruned_distance[
     need (see `Profile.symbols`). `seeded` says whether `heuristic` has seeds (see `SeedHeuristic.bound`).
 
     With `adapt`, the round re-aims its bound as it goes (see `Band.check`), and a distance is exact
-    only within the bound it ends on.
+    only within the bound it ends on. Its tiles and cells go into `tally` (see `probes`).
     """
     comptime if record:
         trail.clear(threshold, adapt)
@@ -370,6 +394,8 @@ def pruned_distance[
             return band.outcome
         comptime if record:
             band.record(tile, trail)
+        tally.add[TILES](1)
+        tally.add[WORD_COLUMNS]((band.end_word - band.top) * (band.end_column(tile) - band.first_column(tile)))
         band.sweep_tile(profile, tile)
         if not band.finish[seeded](tile, heuristic):
             return band.outcome
@@ -378,7 +404,15 @@ def pruned_distance[
 
 def replay[
     seeded: Bool
-](mut profile: Profile, mut trail: Trail, mut heuristic: SeedHeuristic, tile: Int, mut band: Band, mut swept_end: Int):
+](
+    mut profile: Profile,
+    mut trail: Trail,
+    mut heuristic: SeedHeuristic,
+    tile: Int,
+    mut band: Band,
+    mut swept_end: Int,
+    mut tally: Tally,
+):
     """Keeps the tile's left edge, and some before it, by sweeping the round again from the last kept
     edge before it (see `Trail.replay_stride`).
 
@@ -393,6 +427,8 @@ def replay[
     var stride = trail.replay_stride(start, tile)
     band.resume(trail, start, swept_end)
     for step in range(start, tile):
+        tally.add[REPLAYED_TILES](1)
+        tally.add[REPLAYED_WORD_COLUMNS]((band.end_word - band.top) * (band.end_column(step) - band.first_column(step)))
         band.sweep_tile(profile, step)
         var swept = band.finish[seeded](step, heuristic)
         swept = swept and band.prepare[seeded](step + 1, heuristic)
@@ -413,6 +449,7 @@ def retrace(
     start_row: Int,
     score: Int,
     mut moves: List[UInt8],
+    mut tally: Tally,
 ):
     """An optimal path from `(start_column, start_row)`, scoring `score`, back to the origin, as moves
     right to left, traced over the trail's tiles from the last (see `TileTracer`).
@@ -430,12 +467,14 @@ def retrace(
             if not band:
                 band = Band(profile, trail.start_threshold, trail.adapt)
             if heuristic.seeds > 0:
-                replay[True](profile, trail, heuristic, tile, band.value(), swept_end)
+                replay[True](profile, trail, heuristic, tile, band.value(), swept_end, tally)
             else:
-                replay[False](profile, trail, heuristic, tile, band.value(), swept_end)
+                replay[False](profile, trail, heuristic, tile, band.value(), swept_end, tally)
         tracer.trace(profile, trail, tile, moves)
         trail.release(tile)
     tracer.finish(moves)
+    tally.add[TRACED_TILES](trail.tiles())
+    tracer.tally_into(tally)
 
 
 comptime SHORT_AIM = 17
@@ -491,6 +530,7 @@ def band_doubling[
     mut trail: Trail,
     mut heuristic: SeedHeuristic,
     trusted: Bool,
+    mut tally: Tally,
 ) -> Int:
     """Band doubling: the distance, or -1 once the band would cover the matrix and `give_up_wide`
     hands it back for a sweep of the whole.
@@ -541,19 +581,32 @@ def band_doubling[
             if give_up_wide:
                 return -1
             threshold = max(threshold, columns + rows)
+            tally.add[WIDE_LIFTS](1)
+        comptime if PROBES:
+            if first_round:
+                tally.set[FIRST_BOUND](threshold)
+            tally.add[ROUNDS](1)
+            tally.add[BOUND_SUM](threshold)
+            tally.set[LAST_BOUND](threshold)
+        var swept_before = tally.get[WORD_COLUMNS]()
         # A round with seeds and one without each take their own copy (see `SeedHeuristic.bound`).
         var attempt: Round
         if heuristic.seeds > 0:
-            attempt = pruned_distance[record, True](profile, threshold, trail, heuristic, first_round)
+            attempt = pruned_distance[record, True](profile, threshold, trail, heuristic, first_round, tally)
         else:
-            attempt = pruned_distance[record, False](profile, threshold, trail, heuristic, first_round)
+            attempt = pruned_distance[record, False](profile, threshold, trail, heuristic, first_round, tally)
         first_round = False
 
         var found = attempt.distance
         # A checkpoint may have lowered the bound, and only a distance within the lowered one is exact.
         var bound = attempt.bound
         if found >= 0 and found <= bound:
+            comptime if PROBES:
+                tally.set[DISTANCE](found)
+                tally.set[LAST_ROUND_WORD_COLUMNS](tally.get[WORD_COLUMNS]() - swept_before)
             return found
+        if attempt.estimate >= 0:
+            tally.add[CHECKPOINT_GIVE_UPS](1)
 
         # Grown from the bound the round ended on, which a checkpoint may have lowered: from the one it
         # started on, a round lowered and then failed would jump back to a bound it already knew was loose.

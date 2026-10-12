@@ -103,11 +103,16 @@ SAMPLE_PAIRS = 4
 # region Inputs
 
 
-def download() -> list[tuple[str, list[Path]]]:
-    """Every dataset by name and its `.seq` files, downloading what is missing, and A*PA2's published results."""
+def download(only: list[str] = []) -> list[tuple[str, list[Path]]]:
+    """Every dataset by name and its `.seq` files, or only those whose names hold one of `only`, downloading
+    what is missing, and A*PA2's published results."""
+
+    def wanted(name: str) -> bool:
+        return not only or any(part in name for part in only)
+
     PA_BENCH.mkdir(parents=True, exist_ok=True)
     found = []
-    for name in REAL:
+    for name in filter(wanted, REAL):
         directory = PA_BENCH / name
         if not (directory.exists() and any(directory.glob("*.seq"))):
             archive = PA_BENCH / f"{name}.zip"
@@ -117,7 +122,7 @@ def download() -> list[tuple[str, list[Path]]]:
                 opened.extractall(directory)
             archive.unlink()
         found.append((name, sorted(directory.glob("*.seq"))))
-    found.extend(giab.build(DATA / "giab"))
+    found.extend(giab.build(DATA / "giab", wanted))
     if not (PUBLISHED / "results").exists():
         PUBLISHED.mkdir(parents=True, exist_ok=True)
         archive = PUBLISHED / "results.zip"
@@ -128,6 +133,8 @@ def download() -> list[tuple[str, list[Path]]]:
     QUICKED.mkdir(parents=True, exist_ok=True)
     for length, pairs, rate in SIMULATED:
         name = f"l{length}.n{pairs}.e{rate}"
+        if not wanted(name):
+            continue
         path = QUICKED / f"{name}.seq"
         if not path.exists():
             print(f"downloading {name} (200 MB) ...", file=sys.stderr, flush=True)
@@ -376,7 +383,7 @@ def main() -> None:
     harness.REMEASURE = options.fresh
     bases = int(options.bases)
 
-    datasets = download()
+    datasets = download(options.only)
     if options.only:
         datasets = [(name, files) for name, files in datasets if any(part in name for part in options.only)]
     published = published_costs()

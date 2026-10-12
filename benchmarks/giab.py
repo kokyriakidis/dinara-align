@@ -118,11 +118,13 @@ def reference_span(cigar: str) -> tuple[int, int, int]:
     return span, head, tail
 
 
-def build(directory: Path) -> list[tuple[str, list[Path]]]:
-    """Every GIAB dataset by name and its `.seq` file, built the first time."""
+def build(directory: Path, wanted=lambda name: True) -> list[tuple[str, list[Path]]]:
+    """Every GIAB dataset by name, or those `wanted` accepts, and its `.seq` file, built the first time."""
     directory.mkdir(parents=True, exist_ok=True)
     found = []
     for name, (bam, region, preset, shortest) in DATASETS.items():
+        if not wanted(name):
+            continue
         path = directory / f"{name}.seq"
         if not path.exists():
             reference, haplotypes = genome(directory, region.split(":")[0])

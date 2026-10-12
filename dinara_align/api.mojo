@@ -63,6 +63,7 @@ from .gap_affine import (
     wavefront_distance,
 )
 from .modes import ANY_LENGTH, Alignment, Anchor, Band, Costs, Mode, Ties
+from .probes import clock, ENGINE, ENGINE_LANES
 from .scoring import (
     cells_within,
     Scoring,
@@ -465,6 +466,7 @@ def cost_within(
             # More symbols than the sweep takes: the wavefront takes any.
             if error.kind != ErrorKind.UNKNOWN_SYMBOL:
                 raise error
+    var started = clock()
     var penalties = space.penalties_for(costs)
     if max_cost < 0:
         return None
@@ -472,6 +474,7 @@ def cost_within(
         # The lanes first, as a batch of this pair alone takes it; else refused.
         var laned = distance_in_lanes(reference, query, costs, mode, band, max_cost)
         if laned:
+            space.edit.tally.set[ENGINE](ENGINE_LANES)
             return laned.value()
         rings_within(penalties, reference.byte_length(), query.byte_length(), DEFAULT_MAX_MEMORY, ends)
     # No cap is the usual case, and a 64-bit division per pair counts when short reads take a microsecond.
@@ -481,6 +484,7 @@ def cost_within(
         cost = wavefront_distance[2](reference.as_bytes(), query.as_bytes(), penalties, ceiling, space, ends, band)
     else:
         cost = wavefront_distance[1](reference.as_bytes(), query.as_bytes(), penalties, ceiling, space, ends, band)
+    space.tally_wavefronts(started)
     if cost < 0:
         return None
     return cost * penalties.scale
@@ -623,6 +627,7 @@ def least_costly(
         except error:
             if error.kind != ErrorKind.UNKNOWN_SYMBOL:
                 raise error
+    var started = clock()
     var penalties = space.penalties_for(costs)
     if max_cost < 0:
         return not_found()
@@ -630,6 +635,7 @@ def least_costly(
         # The lanes first, as a batch of this pair alone takes it; else refused.
         var laned = alignment_in_lanes(reference, query, costs, mode, band, max_cost, ties, eqx, limit)
         if laned:
+            space.edit.tally.set[ENGINE](ENGINE_LANES)
             var spelled = laned.take()
             if not spelled:
                 return not_found()
@@ -642,6 +648,7 @@ def least_costly(
             found = cigar_within[2](reference, query, penalties, eqx, ceiling, space, band, ties, limit)
         else:
             found = cigar_within[1](reference, query, penalties, eqx, ceiling, space, band, ties, limit)
+        space.tally_wavefronts(started)
         if not found:
             return not_found()
         var cost = found.value().cost
@@ -655,6 +662,7 @@ def least_costly(
         spanned = free_ends_alignment[1](
             space.forward, space.backward, reference, query, penalties, eqx, ceiling, ends, band, ties, limit
         )
+    space.tally_wavefronts(started)
     if not spanned:
         return not_found()
     ref found = spanned.value()

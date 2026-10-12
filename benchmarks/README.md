@@ -14,6 +14,7 @@ pixi run bench --fresh               # the rivals too, rather than their kept re
 pixi run bench-modes                 # local, overlap, infix, prefix, extension, two-piece, tables
 pixi run bench-batch                 # 500,000 short reads, on one core and on every core
 pixi run bench-ablation              # dinara-align with each technique switched off in turn
+pixi run profile all                 # where the time goes and where a rival wins (see Profiling)
 ```
 
 Each writes its tables to the terminal and to `.cache/results/`: `bench.md` and `bench-affine-4-6-2.md`
@@ -412,6 +413,49 @@ ont-10k reads, interleaved groups 4.5 to 11.5% on the long and divergent pairs, 
 2.9% faster. Measured at `dc980d7`, as the paper's Table S2 gives it: the alignments here are at unit costs,
 which neither the divergent-pair handover nor the later changes to it touch, and their bands' edges fit under
 the memory cap.
+
+## Profiling
+
+`pixi run profile` pinpoints where dinara-align's time goes and where a rival beats it, on the samples
+`bench` times (`profile.py`):
+
+```bash
+pixi run profile duel [--affine 4,6,2]   # every pair against every rival's time for it
+pixi run profile probes --only ont-10k   # per pair: engine, phases, work, counters, allocations, copies
+pixi run profile perf --only ont-10k     # Linux: counters and hot functions, files and lines; who copies
+pixi run profile compare main~1          # this checkout against a commit, pair by pair, with intervals
+pixi run profile all                     # duel, probes and perf in one report
+```
+
+- **duel** sets dinara-align's median time per pair, over `--rounds` rounds, beside each rival's kept time
+  for the same pair. A dataset's mean can win while pairs lose: it lists the margin over the fastest
+  rival, the pairs some rival aligned faster, those faster than dinara-align's fastest round (beyond its
+  noise), the share of time those losses cost, and the worst of them with length, cost and divergence.
+- **probes** builds `probed.mojo` with `-D DINARA_PROBES`, which compiles in the library's probes
+  (`dinara_align/probes.mojo`; a normal build folds every one away): the engine that settled each pair,
+  each phase's time (encoding, diagonal transition from one end and two, the fronts grown, the seed
+  heuristic, the band's rounds and traceback, the CIGAR, a full sweep, the wavefront, the difference
+  sweep) and its work (diagonals stepped, bounds tried against the distance, tiles and cells swept, the
+  share swept by rounds that failed, seeds built, matched and kept, tiles swept again or recomputed for
+  the traceback, wavefront steps, meeting checks, splits). Around each pair it reads the processor's
+  counters through `perf_event_open` (instructions, cycles, branches and misses, L1d, last-level and TLB
+  misses) and, with `probes/counting.c` preloaded on Linux, every allocation, `memcpy`, `memmove` and
+  `memset` that reaches the C library, with the bytes, and the page faults. The report gives each
+  dataset's time by engine and phase, the work against what the pair needed, the processor's and the
+  allocator's view per pair after the first, the pairs whose probes match a pattern that costs time
+  (rounds wasted, a band wider than needed, seeds that took longer than the band, tiles recomputed,
+  allocations in a warm aligner, copies beyond the sequences' size), and the slowest pairs in full.
+- **perf** samples the runner built with line tables: cycles, IPC, branch and cache misses per sample,
+  the share of samples by function, by source file (one engine each) and by source line, inlined code
+  charged to its own line, and the samples in copy and allocation routines, with their callers where the
+  processor keeps a last-branch record.
+- **compare** builds the same runner against two commits, or a commit and the checkout as it stands,
+  times both in rounds that alternate, holds every pair's costs equal, and gives each dataset's ratio of
+  mean times with a 95% bootstrap interval over pairs and rounds: faster or slower only when the interval
+  excludes 1. On x86 both builds keep jumps clear of 32-byte boundaries, as the ablation's do.
+
+Every run pins itself to one core (`--core`, default 2) and stops if that core or the machine is busy,
+unless given `--force`. Reports go to `.cache/results/profile-*.md`, each pair's figures to a JSON beside it.
 
 ## Reading the Numbers
 

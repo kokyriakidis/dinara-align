@@ -13,6 +13,14 @@ from std.math import ceildiv, clamp
 
 from .cigar import CigarWriter, reversed_into
 from .diagonal import best_source, DiagonalFronts, slide_forward
+from .probes import (
+    FORWARD_SEGMENTS,
+    PROBES,
+    RECOMPUTE_WINDOWS,
+    RECOMPUTE_WORD_COLUMNS,
+    RECOMPUTED_SEGMENTS,
+    Tally,
+)
 from .slides import GATHERED_SLIDES, LANES, gathered_slides, slide
 from .bit_parallel import (
     advance,
@@ -310,9 +318,15 @@ struct Recompute(Movable):
     """The same window swept again from a top row that falls by one a column, a floor under every score."""
     var low_minus: List[UInt64]
     var low_bases: List[Int]
+    var windows: Int
+    """Windows swept, in a build with probes (see `probes`)."""
+    var word_columns: Int
+    """Their words times columns, in a build with probes."""
 
     def __init__(out self):
         """Empty buffers, which the first recompute grows."""
+        self.windows = 0
+        self.word_columns = 0
         self.plus = List[UInt64]()
         self.minus = List[UInt64]()
         self.bases = List[Int]()
@@ -344,6 +358,9 @@ def recomputed_segment(
     var window = RECOMPUTE_WORDS
     while True:
         var first_word = max(top, end_word - window)
+        comptime if PROBES:
+            buffers.windows += 1
+            buffers.word_columns += (end_word - first_word) * (end_column - trail.first_columns[tile])
         var left: Int
         if profile.extended:
             left = window_segment[True](
@@ -563,6 +580,10 @@ struct TileTracer(Movable):
     var column: Int
     var row: Int
     var current: Int
+    var forward: Int
+    """Tiles traced by the wavefront, in a build with probes (see `probes`)."""
+    var recomputed: Int
+    """Tiles swept again and traced cell by cell, in a build with probes."""
 
     def __init__(out self, start_column: Int, start_row: Int, score: Int):
         """A trace from `(start_column, start_row)`, scoring `score`."""
@@ -574,6 +595,8 @@ struct TileTracer(Movable):
         self.column = start_column
         self.row = start_row
         self.current = score
+        self.forward = 0
+        self.recomputed = 0
 
     def trace(mut self, profile: Profile, trail: Trail, tile: Int, mut moves: List[UInt8]):
         """Traces the tile, the one left of where the trace stands, whose edge must be kept."""
@@ -588,10 +611,22 @@ struct TileTracer(Movable):
         )
         if left < 0:
             left = recomputed_segment(profile, trail, tile, self.column, self.row, self.current, self.buffers, moves)
+            comptime if PROBES:
+                self.recomputed += 1
+        else:
+            comptime if PROBES:
+                self.forward += 1
         # Exact, since it plus the segment's cost is the exact score the segment started from.
         self.current = self.edge.score(left)
         self.column = first_column
         self.row = left
+
+    def tally_into(self, mut tally: Tally):
+        """Its probes into `tally` (see `probes`)."""
+        tally.add[FORWARD_SEGMENTS](self.forward)
+        tally.add[RECOMPUTED_SEGMENTS](self.recomputed)
+        tally.add[RECOMPUTE_WINDOWS](self.buffers.windows)
+        tally.add[RECOMPUTE_WORD_COLUMNS](self.buffers.word_columns)
 
     def finish(self, mut moves: List[UInt8]):
         """The first column is the border: the rest of the way up is gaps against the second sequence."""
