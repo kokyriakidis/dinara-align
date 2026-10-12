@@ -184,6 +184,17 @@ events are open than it has counters and it rotates them: no `rdpmc` reading is 
 
 
 @always_inline
+def running_gap(page: Int) -> Int:
+    """How much longer the counter behind `page` has been enabled than running, in nanoseconds: a change in it
+    across a phase means the kernel rotated the counter off the processor during it."""
+    if page == 0:
+        return 0
+    var enabled = MutPointer[UInt64, MutAnyOrigin](unsafe_from_address=page + 24).unsafe_load[volatile=True]()
+    var running = MutPointer[UInt64, MutAnyOrigin](unsafe_from_address=page + 32).unsafe_load[volatile=True]()
+    return Int(enabled) - Int(running)
+
+
+@always_inline
 def read_counter(page: Int) -> Int:
     """The counter behind `page` now, by `rdpmc` under the page's sequence lock; 0 where there is none, and
     `UNCOUNTED` while the kernel has it off the processor."""
@@ -197,10 +208,7 @@ def read_counter(page: Int) -> Int:
         var index = words.unsafe_load[volatile=True](3)
         var offset = MutPointer[Int64, MutAnyOrigin](unsafe_from_address=page + 16).unsafe_load[volatile=True]()
         var width = Int(MutPointer[UInt16, MutAnyOrigin](unsafe_from_address=page + 48).unsafe_load[volatile=True]())
-        # Enabled and running times apart: the event has been rotated off since it opened.
-        var enabled = MutPointer[UInt64, MutAnyOrigin](unsafe_from_address=page + 24).unsafe_load[volatile=True]()
-        var running = MutPointer[UInt64, MutAnyOrigin](unsafe_from_address=page + 32).unsafe_load[volatile=True]()
-        if index == 0 or enabled != running:
+        if index == 0:
             return UNCOUNTED
         var count = llvm_intrinsic["llvm.x86.rdpmc", Int64](Int32(index - 1))
         count = (count << Int64(64 - width)) >> Int64(64 - width)
@@ -229,6 +237,9 @@ struct Tally(Movable):
     """The cycles counted when it started."""
     var uncounted: Bool
     """Whether a phase of this pair met a counter off the processor, its counts then left out."""
+    var marked_gap: Int
+    """The instruction and cycle counters' gaps between enabled and running when the phase started (see
+    `running_gap`), summed."""
 
     def __init__(out self):
         """Every slot zero, or no slots at all without probes; the counters opened when first started."""
@@ -246,6 +257,7 @@ struct Tally(Movable):
         self.marked_instructions = 0
         self.marked_cycles = 0
         self.uncounted = False
+        self.marked_gap = 0
 
     def use_counters(mut self, instruction_page: Int, cycle_page: Int):
         """Counts the phases on counters a caller already opened (see `counter_page`), rather than open its
@@ -283,6 +295,7 @@ struct Tally(Movable):
                 # PERF_COUNT_HW_INSTRUCTIONS, PERF_COUNT_HW_CPU_CYCLES
                 self.instruction_page = counter_page(1)
                 self.cycle_page = counter_page(0)
+            self.marked_gap = running_gap(self.instruction_page) + running_gap(self.cycle_page)
             self.marked_instructions = read_counter(self.instruction_page)
             self.marked_cycles = read_counter(self.cycle_page)
         return clock()
@@ -295,8 +308,11 @@ struct Tally(Movable):
             self.values[slot] += clock() - started
             var instructions = read_counter(self.instruction_page)
             var cycles = read_counter(self.cycle_page)
+            # A counter rotated off the processor during the phase, or off it now: no reading means anything.
+            var rotated = running_gap(self.instruction_page) + running_gap(self.cycle_page) != self.marked_gap
             if (
-                instructions == UNCOUNTED
+                rotated
+                or instructions == UNCOUNTED
                 or cycles == UNCOUNTED
                 or self.marked_instructions == UNCOUNTED
                 or self.marked_cycles == UNCOUNTED
