@@ -43,7 +43,7 @@ bench-modes = "python3 benchmarks/modes_bench.py"
 bench-batch = "python3 benchmarks/batch_bench.py"
 # Builds dinara-align with each technique switched off in turn and times every build alike; see `benchmarks/ablation.py`.
 bench-ablation = "python3 benchmarks/ablation.py"
-# Writes the paper, an Overleaf project in paper/, and its HTML pages in build/paper/ from tools/paper/main_text.py
+# Writes the paper, an Overleaf project in paper/, and its PDFs and HTML pages in build/paper/ from tools/paper/main_text.py
 # and supplement.py; `pixi run paper-tables <results dir>` first fills their benchmark tables from bench.py's results.
 paper = "python3 tools/paper/render.py"
 paper-tables = "python3 tools/paper/tables.py"

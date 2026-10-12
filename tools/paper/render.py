@@ -2,7 +2,8 @@
 published versions are made from.
 
     python3 tools/paper/render.py    # rewrites paper/main.tex, paper/sections/, paper/figures/, paper/tables/
-                                     # and paper/supplement.tex; writes build/paper/paper.html and supplement.html
+                                     # and paper/supplement.tex; writes build/paper/paper.html and supplement.html,
+                                     # and compiles build/paper/dinara-align.pdf and supplement.pdf
 
 paper/ holds only what Overleaf compiles: main.tex (the journal's front matter, then one \\input per section),
 supplement.tex, the sections, figures and tables, references.bib, and OUP's General Template class
@@ -571,6 +572,39 @@ def render_tex_supplement():
 \\end{{document}}
 """
 
+def build_pdfs():
+    """Compiles paper/ as Overleaf would, in a copy under build/paper/latex so that paper/ keeps no build output,
+    and leaves build/paper/dinara-align.pdf and supplement.pdf; says so and returns if pdflatex is missing."""
+    import shutil
+    import subprocess
+
+    if not (shutil.which("pdflatex") and shutil.which("bibtex")):
+        print("pdflatex or bibtex not found: no PDFs built")
+        return
+    work = os.path.join(HTML_OUT, "latex")
+    shutil.rmtree(work, ignore_errors=True)
+    shutil.copytree(PAPER, work)
+    for name, target in (("main", "dinara-align"), ("supplement", "supplement")):
+        def run(*command):
+            return subprocess.run(command, cwd=work, capture_output=True, text=True)
+
+        run("pdflatex", "-interaction=nonstopmode", f"{name}.tex")
+        run("bibtex", name)
+        run("pdflatex", "-interaction=nonstopmode", f"{name}.tex")
+        last = run("pdflatex", "-interaction=nonstopmode", f"{name}.tex")
+        log = open(os.path.join(work, f"{name}.log"), errors="replace").read()
+        errors = [line for line in log.splitlines() if line.startswith("!")]
+        unresolved = re.findall(r"(?:Citation|Reference) `[^']+' on page \d+ undefined", log)
+        pdf = os.path.join(work, f"{name}.pdf")
+        if last.returncode != 0 or errors or not os.path.exists(pdf):
+            print(f"{name}.tex failed: {errors[:3] or 'no PDF'} (log: {work}/{name}.log)")
+            continue
+        shutil.copy(pdf, os.path.join(HTML_OUT, f"{target}.pdf"))
+        pages = re.search(r"Output written on .*?\((\d+) pages", last.stdout)
+        note = f", {len(unresolved)} unresolved references" if unresolved else ""
+        print(f"build/paper/{target}.pdf: {pages.group(1) if pages else '?'} pages{note}")
+
+
 if __name__ == "__main__":
     os.makedirs(HTML_OUT, exist_ok=True)
     open(os.path.join(HTML_OUT, "paper.html"), "w").write(render_html_main())
@@ -586,4 +620,5 @@ if __name__ == "__main__":
     for path, text in render_project().items():
         open(os.path.join(PAPER, path), "w").write(text)
     open(os.path.join(PAPER, "supplement.tex"), "w").write(render_tex_supplement())
-    print("rendered")
+    print("rendered paper/ and build/paper/*.html")
+    build_pdfs()
