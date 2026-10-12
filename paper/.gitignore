@@ -1,6 +1,11 @@
+# Build output: Overleaf, or latexmk here, makes these from the sources.
 *.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
 *.log
 *.out
-*.blg
-*.bbl
-__pycache__/
+*.pdf
+*.synctex.gz
+missfont.log

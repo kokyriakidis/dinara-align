@@ -523,7 +523,8 @@ BACK = [
     ("Funding", "This work received no specific funding."),
     ("Data availability", "The software, benchmark harness and the commits of every compared tool are available at "
      "https://github.com/kokyriakidis/dinara-align. The benchmarks are reproduced by `pixi run bench` (unit and "
-     "`--affine` costs), `bench-modes`, `bench-batch` and `bench-ablation`. Release builds target the baseline "
+     "`--affine` costs), `bench-modes`, `bench-batch` and `bench-ablation`, and the raw results behind every table "
+     "are in `benchmarks/results/2026-10-11`. Release builds target the baseline "
      "processor of each platform; the AVX-512 code paths require a build for the host processor."),
 ]
 

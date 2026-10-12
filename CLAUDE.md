@@ -19,3 +19,5 @@ A session-start hook (`.claude/settings.json`) reminds the agent to load them; f
 - Build and test: `pixi run test`; format: `pixi run format` (120 columns).
 - `pixi run test-wfa` holds every mode WFA2-lib also has to its regression set (scores and CIGARs).
 - Finished work merges straight into `main` and is pushed; no pull requests.
+- The paper's text lives in `tools/paper/` (`main_text.py`, `supplement.py`); `pixi run paper` rewrites `paper/`,
+  an Overleaf project, from it. Edit the source, not the generated `.tex`.
