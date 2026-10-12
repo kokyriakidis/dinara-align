@@ -1923,22 +1923,22 @@ struct SearchSpace(Movable):
                 diagonals += search.probe.get(SEARCH_DIAGONALS)
                 search.probe.reset()
             ref tally = self.edit.tally
-            tally.add[FORWARD_STEPS](steps_forward)
-            tally.add[BACKWARD_STEPS](steps_backward)
-            tally.add[WAVEFRONT_DIAGONALS](diagonals)
-            tally.add[MEETS](meets)
-            tally.add[SPLITS](splits)
-            tally.add[SWEEP_CELLS](cells)
-            tally.add[SWEEP_NS](swept_ns)
+            tally.add(FORWARD_STEPS, steps_forward)
+            tally.add(BACKWARD_STEPS, steps_backward)
+            tally.add(WAVEFRONT_DIAGONALS, diagonals)
+            tally.add(MEETS, meets)
+            tally.add(SPLITS, splits)
+            tally.add(SWEEP_CELLS, cells)
+            tally.add(SWEEP_NS, swept_ns)
             # The sweep's time is its own phase; its instructions and cycles stay counted here.
-            tally.since[WAVEFRONT_NS](started)
-            tally.add[WAVEFRONT_NS](-swept_ns)
+            tally.since(WAVEFRONT_NS, started)
+            tally.add(WAVEFRONT_NS, -swept_ns)
             if cells > 0:
-                tally.set[ENGINE](ENGINE_SWEEP)
+                tally.set(ENGINE, ENGINE_SWEEP)
             elif steps_forward > 0 and steps_backward > 0:
-                tally.set[ENGINE](ENGINE_BIDIRECTIONAL)
+                tally.set(ENGINE, ENGINE_BIDIRECTIONAL)
             else:
-                tally.set[ENGINE](ENGINE_WAVEFRONT)
+                tally.set(ENGINE, ENGINE_WAVEFRONT)
 
 
 def unpaid_letters(columns: Int, rows: Int, ends_free: EndsFree, band: Band) -> Int:

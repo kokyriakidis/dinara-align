@@ -386,14 +386,14 @@ struct SeedHeuristic(Movable):
         """Its probes into `tally` (see `probes`): which seeds, how many, how many chain, the heuristic at
         the origin, the matches found and kept, a rebuild, a give-up."""
         comptime if PROBES:
-            tally.set[SEED_KIND](self.cost if self.seeds > 0 else 0)
-            tally.set[SEEDS](self.seeds)
-            tally.set[SEEDS_COUNTED](self.counted)
-            tally.set[HEURISTIC_ORIGIN](self.h(0, 0))
-            tally.set[SEED_REBUILT](self.probe.get(COUNT_REBUILT))
-            tally.set[SEED_MATCHES](self.probe.get(COUNT_MATCHES))
-            tally.set[SEED_KEPT](self.probe.get(COUNT_KEPT))
-            tally.set[SEED_GAVE_UP](self.probe.get(COUNT_GAVE_UP))
+            tally.set(SEED_KIND, self.cost if self.seeds > 0 else 0)
+            tally.set(SEEDS, self.seeds)
+            tally.set(SEEDS_COUNTED, self.counted)
+            tally.set(HEURISTIC_ORIGIN, self.h(0, 0))
+            tally.set(SEED_REBUILT, self.probe.get(COUNT_REBUILT))
+            tally.set(SEED_MATCHES, self.probe.get(COUNT_MATCHES))
+            tally.set(SEED_KEPT, self.probe.get(COUNT_KEPT))
+            tally.set(SEED_GAVE_UP, self.probe.get(COUNT_GAVE_UP))
 
     def build(mut self, first_codes: List[UInt8], second_codes: List[UInt8], symbols: List[UInt8], inexact: Bool):
         """The seeds, their matches, and the layers, from scratch. `symbols` are the first sequence's

@@ -333,9 +333,48 @@ def read_counter(page: Int) -> Int:
             return Int(count + offset)
 
 
-struct Tally(Movable):
-    """One pair's probes, by slot, and each phase's instructions and cycles; empty and untouched in a build
-    without probes."""
+trait Tallying(Movable):
+    """What a pair's probes offer the library (see `Tally`)."""
+
+    def __init__(out self):
+        """Nothing counted yet."""
+        ...
+
+    def use_counters(mut self, instruction_page: Int, cycle_page: Int):
+        """Counts the phases on counters a caller already opened."""
+        ...
+
+    def add(mut self, slot: Int, amount: Int):
+        """Adds `amount` to `slot`."""
+        ...
+
+    def get(self, slot: Int) -> Int:
+        """`slot`'s value."""
+        ...
+
+    def set(mut self, slot: Int, value: Int):
+        """Sets `slot` to `value`."""
+        ...
+
+    def start(mut self) -> Int:
+        """Marks the start of a phase, for `since`."""
+        ...
+
+    def since(mut self, slot: Int, started: Int):
+        """Adds the time, instructions and cycles since `started` to the phase `slot`."""
+        ...
+
+    def clear(mut self):
+        """Every slot back to zero."""
+        ...
+
+    def json(self) -> String:
+        """The probes as a JSON object's members."""
+        ...
+
+
+struct Tallied(Tallying):
+    """One pair's probes, by slot, and each phase's instructions and cycles: the `Tally` of a build with probes."""
 
     var values: List[Int]
     var instructions: List[Int]
@@ -359,7 +398,7 @@ struct Tally(Movable):
     `running_gap`), summed."""
 
     def __init__(out self):
-        """Every slot zero, or no slots at all without probes; the counters opened when first started."""
+        """Every slot zero; the counters opened when first started."""
         comptime if PROBES:
             self.values = List[Int](length=SLOTS, fill=0)
             self.instructions = List[Int](length=SLOTS, fill=0)
@@ -385,20 +424,20 @@ struct Tally(Movable):
         self.opened = True
 
     @always_inline
-    def add[slot: Int](mut self, amount: Int):
+    def add(mut self, slot: Int, amount: Int):
         """Adds `amount` to `slot`."""
         comptime if PROBES:
             self.values[slot] += amount
 
     @always_inline
-    def get[slot: Int](self) -> Int:
-        """`slot`'s value, 0 without probes."""
+    def get(self, slot: Int) -> Int:
+        """`slot`'s value."""
         comptime if PROBES:
             return self.values[slot]
         return 0
 
     @always_inline
-    def set[slot: Int](mut self, value: Int):
+    def set(mut self, slot: Int, value: Int):
         """Sets `slot` to `value`."""
         comptime if PROBES:
             self.values[slot] = value
@@ -418,7 +457,7 @@ struct Tally(Movable):
         return clock()
 
     @always_inline
-    def since[slot: Int](mut self, started: Int):
+    def since(mut self, slot: Int, started: Int):
         """Adds the nanoseconds since `started`, a `start()`, to `slot`, and the instructions and cycles
         since that mark to the phase's counts."""
         comptime if PROBES:
@@ -560,6 +599,57 @@ struct Tally(Movable):
                 if self.cycles[slot] != 0:
                     out.write(', "', stem, '_cycles": ', self.cycles[slot])
         return out^
+
+
+struct Untallied(Tallying):
+    """No probes: the `Tally` of a normal build, which takes no bytes, so `EditSpace` keeps its size, and every
+    call on it is gone once inlined."""
+
+    def __init__(out self):
+        """Nothing to count."""
+        pass
+
+    def use_counters(mut self, instruction_page: Int, cycle_page: Int):
+        """Nothing."""
+        pass
+
+    @always_inline
+    def add(mut self, slot: Int, amount: Int):
+        """Nothing."""
+        pass
+
+    @always_inline
+    def get(self, slot: Int) -> Int:
+        """Nothing counted: 0."""
+        return 0
+
+    @always_inline
+    def set(mut self, slot: Int, value: Int):
+        """Nothing."""
+        pass
+
+    @always_inline
+    def start(mut self) -> Int:
+        """Nothing: 0."""
+        return 0
+
+    @always_inline
+    def since(mut self, slot: Int, started: Int):
+        """Nothing."""
+        pass
+
+    def clear(mut self):
+        """Nothing."""
+        pass
+
+    def json(self) -> String:
+        """No probes: empty."""
+        return String()
+
+
+comptime Tally: Tallying = Tallied if PROBES else Untallied
+"""One pair's probes as the library carries them, in each `Aligner`'s space (see `EditSpace`): `Tallied` in a
+build with probes, `Untallied`, no bytes and no work, in any other."""
 
 
 def front_steps(score: Int, columns: Int, rows: Int) -> Int:

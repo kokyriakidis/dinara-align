@@ -472,9 +472,9 @@ def retrace(
         trail.release(tile)
     tracer.finish(moves)
     comptime if PROBES:
-        tally.add[TRACED_TILES](trail.tiles())
-        tally.add[REPLAYED_TILES](trail.probe.get(TRAIL_REPLAYED_TILES))
-        tally.add[REPLAYED_WORD_COLUMNS](trail.probe.get(TRAIL_REPLAYED_WORD_COLUMNS))
+        tally.add(TRACED_TILES, trail.tiles())
+        tally.add(REPLAYED_TILES, trail.probe.get(TRAIL_REPLAYED_TILES))
+        tally.add(REPLAYED_WORD_COLUMNS, trail.probe.get(TRAIL_REPLAYED_WORD_COLUMNS))
         tracer.tally_into(tally)
 
 
@@ -582,13 +582,13 @@ def band_doubling[
             if give_up_wide:
                 return -1
             threshold = max(threshold, columns + rows)
-            tally.add[WIDE_LIFTS](1)
+            tally.add(WIDE_LIFTS, 1)
         comptime if PROBES:
             if first_round:
-                tally.set[FIRST_BOUND](threshold)
-            tally.add[ROUNDS](1)
-            tally.add[BOUND_SUM](threshold)
-            tally.set[LAST_BOUND](threshold)
+                tally.set(FIRST_BOUND, threshold)
+            tally.add(ROUNDS, 1)
+            tally.add(BOUND_SUM, threshold)
+            tally.set(LAST_BOUND, threshold)
         var swept_before = trail.probe.get(TRAIL_WORD_COLUMNS)
         var tiles_before = trail.probe.get(TRAIL_TILES)
         # A round with seeds and one without each take their own copy (see `SeedHeuristic.bound`).
@@ -598,8 +598,8 @@ def band_doubling[
         else:
             attempt = pruned_distance[record, False](profile, threshold, trail, heuristic, first_round)
         comptime if PROBES:
-            tally.add[TILES](trail.probe.get(TRAIL_TILES) - tiles_before)
-            tally.add[WORD_COLUMNS](trail.probe.get(TRAIL_WORD_COLUMNS) - swept_before)
+            tally.add(TILES, trail.probe.get(TRAIL_TILES) - tiles_before)
+            tally.add(WORD_COLUMNS, trail.probe.get(TRAIL_WORD_COLUMNS) - swept_before)
         first_round = False
 
         var found = attempt.distance
@@ -607,11 +607,11 @@ def band_doubling[
         var bound = attempt.bound
         if found >= 0 and found <= bound:
             comptime if PROBES:
-                tally.set[DISTANCE](found)
-                tally.set[LAST_ROUND_WORD_COLUMNS](trail.probe.get(TRAIL_WORD_COLUMNS) - swept_before)
+                tally.set(DISTANCE, found)
+                tally.set(LAST_ROUND_WORD_COLUMNS, trail.probe.get(TRAIL_WORD_COLUMNS) - swept_before)
             return found
         if attempt.estimate >= 0:
-            tally.add[CHECKPOINT_GIVE_UPS](1)
+            tally.add(CHECKPOINT_GIVE_UPS, 1)
 
         # Grown from the bound the round ended on, which a checkpoint may have lowered: from the one it
         # started on, a round lowered and then failed would jump back to a bound it already knew was loose.

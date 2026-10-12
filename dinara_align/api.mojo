@@ -462,8 +462,8 @@ def cost_within(
                 found = edit_search(reversed_text(query.as_bytes()), reversed_text(reference.as_bytes()), True).distance
             else:
                 found = edit_search(query, reference, ends.first_begin == 0).distance
-            space.edit.tally.since[SEARCH_NS](started)
-            space.edit.tally.set[ENGINE](ENGINE_SEARCH)
+            space.edit.tally.since(SEARCH_NS, started)
+            space.edit.tally.set(ENGINE, ENGINE_SEARCH)
             return found * scale
         except error:
             # More symbols than the sweep takes: the wavefront takes any.
@@ -477,7 +477,7 @@ def cost_within(
         # The lanes first, as a batch of this pair alone takes it; else refused.
         var laned = distance_in_lanes(reference, query, costs, mode, band, max_cost)
         if laned:
-            space.edit.tally.set[ENGINE](ENGINE_LANES)
+            space.edit.tally.set(ENGINE, ENGINE_LANES)
             return laned.value()
         rings_within(penalties, reference.byte_length(), query.byte_length(), DEFAULT_MAX_MEMORY, ends)
     # No cap is the usual case, and a 64-bit division per pair counts when short reads take a microsecond.
@@ -557,8 +557,8 @@ def aligned_within(
     _ = penalties_of(costs)
     var started = space.edit.tally.start()
     var best = best_scoring(reference, query, costs, mode, band, ties, eqx, limit)
-    space.edit.tally.since[SCORED_NS](started)
-    space.edit.tally.set[ENGINE](ENGINE_SCORED)
+    space.edit.tally.since(SCORED_NS, started)
+    space.edit.tally.set(ENGINE, ENGINE_SCORED)
     return best^
 
 
@@ -628,7 +628,7 @@ def least_costly(
                 hit = EditHit(mirrored.distance, columns - mirrored.end, columns - mirrored.start)
             else:
                 hit = edit_search(query, reference, ends.first_begin == 0, ties)
-            space.edit.tally.since[SEARCH_NS](started)
+            space.edit.tally.since(SEARCH_NS, started)
             var part = text_of(reference.as_bytes()[hit.start : hit.end])
             var found = edit_cigar(part, query, space.edit, eqx, ties, kept_bytes(limit))
             var cost = found.distance * scale
@@ -644,7 +644,7 @@ def least_costly(
         # The lanes first, as a batch of this pair alone takes it; else refused.
         var laned = alignment_in_lanes(reference, query, costs, mode, band, max_cost, ties, eqx, limit)
         if laned:
-            space.edit.tally.set[ENGINE](ENGINE_LANES)
+            space.edit.tally.set(ENGINE, ENGINE_LANES)
             var spelled = laned.take()
             if not spelled:
                 return not_found()

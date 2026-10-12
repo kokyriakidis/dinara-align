@@ -627,10 +627,10 @@ struct TileTracer(Movable):
 
     def tally_into(self, mut tally: Tally):
         """Its probes into `tally` (see `probes`)."""
-        tally.add[FORWARD_SEGMENTS](self.probe.get(TRACED_FORWARD))
-        tally.add[RECOMPUTED_SEGMENTS](self.probe.get(TRACED_RECOMPUTED))
-        tally.add[RECOMPUTE_WINDOWS](self.buffers.probe.get(RECOMPUTE_WINDOWS_SWEPT))
-        tally.add[RECOMPUTE_WORD_COLUMNS](self.buffers.probe.get(RECOMPUTE_COLUMNS_SWEPT))
+        tally.add(FORWARD_SEGMENTS, self.probe.get(TRACED_FORWARD))
+        tally.add(RECOMPUTED_SEGMENTS, self.probe.get(TRACED_RECOMPUTED))
+        tally.add(RECOMPUTE_WINDOWS, self.buffers.probe.get(RECOMPUTE_WINDOWS_SWEPT))
+        tally.add(RECOMPUTE_WORD_COLUMNS, self.buffers.probe.get(RECOMPUTE_COLUMNS_SWEPT))
 
     def finish(self, mut moves: List[UInt8]):
         """The first column is the border: the rest of the way up is gaps against the second sequence."""
