@@ -147,23 +147,36 @@ def core_busy(core: int, seconds: float = 1.0) -> float | None:
     return 1 - (idle1 - idle0) / max(total1 - total0, 1)
 
 
-def check_quiet(core: int, force: bool) -> None:
-    """Stops unless `core` is idle and the machine's load is low: two processes on a pinned core take turns,
-    and every time measured then is wrong without any error. `force` warns instead."""
+def on_core(core: int) -> str:
+    """The busiest processes last seen on `core`, for a refusal to name what keeps it busy."""
+    if not shutil.which("ps"):
+        return ""
+    output = subprocess.run(["ps", "-eo", "psr,pcpu,comm", "--sort=-pcpu"], capture_output=True, text=True).stdout
+    found = [" ".join(line.split()[1:]) for line in output.splitlines()[1:]
+             if line.split() and line.split()[0] == str(core)]
+    return ", ".join(found[:4])
+
+
+def check_quiet(core: int, force: bool, patience: int = 60) -> None:
+    """Waits, up to `patience` seconds, for `core` to stay idle through a one-second sample and for the
+    machine's load to be low, and stops if it never does: two processes on a pinned core take turns, and
+    every time measured then is wrong without any error. A busy moment, this script's own start among them,
+    only delays the run. `force` warns instead of stopping."""
+    cores = os.cpu_count() or 1
     problems = []
-    busy = core_busy(core)
-    if busy is not None and busy > 0.05:
-        problems.append(f"core {core} was {100 * busy:.0f}% busy over a second")
-    if hasattr(os, "getloadavg"):
-        load = os.getloadavg()[0]
-        cores = os.cpu_count() or 1
-        if load > max(1.5, cores / 4):
-            problems.append(f"load average {load:.2f}")
-    if problems:
-        message = "the machine is not quiet: " + "; ".join(problems)
-        if not force:
-            sys.exit(message + " (pass --force to time anyway)")
-        print("WARNING: " + message, file=sys.stderr)
+    for _ in range(patience):
+        problems = []
+        busy = core_busy(core)
+        if busy is not None and busy > 0.05:
+            problems.append(f"core {core} was {100 * busy:.0f}% busy over a second ({on_core(core)})")
+        if hasattr(os, "getloadavg") and os.getloadavg()[0] > max(1.5, cores / 4):
+            problems.append(f"load average {os.getloadavg()[0]:.2f}")
+        if not problems or busy is None and not hasattr(os, "getloadavg"):
+            return
+    message = f"the machine stayed busy for {patience} s: " + "; ".join(problems)
+    if not force:
+        sys.exit(message + " (pass --force to time anyway)")
+    print("WARNING: " + message, file=sys.stderr)
 
 
 # endregion The machine
