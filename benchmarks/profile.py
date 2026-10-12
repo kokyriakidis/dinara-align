@@ -201,10 +201,18 @@ def mojo_build(root: Path, source: Path, binary: Path, extra: list = (), mitigat
         and all(item.stat().st_mtime < binary.stat().st_mtime for item in sources)
     ):
         return binary
-    if assembled:
-        assembled_build(root, source, binary, list(extra), mitigated, pad)
-    else:
-        subprocess.run(command, check=True)
+    # A build times nothing, so it takes every core, and the pin the timings need comes back after it.
+    pinned = os.sched_getaffinity(0) if hasattr(os, "sched_getaffinity") else None
+    if pinned is not None:
+        os.sched_setaffinity(0, set(range(os.cpu_count() or 1)))
+    try:
+        if assembled:
+            assembled_build(root, source, binary, list(extra), mitigated, pad)
+        else:
+            subprocess.run(command, check=True)
+    finally:
+        if pinned is not None:
+            os.sched_setaffinity(0, pinned)
     stamp.write_text(signature)
     return binary
 
@@ -668,9 +676,9 @@ def perf_ready() -> str | None:
     return None
 
 
-def perf_stat(command: list) -> dict:
-    """`perf stat`'s counts for `command`, by event."""
-    output = subprocess.run(["perf", "stat", "-x", ",", "-e", ",".join(COUNTERS), "--", *command],
+def perf_stat(command: list, delay: int = 0) -> dict:
+    """`perf stat`'s counts for `command`, by event, the first `delay` milliseconds left out."""
+    output = subprocess.run(["perf", "stat", "-x", ",", "-D", str(delay), "-e", ",".join(COUNTERS), "--", *command],
                             capture_output=True, text=True)
     counts = {}
     for line in output.stderr.splitlines():
@@ -729,12 +737,13 @@ VECTOR = re.compile(r"%[xyz]mm\d|%k[0-7]\b")
 """An instruction on vector or mask registers."""
 
 
-def topdown(command: list) -> dict:
+def topdown(command: list, delay: int = 0) -> dict:
     """Intel's top-down shares for `command`, level 1 and level 2, by metric name; empty where the processor or
     perf has none."""
     found = {}
     for group in ("TopdownL1", "TopdownL2"):
-        output = subprocess.run(["perf", "stat", "-M", group, "--", *command], capture_output=True, text=True)
+        output = subprocess.run(["perf", "stat", "-D", str(delay), "-M", group, "--", *command], capture_output=True,
+                                text=True)
         for share, name in TOPDOWN.findall(output.stderr):
             found[name] = float(share)
     return found
@@ -755,6 +764,11 @@ def annotate(data: Path, symbol: str, top: int) -> tuple[list[str], float, float
     hottest = [f"| {share:.1f}% | `{text[:100]}` |" for share, text in sorted(instructions, key=lambda item: -item[0])[:top]
                if share >= 0.5]
     return hottest, bulk, vector, sum(share for share, _ in instructions)
+
+
+START_DELAY_MS = 100
+"""What `perf` leaves out at the start of a runner: its 50 ms spin onto a fast core (see `ours.mojo`) and its
+reading, which a pair's time leaves out too."""
 
 
 def perf_targets(options) -> list[tuple[str, list]]:
@@ -805,8 +819,11 @@ def perf(options) -> str:
     hot = []
     for name, command in targets:
         print(f"{name}: perf stat ...", file=sys.stderr, flush=True)
-        counts = perf_stat(command)
-        shares = topdown(command)
+        # A runner's spin and reading left out; the batch and modes drivers time after reading too, but their
+        # reading is long and varies, so they are taken whole.
+        delay = START_DELAY_MS if options.target == "pairs" else 0
+        counts = perf_stat(command, delay)
+        shares = topdown(command, delay)
         instructions = counts.get("instructions", 0) or math.nan
         cycles = counts.get("cycles", 0) or math.nan
 
@@ -823,7 +840,7 @@ def perf(options) -> str:
                      f"{level('tma_bad_speculation')} | {level('tma_frontend_bound')} | {level('tma_backend_bound')} |")
         print(f"{name}: perf record ...", file=sys.stderr, flush=True)
         data = BUILDS / f"perf-{options.target}-{name}.data"
-        record = ["perf", "record", "-q", "-F", str(options.frequency), "-o", str(data)]
+        record = ["perf", "record", "-q", "-D", str(delay), "-F", str(options.frequency), "-o", str(data)]
         # Callers through the last-branch record where the processor keeps one, which needs no frame pointers.
         traced = subprocess.run([*record, "--call-graph", "lbr", "--", *command], capture_output=True).returncode == 0
         if not traced:
