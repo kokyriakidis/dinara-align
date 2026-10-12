@@ -29,6 +29,7 @@ from std.sys.info import CompilationTarget
 
 from .ablation import ABLATE_PAIRED, ABLATE_REGROUP
 from .common import FIRST_SENTINEL, SECOND_SENTINEL
+from .probes import ProbeCounts
 from .cigar import reverse_bytes
 from .errors import AlignmentError, ErrorKind
 
@@ -1167,6 +1168,13 @@ struct Resume(ImplicitlyCopyable, TrivialRegisterPassable):
     var checkpoint: Int
 
 
+comptime TRAIL_TILES = 0
+comptime TRAIL_WORD_COLUMNS = 1
+comptime TRAIL_REPLAYED_TILES = 2
+comptime TRAIL_REPLAYED_WORD_COLUMNS = 3
+"""The slots of a `Trail`'s probes (see `Trail.probe`)."""
+
+
 struct Trail(Movable):
     """The left edges of the tiles a round swept, which is all the traceback needs to retrace it.
 
@@ -1203,15 +1211,10 @@ struct Trail(Movable):
     """The bound the round started on, which sets its tiles' width (see `Band`)."""
     var adapt: Bool
     """Whether the round re-aimed its bound at checkpoints (see `Band.check`)."""
-    var swept_tiles: Int
-    """Tiles swept by every round and replay, in a build with probes (see `probes`): counted here, in a struct
-    the band already carries, so that no hot function takes the probes as an argument of its own."""
-    var swept_word_columns: Int
-    """Their words times columns, likewise."""
-    var replayed_tiles: Int
-    """Of those, the tiles swept again for the traceback, likewise."""
-    var replayed_word_columns: Int
-    """Their words times columns, likewise."""
+    var probe: ProbeCounts
+    """In a build with probes (see `probes`), the tiles every round and replay swept and their words times
+    columns, and of those the tiles swept again for the traceback and theirs (`TRAIL_*`): counted here, in a
+    struct the band already carries, so that no hot function takes the probes as an argument of its own."""
 
     def __init__(out self, columns: Int = 0, budget: Int = Int.MAX):
         """Room for a round over `columns` columns, a vector's words a tile, its edges kept within `budget`
@@ -1232,10 +1235,7 @@ struct Trail(Movable):
         self.widest = 0
         self.start_threshold = 0
         self.adapt = False
-        self.swept_tiles = 0
-        self.swept_word_columns = 0
-        self.replayed_tiles = 0
-        self.replayed_word_columns = 0
+        self.probe = ProbeCounts()
 
     def clear(mut self, start_threshold: Int, adapt: Bool):
         """Empties the trail for a new round, starting on `start_threshold`, keeping its buffers."""

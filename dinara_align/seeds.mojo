@@ -18,6 +18,7 @@ from .bit_parallel import folded, PAIRED_GROUPS, Profile
 from .diagonal import extend
 from .probes import (
     HEURISTIC_ORIGIN,
+    ProbeCounts,
     PROBES,
     SEED_GAVE_UP,
     SEED_KEPT,
@@ -28,6 +29,13 @@ from .probes import (
     SEEDS_COUNTED,
     Tally,
 )
+
+
+comptime COUNT_MATCHES = 0
+comptime COUNT_KEPT = 1
+comptime COUNT_REBUILT = 2
+comptime COUNT_GAVE_UP = 3
+"""The slots of a `SeedHeuristic`'s own probes (see `SeedHeuristic.probe`)."""
 
 
 comptime SEED_LENGTH = 12
@@ -313,21 +321,13 @@ struct SeedHeuristic(Movable):
     var spill_y: List[List[Int32]]
     var hint: Int
     """The layer the last query ended on: neighbouring queries land near it."""
-    var matches: Int
-    """Matches found, over every build, in a build with probes (see `probes`)."""
-    var kept: Int
-    """Matches local pruning kept, in a build with probes."""
-    var rebuilt: Bool
-    """Whether exact seeds were rebuilt inexact, in a build with probes."""
-    var gave_up: Bool
-    """Whether too many matches left the gap heuristic alone, in a build with probes."""
+    var probe: ProbeCounts
+    """In a build with probes (see `probes`): the matches found over every build, those local pruning kept,
+    whether exact seeds were rebuilt inexact, and whether too many matches left the gap heuristic alone."""
 
     def __init__(out self, columns: Int, rows: Int):
         """No seeds: the gap heuristic."""
-        self.matches = 0
-        self.kept = 0
-        self.rebuilt = False
-        self.gave_up = False
+        self.probe = ProbeCounts()
         self.columns = columns
         self.rows = rows
         self.length = SEED_LENGTH
@@ -380,8 +380,7 @@ struct SeedHeuristic(Movable):
             var chained = self.counted - self.h(0, 0)
             if chained * 100 < cutoff * self.counted:
                 self.build(first_codes, second_codes, symbols, True)
-                comptime if PROBES:
-                    self.rebuilt = True
+                self.probe.add(COUNT_REBUILT, 1)
 
     def tally_into(mut self, mut tally: Tally):
         """Its probes into `tally` (see `probes`): which seeds, how many, how many chain, the heuristic at
@@ -391,10 +390,10 @@ struct SeedHeuristic(Movable):
             tally.set[SEEDS](self.seeds)
             tally.set[SEEDS_COUNTED](self.counted)
             tally.set[HEURISTIC_ORIGIN](self.h(0, 0))
-            tally.set[SEED_REBUILT](Int(self.rebuilt))
-            tally.set[SEED_MATCHES](self.matches)
-            tally.set[SEED_KEPT](self.kept)
-            tally.set[SEED_GAVE_UP](Int(self.gave_up))
+            tally.set[SEED_REBUILT](self.probe.get(COUNT_REBUILT))
+            tally.set[SEED_MATCHES](self.probe.get(COUNT_MATCHES))
+            tally.set[SEED_KEPT](self.probe.get(COUNT_KEPT))
+            tally.set[SEED_GAVE_UP](self.probe.get(COUNT_GAVE_UP))
 
     def build(mut self, first_codes: List[UInt8], second_codes: List[UInt8], symbols: List[UInt8], inexact: Bool):
         """The seeds, their matches, and the layers, from scratch. `symbols` are the first sequence's
@@ -437,8 +436,8 @@ struct SeedHeuristic(Movable):
         else:
             held = self.exact_matches(first, second, found_seed, found_row)
         comptime if PROBES:
-            self.matches += len(found_seed)
-            self.gave_up = not held
+            self.probe.add(COUNT_MATCHES, len(found_seed))
+            self.probe.add(COUNT_GAVE_UP, Int(not held))
         if not held:
             # Too many matches for the seeds (see `MATCHES_A_SEED`): the gap heuristic.
             self.seeds = 0
@@ -481,8 +480,7 @@ struct SeedHeuristic(Movable):
                 var match_cost = Int(costs_by_seed[slot]) if inexact else 0
                 if not self.worth_keeping(first, second, seed, start_row, end_row, match_cost, leftmost, fronts):
                     continue
-                comptime if PROBES:
-                    self.kept += 1
+                self.probe.add(COUNT_KEPT, 1)
                 leftmost[column - start_row + self.rows] = Int32(column)
                 var x = column - start_row - potential
                 var y = start_row - column - potential

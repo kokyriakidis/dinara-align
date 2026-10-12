@@ -86,6 +86,7 @@ from .probes import (
     ENGINE_WAVEFRONT,
     FORWARD_STEPS,
     MEETS,
+    ProbeCounts,
     PROBES,
     SPLITS,
     SWEEP_CELLS,
@@ -959,6 +960,15 @@ def step[
     return max(reach, Int(reaches.reduce_max()))
 
 
+comptime SEARCH_STEPS = 0
+comptime SEARCH_DIAGONALS = 1
+comptime SEARCH_MEETS = 2
+comptime SEARCH_SPLITS = 3
+comptime SEARCH_SWEPT_CELLS = 4
+comptime SEARCH_SWEPT_NS = 5
+"""The slots of a `Wavefront`'s probes (see `Wavefront.probe`)."""
+
+
 struct Wavefront[pieces: Int](Movable):
     """One direction's search over two encoded sequences: the fronts of each cost in turn, from cost
     zero at the origin, and, for the costs grown recording, what the traceback needs of each (see
@@ -987,19 +997,10 @@ struct Wavefront[pieces: Int](Movable):
     var band_high: Int
     var last_reached: Int
     """The last cost any front reached a diagonal at: past `window` costs more, none will again."""
-    var steps: Int
-    """Cost steps grown, over every pair since the probes were last read, in a build with probes (see
-    `probes`); unlike `work`, `start` keeps it."""
-    var diagonals: Int
-    """Diagonals stepped, likewise."""
-    var meets: Int
-    """Meeting checks against the other search, likewise."""
-    var splits: Int
-    """Splits for the memory limit, likewise."""
-    var swept_cells: Int
-    """Cells of the sweep in differences taken instead, likewise."""
-    var swept_ns: Int
-    """Nanoseconds that sweep took, likewise."""
+    var probe: ProbeCounts
+    """In a build with probes (see `probes`), over every pair since they were last read (`start` keeps them,
+    unlike `work`): cost steps grown, diagonals stepped, meeting checks against the other search, splits for the
+    memory limit, and the cells and nanoseconds of any sweep in differences taken instead (`SEARCH_*`)."""
 
     def __init__(
         out self,
@@ -1035,12 +1036,7 @@ struct Wavefront[pieces: Int](Movable):
         self.cost = 0
         self.work = 0
         self.furthest = Int.MIN // 2
-        self.steps = 0
-        self.diagonals = 0
-        self.meets = 0
-        self.splits = 0
-        self.swept_cells = 0
-        self.swept_ns = 0
+        self.probe = ProbeCounts()
         self.start(first, second, penalties, origin, record, reverse, free_first, free_second, band)
 
     def start(
@@ -1234,9 +1230,8 @@ struct Wavefront[pieces: Int](Movable):
         self.fronts.reach[slot] = reach
         self.furthest = max(self.furthest, reach)
         self.work += high - low + 1
-        comptime if PROBES:
-            self.steps += 1
-            self.diagonals += high - low + 1
+        self.probe.add(SEARCH_STEPS, 1)
+        self.probe.add(SEARCH_DIAGONALS, high - low + 1)
 
         # Diagonals no layer reached at either end are dropped, as WFA trims them, so the range
         # tracks the paths alive rather than every diagonal the gap costs allow.
@@ -1395,8 +1390,7 @@ def meet[
     """Lowers `best` to where the forward fronts of one cost and the backward fronts of another
     overlap, if that costs less (see `overlap`). Most pairs of costs can do neither, which the two
     checks here show in place: a call apiece was a fifth of a short read's time."""
-    comptime if PROBES:
-        forward.meets += 1
+    forward.probe.add(SEARCH_MEETS, 1)
     if forward_cost + backward_cost - forward.penalties.widest_opening[pieces]() >= best.cost:
         return
     var ahead = forward.fronts.back(forward.cost - forward_cost)
@@ -1738,8 +1732,8 @@ def swept_distance[
     var started = clock()
     var cost = swept_cost[pieces](first, second, penalties)
     comptime if PROBES:
-        forward.swept_ns += clock() - started
-        forward.swept_cells += len(first) * len(second)
+        forward.probe.add(SEARCH_SWEPT_NS, clock() - started)
+        forward.probe.add(SEARCH_SWEPT_CELLS, len(first) * len(second))
     return cost if cost <= ceiling else -1
 
 
@@ -1902,44 +1896,32 @@ struct SearchSpace(Movable):
             var swept_ns = 0
             if self.forward:
                 ref search = self.forward.value()
-                steps_forward += search.steps
-                diagonals += search.diagonals
-                meets += search.meets
-                splits += search.splits
-                cells += search.swept_cells
-                swept_ns += search.swept_ns
-                search.steps = 0
-                search.diagonals = 0
-                search.meets = 0
-                search.splits = 0
-                search.swept_cells = 0
-                search.swept_ns = 0
+                steps_forward += search.probe.get(SEARCH_STEPS)
+                diagonals += search.probe.get(SEARCH_DIAGONALS)
+                meets += search.probe.get(SEARCH_MEETS)
+                splits += search.probe.get(SEARCH_SPLITS)
+                cells += search.probe.get(SEARCH_SWEPT_CELLS)
+                swept_ns += search.probe.get(SEARCH_SWEPT_NS)
+                search.probe.reset()
             if self.backward:
                 ref search = self.backward.value()
-                steps_backward += search.steps
-                diagonals += search.diagonals
-                search.steps = 0
-                search.diagonals = 0
+                steps_backward += search.probe.get(SEARCH_STEPS)
+                diagonals += search.probe.get(SEARCH_DIAGONALS)
+                search.probe.reset()
             if self.forward2:
                 ref search = self.forward2.value()
-                steps_forward += search.steps
-                diagonals += search.diagonals
-                meets += search.meets
-                splits += search.splits
-                cells += search.swept_cells
-                swept_ns += search.swept_ns
-                search.steps = 0
-                search.diagonals = 0
-                search.meets = 0
-                search.splits = 0
-                search.swept_cells = 0
-                search.swept_ns = 0
+                steps_forward += search.probe.get(SEARCH_STEPS)
+                diagonals += search.probe.get(SEARCH_DIAGONALS)
+                meets += search.probe.get(SEARCH_MEETS)
+                splits += search.probe.get(SEARCH_SPLITS)
+                cells += search.probe.get(SEARCH_SWEPT_CELLS)
+                swept_ns += search.probe.get(SEARCH_SWEPT_NS)
+                search.probe.reset()
             if self.backward2:
                 ref search = self.backward2.value()
-                steps_backward += search.steps
-                diagonals += search.diagonals
-                search.steps = 0
-                search.diagonals = 0
+                steps_backward += search.probe.get(SEARCH_STEPS)
+                diagonals += search.probe.get(SEARCH_DIAGONALS)
+                search.probe.reset()
             ref tally = self.edit.tally
             tally.add[FORWARD_STEPS](steps_forward)
             tally.add[BACKWARD_STEPS](steps_backward)
@@ -2275,8 +2257,7 @@ def solve[
             trace(forward.history, penalties, best.layer, best.forward_cost, best.diagonal, best.column, moves)
             return best.cost
         # Too large to keep: the searches go on from where they stopped keeping only their rings.
-        comptime if PROBES:
-            forward.splits += 1
+        forward.probe.add(SEARCH_SPLITS, 1)
         forward.history.reset(0)
         backward.history.reset(0)
     if bidirectional[pieces, False](forward, backward, best, False, Int.MAX, ceiling) == OVER:
@@ -2517,8 +2498,8 @@ def global_path[
     var started = clock()
     cost = swept_path[pieces](first, second, penalties, ties, moves)
     comptime if PROBES:
-        forward_search.value().swept_ns += clock() - started
-        forward_search.value().swept_cells += columns * rows
+        forward_search.value().probe.add(SEARCH_SWEPT_NS, clock() - started)
+        forward_search.value().probe.add(SEARCH_SWEPT_CELLS, columns * rows)
     return cost if cost <= ceiling else -1
 
 

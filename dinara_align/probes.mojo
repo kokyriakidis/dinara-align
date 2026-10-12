@@ -136,6 +136,123 @@ comptime ENGINE_SEARCH = 11
 comptime ENGINE_SCORED = 12
 
 
+trait Counting(Movable):
+    """A struct's own probes, by slot: real counts in a build with probes, nothing at all in any other."""
+
+    def __init__(out self):
+        """Every count zero."""
+        ...
+
+    def add(mut self, slot: Int, amount: Int):
+        """Adds `amount` to `slot`."""
+        ...
+
+    def get(self, slot: Int) -> Int:
+        """`slot`'s count."""
+        ...
+
+    def reset(mut self):
+        """Every count back to zero."""
+        ...
+
+
+struct Counts(Counting):
+    """Eight counts, the most any struct's probes take; a slot known when the call is inlined picks its field
+    with no branch left."""
+
+    var c0: Int
+    var c1: Int
+    var c2: Int
+    var c3: Int
+    var c4: Int
+    var c5: Int
+    var c6: Int
+    var c7: Int
+
+    def __init__(out self):
+        """Every count zero."""
+        self.c0 = 0
+        self.c1 = 0
+        self.c2 = 0
+        self.c3 = 0
+        self.c4 = 0
+        self.c5 = 0
+        self.c6 = 0
+        self.c7 = 0
+
+    @always_inline
+    def add(mut self, slot: Int, amount: Int):
+        """Adds `amount` to `slot`, 0 to 7."""
+        if slot == 0:
+            self.c0 += amount
+        elif slot == 1:
+            self.c1 += amount
+        elif slot == 2:
+            self.c2 += amount
+        elif slot == 3:
+            self.c3 += amount
+        elif slot == 4:
+            self.c4 += amount
+        elif slot == 5:
+            self.c5 += amount
+        elif slot == 6:
+            self.c6 += amount
+        else:
+            self.c7 += amount
+
+    @always_inline
+    def get(self, slot: Int) -> Int:
+        """`slot`'s count, 0 to 7."""
+        if slot == 0:
+            return self.c0
+        if slot == 1:
+            return self.c1
+        if slot == 2:
+            return self.c2
+        if slot == 3:
+            return self.c3
+        if slot == 4:
+            return self.c4
+        if slot == 5:
+            return self.c5
+        if slot == 6:
+            return self.c6
+        return self.c7
+
+    def reset(mut self):
+        """Every count back to zero."""
+        self = Self()
+
+
+struct NoCounts(Counting):
+    """No counts: a field of this type takes no bytes, so a struct carrying it keeps a normal build's layout,
+    and every call on it is gone once inlined."""
+
+    def __init__(out self):
+        """Nothing to count."""
+        pass
+
+    @always_inline
+    def add(mut self, slot: Int, amount: Int):
+        """Nothing."""
+        pass
+
+    @always_inline
+    def get(self, slot: Int) -> Int:
+        """Nothing counted: 0."""
+        return 0
+
+    def reset(mut self):
+        """Nothing."""
+        pass
+
+
+comptime ProbeCounts: Counting = Counts if PROBES else NoCounts
+"""The probes a hot struct carries itself (see `Counting`): real in a build with probes, zero bytes otherwise.
+Adding plain fields to those structs changed a normal build's layout and code, about 1% more instructions on
+long pairs."""
+
+
 @always_inline
 def clock() -> Int:
     """Nanoseconds now in a build with probes; 0, at no cost, in any other."""

@@ -15,6 +15,7 @@ from .cigar import CigarWriter, reversed_into
 from .diagonal import best_source, DiagonalFronts, slide_forward
 from .probes import (
     FORWARD_SEGMENTS,
+    ProbeCounts,
     PROBES,
     RECOMPUTE_WINDOWS,
     RECOMPUTE_WORD_COLUMNS,
@@ -307,6 +308,14 @@ comptime RECOMPUTE_WORDS = 4
 """Words a tile's recompute first takes above the point it traces from, doubling while that falls short."""
 
 
+comptime RECOMPUTE_WINDOWS_SWEPT = 0
+comptime RECOMPUTE_COLUMNS_SWEPT = 1
+"""The slots of a `Recompute`'s probes (see `Recompute.probe`)."""
+comptime TRACED_FORWARD = 0
+comptime TRACED_RECOMPUTED = 1
+"""The slots of a `TileTracer`'s probes (see `TileTracer.probe`)."""
+
+
 struct Recompute(Movable):
     """A tile recompute's buffers, kept across tiles so a recompute neither allocates nor zeroes: every
     slot it reads it has written first."""
@@ -318,15 +327,12 @@ struct Recompute(Movable):
     """The same window swept again from a top row that falls by one a column, a floor under every score."""
     var low_minus: List[UInt64]
     var low_bases: List[Int]
-    var windows: Int
-    """Windows swept, in a build with probes (see `probes`)."""
-    var word_columns: Int
-    """Their words times columns, in a build with probes."""
+    var probe: ProbeCounts
+    """In a build with probes (see `probes`), the windows swept and their words times columns (`RECOMPUTE_*`)."""
 
     def __init__(out self):
         """Empty buffers, which the first recompute grows."""
-        self.windows = 0
-        self.word_columns = 0
+        self.probe = ProbeCounts()
         self.plus = List[UInt64]()
         self.minus = List[UInt64]()
         self.bases = List[Int]()
@@ -359,8 +365,10 @@ def recomputed_segment(
     while True:
         var first_word = max(top, end_word - window)
         comptime if PROBES:
-            buffers.windows += 1
-            buffers.word_columns += (end_word - first_word) * (end_column - trail.first_columns[tile])
+            buffers.probe.add(RECOMPUTE_WINDOWS_SWEPT, 1)
+            buffers.probe.add(
+                RECOMPUTE_COLUMNS_SWEPT, (end_word - first_word) * (end_column - trail.first_columns[tile])
+            )
         var left: Int
         if profile.extended:
             left = window_segment[True](
@@ -580,10 +588,9 @@ struct TileTracer(Movable):
     var column: Int
     var row: Int
     var current: Int
-    var forward: Int
-    """Tiles traced by the wavefront, in a build with probes (see `probes`)."""
-    var recomputed: Int
-    """Tiles swept again and traced cell by cell, in a build with probes."""
+    var probe: ProbeCounts
+    """In a build with probes (see `probes`), the tiles traced by the wavefront and those swept again and traced
+    cell by cell (`TRACED_*`)."""
 
     def __init__(out self, start_column: Int, start_row: Int, score: Int):
         """A trace from `(start_column, start_row)`, scoring `score`."""
@@ -595,8 +602,7 @@ struct TileTracer(Movable):
         self.column = start_column
         self.row = start_row
         self.current = score
-        self.forward = 0
-        self.recomputed = 0
+        self.probe = ProbeCounts()
 
     def trace(mut self, profile: Profile, trail: Trail, tile: Int, mut moves: List[UInt8]):
         """Traces the tile, the one left of where the trace stands, whose edge must be kept."""
@@ -611,11 +617,9 @@ struct TileTracer(Movable):
         )
         if left < 0:
             left = recomputed_segment(profile, trail, tile, self.column, self.row, self.current, self.buffers, moves)
-            comptime if PROBES:
-                self.recomputed += 1
+            self.probe.add(TRACED_RECOMPUTED, 1)
         else:
-            comptime if PROBES:
-                self.forward += 1
+            self.probe.add(TRACED_FORWARD, 1)
         # Exact, since it plus the segment's cost is the exact score the segment started from.
         self.current = self.edge.score(left)
         self.column = first_column
@@ -623,10 +627,10 @@ struct TileTracer(Movable):
 
     def tally_into(self, mut tally: Tally):
         """Its probes into `tally` (see `probes`)."""
-        tally.add[FORWARD_SEGMENTS](self.forward)
-        tally.add[RECOMPUTED_SEGMENTS](self.recomputed)
-        tally.add[RECOMPUTE_WINDOWS](self.buffers.windows)
-        tally.add[RECOMPUTE_WORD_COLUMNS](self.buffers.word_columns)
+        tally.add[FORWARD_SEGMENTS](self.probe.get(TRACED_FORWARD))
+        tally.add[RECOMPUTED_SEGMENTS](self.probe.get(TRACED_RECOMPUTED))
+        tally.add[RECOMPUTE_WINDOWS](self.buffers.probe.get(RECOMPUTE_WINDOWS_SWEPT))
+        tally.add[RECOMPUTE_WORD_COLUMNS](self.buffers.probe.get(RECOMPUTE_COLUMNS_SWEPT))
 
     def finish(self, mut moves: List[UInt8]):
         """The first column is the border: the rest of the way up is gaps against the second sequence."""
