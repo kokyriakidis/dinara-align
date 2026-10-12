@@ -79,8 +79,15 @@ def run(binary: Path, tool: str, path: Path, budget: float) -> list[dict]:
     preload = shim()
     if preload is not None:
         environment["LD_PRELOAD"] = str(preload)
-    output = subprocess.run([str(binary), "seq", tool, str(budget + harness.GRACE), str(path)],
-                            capture_output=True, text=True, env=environment, timeout=budget * 4 + 60).stdout
+    # Stopped a grace past its budget, as `harness.run_tool` stops a runner, keeping the pairs it finished: the
+    # runner checks its budget only between pairs, and one long pair can run for minutes.
+    try:
+        output = subprocess.run([str(binary), "seq", tool, str(budget), str(path)], capture_output=True, text=True,
+                                env=environment, timeout=budget + harness.GRACE).stdout
+    except subprocess.TimeoutExpired as stopped:
+        output = stopped.output or ""
+        if isinstance(output, bytes):
+            output = output.decode(errors="replace")
     records = []
     lengths = None
     for line in output.splitlines():
