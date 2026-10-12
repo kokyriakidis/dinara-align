@@ -3,7 +3,8 @@
 //
 // Counts a process's allocations and bulk copies, preloaded under it on Linux (`LD_PRELOAD`), for
 // `benchmarks/profile.py probes`: every call of malloc, calloc, realloc, the aligned allocators and free,
-// with the bytes asked for, and every call of memcpy, memmove and memset that reaches the C library, with
+// and of the Mojo runtime's own allocator, `KGEN_CompilerRT_AlignedAlloc` and its free, which Mojo's lists
+// and strings take and which reaches no malloc, with the bytes asked for, and every call of memcpy, memmove and memset that reaches the C library, with
 // the bytes moved. Copies the compiler inlined, short ones of a known size, never reach it and are not
 // counted. The runner built with probes finds `dinara_counts` by `dlsym` and reads it before and after
 // each pair; a process without this library finds nothing and reports no counts.
@@ -34,6 +35,8 @@ static void *(*real_memalign)(size_t, size_t);
 static void *(*real_memcpy)(void *, const void *, size_t);
 static void *(*real_memmove)(void *, const void *, size_t);
 static void *(*real_memset)(void *, int, size_t);
+static void *(*real_kgen_alloc)(size_t, size_t);
+static void (*real_kgen_free)(void *);
 
 // dlsym may itself call calloc before `real_calloc` is known: those few calls take this arena.
 static char early[8192];
@@ -54,6 +57,8 @@ static void resolve(void) {
     real_memcpy = dlsym(RTLD_NEXT, "memcpy");
     real_memmove = dlsym(RTLD_NEXT, "memmove");
     real_memset = dlsym(RTLD_NEXT, "memset");
+    real_kgen_alloc = dlsym(RTLD_NEXT, "KGEN_CompilerRT_AlignedAlloc");
+    real_kgen_free = dlsym(RTLD_NEXT, "KGEN_CompilerRT_AlignedFree");
     resolving = 0;
 }
 
@@ -119,6 +124,21 @@ void *memalign(size_t alignment, size_t size) {
     COUNT(ALLOCATIONS, 1);
     COUNT(ALLOCATED, size);
     return real_memalign(alignment, size);
+}
+
+// The Mojo runtime's allocator, as the standard library calls it: an alignment, then the bytes.
+void *KGEN_CompilerRT_AlignedAlloc(size_t alignment, size_t size) {
+    resolve();
+    COUNT(ALLOCATIONS, 1);
+    COUNT(ALLOCATED, size);
+    return real_kgen_alloc(alignment, size);
+}
+
+void KGEN_CompilerRT_AlignedFree(void *pointer) {
+    resolve();
+    if (pointer)
+        COUNT(FREES, 1);
+    real_kgen_free(pointer);
 }
 
 void *memcpy(void *to, const void *from, size_t size) {
