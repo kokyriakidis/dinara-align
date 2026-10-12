@@ -38,7 +38,27 @@ PHASES = [
     ("full_ns", "full-matrix sweep"),
     ("wavefront_ns", "gap-affine wavefront"),
     ("sweep_ns", "difference sweep"),
+    ("search_ns", "end search (prefix, suffix, infix)"),
+    ("scored_ns", "scored modes (local, extension, tables)"),
 ]
+
+EFFICIENCY = [
+    # phase, its work in units of the peak, the phase's time, the peak it is measured against
+    ("band rounds", lambda r: 64 * r.get("word_columns", 0), "band_ns", "band_cells_per_ns"),
+    ("full-matrix sweep", lambda r: 64 * r.get("full_word_columns", 0), "full_ns", "band_cells_per_ns"),
+    ("diagonal transition, two ends", lambda r: r.get("two_ended_steps", 0), "two_ended_ns", "diagonal_steps_per_ns"),
+    ("diagonal transition, one end", lambda r: r.get("diagonal_steps", 0), "diagonal_ns", "diagonal_steps_per_ns"),
+    ("gap-affine wavefront", lambda r: r.get("wavefront_diagonals", 0), "wavefront_ns", "wavefront_diagonals_per_ns"),
+    ("difference sweep", lambda r: r.get("sweep_cells", 0), "sweep_ns", "sweep_cells_per_ns"),
+]
+"""Each phase whose work has a kernel's unit: band cells, diagonal-transition steps, wavefront diagonals,
+sweep cells; its rate over the kernel's peak (see `profile.py peak`) is how much of the kernel it gets."""
+
+
+def peaks() -> dict:
+    """The kernels' peaks from the last `profile.py peak`, if any."""
+    path = harness.RESULTS / "profile-peak.json"
+    return json.loads(path.read_text()) if path.exists() else {}
 
 
 def shim() -> Path | None:
@@ -154,13 +174,35 @@ def dataset_report(name: str, records: list[dict], facts: dict, top: int) -> lis
               for engine, (count, seconds) in sorted(engines.items(), key=lambda item: -item[1][1])]
     lines.append("")
 
-    # Phases.
-    phases = [(label, sum(record.get(key, 0) for record in records) / 1e9) for key, label in PHASES]
-    measured = sum(seconds for _, seconds in phases)
-    lines += ["| phase | time | share |", "| :-- | --: | --: |"]
-    lines += [f"| {label} | {duration(seconds)} | {share(seconds, total)} |" for label, seconds in phases if seconds]
-    lines.append(f"| outside the phases | {duration(max(total - measured, 0))} | {share(max(total - measured, 0), total)} |")
+    # Phases, with the instructions and cycles each retired where the counters could be read.
+    measured = 0.0
+    rows = []
+    for key, label in PHASES:
+        seconds = sum(record.get(key, 0) for record in records) / 1e9
+        if not seconds:
+            continue
+        measured += seconds
+        stem = key.removesuffix("_ns")
+        instructions = sum(record.get(f"{stem}_instructions", 0) for record in records)
+        cycles = sum(record.get(f"{stem}_cycles", 0) for record in records)
+        counted = f"{number(instructions)} | {instructions / cycles:.2f}" if cycles else "— | —"
+        rows.append(f"| {label} | {duration(seconds)} | {share(seconds, total)} | {counted} |")
+    lines += ["| phase | time | share | instructions | IPC |", "| :-- | --: | --: | --: | --: |", *rows]
+    lines.append(f"| outside the phases | {duration(max(total - measured, 0))} | {share(max(total - measured, 0), total)}"
+                 " | | |")
     lines.append("")
+    # Each kernel-shaped phase's rate against the kernel alone.
+    known = peaks()
+    rates = []
+    for label, work, key, peak in EFFICIENCY:
+        done = sum(work(record) for record in records)
+        taken = sum(record.get(key, 0) for record in records)
+        if done and taken and known.get(peak):
+            rate = done / taken
+            rates.append(f"| {label} | {rate:.3g} | {known[peak]:.3g} | {100 * rate / known[peak]:.0f}% |")
+    if rates:
+        lines += ["| phase | its rate, units a ns | the kernel's peak | share of the peak |",
+                  "| :-- | --: | --: | --: |", *rates, ""]
 
     # Work against need.
     work = []

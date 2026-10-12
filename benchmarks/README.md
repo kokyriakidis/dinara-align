@@ -416,46 +416,47 @@ the memory cap.
 
 ## Profiling
 
-`pixi run profile` pinpoints where dinara-align's time goes and where a rival beats it, on the samples
-`bench` times (`profile.py`):
+`pixi run profile` pinpoints where dinara-align's time goes, where it could go less far, and where a rival
+beats it, on the samples `bench` times (`profile.py`):
 
 ```bash
 pixi run profile duel [--affine 4,6,2]   # every pair against every rival's time for it
-pixi run profile probes --only ont-10k   # per pair: engine, phases, work, counters, allocations, copies
-pixi run profile perf --only ont-10k     # Linux: counters and hot functions, files and lines; who copies
+pixi run profile rivals                  # each lost pair: our and the winner's hardware counts side by side
+pixi run profile regret --only ont-10k   # every pair under every engine policy: what each choice cost
+pixi run profile probes --only ont-10k   # per pair: engine, phases (time, instructions, IPC), work, counters,
+                                         # allocations, copies, page faults
+pixi run profile peak                    # each kernel's rate alone, which probes measure phases against
+pixi run profile perf [--target batch]   # Linux: counters, top-down, hot functions, lines and instructions
+pixi run profile modes                   # the probes of the other modes' workloads
+pixi run profile scaling                 # the batch over threads, false sharing (perf c2c), the GPU (nsys)
+pixi run profile noise                   # what moving the code alone does: the floor compare reports against
 pixi run profile compare main~1          # this checkout against a commit, pair by pair, with intervals
-pixi run profile all                     # duel, probes and perf in one report
+pixi run profile all                     # every view but compare, in order
 ```
 
-- **duel** sets dinara-align's median time per pair, over `--rounds` rounds, beside each rival's kept time
-  for the same pair. A dataset's mean can win while pairs lose: it lists the margin over the fastest
-  rival, the pairs some rival aligned faster, those faster than dinara-align's fastest round (beyond its
-  noise), the share of time those losses cost, and the worst of them with length, cost and divergence.
-- **probes** builds `probed.mojo` with `-D DINARA_PROBES`, which compiles in the library's probes
-  (`dinara_align/probes.mojo`; a normal build folds every one away): the engine that settled each pair,
-  each phase's time (encoding, diagonal transition from one end and two, the fronts grown, the seed
-  heuristic, the band's rounds and traceback, the CIGAR, a full sweep, the wavefront, the difference
-  sweep) and its work (diagonals stepped, bounds tried against the distance, tiles and cells swept, the
-  share swept by rounds that failed, seeds built, matched and kept, tiles swept again or recomputed for
-  the traceback, wavefront steps, meeting checks, splits). Around each pair it reads the processor's
-  counters through `perf_event_open` (instructions, cycles, branches and misses, L1d, last-level and TLB
-  misses) and, with `probes/counting.c` preloaded on Linux, every allocation, `memcpy`, `memmove` and
-  `memset` that reaches the C library, with the bytes, and the page faults. The report gives each
-  dataset's time by engine and phase, the work against what the pair needed, the processor's and the
-  allocator's view per pair after the first, the pairs whose probes match a pattern that costs time
-  (rounds wasted, a band wider than needed, seeds that took longer than the band, tiles recomputed,
-  allocations in a warm aligner, copies beyond the sequences' size), and the slowest pairs in full.
-- **perf** samples the runner built with line tables: cycles, IPC, branch and cache misses per sample,
-  the share of samples by function, by source file (one engine each) and by source line, inlined code
-  charged to its own line, and the samples in copy and allocation routines, with their callers where the
-  processor keeps a last-branch record.
-- **compare** builds the same runner against two commits, or a commit and the checkout as it stands,
-  times both in rounds that alternate, holds every pair's costs equal, and gives each dataset's ratio of
-  mean times with a 95% bootstrap interval over pairs and rounds: faster or slower only when the interval
-  excludes 1. On x86 both builds keep jumps clear of 32-byte boundaries, as the ablation's do.
+| view | the question it answers | how |
+| :-- | :-- | :-- |
+| duel | Which pairs does a rival win, by how much, beyond our noise? | our median over rounds per pair beside each rival's kept time |
+| rivals | Do we do more work than the winner, or the same work slower? | each lost pair counted alone for both: instructions, IPC, branch and cache misses |
+| regret | Which engine choices cost time, on which pairs? | every pair under each forced policy (`-D DINARA_FORCE`), costs held equal |
+| probes | Where does each pair's time go, and is the work it does what it needed? | `-D DINARA_PROBES`: engines, phases, per-phase instructions and cycles (`rdpmc`), work counters, `perf_event_open` counters, allocations and copies (`probes/counting.c`), page faults |
+| peak | How close does each phase run to its kernel alone? | each kernel forced on its best workload; `probes` divides each phase's rate by it |
+| perf | Which functions, lines and instructions are hot, and why? | `perf stat`, top-down levels 1 and 2, `perf record` by function, file, line; `perf annotate` of the hottest functions (vector share, inlined copies); LBR callers of copy and allocation routines |
+| modes | The same for local, overlap, infix, prefix, extension, two-piece and tables | `probed_modes.mojo` over the modes workloads |
+| scaling | Do threads scale, do they share cache lines, where does the GPU spend? | the batch on 1 … all threads, `perf c2c`, Nsight Systems |
+| noise | How big must a difference be to be the code's, not its layout's? | the same code with functions moved by 0, 16, 32, 48 bytes |
+| compare | Is a change faster or slower, dataset by dataset? | two builds, alternating rounds, bootstrap intervals, the layout floor |
 
-Every run pins itself to one core (`--core`, default 2) and stops if that core or the machine is busy,
-unless given `--force`. Reports go to `.cache/results/profile-*.md`, each pair's figures to a JSON beside it.
+The probes compile in only with `-D DINARA_PROBES` (`dinara_align/probes.mojo`) and a forced policy only with
+`-D DINARA_FORCE`; a normal build folds every probe and every policy away. Every policy keeps the answer exact,
+and `regret` fails if any policy's cost differs from the default's. The findings `probes` flags (rounds
+wasted, a band wider than needed, seeds that took longer than the band, tiles recomputed, allocations in a
+warm aligner, copies beyond the sequences' size) are diagnostics, each a pattern worth a look.
+
+Every run but `scaling` pins itself to one core (`--core`, default 2), and every run stops if that core or
+the machine is busy, unless given `--force`. Reports go to `.cache/results/profile-*.md`, each pair's figures
+to a JSON beside it. What it does not see: copies the compiler inlines as plain vector moves (only `perf
+annotate` shows them), and the GPU's kernels without Nsight Systems.
 
 ## Reading the Numbers
 

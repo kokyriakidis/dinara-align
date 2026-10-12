@@ -77,6 +77,9 @@ from .differences import difference_bits, path_bytes, swept_cost, swept_path
 from .probes import (
     BACKWARD_STEPS,
     clock,
+    FORCE_BIDIRECTIONAL,
+    FORCE_NO_SWEEP,
+    FORCE_SWEEP,
     ENGINE,
     ENGINE_BIDIRECTIONAL,
     ENGINE_SWEEP,
@@ -1691,7 +1694,21 @@ def searched_distance[
     begun(
         forward, first, second, penalties, FREE_START, False, False, ends_free.first_begin, ends_free.second_begin, band
     )
-    var grown_alone = ends_free.first_end == 0 and ends_free.second_end == 0
+    var whole_end = ends_free.first_end == 0 and ends_free.second_end == 0
+    var grown_alone = whole_end and not FORCE_BIDIRECTIONAL
+    # A forced sweep takes a pair it can from the start.
+    var columns = len(first)
+    var rows = len(second)
+    var sweepable = (
+        whole_end
+        and ends_free.first_begin == 0
+        and ends_free.second_begin == 0
+        and band.covers(columns, rows)
+        and difference_bits[pieces](penalties) > 0
+        and not FORCE_NO_SWEEP
+    )
+    if FORCE_SWEEP and sweepable:
+        return swept_distance[pieces](forward.value(), first, second, penalties, ceiling)
     if grown_alone:
         var found = alone(forward.value(), ceiling)
         if found != GROWING:
@@ -1702,28 +1719,28 @@ def searched_distance[
     )
     var best = Meeting.none()
     # A global pair with the whole matrix open may take the sweep in differences once it would finish first.
-    var columns = len(first)
-    var rows = len(second)
-    var sweepable = (
-        grown_alone
-        and ends_free.first_begin == 0
-        and ends_free.second_begin == 0
-        and band.covers(columns, rows)
-        and difference_bits[pieces](penalties) > 0
-    )
     var status = bidirectional[pieces, False, cost_only=True](
         forward.value(), backward.value(), best, sweepable, Int.MAX, ceiling, grown_alone
     )
     if status == SWEEP:
-        var started = clock()
-        var cost = swept_cost[pieces](first, second, penalties)
-        comptime if PROBES:
-            forward.value().swept_ns += clock() - started
-            forward.value().swept_cells += columns * rows
-        return cost if cost <= ceiling else -1
+        return swept_distance[pieces](forward.value(), first, second, penalties, ceiling)
     if status != MET:
         return -1
     return best.cost
+
+
+def swept_distance[
+    pieces: Int
+](
+    mut forward: Wavefront[pieces], first: Span[UInt8, _], second: Span[UInt8, _], penalties: Penalties, ceiling: Int
+) -> Int:
+    """`swept_cost`, or -1 past `ceiling`, its time and cells in `forward`'s probes (see `probes`)."""
+    var started = clock()
+    var cost = swept_cost[pieces](first, second, penalties)
+    comptime if PROBES:
+        forward.swept_ns += clock() - started
+        forward.swept_cells += len(first) * len(second)
+    return cost if cost <= ceiling else -1
 
 
 def begun[
@@ -1874,7 +1891,7 @@ struct SearchSpace(Movable):
     def tally_wavefronts(mut self, started: Int):
         """The wavefronts' probes since the last call into the edit space's tally, in a build with probes
         (see `probes`): their steps, diagonals, meetings, splits and any sweep taken instead, the time
-        since `started`, a `clock()`, less the sweep's, and which engine settled the pair."""
+        since `started`, a tally's `start()`, less the sweep's, and which engine settled the pair."""
         comptime if PROBES:
             var steps_forward = 0
             var steps_backward = 0
@@ -1931,7 +1948,9 @@ struct SearchSpace(Movable):
             tally.add[SPLITS](splits)
             tally.add[SWEEP_CELLS](cells)
             tally.add[SWEEP_NS](swept_ns)
-            tally.add[WAVEFRONT_NS](clock() - started - swept_ns)
+            # The sweep's time is its own phase; its instructions and cycles stay counted here.
+            tally.since[WAVEFRONT_NS](started)
+            tally.add[WAVEFRONT_NS](-swept_ns)
             if cells > 0:
                 tally.set[ENGINE](ENGINE_SWEEP)
             elif steps_forward > 0 and steps_backward > 0:
@@ -2193,14 +2212,16 @@ def solve[
     var mirrored = ties != Ties.RIGHT
     if whole and mirrored:
         begun(backward_search, first, second, penalties, finish, keep, True, 0, 0, band.mirrored(columns - rows))
-        var cost = traced_alone(backward_search.value(), ceiling, True, limit, moves)
-        if cost != GROWING:
-            return cost
+        comptime if not FORCE_BIDIRECTIONAL:
+            var cost = traced_alone(backward_search.value(), ceiling, True, limit, moves)
+            if cost != GROWING:
+                return cost
     elif whole:
         begun(forward_search, first, second, penalties, start, keep, False, 0, 0, band)
-        var cost = traced_alone(forward_search.value(), ceiling, False, limit, moves)
-        if cost != GROWING:
-            return cost
+        comptime if not FORCE_BIDIRECTIONAL:
+            var cost = traced_alone(forward_search.value(), ceiling, False, limit, moves)
+            if cost != GROWING:
+                return cost
     if not whole or mirrored:
         begun(forward_search, first, second, penalties, start, keep, False, 0, 0, band)
     if not whole or not mirrored:
@@ -2468,23 +2489,29 @@ def global_path[
         band.covers(columns, rows)
         and difference_bits[pieces](penalties) > 0
         and path_bytes(columns, rows) <= limit * KEPT_BYTES
+        and not FORCE_NO_SWEEP
     )
-    var cost = solve[pieces](
-        forward_search,
-        backward_search,
-        first,
-        second,
-        penalties,
-        FREE_START,
-        FREE_START,
-        limit,
-        moves,
-        True,
-        ceiling,
-        band,
-        ties,
-        sweepable,
-    )
+    var cost = SWEEP_INSTEAD
+    # A forced sweep takes the pair from the start; its search is begun only to hold the probes.
+    if FORCE_SWEEP and sweepable:
+        begun(forward_search, first, second, penalties, FREE_START, False, False, 0, 0, band)
+    else:
+        cost = solve[pieces](
+            forward_search,
+            backward_search,
+            first,
+            second,
+            penalties,
+            FREE_START,
+            FREE_START,
+            limit,
+            moves,
+            True,
+            ceiling,
+            band,
+            ties,
+            sweepable,
+        )
     if cost != SWEEP_INSTEAD:
         return cost
     var started = clock()

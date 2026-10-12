@@ -53,6 +53,8 @@ from .probes import (
     CHECKPOINT_GIVE_UPS,
     DISTANCE,
     FIRST_BOUND,
+    FORCE,
+    FORCE_SEEDS,
     LAST_BOUND,
     LAST_ROUND_WORD_COLUMNS,
     PROBES,
@@ -659,6 +661,10 @@ def band_start(profile: Profile, search: Probe, mut probe: Probe, mut trusted: B
     var projected = diagonal_transition(profile, PROJECTION_ONLY, fronts)
     trusted = trusted_projection(search, projected)
     probe = Probe(-1, projected.estimate, max(search.floor, projected.floor))
+    comptime if FORCE_SEEDS:
+        comptime if FORCE == "seeds-none":
+            return SeedHeuristic(profile.columns, profile.rows)
+        return SeedHeuristic(profile, FORCE == "seeds-inexact")
     var seeded = profile.columns >= SEED_COLUMNS or (
         SHORT_SEEDS and projected.estimate >= SEED_EDITS and projected.estimate * SEED_DIVERGENCE <= profile.columns
     )

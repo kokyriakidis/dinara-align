@@ -8,15 +8,43 @@ defines no `DINARA_PROBES`, every probe is then a constant branch the compiler f
 
 A `Tally` lives in each `Aligner`'s space (see `EditSpace`), so it is per thread like the rest of the
 library's memory; the runner reads it after each pair and clears it. The slots below index it; `json`
-names them.
+names them. Each phase also counts the instructions and cycles it retired, read by `rdpmc` from counters
+the tally opens through `perf_event_open` on Linux x86 the first time it is started, so a phase costs a
+few dozen cycles more, not a system call.
+
+A build may also force a policy on the engines' choices, `-D DINARA_FORCE=<policy>` (see `FORCE`), so that
+`profile.py regret` can time each pair under every choice the library could have made for it.
 """
 
-from std.sys import is_defined
+from std.ffi import external_call
+from std.sys import get_defined_string, is_defined, llvm_intrinsic
+from std.sys.info import CompilationTarget
 from std.time import perf_counter_ns
 
 
 comptime PROBES = is_defined["DINARA_PROBES"]()
 """Whether this build records probes."""
+
+comptime FORCE = get_defined_string["DINARA_FORCE", ""]()
+"""A policy forced on the engines' choices, every one of which keeps the answer exact, or none:
+
+- `band`: no diagonal transition settles a pair; band doubling takes it from the one front's projection.
+- `diagonal`: diagonal transition never hands over on a projection, only at its own limit.
+- `full`: the whole matrix, swept for a distance, or as one band for an alignment.
+- `seeds-none`, `seeds-exact`, `seeds-inexact`: the band's seed heuristic, whatever the gate would choose.
+- `sweep`: a gap-affine pair the difference sweep can take takes it from the start.
+- `no-sweep`: the wavefront never hands a gap-affine pair to the sweep.
+- `bidirectional`: a gap-affine pair skips the one-search phase, both searches growing from the start.
+"""
+comptime FORCE_BAND = FORCE == "band"
+comptime FORCE_DIAGONAL = FORCE == "diagonal"
+comptime FORCE_FULL = FORCE == "full"
+comptime FORCE_SEEDS = FORCE.startswith("seeds-")
+comptime FORCE_SWEEP = FORCE == "sweep"
+comptime FORCE_NO_SWEEP = FORCE == "no-sweep"
+comptime FORCE_BIDIRECTIONAL = FORCE == "bidirectional"
+comptime FORCED_STEP_TENTHS = 1 << 30
+"""The step budget a forced diagonal transition takes: past any projection, so only its limit stops it."""
 
 # Phases, in nanoseconds.
 comptime ENCODE_NS = 0
@@ -86,7 +114,11 @@ comptime SWEEP_CELLS = 50
 # Band doubling again: the words times columns of the round that succeeded, the rest spent on rounds that
 # failed.
 comptime LAST_ROUND_WORD_COLUMNS = 51
-comptime SLOTS = 52
+# Phases of the paths beside the global ones: the bit-parallel search for an end (prefix, suffix, infix),
+# and the scored modes (local, extension, substitution tables).
+comptime SEARCH_NS = 52
+comptime SCORED_NS = 53
+comptime SLOTS = 54
 
 
 # The engines `ENGINE` names.
@@ -100,6 +132,8 @@ comptime ENGINE_BIDIRECTIONAL = 7
 comptime ENGINE_SWEEP = 8
 comptime ENGINE_LANES = 9
 comptime ENGINE_EMPTY = 10
+comptime ENGINE_SEARCH = 11
+comptime ENGINE_SCORED = 12
 
 
 @always_inline
@@ -110,17 +144,96 @@ def clock() -> Int:
     return 0
 
 
+def perf_event_open(config: Int) -> Int:
+    """A hardware counter of `config` (`PERF_TYPE_HARDWARE`) for this thread, user space only, counting from
+    now; -1 where none."""
+    comptime if not CompilationTarget.is_linux():
+        return -1
+    # `struct perf_event_attr` as its first version, 64 bytes: type, size, config, the sample period and
+    # type, the read format, then the flags, exclude_kernel and exclude_hv.
+    var attribute = List[UInt64](length=8, fill=0)
+    attribute[0] = UInt64(64) << 32
+    attribute[1] = UInt64(config)
+    attribute[5] = (1 << 5) | (1 << 6)
+    comptime number = 298 if CompilationTarget.is_x86() else 241
+    return external_call["syscall", Int](number, attribute.unsafe_ptr(), 0, -1, -1, 0)
+
+
+def counter_page(config: Int) -> Int:
+    """The address of the page through which user space reads a hardware counter of `config` by `rdpmc`, or
+    0 where it cannot: off Linux x86, without the event, or without `cap_user_rdpmc`."""
+    comptime if not (CompilationTarget.is_linux() and CompilationTarget.is_x86()):
+        return 0
+    var descriptor = perf_event_open(config)
+    if descriptor < 0:
+        return 0
+    # PROT_READ, MAP_SHARED
+    var page = external_call["mmap", Int](0, 4096, 1, 1, descriptor, 0)
+    if page == -1 or page == 0:
+        return 0
+    # `struct perf_event_mmap_page`: capabilities at byte 40, bit 2 `cap_user_rdpmc`.
+    var capabilities = MutPointer[UInt64, MutAnyOrigin](unsafe_from_address=page + 40).unsafe_load[volatile=True]()
+    if (capabilities >> 2) & 1 == 0:
+        return 0
+    return page
+
+
+@always_inline
+def read_counter(page: Int) -> Int:
+    """The counter behind `page` now, by `rdpmc` under the page's sequence lock; 0 where there is none."""
+    comptime if not CompilationTarget.is_x86():
+        return 0
+    if page == 0:
+        return 0
+    var words = MutPointer[UInt32, MutAnyOrigin](unsafe_from_address=page)
+    while True:
+        var sequence = words.unsafe_load[volatile=True](2)
+        var index = words.unsafe_load[volatile=True](3)
+        var offset = MutPointer[Int64, MutAnyOrigin](unsafe_from_address=page + 16).unsafe_load[volatile=True]()
+        var width = Int(MutPointer[UInt16, MutAnyOrigin](unsafe_from_address=page + 48).unsafe_load[volatile=True]())
+        if index == 0:
+            return 0
+        var count = llvm_intrinsic["llvm.x86.rdpmc", Int64](Int32(index - 1))
+        count = (count << Int64(64 - width)) >> Int64(64 - width)
+        if words.unsafe_load[volatile=True](2) == sequence:
+            return Int(count + offset)
+
+
 struct Tally(Movable):
-    """One pair's probes, by slot; empty and untouched in a build without probes."""
+    """One pair's probes, by slot, and each phase's instructions and cycles; empty and untouched in a build
+    without probes."""
 
     var values: List[Int]
+    var instructions: List[Int]
+    """Instructions retired in each phase slot."""
+    var cycles: List[Int]
+    """Cycles in each phase slot."""
+    var instruction_page: Int
+    """The instruction counter's page (see `counter_page`), 0 where there is none."""
+    var cycle_page: Int
+    """The cycle counter's page."""
+    var opened: Bool
+    """Whether the counters have been opened."""
+    var marked_instructions: Int
+    """The instructions counted when the current phase started."""
+    var marked_cycles: Int
+    """The cycles counted when it started."""
 
     def __init__(out self):
-        """Every slot zero, or no slots at all without probes."""
+        """Every slot zero, or no slots at all without probes; the counters opened when first started."""
         comptime if PROBES:
             self.values = List[Int](length=SLOTS, fill=0)
+            self.instructions = List[Int](length=SLOTS, fill=0)
+            self.cycles = List[Int](length=SLOTS, fill=0)
         else:
             self.values = List[Int]()
+            self.instructions = List[Int]()
+            self.cycles = List[Int]()
+        self.instruction_page = 0
+        self.cycle_page = 0
+        self.opened = False
+        self.marked_instructions = 0
+        self.marked_cycles = 0
 
     @always_inline
     def add[slot: Int](mut self, amount: Int):
@@ -142,19 +255,40 @@ struct Tally(Movable):
             self.values[slot] = value
 
     @always_inline
+    def start(mut self) -> Int:
+        """Marks the start of a phase: its counters now, and the time returned, for `since`."""
+        comptime if PROBES:
+            if not self.opened:
+                self.opened = True
+                # PERF_COUNT_HW_INSTRUCTIONS, PERF_COUNT_HW_CPU_CYCLES
+                self.instruction_page = counter_page(1)
+                self.cycle_page = counter_page(0)
+            self.marked_instructions = read_counter(self.instruction_page)
+            self.marked_cycles = read_counter(self.cycle_page)
+        return clock()
+
+    @always_inline
     def since[slot: Int](mut self, started: Int):
-        """Adds the nanoseconds since `started`, a `clock()`, to `slot`."""
+        """Adds the nanoseconds since `started`, a `start()`, to `slot`, and the instructions and cycles
+        since that mark to the phase's counts."""
         comptime if PROBES:
             self.values[slot] += clock() - started
+            if self.instruction_page != 0:
+                self.instructions[slot] += read_counter(self.instruction_page) - self.marked_instructions
+            if self.cycle_page != 0:
+                self.cycles[slot] += read_counter(self.cycle_page) - self.marked_cycles
 
     def clear(mut self):
         """Every slot back to zero, for the next pair."""
         comptime if PROBES:
             for slot in range(SLOTS):
                 self.values[slot] = 0
+                self.instructions[slot] = 0
+                self.cycles[slot] = 0
 
     def json(self) -> String:
-        """The slots that are not zero as a JSON object's members, the engine by name."""
+        """The slots that are not zero as a JSON object's members, the engine by name, and each phase's
+        instructions and cycles."""
         var out = String()
         comptime if PROBES:
             var names: List[StaticString] = [
@@ -210,6 +344,8 @@ struct Tally(Movable):
                 "splits",
                 "sweep_cells",
                 "last_round_word_columns",
+                "search_ns",
+                "scored_ns",
             ]
             var engines: List[StaticString] = [
                 "none",
@@ -223,6 +359,8 @@ struct Tally(Movable):
                 "sweep",
                 "lanes",
                 "empty",
+                "search",
+                "scored",
             ]
             for slot in range(SLOTS):
                 var value = self.values[slot]
@@ -234,6 +372,28 @@ struct Tally(Movable):
                     out.write('"engine": "', engines[value], '"')
                 else:
                     out.write('"', names[slot], '": ', value)
+            # The phase slots, whose instructions and cycles are counted beside their time.
+            var phases: List[Int] = [
+                ENCODE_NS,
+                DIAGONAL_NS,
+                TWO_ENDED_NS,
+                GROW_NS,
+                SEEDS_NS,
+                BAND_NS,
+                TRACEBACK_NS,
+                CIGAR_NS,
+                FULL_NS,
+                WAVEFRONT_NS,
+                SWEEP_NS,
+                SEARCH_NS,
+                SCORED_NS,
+            ]
+            for slot in phases:
+                var stem = names[slot].removesuffix("_ns")
+                if self.instructions[slot] != 0:
+                    out.write(', "', stem, '_instructions": ', self.instructions[slot])
+                if self.cycles[slot] != 0:
+                    out.write(', "', stem, '_cycles": ', self.cycles[slot])
         return out^
 
 

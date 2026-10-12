@@ -63,7 +63,7 @@ from .gap_affine import (
     wavefront_distance,
 )
 from .modes import ANY_LENGTH, Alignment, Anchor, Band, Costs, Mode, Ties
-from .probes import clock, ENGINE, ENGINE_LANES
+from .probes import ENGINE, ENGINE_LANES, ENGINE_SCORED, ENGINE_SEARCH, SCORED_NS, SEARCH_NS
 from .scoring import (
     cells_within,
     Scoring,
@@ -455,18 +455,21 @@ def cost_within(
             var scale = costs.unit_scale()
             if ends.first_begin == 0 and ends.first_end == 0:
                 return edit_distance(reference, query, space.edit) * scale
+            var started = space.edit.tally.start()
+            var found: Int
             if ends.first_end == 0:
                 # A suffix: a prefix of both reversed.
-                return (
-                    edit_search(reversed_text(query.as_bytes()), reversed_text(reference.as_bytes()), True).distance
-                    * scale
-                )
-            return edit_search(query, reference, ends.first_begin == 0).distance * scale
+                found = edit_search(reversed_text(query.as_bytes()), reversed_text(reference.as_bytes()), True).distance
+            else:
+                found = edit_search(query, reference, ends.first_begin == 0).distance
+            space.edit.tally.since[SEARCH_NS](started)
+            space.edit.tally.set[ENGINE](ENGINE_SEARCH)
+            return found * scale
         except error:
             # More symbols than the sweep takes: the wavefront takes any.
             if error.kind != ErrorKind.UNKNOWN_SYMBOL:
                 raise error
-    var started = clock()
+    var started = space.edit.tally.start()
     var penalties = space.penalties_for(costs)
     if max_cost < 0:
         return None
@@ -552,7 +555,11 @@ def aligned_within(
     if max_cost != Int.MAX:
         raise AlignmentError(ErrorKind.INVALID_ARGUMENT, "a mode with a match score takes no cost cap")
     _ = penalties_of(costs)
-    return best_scoring(reference, query, costs, mode, band, ties, eqx, limit)
+    var started = space.edit.tally.start()
+    var best = best_scoring(reference, query, costs, mode, band, ties, eqx, limit)
+    space.edit.tally.since[SCORED_NS](started)
+    space.edit.tally.set[ENGINE](ENGINE_SCORED)
+    return best^
 
 
 def swept_by_bits(costs: Costs, ends: EndsFree, band: Band, max_cost: Int, columns: Int, rows: Int) -> Bool:
@@ -607,6 +614,7 @@ def least_costly(
                 var whole = edit_cigar(reference, query, space.edit, eqx, ties, kept_bytes(limit))
                 var cost = whole.distance * scale
                 return Alignment(cost, -cost, whole^.take_cigar(), 0, columns, 0, rows)
+            var started = space.edit.tally.start()
             var hit: EditHit
             if ends.first_end == 0:
                 # A suffix: a prefix of both reversed, the rule's span mirrored, as `Ties.RIGHT` is `Ties.LEFT`
@@ -620,6 +628,7 @@ def least_costly(
                 hit = EditHit(mirrored.distance, columns - mirrored.end, columns - mirrored.start)
             else:
                 hit = edit_search(query, reference, ends.first_begin == 0, ties)
+            space.edit.tally.since[SEARCH_NS](started)
             var part = text_of(reference.as_bytes()[hit.start : hit.end])
             var found = edit_cigar(part, query, space.edit, eqx, ties, kept_bytes(limit))
             var cost = found.distance * scale
@@ -627,7 +636,7 @@ def least_costly(
         except error:
             if error.kind != ErrorKind.UNKNOWN_SYMBOL:
                 raise error
-    var started = clock()
+    var started = space.edit.tally.start()
     var penalties = space.penalties_for(costs)
     if max_cost < 0:
         return not_found()

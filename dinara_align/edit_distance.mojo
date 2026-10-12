@@ -29,6 +29,8 @@ from .diagonal import (
     STEP_TENTHS_ALIGNMENT,
     STEP_TENTHS_DISTANCE,
     grow_to,
+    Probe,
+    PROJECTION_ONLY,
     two_ended,
     two_ended_distance,
     two_ended_setup,
@@ -38,7 +40,6 @@ from .modes import Ties
 from .probes import (
     BAND_NS,
     CIGAR_NS,
-    clock,
     DIAGONAL_NS,
     DIAGONAL_SCORE,
     DIAGONAL_STEPS,
@@ -53,6 +54,10 @@ from .probes import (
     ENGINE_WIDE_FULL,
     ESTIMATE,
     FLOOR,
+    FORCE_BAND,
+    FORCE_DIAGONAL,
+    FORCE_FULL,
+    FORCED_STEP_TENTHS,
     front_steps,
     FULL_NS,
     FULL_WORD_COLUMNS,
@@ -67,6 +72,7 @@ from .probes import (
     TWO_ENDED_SCORE,
     TWO_ENDED_STEPS,
 )
+from .seeds import SeedHeuristic
 from .traceback import cigar_string, diagonal_cigar, EditPath
 
 
@@ -116,7 +122,7 @@ def edit_distance(first: String, second: String, mut space: EditSpace) raises Al
     matrix, the whole matrix is swept instead; a short pair's band covers it from the start, so the
     diagonal transition gives way straight to the sweep once it would cost more.
     """
-    var started = clock()
+    var started = space.tally.start()
     space.profile.reset(first, second)
     ref profile = space.profile
     ref tally = space.tally
@@ -127,11 +133,19 @@ def edit_distance(first: String, second: String, mut space: EditSpace) raises Al
     # A short pair's band would sweep its whole matrix (see `SHORT_BAND_COLUMNS`), so past what that
     # sweep costs the diagonal transition gives way to the sweep itself.
     var short = profile.columns <= SHORT_BAND_COLUMNS
-    started = clock()
+    comptime if FORCE_FULL:
+        return swept_whole(profile, tally, ENGINE_WIDE_FULL)
+    comptime if FORCE_BAND:
+        var search = projection(profile)
+        if short:
+            # The band of a short pair covers the matrix, so band doubling would hand it straight back.
+            return swept_whole(profile, tally, ENGINE_SHORT_FULL)
+        return banded_distance(profile, search, tally)
+    started = tally.start()
     var search = two_ended_distance(
         profile,
-        STEP_TENTHS_DISTANCE,
-        full_matrix_steps(profile.columns, profile.rows) if short else Int.MAX,
+        FORCED_STEP_TENTHS if FORCE_DIAGONAL else STEP_TENTHS_DISTANCE,
+        full_matrix_steps(profile.columns, profile.rows) if short and not FORCE_DIAGONAL else Int.MAX,
         space.first_back,
         space.second_back,
         space.ahead,
@@ -151,16 +165,30 @@ def edit_distance(first: String, second: String, mut space: EditSpace) raises Al
         return search.distance
     if short:
         return swept_whole(profile, tally, ENGINE_SHORT_FULL)
+    return banded_distance(profile, search, tally)
+
+
+def projection(profile: Profile) -> Probe:
+    """One front's projection of the distance from its first edits, as `band_start` takes it, settling
+    nothing: what a band forced to take a pair (see `probes.FORCE`) starts from."""
+    var fronts = DiagonalFronts()
+    var projected = diagonal_transition(profile, PROJECTION_ONLY, fronts)
+    return Probe(-1, projected.estimate, projected.floor)
+
+
+def banded_distance(mut profile: Profile, search: Probe, mut tally: Tally) -> Int:
+    """The distance by band doubling from the diagonal transition's `search`, or by a sweep of the whole
+    matrix once the band would cover it."""
     var probe = search
     var trusted = True
-    started = clock()
+    var started = tally.start()
     var heuristic = band_start(profile, search, probe, trusted)
     tally.since[SEEDS_NS](started)
     tally.set[TRUSTED](Int(trusted))
     tally.set[ESTIMATE](probe.estimate)
     heuristic.tally_into(tally)
     var trail = Trail()
-    started = clock()
+    started = tally.start()
     var distance = band_doubling[False](profile, True, probe, trail, heuristic, trusted, tally)
     tally.since[BAND_NS](started)
     if distance >= 0:
@@ -171,7 +199,7 @@ def edit_distance(first: String, second: String, mut space: EditSpace) raises Al
 
 def swept_whole(mut profile: Profile, mut tally: Tally, engine: Int) -> Int:
     """`full_distance`, its time and cells tallied and `engine` named as what settled the pair."""
-    var started = clock()
+    var started = tally.start()
     var distance = full_distance(profile)
     tally.since[FULL_NS](started)
     tally.set[ENGINE](engine)
@@ -230,13 +258,13 @@ def edit_cigar(
     # The search's rule places every edit as far right as it goes; over the reversed pair that is as far
     # left over the pair itself.
     var reverse = ties == Ties.LEFT
-    var started = clock()
+    var started = space.tally.start()
     space.profile.reset(first, second, reverse)
     ref profile = space.profile
     ref tally = space.tally
     tally.since[ENCODE_NS](started)
     var settled = settle(profile, space.traced, max_memory // EDGE_WORD_BYTES, tally)
-    started = clock()
+    started = tally.start()
     if not settled.banded:
         var cigar = diagonal_cigar(profile, space.traced, settled.distance, reverse, eqx)
         tally.since[CIGAR_NS](started)
@@ -303,10 +331,15 @@ def settle(
             moves.append(LEFT)
         tally.set[ENGINE](ENGINE_EMPTY)
         return Settled(columns + rows, moves^, True)
+    comptime if FORCE_FULL:
+        return banded_alignment(profile, Probe(-1, columns + rows, 0), budget, tally, True)
+    comptime if FORCE_BAND:
+        return banded_alignment(profile, projection(profile), budget, tally, False)
+    comptime step_tenths = FORCED_STEP_TENTHS if FORCE_DIAGONAL else STEP_TENTHS_ALIGNMENT
     # A near-identical pair: one front, kept whole, settles it before both ends' setup would pay.
-    var started = clock()
+    var started = tally.start()
     traced.clear()
-    var close = diagonal_transition(profile, STEP_TENTHS_ALIGNMENT, traced, switch_setup=two_ended_setup(columns, rows))
+    var close = diagonal_transition(profile, step_tenths, traced, switch_setup=two_ended_setup(columns, rows))
     comptime if PROBES:
         tally.since[DIAGONAL_NS](started)
         var steps = 0
@@ -319,12 +352,12 @@ def settle(
         tally.set[ENGINE](ENGINE_DIAGONAL)
         tally.set[DISTANCE](close.distance)
         return Settled(close.distance, List[UInt8](), False)
-    started = clock()
+    started = tally.start()
     var first_back = reversed_codes(profile.column_codes, columns, FIRST_SENTINEL)
     var second_back = reversed_codes(profile.row_codes, rows, SECOND_SENTINEL)
     var ahead = FrontPair(record=True)
     var behind = FrontPair(record=True)
-    var meeting = two_ended(profile, first_back, second_back, STEP_TENTHS_ALIGNMENT, ahead, behind)
+    var meeting = two_ended(profile, first_back, second_back, step_tenths, ahead, behind)
     comptime if PROBES:
         tally.since[TWO_ENDED_NS](started)
         tally.set[TWO_ENDED_SCORE](ahead.score + behind.score)
@@ -333,7 +366,7 @@ def settle(
         tally.set[FLOOR](meeting.probe.floor)
     if meeting.probe.distance >= 0:
         var distance = meeting.probe.distance
-        started = clock()
+        started = tally.start()
         grow_to(profile, ahead.history, behind.history, distance)
         traced = ahead^.take_history()
         comptime if PROBES:
@@ -345,21 +378,34 @@ def settle(
         tally.set[ENGINE](ENGINE_TWO_ENDED)
         tally.set[DISTANCE](distance)
         return Settled(distance, List[UInt8](), False)
-    var probe = meeting.probe
+    return banded_alignment(profile, meeting.probe, budget, tally, False)
+
+
+def banded_alignment(mut profile: Profile, search: Probe, budget: Int, mut tally: Tally, whole: Bool) -> Settled:
+    """The distance by band doubling from the diagonal transition's `search`, its path traced back over the
+    trail, its edges kept within `budget` words; with `whole`, as one band over the whole matrix and the gap
+    heuristic alone, as a policy forcing it takes it (see `probes.FORCE`)."""
+    var columns = profile.columns
+    var rows = profile.rows
+    var probe = search
     var trusted = True
-    started = clock()
-    var heuristic = band_start(profile, meeting.probe, probe, trusted)
+    var started = tally.start()
+    var heuristic: SeedHeuristic
+    if whole:
+        heuristic = SeedHeuristic(columns, rows)
+    else:
+        heuristic = band_start(profile, search, probe, trusted)
     tally.since[SEEDS_NS](started)
     tally.set[TRUSTED](Int(trusted))
     tally.set[ESTIMATE](probe.estimate)
     heuristic.tally_into(tally)
     var trail = Trail(columns, budget)
-    started = clock()
+    started = tally.start()
     var distance = band_doubling[True](profile, False, probe, trail, heuristic, trusted, tally)
     tally.since[BAND_NS](started)
-    started = clock()
+    started = tally.start()
     var moves = List[UInt8](capacity=columns + rows)
     retrace(profile, trail, heuristic, columns, rows, distance, moves, tally)
     tally.since[TRACEBACK_NS](started)
-    tally.set[ENGINE](ENGINE_BAND)
+    tally.set[ENGINE](ENGINE_WIDE_FULL if whole else ENGINE_BAND)
     return Settled(distance, moves^, True)
