@@ -108,11 +108,12 @@ BODY = [
  'the minimum of two such functions [@Li2018], and a substitution matrix instead scores each pair of letters. '
  'Global alignment compares two whole sequences; ends-free alignment places a read inside a longer window or '
  'finds the overlap of two reads; extension grows an alignment from a seed match [@Li2018]; and local alignment '
- 'finds the best-matching parts of two sequences. Extension and local alignment maximise a score that rewards '
- 'each match (Section 3.8). An alignment is *optimal* if no alignment has lower cost under the requested costs '
- 'and mode; a caller may further restrict alignments to a band of diagonals or a maximum cost, and an exact '
- 'aligner then returns an optimal alignment among those or reports that none exists. At unit costs the distance '
- '\\(D(i,j)\\) between the prefixes \\(a_1\\dots a_i\\) and \\(b_1\\dots b_j\\) satisfies'),
+ 'finds the best-matching parts of two sequences. Extension, local and, where asked, ends-free alignment instead '
+ 'maximise a score that rewards matches (Section 3.8). An alignment is *optimal* if no alignment has a lower '
+ 'cost, or a higher score, under the requested costs and mode; a caller may further restrict alignments to a '
+ 'band of diagonals or a maximum cost, and an exact aligner then returns an optimal alignment among those or '
+ 'reports that none exists. At unit costs the distance \\(D(i,j)\\) between the prefixes \\(a_1\\dots a_i\\) and '
+ '\\(b_1\\dots b_j\\) satisfies'),
 ('p',
  '\\[ D(i,j) = \\min\\bigl(D(i-1,j)+1,\\; D(i,j-1)+1, \\qquad D(i-1,j-1)+[a_i \\ne b_j]\\bigr), \\]'),
 ('p',
@@ -140,7 +141,7 @@ BODY = [
  'gap-chaining seed heuristic charges a chain of matches from a cell the cost of each match and, for each gap '
  'between consecutive matches and from the last to the end, the larger of the potential of the seeds that start '
  'in the gap and the number of diagonals it shifts. Its value, the least charge of any chain, never exceeds the '
- 'remaining cost, and A*PA keeps the match starts in layers by the value of the best chain each begins '
+ 'remaining cost, and A*PA keeps the match starts in layers by how much potential the best chain from each saves '
  "[@GrootKoerkamp2024a]. A*PA2 prunes matches before the alignment, in place of A*PA's pruning during the "
  'search: a match \\(\\nu\\) with cost \\(c(\\nu)\\) and end cell \\(\\mathrm{end}(\\nu)\\) is kept only if a path from '
  '\\(\\mathrm{end}(\\nu)\\), starting at cost \\(c(\\nu)\\), crosses the next \\(p = 14\\) seeds, counting that of '
