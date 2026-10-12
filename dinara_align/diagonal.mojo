@@ -992,10 +992,21 @@ def grow_to(profile: Profile, mut ahead: DiagonalFronts, behind: DiagonalFronts,
     ahead.starts.reserve(len(ahead.starts) + scores)
     ahead.lows.reserve(len(ahead.lows) + scores)
     ahead.highs.reserve(len(ahead.highs) + scores)
+    # Each score's bounds carried from the last rather than read back, and the bookkeeping written through
+    # pointers into room taken at once: a score grows only a few diagonals, and on short reads the checked
+    # reads and appends around them had cost more than the diagonals themselves.
+    var previous_low = kept_low
+    var previous_high = kept_high
+    var previous_start = ahead.starts[top]
+    var first_score = len(ahead.lows)
+    ahead.starts.resize(unsafe_uninit_length=first_score + scores)
+    ahead.lows.resize(unsafe_uninit_length=first_score + scores)
+    ahead.highs.resize(unsafe_uninit_length=first_score + scores)
+    var behind_lows = behind.lows.unsafe_ptr()
+    var behind_highs = behind.highs.unsafe_ptr()
+    var behind_starts = behind.starts.unsafe_ptr()
     for score in range(top + 1, distance + 1):
-        var previous_low = ahead.lows[score - 1]
-        var previous_high = ahead.highs[score - 1]
-        var previous = ahead.offsets.unsafe_ptr().unsafe_offset(ahead.starts[score - 1] + FRONT_PADDING - previous_low)
+        var previous = ahead.offsets.unsafe_ptr().unsafe_offset(previous_start + FRONT_PADDING - previous_low)
         var new_low = max(previous_low - 1, -rows)
         var new_high = min(previous_high + 1, columns)
         var row_start = len(ahead.offsets)
@@ -1008,9 +1019,11 @@ def grow_to(profile: Profile, mut ahead: DiagonalFronts, behind: DiagonalFronts,
             current[unsafe_offset=new_high + pad] = UNREACHED
         rest = distance - score
         # The backward front of the rest, as a row of the forward diagonals it mirrors.
-        var back_low = behind.lows[rest]
-        var back_high = behind.highs[rest]
-        var back = behind.offsets.unsafe_ptr().unsafe_offset(behind.starts[rest] + FRONT_PADDING - back_low)
+        var back_low = behind_lows[unsafe_offset=rest]
+        var back_high = behind_highs[unsafe_offset=rest]
+        var back = behind.offsets.unsafe_ptr().unsafe_offset(
+            behind_starts[unsafe_offset=rest] + FRONT_PADDING - back_low
+        )
         kept_low = new_high + 1
         kept_high = new_low - 1
         for diagonal in range(new_low, new_high + 1):
@@ -1038,9 +1051,13 @@ def grow_to(profile: Profile, mut ahead: DiagonalFronts, behind: DiagonalFronts,
         if kept_low > kept_high:
             kept_low = new_low
             kept_high = new_low - 1
-        ahead.starts.append(row_start + kept_low - new_low)
-        ahead.lows.append(kept_low)
-        ahead.highs.append(kept_high)
+        var at = first_score + score - top - 1
+        previous_start = row_start + kept_low - new_low
+        previous_low = kept_low
+        previous_high = kept_high
+        ahead.starts.unsafe_ptr()[unsafe_offset=at] = previous_start
+        ahead.lows.unsafe_ptr()[unsafe_offset=at] = kept_low
+        ahead.highs.unsafe_ptr()[unsafe_offset=at] = kept_high
 
 
 def trace_diagonals(profile: Profile, fronts: DiagonalFronts, distance: Int, mut moves: List[UInt8]):
