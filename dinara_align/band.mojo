@@ -673,11 +673,9 @@ def band_start(profile: Profile, search: Probe, mut probe: Probe, mut trusted: B
     )
     if not seeded:
         return SeedHeuristic(profile.columns, profile.rows)
-    # Long pairs only: inexact seeds when a trusted projection already says they pay, else exact ones
-    # rebuilt inexact if they chain poorly (see `SeedHeuristic`). An untrusted projection, from edits
-    # gathered at an end, overstates the divergence, as it would aim the band (see `band_doubling`): on
-    # the ont-500k-genvar reads it chose inexact seeds that cost 5 to 48% more than exact ones.
+    # Long pairs only: inexact seeds when the projection already says they pay, else exact ones
+    # rebuilt inexact if they chain poorly (see `SeedHeuristic`).
     var long = profile.columns >= INEXACT_COLUMNS
-    var inexact = long and trusted and projected.estimate * INEXACT_DIVERGENCE >= profile.columns
+    var inexact = long and projected.estimate * INEXACT_DIVERGENCE >= profile.columns
     var cutoff = INEXACT_CHAINED_SPREAD if trusted else INEXACT_CHAINED
     return SeedHeuristic(profile, inexact, choose=long, cutoff=min(cutoff, INEXACT_CHAINED))
