@@ -150,8 +150,9 @@ def forward_segment(
     # Room past the last row for a lane group's stores past its end.
     fronts.columns.resize(unsafe_uninit_length=levels * stride + LANES)
     var grid = fronts.columns.unsafe_ptr().unsafe_origin_cast[MutUntrackedOrigin]()
-    fronts.lows.resize(levels, 0)
-    fronts.highs.resize(levels, 0)
+    # Every level writes its own bounds below before any is read.
+    fronts.lows.resize(unsafe_uninit_length=levels)
+    fronts.highs.resize(unsafe_uninit_length=levels)
     var lows = fronts.lows.unsafe_ptr()
     var highs = fronts.highs.unsafe_ptr()
     var entry_diagonals = fronts.entry_diagonals.unsafe_ptr()
