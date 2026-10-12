@@ -579,6 +579,22 @@ struct FrontPair(Movable):
         for diagonal in range(-FRONT_PADDING, FRONT_PADDING + 1):
             first[unsafe_offset=diagonal] = UNREACHED
 
+    def restart(mut self, record: Bool):
+        """As new, recording when `record`, the ring's and the history's memory kept: an alignment's searches
+        over a reused space take no memory a pair, where each pair's own had been tens of kilobytes."""
+        self.low = 0
+        self.high = 0
+        self.previous_low = 0
+        self.previous_high = -1
+        self.score = 0
+        self.slot = 0
+        self.furthest = 0
+        self.history.clear()
+        self.record = record
+        var first = self.front_mut(0)
+        for diagonal in range(-FRONT_PADDING, FRONT_PADDING + 1):
+            first[unsafe_offset=diagonal] = UNREACHED
+
     def take_history(deinit self) -> DiagonalFronts:
         """The fronts kept, the rest given up."""
         return self.history^

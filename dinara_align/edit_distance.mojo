@@ -25,7 +25,7 @@ from .diagonal import (
     diagonal_transition,
     DiagonalFronts,
     FrontPair,
-    reversed_codes,
+    reversed_codes_into,
     STEP_TENTHS_ALIGNMENT,
     STEP_TENTHS_DISTANCE,
     grow_to,
@@ -89,6 +89,10 @@ struct EditSpace(Movable):
     var behind: FrontPair
     var traced: DiagonalFronts
     """The fronts an alignment settled by diagonal transition traces back (see `settle`)."""
+    var traced_ahead: FrontPair
+    """An alignment's two-ended search from the start, recording, kept from pair to pair (see `settle`)."""
+    var traced_behind: FrontPair
+    """Its search from the end."""
     var tally: Tally
     """The last pair's probes, in a build with them (see `probes`)."""
 
@@ -100,6 +104,8 @@ struct EditSpace(Movable):
         self.ahead = FrontPair()
         self.behind = FrontPair()
         self.traced = DiagonalFronts(reserve=False)
+        self.traced_ahead = FrontPair(record=True)
+        self.traced_behind = FrontPair(record=True)
         self.tally = Tally()
 
 
@@ -286,7 +292,16 @@ def edit_cigar(
     space.profile.reset(first, second, reverse)
     ref profile = space.profile
     space.tally.since(ENCODE_NS, started)
-    var settled = settle(profile, space.traced, max_memory // EDGE_WORD_BYTES, space.tally)
+    var settled = settle(
+        profile,
+        space.traced,
+        space.first_back,
+        space.second_back,
+        space.traced_ahead,
+        space.traced_behind,
+        max_memory // EDGE_WORD_BYTES,
+        space.tally,
+    )
     comptime if PROBES:
         started = space.tally.start()
     if not settled.banded:
@@ -334,7 +349,14 @@ struct Settled(Movable):
 
 
 def settle(
-    mut profile: Profile, mut traced: DiagonalFronts, budget: Int, mut tally: Tally
+    mut profile: Profile,
+    mut traced: DiagonalFronts,
+    mut first_back: List[UInt8],
+    mut second_back: List[UInt8],
+    mut ahead: FrontPair,
+    mut behind: FrontPair,
+    budget: Int,
+    mut tally: Tally,
 ) raises AlignmentError -> Settled:
     """The global edit distance between a profile's two sequences, and what an optimal alignment by
     WFA2-lib's rule for ties is traced from: from the corner back, an edit into each cell whenever one
@@ -348,8 +370,9 @@ def settle(
     succeeds, or within `budget` words only some, and each tile is traced by the same rule (see
     `band.retrace`).
 
-    The fronts to trace back are left in `traced`, whose memory a reused space keeps from pair to pair,
-    and the pair's probes in `tally` (see `probes`).
+    The fronts to trace back are left in `traced`, and the two-ended search runs over `first_back`,
+    `second_back`, `ahead` and `behind`, all of whose memory a reused space keeps from pair to pair; the
+    pair's probes go in `tally` (see `probes`).
     """
     var columns = profile.columns
     var rows = profile.rows
@@ -383,10 +406,10 @@ def settle(
         tally.set(DISTANCE, close.distance)
         return Settled(close.distance, List[UInt8](), False)
     started = tally.start()
-    var first_back = reversed_codes(profile.column_codes, columns, FIRST_SENTINEL)
-    var second_back = reversed_codes(profile.row_codes, rows, SECOND_SENTINEL)
-    var ahead = FrontPair(record=True)
-    var behind = FrontPair(record=True)
+    reversed_codes_into(first_back, profile.column_codes, columns, FIRST_SENTINEL)
+    reversed_codes_into(second_back, profile.row_codes, rows, SECOND_SENTINEL)
+    ahead.restart(record=True)
+    behind.restart(record=True)
     var meeting = two_ended(profile, first_back, second_back, step_tenths, ahead, behind)
     comptime if PROBES:
         tally.since(TWO_ENDED_NS, started)
@@ -398,7 +421,8 @@ def settle(
         var distance = meeting.probe.distance
         started = tally.start()
         grow_to(profile, ahead.history, behind.history, distance)
-        traced = ahead^.take_history()
+        # The grown fronts become the ones traced, and the search keeps the memory they had.
+        swap(traced, ahead.history)
         comptime if PROBES:
             tally.since(GROW_NS, started)
             var grown = 0
