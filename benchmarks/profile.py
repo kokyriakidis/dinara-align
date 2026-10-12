@@ -280,7 +280,10 @@ def samples(options) -> list[tuple[str, Path, dict]]:
 
 def ours_tool(options) -> str:
     """The name the runner takes for one pair at a time, at the costs asked for."""
-    return f"dinara-align:{options.affine}" if options.affine else bench.dinara("1 thread")
+    if options.affine:
+        return f"dinara-align:{options.affine}"
+    # The distance alone, no traceback (see `ours.mojo`), with `--distance`.
+    return bench.dinara("1 thread") + (" distance" if options.distance else "")
 
 
 def rounds_of(binary: Path, tool: str, path: Path, options) -> list[list[tuple]]:
@@ -1367,6 +1370,8 @@ def main() -> None:
     parser.add_argument("head", nargs="?", default=".", help="compare: the commit compared, or . (default) for this checkout")
     parser.add_argument("--only", nargs="*", default=[], help="only datasets whose names hold one of these")
     parser.add_argument("--affine", metavar="X,O,E", help="at affine costs: WFA's mismatch, opening and extension")
+    parser.add_argument("--distance", action="store_true",
+                        help="unit costs' distance alone, no traceback, rather than an alignment")
     parser.add_argument("--bases", type=float, default=bench.SAMPLE_BASES, help="sequence per sample, as bench.py")
     parser.add_argument("--budget", type=float, default=30.0, help="seconds per run per sample (default 30)")
     parser.add_argument("--rounds", type=int, default=3, help="rounds of dinara-align (default 3)")
