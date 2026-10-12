@@ -68,7 +68,9 @@ def main() raises:
         var taken = Atomic[Int64](0)
         var started = perf_counter_ns()
 
-        def run_pieces(worker: Int) {mut taken, imm piece_references, imm piece_queries, imm costs, imm out, imm pairs, imm pieces, imm threads}:
+        def run_pieces(
+            worker: Int,
+        ) {mut taken, imm piece_references, imm piece_queries, imm costs, imm out, imm pairs, imm pieces, imm threads}:
             """Takes the next piece until none is left, each one call."""
             var last = 0
             while True:

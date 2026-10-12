@@ -13,6 +13,8 @@ its counts are left out rather than reported as zero.
 from std.ffi import external_call
 from std.sys.info import CompilationTarget
 
+from dinara_align.probes import counter_page, read_counter, UNCOUNTED
+
 
 comptime EVENTS = 7
 """Hardware events counted: see `Counters.json`."""
@@ -54,6 +56,10 @@ struct Counters(Movable):
     """`getrusage`'s answer."""
     var shim: Int
     """The address of `counting.c`'s `dinara_counts`, 0 where it is not preloaded."""
+    var instruction_page: Int
+    """The instruction counter's page, which an aligner's tally counts its phases on (see `Tally.use_counters`)."""
+    var cycle_page: Int
+    """The cycle counter's page, likewise."""
     var multiplexed: Bool
     """Whether any event ran for less time than it was enabled, its count then scaled."""
 
@@ -63,8 +69,15 @@ struct Counters(Movable):
         # PERF_TYPE_HARDWARE, then PERF_TYPE_HW_CACHE as cache | read << 8 | miss << 16.
         var kinds = [0, 0, 0, 0, 3, 3, 3]
         var configs = [1, 0, 4, 5, 0x10000, 0x10002, 0x10003]
+        # Instructions and cycles by `rdpmc` from pages the library opens, shared with each aligner's tally
+        # (see `Tally.use_counters`), so no event is open twice and every one fits on the processor at once.
+        self.instruction_page = counter_page(1)
+        self.cycle_page = counter_page(0)
         for event in range(EVENTS):
-            self.descriptors.append(perf_event_open(kinds[event], configs[event]))
+            if event < 2:
+                self.descriptors.append(-1)
+            else:
+                self.descriptors.append(perf_event_open(kinds[event], configs[event]))
         var name = String("dinara_counts")
         var handle = -2 if CompilationTarget.is_macos() else 0
         self.shim = external_call["dlsym", Int](handle, name.as_c_string_span().ptr())
@@ -98,6 +111,15 @@ struct Counters(Movable):
                 )
             else:
                 self.put[end](event, Int(self.buffer[0]))
+        for event in range(2):
+            var page = self.instruction_page if event == 0 else self.cycle_page
+            if page == 0:
+                continue
+            var value = read_counter(page)
+            if value == UNCOUNTED:
+                self.multiplexed = True
+            else:
+                self.put[end](event, value)
         for slot in range(SHIMS):
             self.put[end](EVENTS + slot, -1)
             if self.shim != 0:

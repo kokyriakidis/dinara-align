@@ -178,9 +178,15 @@ def counter_page(config: Int) -> Int:
     return page
 
 
+comptime UNCOUNTED = -1
+"""What `read_counter` gives for a counter the kernel has not got on the processor right now, as when more
+events are open than it has counters and it rotates them: no `rdpmc` reading is then meaningful."""
+
+
 @always_inline
 def read_counter(page: Int) -> Int:
-    """The counter behind `page` now, by `rdpmc` under the page's sequence lock; 0 where there is none."""
+    """The counter behind `page` now, by `rdpmc` under the page's sequence lock; 0 where there is none, and
+    `UNCOUNTED` while the kernel has it off the processor."""
     comptime if not CompilationTarget.is_x86():
         return 0
     if page == 0:
@@ -191,8 +197,11 @@ def read_counter(page: Int) -> Int:
         var index = words.unsafe_load[volatile=True](3)
         var offset = MutPointer[Int64, MutAnyOrigin](unsafe_from_address=page + 16).unsafe_load[volatile=True]()
         var width = Int(MutPointer[UInt16, MutAnyOrigin](unsafe_from_address=page + 48).unsafe_load[volatile=True]())
-        if index == 0:
-            return 0
+        # Enabled and running times apart: the event has been rotated off since it opened.
+        var enabled = MutPointer[UInt64, MutAnyOrigin](unsafe_from_address=page + 24).unsafe_load[volatile=True]()
+        var running = MutPointer[UInt64, MutAnyOrigin](unsafe_from_address=page + 32).unsafe_load[volatile=True]()
+        if index == 0 or enabled != running:
+            return UNCOUNTED
         var count = llvm_intrinsic["llvm.x86.rdpmc", Int64](Int32(index - 1))
         count = (count << Int64(64 - width)) >> Int64(64 - width)
         if words.unsafe_load[volatile=True](2) == sequence:
@@ -218,6 +227,8 @@ struct Tally(Movable):
     """The instructions counted when the current phase started."""
     var marked_cycles: Int
     """The cycles counted when it started."""
+    var uncounted: Bool
+    """Whether a phase of this pair met a counter off the processor, its counts then left out."""
 
     def __init__(out self):
         """Every slot zero, or no slots at all without probes; the counters opened when first started."""
@@ -234,6 +245,15 @@ struct Tally(Movable):
         self.opened = False
         self.marked_instructions = 0
         self.marked_cycles = 0
+        self.uncounted = False
+
+    def use_counters(mut self, instruction_page: Int, cycle_page: Int):
+        """Counts the phases on counters a caller already opened (see `counter_page`), rather than open its
+        own: two of each event would need more counters than the processor has, and rotated counters
+        give no reading."""
+        self.instruction_page = instruction_page
+        self.cycle_page = cycle_page
+        self.opened = True
 
     @always_inline
     def add[slot: Int](mut self, amount: Int):
@@ -273,10 +293,18 @@ struct Tally(Movable):
         since that mark to the phase's counts."""
         comptime if PROBES:
             self.values[slot] += clock() - started
-            if self.instruction_page != 0:
-                self.instructions[slot] += read_counter(self.instruction_page) - self.marked_instructions
-            if self.cycle_page != 0:
-                self.cycles[slot] += read_counter(self.cycle_page) - self.marked_cycles
+            var instructions = read_counter(self.instruction_page)
+            var cycles = read_counter(self.cycle_page)
+            if (
+                instructions == UNCOUNTED
+                or cycles == UNCOUNTED
+                or self.marked_instructions == UNCOUNTED
+                or self.marked_cycles == UNCOUNTED
+            ):
+                self.uncounted = True
+                return
+            self.instructions[slot] += instructions - self.marked_instructions
+            self.cycles[slot] += cycles - self.marked_cycles
 
     def clear(mut self):
         """Every slot back to zero, for the next pair."""
@@ -285,6 +313,7 @@ struct Tally(Movable):
                 self.values[slot] = 0
                 self.instructions[slot] = 0
                 self.cycles[slot] = 0
+            self.uncounted = False
 
     def json(self) -> String:
         """The slots that are not zero as a JSON object's members, the engine by name, and each phase's
@@ -388,6 +417,9 @@ struct Tally(Movable):
                 SEARCH_NS,
                 SCORED_NS,
             ]
+            if self.uncounted:
+                out.write(', "phase_counters": "uncounted"')
+                return out^
             for slot in phases:
                 var stem = names[slot].removesuffix("_ns")
                 if self.instructions[slot] != 0:

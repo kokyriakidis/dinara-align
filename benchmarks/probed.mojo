@@ -46,6 +46,7 @@ def main() raises:
         var pairs = SeqFile(path)
         var aligner = Aligner()
         var counters = Counters()
+        aligner.space.edit.tally.use_counters(counters.instruction_page, counters.cycle_page)
         var first = String()
         var second = String()
         while spent < budget and pairs.next(first, second):

@@ -38,6 +38,7 @@ def main() raises:
     var scoring = dna_table()
     var aligner = Aligner()
     var counters = Counters()
+    aligner.space.edit.tally.use_counters(counters.instruction_page, counters.cycle_page)
     for index in range(len(references)):
         ref reference = references[index]
         ref query = queries[index]
