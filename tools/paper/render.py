@@ -621,4 +621,15 @@ if __name__ == "__main__":
         open(os.path.join(PAPER, path), "w").write(text)
     open(os.path.join(PAPER, "supplement.tex"), "w").write(render_tex_supplement())
     print("rendered paper/ and build/paper/*.html")
+    # The project as one zip, for Overleaf's New Project > Upload Project: its files at the zip's top level.
+    import zipfile
+
+    archive = os.path.join(HTML_OUT, "dinara-align-overleaf.zip")
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as out:
+        for folder, _, files in os.walk(PAPER):
+            for name in files:
+                if name != ".gitignore":
+                    path = os.path.join(folder, name)
+                    out.write(path, os.path.relpath(path, PAPER))
+    print("build/paper/dinara-align-overleaf.zip: the project, for Overleaf's Upload Project")
     build_pdfs()
