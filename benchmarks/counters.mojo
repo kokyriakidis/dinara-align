@@ -2,8 +2,7 @@
 # MPL was not distributed with this file, You can obtain one at https://mozilla.org/MPL/2.0/.
 """
 What the runner built with probes counts around each pair, beside the library's own probes: the
-processor's counters (instructions, cycles, branches and their misses, first-level and last-level cache
-misses), read through Linux's `perf_event_open`, user space only; the allocations and bulk copies that
+processor's counters (instructions, cycles, branch misses, first-level and last-level cache misses), read through Linux's `perf_event_open`, user space only; the allocations and bulk copies that
 reach the C library, from `probes/counting.c` when it is preloaded; and the page faults, from
 `getrusage`. Each is read before and after a pair, outside its timed span, and the runner prints the
 differences. Where a source is missing (another system, `perf_event_paranoid` too strict, no preload),
@@ -16,7 +15,7 @@ from std.sys.info import CompilationTarget
 from dinara_align.probes import counter_page, read_counter, UNCOUNTED
 
 
-comptime EVENTS = 7
+comptime EVENTS = 5
 """Hardware events counted: see `Counters.json`."""
 comptime SHIMS = 10
 """`counting.c`'s counts, in its `dinara_counts` order: see `Counters.json`."""
@@ -66,9 +65,11 @@ struct Counters(Movable):
     def __init__(out self):
         """Opens every event and finds the shim."""
         self.descriptors = List[Int]()
-        # PERF_TYPE_HARDWARE, then PERF_TYPE_HW_CACHE as cache | read << 8 | miss << 16.
-        var kinds = [0, 0, 0, 0, 3, 3, 3]
-        var configs = [1, 0, 4, 5, 0x10000, 0x10002, 0x10003]
+        # PERF_TYPE_HARDWARE, then PERF_TYPE_HW_CACHE as cache | read << 8 | miss << 16. Five events, two on the
+        # fixed counters and three on general ones, fit the Skylake-X beside the NMI watchdog; a sixth made
+        # the kernel rotate them, and a rotated count is an estimate.
+        var kinds = [0, 0, 0, 3, 3]
+        var configs = [1, 0, 5, 0x10000, 0x10002]
         # Instructions and cycles by `rdpmc` from pages the library opens, shared with each aligner's tally
         # (see `Tally.use_counters`), so no event is open twice and every one fits on the processor at once.
         self.instruction_page = counter_page(1)
@@ -146,11 +147,9 @@ struct Counters(Movable):
         var names: List[StaticString] = [
             "instructions",
             "cycles",
-            "branches",
             "branch_misses",
             "l1d_misses",
             "llc_misses",
-            "dtlb_misses",
             "allocations",
             "allocated_bytes",
             "frees",

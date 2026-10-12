@@ -353,14 +353,7 @@ struct Band(Movable):
 
 def pruned_distance[
     record: Bool, seeded: Bool
-](
-    mut profile: Profile,
-    threshold: Int,
-    mut trail: Trail,
-    mut heuristic: SeedHeuristic,
-    adapt: Bool,
-    mut tally: Tally,
-) -> Round:
+](mut profile: Profile, threshold: Int, mut trail: Trail, mut heuristic: SeedHeuristic, adapt: Bool,) -> Round:
     """One round of band doubling with A*PA2-simple's pruning.
 
     Only cells a path of cost at most `threshold` could cross are computed. Ukkonen's band bounds
@@ -386,7 +379,7 @@ def pruned_distance[
     need (see `Profile.symbols`). `seeded` says whether `heuristic` has seeds (see `SeedHeuristic.bound`).
 
     With `adapt`, the round re-aims its bound as it goes (see `Band.check`), and a distance is exact
-    only within the bound it ends on. Its tiles and cells go into `tally` (see `probes`).
+    only within the bound it ends on. In a build with probes, its tiles and cells go into the trail's counts.
     """
     comptime if record:
         trail.clear(threshold, adapt)
@@ -396,8 +389,9 @@ def pruned_distance[
             return band.outcome
         comptime if record:
             band.record(tile, trail)
-        tally.add[TILES](1)
-        tally.add[WORD_COLUMNS]((band.end_word - band.top) * (band.end_column(tile) - band.first_column(tile)))
+        comptime if PROBES:
+            trail.swept_tiles += 1
+            trail.swept_word_columns += (band.end_word - band.top) * (band.end_column(tile) - band.first_column(tile))
         band.sweep_tile(profile, tile)
         if not band.finish[seeded](tile, heuristic):
             return band.outcome
@@ -406,15 +400,7 @@ def pruned_distance[
 
 def replay[
     seeded: Bool
-](
-    mut profile: Profile,
-    mut trail: Trail,
-    mut heuristic: SeedHeuristic,
-    tile: Int,
-    mut band: Band,
-    mut swept_end: Int,
-    mut tally: Tally,
-):
+](mut profile: Profile, mut trail: Trail, mut heuristic: SeedHeuristic, tile: Int, mut band: Band, mut swept_end: Int):
     """Keeps the tile's left edge, and some before it, by sweeping the round again from the last kept
     edge before it (see `Trail.replay_stride`).
 
@@ -429,8 +415,11 @@ def replay[
     var stride = trail.replay_stride(start, tile)
     band.resume(trail, start, swept_end)
     for step in range(start, tile):
-        tally.add[REPLAYED_TILES](1)
-        tally.add[REPLAYED_WORD_COLUMNS]((band.end_word - band.top) * (band.end_column(step) - band.first_column(step)))
+        comptime if PROBES:
+            trail.replayed_tiles += 1
+            trail.replayed_word_columns += (band.end_word - band.top) * (
+                band.end_column(step) - band.first_column(step)
+            )
         band.sweep_tile(profile, step)
         var swept = band.finish[seeded](step, heuristic)
         swept = swept and band.prepare[seeded](step + 1, heuristic)
@@ -469,14 +458,17 @@ def retrace(
             if not band:
                 band = Band(profile, trail.start_threshold, trail.adapt)
             if heuristic.seeds > 0:
-                replay[True](profile, trail, heuristic, tile, band.value(), swept_end, tally)
+                replay[True](profile, trail, heuristic, tile, band.value(), swept_end)
             else:
-                replay[False](profile, trail, heuristic, tile, band.value(), swept_end, tally)
+                replay[False](profile, trail, heuristic, tile, band.value(), swept_end)
         tracer.trace(profile, trail, tile, moves)
         trail.release(tile)
     tracer.finish(moves)
-    tally.add[TRACED_TILES](trail.tiles())
-    tracer.tally_into(tally)
+    comptime if PROBES:
+        tally.add[TRACED_TILES](trail.tiles())
+        tally.add[REPLAYED_TILES](trail.replayed_tiles)
+        tally.add[REPLAYED_WORD_COLUMNS](trail.replayed_word_columns)
+        tracer.tally_into(tally)
 
 
 comptime SHORT_AIM = 17
@@ -590,13 +582,17 @@ def band_doubling[
             tally.add[ROUNDS](1)
             tally.add[BOUND_SUM](threshold)
             tally.set[LAST_BOUND](threshold)
-        var swept_before = tally.get[WORD_COLUMNS]()
+        var swept_before = trail.swept_word_columns
+        var tiles_before = trail.swept_tiles
         # A round with seeds and one without each take their own copy (see `SeedHeuristic.bound`).
         var attempt: Round
         if heuristic.seeds > 0:
-            attempt = pruned_distance[record, True](profile, threshold, trail, heuristic, first_round, tally)
+            attempt = pruned_distance[record, True](profile, threshold, trail, heuristic, first_round)
         else:
-            attempt = pruned_distance[record, False](profile, threshold, trail, heuristic, first_round, tally)
+            attempt = pruned_distance[record, False](profile, threshold, trail, heuristic, first_round)
+        comptime if PROBES:
+            tally.add[TILES](trail.swept_tiles - tiles_before)
+            tally.add[WORD_COLUMNS](trail.swept_word_columns - swept_before)
         first_round = False
 
         var found = attempt.distance
@@ -605,7 +601,7 @@ def band_doubling[
         if found >= 0 and found <= bound:
             comptime if PROBES:
                 tally.set[DISTANCE](found)
-                tally.set[LAST_ROUND_WORD_COLUMNS](tally.get[WORD_COLUMNS]() - swept_before)
+                tally.set[LAST_ROUND_WORD_COLUMNS](trail.swept_word_columns - swept_before)
             return found
         if attempt.estimate >= 0:
             tally.add[CHECKPOINT_GIVE_UPS](1)

@@ -255,11 +255,10 @@ def dataset_report(name: str, records: list[dict], facts: dict, top: int) -> lis
             f"{number(median([r['instructions'] / max(r['columns'] + r['rows'], 1) for r in counted]))} |",
             f"| instructions per cycle | {instructions / max(cycles, 1):.2f} |",
         ]
-        if any("branches" in record for record in counted):
-            branches = sum(record.get("branches", 0) for record in counted)
+        if any("branch_misses" in record for record in counted):
             misses = sum(record.get("branch_misses", 0) for record in counted)
-            machine.append(f"| branch misses per branch | {100 * misses / max(branches, 1):.2f}% |")
-        for key, label in (("l1d_misses", "L1d"), ("llc_misses", "LLC"), ("dtlb_misses", "dTLB")):
+            machine.append(f"| branch misses per thousand instructions | {1000 * misses / instructions:.2f} |")
+        for key, label in (("l1d_misses", "L1d"), ("llc_misses", "LLC")):
             if any(key in record for record in counted):
                 missed = sum(record.get(key, 0) for record in counted)
                 machine.append(f"| {label} load misses per thousand instructions | {1000 * missed / instructions:.2f} |")

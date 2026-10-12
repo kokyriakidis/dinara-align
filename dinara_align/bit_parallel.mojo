@@ -1203,6 +1203,15 @@ struct Trail(Movable):
     """The bound the round started on, which sets its tiles' width (see `Band`)."""
     var adapt: Bool
     """Whether the round re-aimed its bound at checkpoints (see `Band.check`)."""
+    var swept_tiles: Int
+    """Tiles swept by every round and replay, in a build with probes (see `probes`): counted here, in a struct
+    the band already carries, so that no hot function takes the probes as an argument of its own."""
+    var swept_word_columns: Int
+    """Their words times columns, likewise."""
+    var replayed_tiles: Int
+    """Of those, the tiles swept again for the traceback, likewise."""
+    var replayed_word_columns: Int
+    """Their words times columns, likewise."""
 
     def __init__(out self, columns: Int = 0, budget: Int = Int.MAX):
         """Room for a round over `columns` columns, a vector's words a tile, its edges kept within `budget`
@@ -1223,6 +1232,10 @@ struct Trail(Movable):
         self.widest = 0
         self.start_threshold = 0
         self.adapt = False
+        self.swept_tiles = 0
+        self.swept_word_columns = 0
+        self.replayed_tiles = 0
+        self.replayed_word_columns = 0
 
     def clear(mut self, start_threshold: Int, adapt: Bool):
         """Empties the trail for a new round, starting on `start_threshold`, keeping its buffers."""

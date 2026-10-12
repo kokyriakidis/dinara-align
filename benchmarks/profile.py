@@ -554,8 +554,10 @@ def explain(name: str, path: Path, binaries: dict, base_label: str, head_label: 
         subprocess.run(["perf", "record", "-q", "-D", str(START_DELAY_MS), "-e", "instructions:u", "-c", "200003",
                         "-o", str(data), "--", *command(label)], capture_output=True)
         for share, symbol in perf_top(data, "sym", 60):
-            # The function's name without the parameters Mojo spells into it, which a new argument changes.
-            key = re.sub(r"\[.*$", "", symbol.split()[-1])[:90]
+            # The function's name without the parameters Mojo spells into it, which a new argument changes, and
+            # without the clone suffixes LLVM adds.
+            name_only = symbol.split("] ", 1)[-1].strip()
+            key = re.split(r"[\[(]", name_only, maxsplit=1)[0][:90] or name_only[:90]
             by_function.setdefault(key, {})[label] = by_function.get(key, {}).get(label, 0) + share * totals[label] / 100
     moved = sorted(by_function.items(), key=lambda item: -abs(item[1].get(head_label, 0) - item[1].get(base_label, 0)))
     lines += ["", f"| function | instructions, {base_label} | instructions, {head_label} | change |", "| :-- | --: | --: | --: |"]
@@ -703,7 +705,9 @@ def share_of(part: float, whole: float) -> str:
 
 # region perf
 
-COUNTERS = ["cycles", "instructions", "branches", "branch-misses", "L1-dcache-load-misses", "LLC-load-misses"]
+COUNTERS = ["cycles", "instructions", "branch-misses", "L1-dcache-load-misses", "LLC-load-misses"]
+"""Five events: two on the fixed counters and three on general ones, which fit the Skylake-X beside the NMI
+watchdog; a sixth made the kernel rotate them, and `perf` then reports estimates."""
 
 
 def perf_ready() -> str | None:
@@ -862,7 +866,7 @@ def perf(options) -> str:
         " slots, retiring (useful work), bad speculation, front-end bound (instructions not delivered) and back-end"
         " bound (waiting on memory or on execution units), and level 2 beneath them.",
         "",
-        "| target | cycles | IPC | branch misses / branch | L1d misses / kinst | LLC misses / kinst | retiring | bad"
+        "| target | cycles | IPC | branch misses / kinst | L1d misses / kinst | LLC misses / kinst | retiring | bad"
         " speculation | front-end bound | back-end bound |",
         "| :-- | --: | --: | --: | --: | --: | --: | --: | --: | --: |",
     ]
@@ -883,9 +887,7 @@ def perf(options) -> str:
         def level(name: str) -> str:
             return f"{shares[name]:.1f}%" if name in shares else "—"
 
-        branch = (f"{100 * counts['branch-misses'] / counts['branches']:.2f}%"
-                  if counts.get("branches") else "—")
-        lines.append(f"| {name} | {cycles:.3g} | {instructions / cycles:.2f} | {branch} | "
+        lines.append(f"| {name} | {cycles:.3g} | {instructions / cycles:.2f} | {per_kilo('branch-misses')} | "
                      f"{per_kilo('L1-dcache-load-misses')} | {per_kilo('LLC-load-misses')} | {level('tma_retiring')} | "
                      f"{level('tma_bad_speculation')} | {level('tma_frontend_bound')} | {level('tma_backend_bound')} |")
         print(f"{name}: perf record ...", file=sys.stderr, flush=True)
