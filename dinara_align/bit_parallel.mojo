@@ -982,8 +982,15 @@ struct Profile(Movable):
         if len(self.column_low) > 0 or self.columns == 0:
             return
         var padded = self.columns + 2 * COLUMN_PADDING
-        self.column_low = List[UInt64](length=padded, fill=0)
-        self.column_high = List[UInt64](length=padded, fill=0)
+        # Only the padding zeroed: every column between is written below, and zeroing the whole plane first
+        # had cleared 1.6 MB a 100 kbp pair for nothing.
+        self.column_low = List[UInt64](unsafe_uninit_length=padded)
+        self.column_high = List[UInt64](unsafe_uninit_length=padded)
+        for pad in range(COLUMN_PADDING):
+            self.column_low[pad] = 0
+            self.column_high[pad] = 0
+            self.column_low[padded - 1 - pad] = 0
+            self.column_high[padded - 1 - pad] = 0
         var low = self.column_low.unsafe_ptr().unsafe_offset(COLUMN_PADDING)
         var high = self.column_high.unsafe_ptr().unsafe_offset(COLUMN_PADDING)
         var column_codes = self.column_codes.unsafe_ptr()
@@ -1005,18 +1012,20 @@ struct Profile(Movable):
         self.row_low = List[UInt64](length=self.words, fill=0)
         self.row_high = List[UInt64](length=self.words, fill=0)
         var row_codes = self.row_codes.unsafe_ptr()
+        var row_low = self.row_low.unsafe_ptr()
+        var row_high = self.row_high.unsafe_ptr()
         var row = 0
         while row + 8 <= self.rows:
             var eight = row_codes.unsafe_offset(row).unsafe_bitcast[UInt64]().unsafe_load()
             var shift = UInt64(row % WORD_BITS)
-            self.row_low[row // WORD_BITS] |= ((((eight & ONES) * GATHER) >> 56) ^ 0xFF) << shift
-            self.row_high[row // WORD_BITS] |= (((((eight >> 1) & ONES) * GATHER) >> 56) ^ 0xFF) << shift
+            row_low[unsafe_offset=row // WORD_BITS] |= ((((eight & ONES) * GATHER) >> 56) ^ 0xFF) << shift
+            row_high[unsafe_offset=row // WORD_BITS] |= (((((eight >> 1) & ONES) * GATHER) >> 56) ^ 0xFF) << shift
             row += 8
         while row < self.rows:
             var code = row_codes[unsafe_offset=row]
             var shift = UInt64(row % WORD_BITS)
-            self.row_low[row // WORD_BITS] |= ((code & 1) ^ 1).cast[DType.uint64]() << shift
-            self.row_high[row // WORD_BITS] |= (((code >> 1) & 1) ^ 1).cast[DType.uint64]() << shift
+            row_low[unsafe_offset=row // WORD_BITS] |= ((code & 1) ^ 1).cast[DType.uint64]() << shift
+            row_high[unsafe_offset=row // WORD_BITS] |= (((code >> 1) & 1) ^ 1).cast[DType.uint64]() << shift
             row += 1
         if not self.extended:
             return
