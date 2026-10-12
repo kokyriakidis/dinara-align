@@ -8,8 +8,8 @@
 Problem & Algorithm & Changes (section) \\
 \midrule
 Unit costs, divergent pairs & Band doubling over bit-parallel tiles with the gap-chaining seed heuristic (A*PA2) & Regrouped recurrence, interleaved groups (3.2); agreeing estimates (3.3); direct neighbours (3.5); traceback within a memory limit (3.7) \\
-Unit costs, near-identical pairs & Diagonal transition (WFA, BiWFA) & Gathered extension (3.4); bounded-waste hand-over (3.10); per-pair overhead (3.11) \\
-Gap-affine, two-piece & Wavefront, one search or two (WFA, BiWFA); full sweep in difference recurrences for divergent pairs (Suzuki and Kasahara, 2018) & Gathered extension (3.4); one search or two (3.9); bounded-waste hand-over (3.10) \\
+Unit costs, near-identical pairs & Diagonal transition (WFA, BiWFA) & Gathered extension (3.4); estimate-delayed hand-over (3.10); per-pair overhead (3.11) \\
+Gap-affine, two-piece & Wavefront, one search or two (WFA, BiWFA); full sweep in difference recurrences for divergent pairs (Suzuki and Kasahara, 2018) & Gathered extension (3.4); one search or two (3.9); estimate-delayed hand-over (3.10) \\
 Substitution matrices & Anti-diagonal vector sweep (Wozniak, 1997) & Score-certified band, cache-sized strips (3.8) \\
 Local alignment & End found by a forward sweep (Zhao et al., 2013) & Backward wavefront from the best end (3.8) \\
 Batches of short pairs & Inter-sequence vectorisation (Rognes, 2011; Rahn et al., 2018; Daily, 2016) & Certified per-lane bands (3.6) \\

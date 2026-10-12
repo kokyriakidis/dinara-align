@@ -153,13 +153,13 @@ BODY = [
 ('sec', 'Methods'),
 ('sub', 'Overview'),
 ('p',
- 'Each problem is assigned to an algorithm ([#tab:engines]; [#fig:overview]). Unit costs follow A*PA2 '
+ 'Each pair is assigned to an algorithm ([#tab:engines]; [#fig:overview]). Unit costs follow A*PA2 '
  '[@GrootKoerkamp2024b]: band doubling over 256-column tiles of bit-parallel words, pruned on long pairs by the '
  'gap-chaining seed heuristic [@GrootKoerkamp2024a], with near-identical pairs aligned by diagonal transition '
  'alone. Gap-affine costs use the wavefront of WFA and BiWFA [@MarcoSola2021; @MarcoSola2023]. At unit costs, '
- "diagonal transition runs first and hands over once its projected remaining work exceeds the alternative's and "
- 'it has spent a twenty-fourth of it (Section 3.10); its projection, the length and the cost model then choose '
- 'the next algorithm and its parameters.'),
+ "diagonal transition runs first and hands over once its projected remaining work exceeds the band's and it has "
+ "spent a twenty-fourth of the band's least work (Section 3.10); its projection, the length and the cost model "
+ 'then choose the next algorithm and its parameters.'),
 ('p',
  'At unit, gap-affine and two-piece costs, every engine selects the same alignment among equally good ones, by '
  'the backtrace order of WFA2-lib: from the end, an edit into a cell is preferred to a match whenever one is '
@@ -209,20 +209,20 @@ BODY = [
  'D = s(n+m)/\\rho\\), which is reliable when edits are spread evenly and too high by orders of magnitude when '
  'they gather, as at the ends of nanopore reads. dinara-align therefore takes two estimates, \\(\\hat D_1\\) from a '
  'one-ended diagonal-transition search stopped after eight edits and \\(\\hat D_2\\) from the two-ended search '
- 'where it handed over. Without seeds that chain well, the first bound is aimed just above \\(\\hat D_1\\) when '
- '\\(\\max(\\hat D_1,\\hat D_2) \\le \\tfrac43 \\min(\\hat D_1,\\hat D_2)\\), or when the search stopped within 16 edits; '
- 'otherwise, as in A*PA2, it starts at most 256 above the known lower bound and each retry at most doubles it. A '
- 'failed round aims the next bound from where it stopped, and the first round estimates the distance again after '
- 'one eighth, one quarter and one half of the columns, lowering its bound or abandoning the round. A distance is '
- 'accepted only within the bound its round ended on, and these rules change only the sequence of bounds, so the '
- 'result stays exact.'),
+ 'where it handed over. When at least one seed in 32 chains from the origin, the first bound starts 64 above the '
+ 'seed heuristic there, which on long reads lies within a few per cent of the distance. Otherwise it is aimed '
+ 'just above \\(\\hat D_1\\) when \\(\\max(\\hat D_1,\\hat D_2) \\le \\tfrac43 \\min(\\hat D_1,\\hat D_2)\\) or the search '
+ 'stopped within 16 edits, and failing both, as in A*PA2, it starts at most 256 above the known lower bound and '
+ 'each retry at most doubles it. A failed round aims the next bound from where it stopped, and the first round '
+ 'estimates the distance again after one eighth, one quarter and one half of the columns, lowering its bound or '
+ 'abandoning the round. A distance is accepted only within the bound its round ended on, and these rules change '
+ 'only the sequence of bounds, so the result stays exact.'),
 ('p',
  'Within a round, the band drops the rows at the top and bottom of each tile whose score plus the heuristic '
  'exceeds the bound, as A*PA2 does. A score changes by at most one per row, and the heuristic by at most its '
  'climb \\(\\gamma\\) (one without seeds or with exact seeds, two with inexact ones), so a row that exceeds the '
  'bound by \\(y\\) rules out itself and the next \\(\\lceil y/(1+\\gamma) \\rceil - 1\\) rows, which are skipped '
- 'unread. With seeds, when at least one seed in 32 chains from the origin, the first bound starts 64 above the '
- 'heuristic at the origin, which on long reads lies within a few per cent of the distance.'),
+ 'unread.'),
 ('sub', 'Diagonal transition for near-identical pairs'),
 ('p',
  'Diagonal transition extends each diagonal of a wavefront along its run of matches. dinara-align compares eight '
@@ -232,7 +232,7 @@ BODY = [
  'both ends [@MarcoSola2023]; the traceback inside each tile, restricted to the diagonals that can still reach '
  'the traced cell; and the three-layer gap-affine front.'),
 ('p',
- 'A pair whose diagonal transition finishes within its budget is aligned from its wavefronts alone. From both '
+ 'A pair that diagonal transition finishes before handing over is aligned from its wavefronts alone. From both '
  'ends, as in BiWFA, the forward wavefronts are grown on to the proven distance, each cost kept only on the '
  'diagonals on which the backward wavefronts show that an optimal path passes. The backtrace takes the '
  'furthest-reaching source at each cost (Section 3.1) and writes the CIGAR run by run.'),
@@ -280,8 +280,8 @@ BODY = [
  'within the band.'),
 ('p',
  '*Proof idea.* An alignment that leaves the band must open a gap reaching the diagonal beyond it and another '
- 'returning to the end diagonal, which together cost at least \\(L\\) of that diagonal (proof in Supplementary '
- 'Section S6).'),
+ 'returning to the end diagonal, which together cost at least \\(L(d)\\) for that diagonal \\(d\\) (proof in '
+ 'Supplementary Section S6).'),
 ('p',
  'Each vector lane of an inter-sequence batch evaluates its own certificate. When every optimal alignment lies '
  'in the band, each in-band score on an optimal path is exact, so the tie rule makes the same choices as in the '
@@ -298,7 +298,7 @@ BODY = [
  'only on this state and on the scores it computes, so each boundary is recovered as the round left it and the '
  'alignment is the same byte for byte; splitting the pair instead, as QuickEd does [@Doblas2025], resolves ties '
  'within each part. On the 1 Mbp pairs at 20% errors, the growth of peak memory fell from 175 to 133 MiB on the '
- "worst pair when this was introduced, for 9% more time (Section 4.2 gives the reported commit's)."),
+ 'worst pair when this was introduced, for 9% more time; Section 4.2 gives the figure at the reported commit.'),
 ('sub', 'Gap-affine and score-based alignment'),
 ('p',
  'A scoring scheme with match score \\(\\alpha\\), mismatch score \\(\\beta\\) and gap scores \\(-(o+ke)\\) can be '
@@ -367,23 +367,23 @@ BODY = [
  'Illumina read at (4, 6, 2), through one aligner, from 2.41 to 1.52 µs, and the measured-work rule, in place of '
  'a single search that grew alone only through its first \\(w\\) costs, saved a further 5%, a third on the pairs '
  'costing 9 to 32; nanopore and HiFi reads were unchanged.'),
-('sub', 'Handing over on a projection, with bounded waste'),
+('sub', 'Hand-overs that wait on a runtime estimate'),
 ('p',
- 'Two hand-overs rest on projections: diagonal transition hands over to band doubling once its remaining work is '
- "projected to exceed a band's, and the gap-affine wavefront to the difference sweep once its projected total "
- "exceeds the sweep's. A projection from the edits seen so far is reliable when edits are spread evenly, but can "
- 'exceed the distance a hundredfold when they gather at the ends, as on nanopore reads with adapters or poly-A '
- 'tails, and so hand a pair that the search would finish in microseconds to a band over the whole matrix. '
- 'dinara-align hands over on a projection only once the work already spent has reached one twenty-fourth of the '
- 'cheapest alternative that could still be needed: for diagonal transition, the band whose bound equals the cost '
- 'already reached, than which no band is cheaper since the distance is at least that cost; for the wavefront, '
- 'the full sweep. Once the projection favours the alternative, the rule thus delays the hand-over by at most '
- 'about 4% (1/24, in the units of the cost model) of the work the alternative needs in any case, while a search '
- 'that would have finished is no longer abandoned on a projection from a handful of edits. At gap-affine costs, '
- 'the rule took the ont-10k reads from 2.33 to 1.56 ms and the ont-50k reads from 30.5 to 21.0 ms (Supplementary '
- 'Table S1). For an alignment, the one-ended diagonal transition also waits until the projected work exceeds the '
- "band's by a factor \\(1 + 1.5/\\sqrt{q}\\) after \\(q\\) edits, 1.5 times the relative error of a projection from "
- '\\(q\\) edits.'),
+ 'Two hand-overs rest on projections, the work still needed extrapolated from the edits seen so far: diagonal '
+ "transition hands over to band doubling once its remaining work is projected to exceed a band's, and the "
+ "gap-affine wavefront to the difference sweep once its projected total exceeds the sweep's. A projection is "
+ 'reliable when edits are spread evenly, but can exceed the distance a hundredfold when they gather at the ends, '
+ 'as on nanopore reads with adapters or poly-A tails, and so hand a pair that the search would finish in '
+ 'microseconds to a band over the whole matrix. dinara-align hands over on a projection only once the work '
+ 'already spent has reached one twenty-fourth of the cheapest alternative that could still be needed: for '
+ 'diagonal transition, the band whose bound equals the cost already reached, which no band can undercut since '
+ 'the distance is at least that cost; for the wavefront, the full sweep. Once the projection favours the '
+ 'alternative, the rule thus delays the hand-over by at most about 4% (1/24, in the units of the cost model) of '
+ 'the work the alternative needs in any case, while a search that would have finished is no longer abandoned on '
+ 'a projection from a handful of edits. At gap-affine costs, the rule took the ont-10k reads from 2.33 to 1.56 '
+ 'ms and the ont-50k reads from 30.5 to 21.0 ms (Supplementary Table S1). For an alignment, the one-ended '
+ "diagonal transition also waits until the projected work exceeds the band's by a factor \\(1 + 1.5/\\sqrt{q}\\) "
+ 'after \\(q\\) edits, 1.5 times the relative error of a projection from \\(q\\) edits.'),
 ('sub', 'Per-pair overhead on short reads'),
 ('p',
  'A 250 bp read aligns in well under a microsecond, so work that does not depend on the pair dominates. An '
@@ -543,8 +543,8 @@ TABLES = {
   "wrap": [1, 2],
   "rows": [
     ["Unit costs, divergent pairs", "Band doubling over bit-parallel tiles with the gap-chaining seed heuristic (A*PA2)", "Regrouped recurrence, interleaved groups (3.2); agreeing estimates (3.3); direct neighbours (3.5); traceback within a memory limit (3.7)"],
-    ["Unit costs, near-identical pairs", "Diagonal transition (WFA, BiWFA)", "Gathered extension (3.4); bounded-waste hand-over (3.10); per-pair overhead (3.11)"],
-    ["Gap-affine, two-piece", "Wavefront, one search or two (WFA, BiWFA); full sweep in difference recurrences for divergent pairs (Suzuki and Kasahara, 2018)", "Gathered extension (3.4); one search or two (3.9); bounded-waste hand-over (3.10)"],
+    ["Unit costs, near-identical pairs", "Diagonal transition (WFA, BiWFA)", "Gathered extension (3.4); estimate-delayed hand-over (3.10); per-pair overhead (3.11)"],
+    ["Gap-affine, two-piece", "Wavefront, one search or two (WFA, BiWFA); full sweep in difference recurrences for divergent pairs (Suzuki and Kasahara, 2018)", "Gathered extension (3.4); one search or two (3.9); estimate-delayed hand-over (3.10)"],
     ["Substitution matrices", "Anti-diagonal vector sweep (Wozniak, 1997)", "Score-certified band, cache-sized strips (3.8)"],
     ["Local alignment", "End found by a forward sweep (Zhao et al., 2013)", "Backward wavefront from the best end (3.8)"],
     ["Batches of short pairs", "Inter-sequence vectorisation (Rognes, 2011; Rahn et al., 2018; Daily, 2016)", "Certified per-lane bands (3.6)"],
