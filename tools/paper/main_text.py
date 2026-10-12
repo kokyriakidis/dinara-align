@@ -41,13 +41,15 @@ BODY = [
  'compare reads with one another to find their overlaps [@Li2018], and assemblies, haplotypes and viral genomes '
  'are compared base by base.'),
 ('p',
- 'Read lengths have grown from hundreds of bases to hundreds of kilobases. The gap-affine dynamic program '
- '[@Gotoh1982] fills an \\(n \\times m\\) matrix, \\(2.5 \\times 10^{11}\\) cells for one pair of 500 kbp reads, so '
- 'heuristic aligners compute only part of it: a fixed or adaptive band [@Liu2023], a series of windows, or the '
- 'cells before the score drops by more than a threshold (X-drop, or Z-drop in minimap2 [@Li2018]). Their result '
- 'then depends on these cut-offs, and alignments with large indels or clustered errors can be missed or '
- 'misplaced. Exact aligners instead skip only cells that provably cannot lie on an optimal path, so that their '
- 'running time grows with the distance as well as the length, rather than with the product of the lengths.'),
+ 'Read lengths have grown from hundreds of bases to hundreds of kilobases, and the gap-affine dynamic program '
+ '[@Gotoh1982] fills an \\(n \\times m\\) matrix, \\(2.5 \\times 10^{11}\\) cells for one pair of 500 kbp reads. '
+ 'Heuristic aligners therefore compute only part of it: a fixed or adaptive band [@Liu2023], a series of '
+ "windows, or the cells before the score drops by more than a threshold, as in X-drop or minimap2's Z-drop "
+ '[@Li2018]. Their result then depends on these cut-offs, and alignments with large indels or clustered errors '
+ 'can be missed or misplaced. Exact aligners return an optimal alignment under the chosen costs whatever the '
+ 'data, which also makes them the ground truth against which heuristics are evaluated, and the fastest of them '
+ 'skip only cells that provably cannot lie on an optimal path, so that their running time grows with the '
+ 'distance as well as the length rather than with the product of the lengths.'),
 ('p',
  'Three ideas underlie current exact aligners. *Band doubling* computes only the diagonals a path within a cost '
  'bound can reach, doubling the bound until the optimum lies within it [@Ukkonen1985]; *bit-parallelism* encodes '
@@ -67,15 +69,15 @@ BODY = [
  'ones; and inter-sequence vectorisation on batches of short pairs. An aligner that is fastest across workloads '
  'must therefore choose among them for each pair, and an exact aligner must make every such choice (which '
  'algorithm, which bound, when to abandon a search) without giving up optimality. In dinara-align every engine '
- 'is exact, so no choice changes the optimal cost, and every hand-over that rests on a projection provably '
- 'bounds the work it can waste. Our contributions are:'),
+ 'is exact, so no choice changes the optimal cost, and a choice that rests on a runtime estimate can delay the '
+ "work by at most a fixed small share of the alternative's. Our contributions are:"),
 ('list',
  ['**One wavefront search or two, chosen by measured work** (Section 3.9): a gap-affine alignment adds a second '
   'search only when its measured work exceeds what two would need, and still returns an optimal alignment '
   '(Proposition 2).',
- "**Projections with bounded waste** (Sections 3.3 and 3.10): a projected distance sets a band's first bound "
-  'only when two projections agree, and a search hands over to an algorithm projected to be cheaper only after '
-  "spending one twenty-fourth of that algorithm's least possible work.",
+ "**Runtime estimates that cannot derail a search** (Sections 3.3 and 3.10): a projected distance sets a band's "
+  'first bound only when two projections agree, and a search hands over to an algorithm projected to be cheaper '
+  "only after spending one twenty-fourth of that algorithm's least possible work.",
  '**Certified bands for inter-sequence batches** (Section 3.6): each pair is aligned in a vector lane within a '
   'narrow band that the lane certifies optimal under gap-affine and two-piece costs (Proposition 1), bringing the '
   'speculate-and-verify approach of narrow-band aligners [@Gibrat2018; @Fujiki2020] to every lane of a batch.',
@@ -83,18 +85,20 @@ BODY = [
   'matches are inserted without search, provably including every one that local pruning keeps (Lemma 1); we also '
   "prove that A*PA2's pruning keeps the heuristic a lower bound (Lemma S1).",
  '**One alignment whichever engine computes it** (Sections 3.1 and 3.7): at unit, gap-affine and two-piece costs '
-  'every engine breaks ties by the same rule, unless a gap-affine pair must be split to fit the memory limit, and '
-  'a unit-cost band recomputes its traceback from recorded state rather than splitting the pair, so that its '
-  'alignment is the same under any memory limit.',
- '**Engines arranged for the processor** (Sections 3.2, 3.4 and 3.11): diagonal transition with gathered AVX-512 '
-  'loads, interleaved bit-parallel groups with a shorter dependency chain, and lower per-pair overhead on short '
-  'reads.',
+  'every engine breaks ties by the same rule, and a unit-cost band recomputes stretches of its traceback rather '
+  'than splitting the pair, so its alignment does not depend on the memory limit; only a gap-affine pair split to '
+  'fit that limit follows the rule within each piece.',
+ '**Hardware-aware engines** (Sections 3.2, 3.4 and 3.11): diagonal transition with gathered AVX-512 loads, '
+  'interleaved bit-parallel groups with a shorter dependency chain, and lower per-pair overhead on short reads.',
  '**One library** ([#tab:engines]; Supplementary Table S3) for global, ends-free, extension and local alignment '
   'under unit, gap-affine, two-piece and substitution-matrix costs, for single pairs and batches, through C, C++, '
   'Python and command-line interfaces.']),
 ('p',
- "We evaluate dinara-align on the datasets of the A*PA2 and QuickEd benchmarks, with QuickEd's Illumina, HiFi "
- "and PromethION sets built from HG002 reads, each paired with the stretch of HG002's own assembly it covers."),
+ 'We evaluate dinara-align on the 25 datasets of the A*PA2 and QuickEd benchmarks, nanopore, Illumina, PacBio '
+ "HiFi and PromethION reads, SARS-CoV-2 genomes and simulated pairs of up to 1 Mbp, with QuickEd's Illumina, "
+ "HiFi and PromethION sets built from HG002 reads, each paired with the stretch of HG002's own assembly it "
+ 'covers. It was the fastest exact aligner on all of them at unit costs, and at gap-affine costs on every '
+ 'dataset any tool completed, tied with WFA on the Illumina reads.'),
 ('sec', 'Background'),
 ('sub', 'Alignment and costs'),
 ('p',
