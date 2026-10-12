@@ -5,7 +5,7 @@ Inline markup: **bold**, *italic*, `code`, [@Key; @Key] parenthetical citation, 
 Blocks: ("sec", title), ("sub", title), ("p", text), ("list", [items]) numbered, ("table", key), ("figure", key).
 """
 
-TITLE = 'dinara-align: hardware-aware algorithms for exact pairwise alignment'
+TITLE = 'dinara-align: fast, hardware-aware exact pairwise alignment that adapts its algorithm to each pair'
 # Authors in order, each with an email; both are corresponding authors.
 AUTHORS = [("Konstantinos Kyriakidis", "kkyriaki@ucsc.edu"), ("Benedict Paten", "bpaten@ucsc.edu")]
 AFFILIATION = "UC Santa Cruz Genomics Institute, Santa Cruz, CA, USA"
