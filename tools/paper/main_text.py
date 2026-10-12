@@ -416,7 +416,8 @@ BODY = [
  'All measurements were taken on an Intel Core i9-7900X (Skylake-X, AVX-512), its ten cores at a fixed 3.3 GHz '
  'with turbo boost and hyper-threading disabled, with dinara-align compiled by Mojo 1.1.0 [@Modular] at commit '
  "`87d365f` and every tool compiled for the native instruction set except BSAlign's gap-affine kernel, which its "
- 'own build keeps to SSE4.2. We combined the protocols of A*PA2 [@GrootKoerkamp2024b] and QuickEd [@Doblas2025]. '
+ 'own build keeps to SSE4.2. We combined the protocols of A*PA2 [@GrootKoerkamp2024b] and QuickEd [@Doblas2025].'),
+('p',
  "The real datasets come from both. From A*PA2's release [@PaBench] we use the nanopore sets ont-1k, ont-10k, "
  'ont-50k and ont-500k, named by length class (mean 0.83, 3.6, 9.6 and 642 kbp), CHM13 reads paired with the '
  'CHM13 reference; ont-500k-genvar, ultra-long reads of another individual against the same reference, which '
@@ -430,26 +431,27 @@ BODY = [
  "mainly by sequencing errors. The simulated datasets are QuickEd's random sequences [@QuickEdData] of 10 kbp to "
  '1 Mbp whose pairs differ by single-base substitutions, insertions and deletions spread uniformly at nominal '
  'error rates of 1, 5, 10 and 20%, modelling no sequencing technology; the 20% sets measure 17% divergence '
- '(Supplementary Table S6). Each dataset was sampled to about 2 Mbp of sequence, both sides counted, and at '
- 'least four pairs. Every tool aligned each pair with traceback, on one pinned core, through one aligner object '
- 'per sample as its own benchmark runner does, with a 30 s budget per sample, in three rounds that alternated '
- "between the tools; a pair's time is its median over the rounds, and a tool is credited only with the pairs it "
- "completed in every round. The rounds agreed closely: the median spread between a tool's fastest and slowest "
- "round was 0.5% at unit and 0.7% at gap-affine costs, at most 18%, on dinara-align's 0.6 µs Illumina "
- 'alignments. Timings quoted in Section 3 were recorded when each change was made, against the version before it '
- '(Supplementary Table S1). The exact aligners compared are A*PA2-full (with the seed heuristic and pruning) and '
- 'A*PA2-simple (band doubling alone), A*PA [@GrootKoerkamp2024a], Edlib [@Sosic2017], WFA and BiWFA, which '
- 'denote WFA2-lib in its high-memory and bidirectional modes [@MarcoSola2021; @MarcoSola2023], QuickEd, BSAlign '
- '[@Shao2024], KSW2 [@Li2018], parasail [@Daily2016] and SSW [@Zhao2013], each on the workloads it supports. On '
- 'the pairs any two tools completed, their costs agreed, and at unit costs they agreed with the published A*PA2 '
- 'results on its datasets. The other alignment modes were timed in-process on simulated workloads, and the '
- 'batches on 500,000 simulated pairs of 148 bp at 1% error, each the median of three runs (Supplementary Tables '
- 'S3 and S8).'),
+ '(Supplementary Table S6).'),
+('p',
+ 'Each dataset was sampled to about 2 Mbp of sequence, both sides counted, and at least four pairs. Every tool '
+ 'aligned each pair with traceback, on one pinned core, through one aligner object per sample as its own '
+ 'benchmark runner does, with a 30 s budget per sample, in three rounds that alternated between the tools; a '
+ "pair's time is its median over the rounds, and a tool is credited only with the pairs it completed in every "
+ "round. The rounds agreed closely: the median spread between a tool's fastest and slowest round was 0.5% at "
+ "unit and 0.7% at gap-affine costs, at most 18%, on dinara-align's 0.6 µs Illumina alignments. Timings quoted "
+ 'in Section 3 were recorded when each change was made, against the version before it (Supplementary Table S1). '
+ 'The exact aligners compared are A*PA2-full (with the seed heuristic and pruning) and A*PA2-simple (band '
+ 'doubling alone), A*PA [@GrootKoerkamp2024a], Edlib [@Sosic2017], WFA and BiWFA, which denote WFA2-lib in its '
+ 'high-memory and bidirectional modes [@MarcoSola2021; @MarcoSola2023], QuickEd, BSAlign [@Shao2024], KSW2 '
+ '[@Li2018], parasail [@Daily2016] and SSW [@Zhao2013], each on the workloads it supports. On the pairs any two '
+ 'tools completed, their costs agreed, and at unit costs they agreed with the published A*PA2 results on its '
+ 'datasets. The other alignment modes were timed in-process on simulated workloads, and the batches on 500,000 '
+ 'simulated pairs of 148 bp at 1% error, each the median of three runs (Supplementary Tables S3 and S8).'),
 ('sub', 'Speed and memory'),
 ('p',
  'At unit costs dinara-align had the lowest mean time per alignment of the exact aligners on all 25 datasets. On '
- 'the real data ([#tab:unit]) it was 1.4 to 2.4 times faster than the fastest alternative on the nanopore reads, '
- '1.7 times on PromethION, and 2.6 times on the SARS-CoV-2 genomes, and 1.9 and 5.1 times faster than WFA, the '
+ 'the real data ([#tab:unit]) it was 1.4 to 2.4 times faster than the fastest alternative on the nanopore reads '
+ '(1.7 times on PromethION) and 2.6 times on the SARS-CoV-2 genomes, and 1.9 and 5.1 times faster than WFA, the '
  'fastest of the others there, on the Illumina and HiFi reads. On the simulated data ([#fig:sweeps]; '
  'Supplementary Table S5) it was 1.1 to 2.4 times faster than the fastest alternative: 100 kbp pairs at 1, 5, 10 '
  'and 20% errors took 1.5, 5.1, 7.2 and 15.8 ms, against 7.5, 8.4, 13.9 and 36.8 ms for A*PA2-full and 12.5, '
@@ -493,7 +495,8 @@ BODY = [
  'within 30 s. Where memory matters more than time, Edlib, QuickEd and BiWFA (15 to 29 MiB on ultra-long reads) '
  "use less than dinara-align's 64 MiB. The measured-work rule, the regrouped recurrence and the per-lane "
  'certificate do not depend on this implementation and apply to other wavefront, bit-parallel and inter-sequence '
- 'aligners.'),
+ 'aligners. And because its alignments are exact and the same whichever engine computes them, dinara-align can '
+ 'serve as the reference against which heuristic aligners are measured, at the scale of current long reads.'),
 ('sub', 'Limitations'),
 ('list',
  ['The evaluation covers one x86 processor with AVX-512, and single-thread latency except for the batches; the '
@@ -509,15 +512,15 @@ BODY = [
  'The ablation switches off one technique at a time, so it does not separate their interactions.']),
 ('sub', 'Future work'),
 ('list',
- ['a cheap upper bound on the distance: with the true distance supplied by an oracle, starting band doubling at '
+ ['A cheap upper bound on the distance. With the true distance supplied by an oracle, starting band doubling at '
   'it saves up to 27% on 100 kbp pairs at 20% errors, but starting 15% above it loses up to 23% on ultra-long '
   'reads, whereas capping the bound at an upper bound within 5% of the distance saves up to 27% on 1 Mbp pairs at '
-  '20% (Supplementary Section S5);',
- 'reusing computation across band-doubling rounds, as in the incremental doubling of A*PA2, once its exactness '
-  'for these tiles is proven;',
- 'faster construction of the seed heuristic, whose scalar lookups dominate on long divergent pairs, and a seed '
-  'heuristic for gap-affine costs, at which no tool completed a 1 Mbp pair beyond 1% errors;',
- 'measurements on further processors, and an evaluation of the GPU kernels the library provides for batches '
+  '20% (Supplementary Section S5).',
+ 'Reusing computation across band-doubling rounds, as in the incremental doubling of A*PA2, once its exactness '
+  'for these tiles is proven.',
+ 'Faster construction of the seed heuristic, whose scalar lookups dominate on long divergent pairs, and a seed '
+  'heuristic for gap-affine costs, at which no tool completed a 1 Mbp pair beyond 1% errors.',
+ 'Measurements on further processors, and an evaluation of the GPU kernels the library provides for batches '
   '(Supplementary Section S1.5).']),
 ]
 
