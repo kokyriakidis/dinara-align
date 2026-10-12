@@ -718,9 +718,14 @@ def perf_ready() -> str | None:
     return None
 
 
+def delayed(delay: int) -> list:
+    """`perf`'s flag leaving out a program's first `delay` milliseconds, or none: `perf record` refuses `-D 0`."""
+    return ["-D", str(delay)] if delay > 0 else []
+
+
 def perf_stat(command: list, delay: int = 0) -> dict:
     """`perf stat`'s counts for `command`, by event, the first `delay` milliseconds left out."""
-    output = subprocess.run(["perf", "stat", "-x", ",", "-D", str(delay), "-e", ",".join(COUNTERS), "--", *command],
+    output = subprocess.run(["perf", "stat", "-x", ",", *delayed(delay), "-e", ",".join(COUNTERS), "--", *command],
                             capture_output=True, text=True)
     counts = {}
     for line in output.stderr.splitlines():
@@ -787,7 +792,7 @@ def topdown(command: list, delay: int = 0) -> dict:
     perf has none."""
     found = {}
     for group in ("TopdownL1", "TopdownL2"):
-        output = subprocess.run(["perf", "stat", "-D", str(delay), "-M", group, "--", *command], capture_output=True,
+        output = subprocess.run(["perf", "stat", *delayed(delay), "-M", group, "--", *command], capture_output=True,
                                 text=True)
         for share, name in TOPDOWN.findall(output.stderr):
             found[name] = float(share)
@@ -885,7 +890,7 @@ def perf(options) -> str:
                      f"{level('tma_bad_speculation')} | {level('tma_frontend_bound')} | {level('tma_backend_bound')} |")
         print(f"{name}: perf record ...", file=sys.stderr, flush=True)
         data = BUILDS / f"perf-{options.target}-{name}.data"
-        record = ["perf", "record", "-q", "-D", str(delay), "-F", str(options.frequency), "-o", str(data)]
+        record = ["perf", "record", "-q", *delayed(delay), "-F", str(options.frequency), "-o", str(data)]
         # Callers through the last-branch record where the processor keeps one, which needs no frame pointers.
         traced = subprocess.run([*record, "--call-graph", "lbr", "--", *command], capture_output=True).returncode == 0
         if not traced:
