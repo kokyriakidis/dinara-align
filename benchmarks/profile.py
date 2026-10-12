@@ -861,7 +861,10 @@ def perf_targets(options) -> list[tuple[str, list]]:
         return [(workload, [str(binary), str(modes_bench.MODES / f"{workload}.tsv")]) for workload in chosen]
     binary = mojo_build(ROOT, HERE / "ours.mojo", BUILDS / f"runner-lines-{harness.CPU}", extra=["-g1"])
     tool = ours_tool(options)
-    return [(name, [str(binary), "seq", tool, str(options.budget), str(path)]) for name, path, _ in samples(options)]
+    # Quiet (see `ours.mojo`), with no system call or row a pair, and a short sample repeated until its pairs
+    # take about half a second, so the alignments, not the runner, fill what perf samples.
+    return [(name, [str(binary), "seq", tool + " quiet", str(options.budget * 50),
+                    str(repeated_sample(path, binary, tool, options))]) for name, path, _ in samples(options)]
 
 
 def perf(options) -> str:

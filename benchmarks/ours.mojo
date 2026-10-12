@@ -94,6 +94,10 @@ def seq_mode() raises:
 
     A tool named with `distance` gives the edit distance alone, no traceback, for the rivals that give
     no alignment.
+
+    A tool named with `quiet` reads no memory growth and prints no row a pair, only one at the end, the
+    total seconds and the costs summed: what `profile.py perf` samples, so the runner's own system calls
+    and printing do not crowd out a short pair's alignment.
     """
     var tool = String(argv()[2])
     var affine = False
@@ -135,7 +139,9 @@ def seq_mode() raises:
             for cost in costs:
                 print(tool, path, share, cost, sep="\t")
         return
+    var quiet = "quiet" in tool
     var spent = 0.0
+    var total = 0
     for argument in range(4, len(argv())):
         if spent >= budget:
             break
@@ -145,7 +151,7 @@ def seq_mode() raises:
         var first = String()
         var second = String()
         while spent < budget and pairs.next(first, second):
-            var before = peak_resident()
+            var before = 0 if quiet else peak_resident()
             var started = perf_counter_ns()
             var cost: Int
             if affine:
@@ -156,9 +162,14 @@ def seq_mode() raises:
                 # A CIGAR, as every rival's traceback hands back, rather than the two gapped rows.
                 cost = aligner.align(first, second).cost
             var seconds = Float64(perf_counter_ns() - started) / 1e9
-            var growth = peak_resident() - before
             spent += seconds
+            if quiet:
+                total += cost
+                continue
+            var growth = peak_resident() - before
             print(tool, path, seconds, cost, growth, sep="\t", flush=True)
+    if quiet:
+        print(tool, "all", spent, total, sep="\t")
 
 
 def main() raises:
