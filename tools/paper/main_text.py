@@ -12,19 +12,21 @@ AFFILIATION = "UC Santa Cruz Genomics Institute, Santa Cruz, CA, USA"
 KEYWORDS = ["pairwise alignment", "edit distance", "gap-affine alignment", "band doubling", "diagonal transition", "SIMD"]
 
 ABSTRACT = [('Motivation',
-  'Exact pairwise alignment returns an optimal alignment that no heuristic cut-off can change, the reference '
-  'for evaluating read mappers, assemblers and variant callers. Yet no exact algorithm is fastest across '
-  'workloads: diagonal transition wins on near-identical pairs, bit-parallel band doubling on long divergent '
-  'reads, and inter-sequence vectorisation on batches of short pairs.'),
+  'Exact pairwise alignment guarantees an optimal alignment under the chosen costs, unaffected by the cut-offs '
+  'of heuristic aligners, and is the ground truth against which those aligners are evaluated. No single exact '
+  'algorithm, however, is fastest across workloads: diagonal transition excels on near-identical pairs, '
+  'bit-parallel band doubling on long divergent reads, and inter-sequence vectorisation on batches of short '
+  'pairs.'),
  ('Results',
-  'We present dinara-align, an exact aligner that chooses its algorithm for each pair. Every hand-over that '
-  'rests on a projection provably bounds its waste; a gap-affine alignment adds a second search only when its '
-  'measured work exceeds what two would need, provably still finding an optimal alignment; short pairs are '
-  'aligned in bands that each vector lane certifies optimal; and, within the memory limit, all engines break '
-  'ties alike at unit and gap-affine costs. On one Skylake-X core, dinara-align was the fastest exact aligner '
-  'compared on every dataset at unit costs: up to 2.4 times faster than A*PA2 on ultra-long nanopore reads, and '
-  '1.9 and 5.1 times faster than WFA on Illumina and HiFi reads. At gap-affine costs it was the fastest on '
-  'every dataset any tool completed, tied with WFA on Illumina reads.'),
+  'We present dinara-align, an exact aligner that selects its algorithm for each pair without giving up '
+  'optimality. Switches prompted by runtime estimates wait until the current search has spent a small fixed '
+  "share of the alternative's least work, so estimates misled by clustered errors no longer abandon searches "
+  'that would finish; a gap-affine alignment adds a second wavefront search only when measured work shows two '
+  'would be cheaper, which we prove keeps it optimal; and short pairs are aligned in narrow bands that each '
+  'vector lane certifies optimal. On one Intel Skylake-X core and 25 datasets from 250 bp reads to 1 Mbp pairs, '
+  'dinara-align was the fastest exact aligner at unit costs, up to 2.4 times faster than A*PA2 on ultra-long '
+  'nanopore reads and 1.9 and 5.1 times faster than WFA on Illumina and HiFi reads, and at gap-affine costs the '
+  'fastest on every dataset any tool completed, tied with WFA on Illumina reads.'),
  ('Availability and implementation',
   'dinara-align is free software under the Mozilla Public License 2.0, available at '
   'https://github.com/kokyriakidis/dinara-align with C, C++, Python and command-line interfaces.'),
