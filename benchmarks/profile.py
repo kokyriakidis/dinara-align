@@ -534,10 +534,25 @@ def compare(options) -> str:
     return "\n".join(lines) + "\n"
 
 
+def repeated_sample(path: Path, binary: Path, tool: str, options) -> Path:
+    """The sample at `path`, or for one whose pairs align in under half a second, the sample repeated enough
+    times to take about that long, at most 400 times."""
+    rows, _, _ = harness.run_tool(binary, tool, path, options.budget)
+    spent = sum(row[0] for row in rows) or 1e-9
+    copies = int(min(max(0.5 / spent, 1), 400))
+    if copies == 1:
+        return path
+    repeated = BUILDS / f"repeated-{path.name}"
+    repeated.write_text(path.read_text() * copies)
+    return repeated
+
+
 def explain(name: str, path: Path, binaries: dict, base_label: str, head_label: str, tool: str, options) -> list[str]:
     """One dataset's instructions and cycles in each build, and its instructions by function in each, the
-    functions whose count moved most first."""
-    command = lambda label: [str(binaries[label]), "seq", tool, str(options.budget), str(path)]
+    functions whose count moved most first. A sample that aligns in less than about half a second is counted
+    repeated, so its pairs and not the runner's reading and printing make up what is counted."""
+    repeated = repeated_sample(path, binaries[base_label], tool, options)
+    command = lambda label: [str(binaries[label]), "seq", tool, str(options.budget * 50), str(repeated)]
     lines = [f"### {name}", "", "| build | instructions | cycles | IPC |", "| :-- | --: | --: | --: |"]
     totals = {}
     for label in (base_label, head_label):
