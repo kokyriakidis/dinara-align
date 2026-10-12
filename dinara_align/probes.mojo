@@ -35,6 +35,8 @@ comptime FORCE = get_defined_string["DINARA_FORCE", ""]()
 - `sweep`: a gap-affine pair the difference sweep can take takes it from the start.
 - `no-sweep`: the wavefront never hands a gap-affine pair to the sweep.
 - `bidirectional`: a gap-affine pair skips the one-search phase, both searches growing from the start.
+- `trace-wavefront`, `trace-recompute`: a band's traceback traces each tile by the wavefront wherever it fits
+  its work cap, or always recomputes it.
 """
 comptime FORCE_BAND = FORCE == "band"
 comptime FORCE_DIAGONAL = FORCE == "diagonal"

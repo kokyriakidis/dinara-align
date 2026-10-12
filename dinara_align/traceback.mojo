@@ -14,6 +14,7 @@ from std.math import ceildiv, clamp
 from .cigar import CigarWriter, reversed_into
 from .diagonal import best_source, DiagonalFronts, slide_forward
 from .probes import (
+    FORCE,
     FORWARD_SEGMENTS,
     ProbeCounts,
     PROBES,
@@ -612,6 +613,11 @@ struct TileTracer(Movable):
         # times that, or `WAVEFRONT_FLOOR`, before the tile is recomputed instead.
         var share = ceildiv(self.score * (self.column - first_column), max(self.start_column, 1))
         var limit = max(WAVEFRONT_FLOOR, 3 * share)
+        # A forced policy (see `probes.FORCE`): the wavefront wherever it fits `TILE_WORK`, or never.
+        comptime if FORCE == "trace-wavefront":
+            limit = Int.MAX
+        comptime if FORCE == "trace-recompute":
+            limit = 0
         var left = forward_segment(
             profile, self.edge, first_column, self.column, self.row, self.current, limit, self.fronts, moves
         )
