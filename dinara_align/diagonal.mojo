@@ -528,7 +528,8 @@ next grows over the one before."""
 
 struct FrontPair(Movable):
     """One direction's latest fronts, in a ring of `FRONT_RING` slots of `FRONT_WIDTH`, each indexed
-    by diagonal, for up to `TWO_ENDED_LIMIT` scores."""
+    by diagonal, for up to `TWO_ENDED_LIMIT` scores; or, when recording, every front in its history, each
+    written there as it is grown, the ring's two slots then the history's last two fronts."""
 
     var buffers: List[Int32]
     var low: Int
@@ -544,6 +545,10 @@ struct FrontPair(Movable):
     var history: DiagonalFronts
     """Every front so far, when `record`, laid out as `diagonal_transition` keeps them, for a traceback."""
     var record: Bool
+    var recorded_first: Int
+    """When recording, where diagonal zero of the front in ring slot 0 sits in the history's offsets."""
+    var recorded_second: Int
+    """The same for ring slot 1."""
 
     def __init__(out self, record: Bool = False):
         """A ring holding only score zero's front, still to be set, and a history when `record`."""
@@ -560,9 +565,9 @@ struct FrontPair(Movable):
         self.furthest = 0
         self.history = DiagonalFronts(reserve=record)
         self.record = record
-        var first = self.front_mut(0)
-        for diagonal in range(-FRONT_PADDING, FRONT_PADDING + 1):
-            first[unsafe_offset=diagonal] = UNREACHED
+        self.recorded_first = 0
+        self.recorded_second = 0
+        self.begin()
 
     def reset(mut self):
         """As new, recording nothing, the ring's memory kept for a batch's next pair."""
@@ -575,9 +580,7 @@ struct FrontPair(Movable):
         self.furthest = 0
         self.history = DiagonalFronts(reserve=False)
         self.record = False
-        var first = self.front_mut(0)
-        for diagonal in range(-FRONT_PADDING, FRONT_PADDING + 1):
-            first[unsafe_offset=diagonal] = UNREACHED
+        self.begin()
 
     def restart(mut self, record: Bool):
         """As new, recording when `record`, the ring's and the history's memory kept: an alignment's searches
@@ -591,6 +594,18 @@ struct FrontPair(Movable):
         self.furthest = 0
         self.history.clear()
         self.record = record
+        self.begin()
+
+    def begin(mut self):
+        """Score zero's front, still to be set, its padding unreached: in the ring's first slot, or when
+        recording, the history's first front."""
+        if self.record:
+            var count = 1 + 2 * FRONT_PADDING
+            self.history.offsets.resize(unsafe_uninit_length=count)
+            self.history.starts.append(0)
+            self.history.lows.append(0)
+            self.history.highs.append(0)
+            self.recorded_first = FRONT_PADDING
         var first = self.front_mut(0)
         for diagonal in range(-FRONT_PADDING, FRONT_PADDING + 1):
             first[unsafe_offset=diagonal] = UNREACHED
@@ -598,33 +613,6 @@ struct FrontPair(Movable):
     def take_history(deinit self) -> DiagonalFronts:
         """The fronts kept, the rest given up."""
         return self.history^
-
-    @always_inline
-    def keep(mut self):
-        """Copies the latest front, with its padding, onto the history, when recording: a check in place
-        for a distance, which records nothing and once paid a call a step for it."""
-        if self.record:
-            self.kept()
-
-    def kept(mut self):
-        """`keep`'s copy."""
-        var source = self.front(self.slot)
-        var start = len(self.history.offsets)
-        self.history.starts.append(start)
-        self.history.lows.append(self.low)
-        self.history.highs.append(self.high)
-        var count = self.high - self.low + 1 + 2 * FRONT_PADDING
-        self.history.offsets.resize(unsafe_uninit_length=start + count)
-        var target = self.history.offsets.unsafe_ptr().unsafe_offset(start)
-        var origin = source.unsafe_offset(self.low - FRONT_PADDING)
-        # Sixteen at a time: the compiler keeps a plain loop here scalar.
-        var index = 0
-        while index + 16 <= count:
-            target.unsafe_offset(index).unsafe_store(origin.unsafe_offset(index).unsafe_load[width=16]())
-            index += 16
-        while index < count:
-            target[unsafe_offset=index] = origin[unsafe_offset=index]
-            index += 1
 
     @inline(.always)
     def previous(self) -> Int:
@@ -635,13 +623,31 @@ struct FrontPair(Movable):
     def advance(
         mut self, codes: ImmPointer[UInt8, _], others: ImmPointer[UInt8, _], measure: Bool, columns: Int, rows: Int
     ):
-        """One more score: the next front in the ring, grown from the latest."""
-        var previous = self.front(self.slot)
+        """One more score: the next front in the ring, grown from the latest; when recording, written
+        straight onto the end of the history, which the ring's slot then points into, rather than copied
+        there after, which had doubled the memory a recording search moved."""
         var next_slot = self.slot + 1 if self.slot + 1 < FRONT_RING else 0
-        var current = self.front_mut(next_slot)
         self.score += 1
         var low = max(-self.score, -rows)
         var high = min(self.score, columns)
+        if self.record:
+            var start = len(self.history.offsets)
+            var count = high - low + 1 + 2 * FRONT_PADDING
+            # Room for a step's last vector past the front too, grown by doubling so the copies stay linear.
+            var needed = start + count + FRONT_LANES
+            if needed > self.history.offsets.capacity():
+                self.history.offsets.reserve(max(needed, 2 * self.history.offsets.capacity()))
+            self.history.offsets.resize(unsafe_uninit_length=start + count)
+            self.history.starts.append(start)
+            self.history.lows.append(low)
+            self.history.highs.append(high)
+            if next_slot == 0:
+                self.recorded_first = start + FRONT_PADDING - low
+            else:
+                self.recorded_second = start + FRONT_PADDING - low
+        # Both after the history grows, which may move it.
+        var previous = self.front(self.slot)
+        var current = self.front_mut(next_slot)
         for index in range(1, FRONT_PADDING + 1):
             current[unsafe_offset=low - index] = UNREACHED
         if measure:
@@ -653,11 +659,16 @@ struct FrontPair(Movable):
         self.low = low
         self.high = high
         self.slot = next_slot
-        self.keep()
 
     @inline(.always)
     def front(self, which: Int) -> ImmPointer[Int32, ImmUntrackedOrigin]:
-        """Front `which` of the ring, to read, indexed by diagonal."""
+        """Front `which` of the ring, to read, indexed by diagonal: in the history when recording."""
+        if self.record:
+            return (
+                self.history.offsets.unsafe_ptr()
+                .unsafe_origin_cast[ImmUntrackedOrigin]()
+                .unsafe_offset(self.recorded_first if which == 0 else self.recorded_second)
+            )
         return (
             self.buffers.unsafe_ptr()
             .unsafe_origin_cast[ImmUntrackedOrigin]()
@@ -666,8 +677,14 @@ struct FrontPair(Movable):
 
     @inline(.always)
     def front_mut(mut self, which: Int) -> MutPointer[Int32, MutUntrackedOrigin]:
-        """Front `which` of the ring, to write, indexed by diagonal. Untracked, as a front is written
-        while `front` reads the one before it from the same buffer."""
+        """Front `which` of the ring, to write, indexed by diagonal: in the history when recording.
+        Untracked, as a front is written while `front` reads the one before it from the same buffer."""
+        if self.record:
+            return (
+                self.history.offsets.unsafe_ptr()
+                .unsafe_origin_cast[MutUntrackedOrigin]()
+                .unsafe_offset(self.recorded_first if which == 0 else self.recorded_second)
+            )
         return (
             self.buffers.unsafe_ptr()
             .unsafe_origin_cast[MutUntrackedOrigin]()
@@ -781,8 +798,6 @@ def two_ended(
     var limit = TWO_ENDED_LIMIT
     ahead.front_mut(0)[unsafe_offset=0] = Int32(slide_forward(first, second, 0, 0))
     behind.front_mut(0)[unsafe_offset=0] = Int32(slide_forward(first_reversed, second_reversed, 0, 0))
-    ahead.keep()
-    behind.keep()
 
     @inline(.always)
     def overlapping(
