@@ -779,6 +779,16 @@ def diagonal_cigar(profile: Profile, fronts: DiagonalFronts, distance: Int, reve
     var rows = profile.rows
     var matched = UInt8(ord("=")) if eqx else UInt8(ord("M"))
     var substituted = UInt8(ord("X")) if eqx else UInt8(ord("M"))
+    var digits = 1
+    var power = 10
+    while power <= max(columns, rows):
+        digits += 1
+        power *= 10
+    var writer = CigarWriter((digits + 1) * (2 * distance + 2))
+    # The reversed pair's runs come right to left over it, left to right over the pair, the CIGAR's own
+    # order: written as they come, the default `Ties.LEFT`'s every CIGAR, with no runs kept to turn round.
+    if reversed:
+        return reversed_diagonal_cigar(fronts, distance, columns, rows, matched, substituted, writer^)
     var letters = List[UInt8](capacity=2 * distance + 2)
     var lengths = List[Int](capacity=2 * distance + 2)
     var diagonal = columns - rows
@@ -807,14 +817,45 @@ def diagonal_cigar(profile: Profile, fronts: DiagonalFronts, distance: Int, reve
     if column > 0:
         letters.append(matched)
         lengths.append(column)
-    var digits = 1
-    var power = 10
-    while power <= max(columns, rows):
-        digits += 1
-        power *= 10
-    var writer = CigarWriter((digits + 1) * (2 * distance + 2))
     var count = len(letters)
     for index in range(count):
-        var at = index if reversed else count - 1 - index
+        var at = count - 1 - index
         writer.add(letters[at], lengths[at])
+    return writer^.finish()
+
+
+def reversed_diagonal_cigar(
+    fronts: DiagonalFronts,
+    distance: Int,
+    columns: Int,
+    rows: Int,
+    matched: UInt8,
+    substituted: UInt8,
+    var writer: CigarWriter,
+) -> String:
+    """`diagonal_cigar` for the reversed pair's fronts, each run written into `writer` as it is traced, which
+    is the pair's own order."""
+    var diagonal = columns - rows
+    var column = columns
+    var score = distance
+    while score > 0:
+        var source = best_source(fronts, score, diagonal, columns, rows)
+        var best = source[0]
+        if column > best:
+            writer.add(matched, column - best)
+        var move = source[1]
+        if move == DIAGONAL:
+            writer.add(substituted, 1)
+            column = best - 1
+        elif move == LEFT:
+            writer.add(UInt8(ord("D")), 1)
+            column = best - 1
+            diagonal -= 1
+        else:
+            writer.add(UInt8(ord("I")), 1)
+            column = best
+            diagonal += 1
+        score -= 1
+    if column > 0:
+        writer.add(matched, column)
     return writer^.finish()

@@ -155,11 +155,12 @@ def cigar_matches(first: String, second: String, cigar: String) -> Int:
 
 
 struct CigarWriter:
-    """A CIGAR string written a run at a time into bytes reserved once, a run of the same letter as the
-    last one joining it; each length's digits are written by hand, as formatting one through a `String`,
-    or growing the bytes a run at a time, took longer than the gapped rows' whole copy on short reads."""
+    """A CIGAR string written a run at a time into the string itself, its bytes reserved once, a run of the
+    same letter as the last one joining it; each length's digits are written by hand, as formatting one
+    through a `String`, or growing the bytes a run at a time, took longer than the gapped rows' whole copy on
+    short reads. Written in place, as a `String` made from bytes copies them."""
 
-    var text: List[UInt8]
+    var text: String
     var used: Int
     var letter: UInt8
     """The letter of the run still being added to, zero before the first."""
@@ -168,8 +169,7 @@ struct CigarWriter:
 
     def __init__(out self, capacity: Int):
         """Room for `capacity` bytes, which the caller bounds: nothing past it is checked."""
-        self.text = List[UInt8](capacity=capacity)
-        self.text.resize(unsafe_uninit_length=capacity)
+        self.text = String(unsafe_uninit_length=capacity)
         self.used = 0
         self.letter = 0
         self.length = 0
@@ -193,7 +193,7 @@ struct CigarWriter:
             power *= 10
         var at = self.used
         self.used += digits + 1
-        var out = self.text.unsafe_ptr()
+        var out = self.text.unsafe_ptr_mut()
         var rest = self.length
         for place in range(digits - 1, -1, -1):
             out[unsafe_offset=at + place] = UInt8(ord("0") + rest % 10)
@@ -204,5 +204,8 @@ struct CigarWriter:
     def finish(var self) -> String:
         """The CIGAR string, its last run written."""
         self.flush()
-        self.text.resize(self.used, 0)
-        return String(unsafe_from_utf8=self.text)
+        self.text.resize(unsafe_uninit_length=self.used)
+        # Swapped out, so the writer is left whole to be destroyed and the string is not copied.
+        var text = String()
+        swap(text, self.text)
+        return text^
