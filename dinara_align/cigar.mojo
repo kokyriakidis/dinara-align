@@ -161,6 +161,10 @@ struct CigarWriter:
     short reads. Written in place, as a `String` made from bytes copies them."""
 
     var text: String
+    var out: MutPointer[UInt8, MutUntrackedOrigin]
+    """The string's bytes, taken once: asked for at every run, the call was a cost of its own on pairs of
+    thousands of runs. The string is always made large enough to keep its bytes on the heap, where moving
+    the writer leaves them."""
     var used: Int
     var letter: UInt8
     """The letter of the run still being added to, zero before the first."""
@@ -169,7 +173,8 @@ struct CigarWriter:
 
     def __init__(out self, capacity: Int):
         """Room for `capacity` bytes, which the caller bounds: nothing past it is checked."""
-        self.text = String(unsafe_uninit_length=capacity)
+        self.text = String(unsafe_uninit_length=max(capacity, 32))
+        self.out = self.text.unsafe_ptr_mut().unsafe_origin_cast[MutUntrackedOrigin]()
         self.used = 0
         self.letter = 0
         self.length = 0
@@ -193,7 +198,7 @@ struct CigarWriter:
             power *= 10
         var at = self.used
         self.used += digits + 1
-        var out = self.text.unsafe_ptr_mut()
+        var out = self.out
         var rest = self.length
         for place in range(digits - 1, -1, -1):
             out[unsafe_offset=at + place] = UInt8(ord("0") + rest % 10)
