@@ -702,14 +702,17 @@ def perf_top(data: Path, sort: str, limit: int) -> list[tuple[float, str]]:
     return found[:limit]
 
 
-COPYING = re.compile(r"\b(__)?(mem(cpy|move|set)|malloc|calloc|realloc|free|cfree|_int_malloc|_int_free|"
-                     r"posix_memalign|aligned_alloc|memalign|malloc_consolidate|KGEN_CompilerRT_\w*Alloc\w*)")
+COPYING = re.compile(r"^(__)?(mem(cpy|move|set)\w*|malloc|calloc|realloc|free|cfree|_int_malloc|_int_free|"
+                     r"_int_realloc|posix_memalign|aligned_alloc|memalign|malloc_consolidate|"
+                     r"KGEN_CompilerRT_\w*Alloc\w*|KGEN_CompilerRT_\w*Free\w*)$")
 """The C library's copy, set and allocation routines, and the Mojo runtime's allocator, by symbol."""
 
 
 def copies_and_allocations(data: Path, traced: bool) -> list[str]:
     """The share of samples in copy, set and allocation routines, and with call graphs their callers."""
-    found = [(share, symbol) for share, symbol in perf_top(data, "sym", 400) if COPYING.search(symbol)]
+    # By the symbol's own name, its last word in `perf report`'s column, so a Mojo function whose parameters
+    # spell `free=false` is not taken for `free`.
+    found = [(share, symbol) for share, symbol in perf_top(data, "sym", 400) if COPYING.match(symbol.split()[-1])]
     if not found:
         return ["Copies and allocations: no samples in the C library's copy, set or allocation routines.", ""]
     lines = [f"Copies and allocations: {sum(share for share, _ in found):.1f}% of samples, "
