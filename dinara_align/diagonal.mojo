@@ -314,6 +314,14 @@ def noisy_budget(budget: Int, edits: Int) -> Int:
 
 
 @inline(.always)
+def beyond_reach(estimate: Int, edits: Int, reach: Int) -> Bool:
+    """Whether a projection of `estimate` from `edits` edits puts the distance past `reach`, the most a search
+    can settle, even taken `PROBE_SPREAD` of its spreads low (see `noisy_budget`): then every step left is
+    spent for nothing, however cheap, and the search gives up at once."""
+    return Float64(estimate) > Float64(reach) * (1.0 + PROBE_SPREAD / sqrt(Float64(max(edits, 1))))
+
+
+@inline(.always)
 def step_budget(columns: Int, step_tenths: Int, estimate: Int) -> Int:
     """How many diagonal steps cost what a band over `columns` columns would, at a projected distance.
 
@@ -495,6 +503,9 @@ def diagonal_transition(
             if switch_setup >= 0 and estimate * estimate - score * score > (
                 estimate * estimate * ALIGNED_TWO_ENDED_PERCENT // 100 + switch_setup
             ):
+                return Probe(-1, max(estimate, score + 1), score)
+            # A distance past the ceiling this search can reach: nothing left would settle it.
+            if beyond_reach(estimate, score, PROBE_CEILING):
                 return Probe(-1, max(estimate, score + 1), score)
             # What is left to search, about `estimate² - score²` diagonals, against what a band
             # would cost; the work already done is spent either way. Only once the search has spent
@@ -887,6 +898,10 @@ def two_ended_gives_up(
     """The two-ended search's projected distance once what is left of it passes the budget, or the
     `ceiling` where that is less, or -1."""
     var estimate = total * (columns + rows) // max(reached, 1)
+    # A distance past what both fronts together can reach: nothing left would settle it. On 500 kbp and 1 Mbp
+    # pairs at 1% the search had run to its budget for distances of 5,000 and 10,000 it could never meet.
+    if beyond_reach(estimate, total, 2 * TWO_ENDED_LIMIT - 1):
+        return max(estimate, total + 1)
     # A ceiling the search's own fallback costs, widened by the projection's noise (see `noisy_budget`),
     # so a projection that overshoots does not give up a search that would have finished cheaper.
     var cap = noisy_budget(ceiling, total) if ceiling != Int.MAX else ceiling
