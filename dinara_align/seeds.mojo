@@ -269,6 +269,36 @@ def first_at_least(values: List[Int32], wanted: Int) -> Int:
     return low
 
 
+struct Leftmost(Movable):
+    """The leftmost kept match's column on each diagonal of a window, `Int32.MAX` on one with none, for local
+    pruning's shortcut (see `SeedHeuristic.worth_keeping`). A diagonal outside the window reads as holding
+    none and a match there goes unrecorded, both exact: the shortcut only keeps a match sooner, and without
+    it the search decides, as local pruning always may."""
+
+    var low: Int
+    var high: Int
+    var columns: List[Int32]
+
+    def __init__(out self, low: Int, high: Int):
+        """No match kept yet on diagonals `low ..= high`."""
+        self.low = low
+        self.high = high
+        self.columns = List[Int32](length=max(high - low + 1, 0), fill=Int32.MAX)
+
+    @always_inline
+    def at(self, diagonal: Int) -> Int:
+        """The leftmost kept match's column on `diagonal`, `Int32.MAX` for none."""
+        if diagonal < self.low or diagonal > self.high:
+            return Int(Int32.MAX)
+        return Int(self.columns.unsafe_ptr()[unsafe_offset=diagonal - self.low])
+
+    @always_inline
+    def keep(mut self, diagonal: Int, column: Int):
+        """A match kept on `diagonal` starting at `column`, the leftmost so far, as the seeds go last first."""
+        if diagonal >= self.low and diagonal <= self.high:
+            self.columns.unsafe_ptr()[unsafe_offset=diagonal - self.low] = Int32(column)
+
+
 struct SeedHeuristic(Movable):
     """A*PA2-full's gap-chaining seed heuristic, without match pruning.
 
@@ -468,7 +498,14 @@ struct SeedHeuristic(Movable):
         # A match starts `cost` less its own cost layers above the best its end can chain on to. Right
         # to left on every diagonal, as the seeds go last first, so local pruning sees the matches
         # kept after it.
-        var leftmost = List[Int32](length=self.columns + self.rows + 1, fill=Int32.MAX)
+        # Only diagonals near the end's can hold a kept match: a match is kept only while its gap to the end is
+        # within its seeds' potential, at most `cost` a seed, and a search from it strays no further than the
+        # potential of the seeds it looks ahead over. The window takes those alone, a twelfth of every diagonal
+        # on a 1 Mbp pair, which had filled 8 MB a pair and spread its lookups over all of it.
+        var reach = self.cost * (self.seeds + LOOKAHEAD_SEEDS) + 2
+        var window_low = max(-self.rows, self.columns - self.rows - reach)
+        var window_high = min(self.columns, self.columns - self.rows + reach)
+        var leftmost = Leftmost(window_low, window_high)
         var fronts = List[Int](length=4 * self.cost * LOOKAHEAD_SEEDS + 3, fill=0)
         for seed in range(self.seeds - 1, -1, -1):
             var column = seed * self.length
@@ -481,7 +518,7 @@ struct SeedHeuristic(Movable):
                 if not self.worth_keeping(first, second, seed, start_row, end_row, match_cost, leftmost, fronts):
                     continue
                 self.probe.add(COUNT_KEPT, 1)
-                leftmost[column - start_row + self.rows] = Int32(column)
+                leftmost.keep(column - start_row, column)
                 var x = column - start_row - potential
                 var y = start_row - column - potential
                 var end_x = column + self.length - end_row - end_potential
@@ -534,7 +571,7 @@ struct SeedHeuristic(Movable):
         potential: Int,
         end_potential: Int,
         layer: Int,
-        mut leftmost: List[Int32],
+        mut leftmost: Leftmost,
     ):
         """The four matches an exact inexact-seed match at `start_row` always has, each costing one edit:
         the windows one base shorter and one longer that share its start, and the two that share its end.
@@ -568,7 +605,7 @@ struct SeedHeuristic(Movable):
             var row = start_row + 1 - 2 * side
             if row < 0 or layer < 2:
                 continue
-            leftmost[column - row + self.rows] = Int32(column)
+            leftmost.keep(column - row, column)
             self.insert(layer - 1, 1, column - row - potential, row - column - potential)
 
     def count_seeds(mut self, symbols: List[UInt8]):
@@ -965,7 +1002,7 @@ struct SeedHeuristic(Movable):
         start_row: Int,
         end_row: Int,
         match_cost: Int,
-        leftmost: List[Int32],
+        leftmost: Leftmost,
         mut fronts: List[Int],
     ) -> Bool:
         """A*PA2's local pruning, its pre-pruning: whether a match can lower the cost of some path, so dropping
@@ -996,8 +1033,7 @@ struct SeedHeuristic(Movable):
         front[unsafe_offset=reach] = reached
         if reached >= end_column:
             return True
-        var nearest = leftmost.unsafe_ptr()
-        var kept = Int(nearest[unsafe_offset=origin + self.rows])
+        var kept = leftmost.at(origin)
         if kept <= reached:
             return True
         # Past the live fronts, one on either side reads as unreachable, so every front takes the best
@@ -1033,8 +1069,7 @@ struct SeedHeuristic(Movable):
                 front[unsafe_offset=d] = after
                 if after >= end_column:
                     return True
-                # A point inside the matrix, so its diagonal indexes `leftmost`.
-                var kept_column = Int(nearest[unsafe_offset=diagonal + self.rows])
+                var kept_column = leftmost.at(diagonal)
                 if before <= kept_column and kept_column <= after:
                     return True
         return False
