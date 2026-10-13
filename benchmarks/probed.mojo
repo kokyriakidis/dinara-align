@@ -31,7 +31,7 @@ def main() raises:
     var affine = ":" in tool
     var costs = Costs.edit()
     if affine:
-        var parts = tool.split(":")[1].split(",")
+        var parts = tool.split(":")[1].split(" ")[0].split(",")
         costs = Costs.affine(Int(String(parts[0])), Int(String(parts[1])), Int(String(parts[2])))
     var budget = Float64(String(argv()[3]))
     # A short spin first, so the scheduler has moved this process onto a fast core.

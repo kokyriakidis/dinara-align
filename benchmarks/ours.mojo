@@ -105,7 +105,7 @@ def seq_mode() raises:
     var opening = 0
     var extension = 0
     if ":" in tool:
-        var costs = tool.split(":")[1].split(",")
+        var costs = tool.split(":")[1].split(" ")[0].split(",")
         affine = True
         mismatch = Int(String(costs[0]))
         opening = Int(String(costs[1]))
