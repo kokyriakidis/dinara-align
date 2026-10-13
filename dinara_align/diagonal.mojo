@@ -336,7 +336,7 @@ def beyond_reach(estimate: Int, edits: Int, reach: Int) -> Bool:
 
 
 @inline(.always)
-def step_budget(columns: Int, cost: StepCost, estimate: Int) -> Int:
+def step_budget[cost: StepCost](columns: Int, estimate: Int) -> Int:
     """How many diagonal steps cost what a band over `columns` columns would, at a projected distance.
 
     A band's column costs a fixed part plus a part growing with the distance, its band taller; in
@@ -436,12 +436,9 @@ def step_front[
     return furthest
 
 
-def diagonal_transition(
-    profile: Profile,
-    cost: StepCost,
-    mut fronts: DiagonalFronts,
-    switch_setup: Int = -1,
-) -> Probe:
+def diagonal_transition[
+    cost: StepCost
+](profile: Profile, mut fronts: DiagonalFronts, switch_setup: Int = -1,) -> Probe:
     """The edit distance by diagonal transition, as WFA computes it, while it stays cheaper than a band.
 
     Score `s` reaches, on every diagonal, the furthest cell some path of `s` edits reaches; matches
@@ -526,8 +523,8 @@ def diagonal_transition(
             # finishes in microseconds to a band four times slower.
             if (
                 beyond_reach(estimate, score, PROBE_CEILING)
-                or estimate * estimate - score * score > noisy_budget(step_budget(columns, cost, estimate), score)
-            ) and score * score * GIVE_UP_SHARE >= step_budget(columns, cost, score):
+                or estimate * estimate - score * score > noisy_budget(step_budget[cost](columns, estimate), score)
+            ) and score * score * GIVE_UP_SHARE >= step_budget[cost](columns, score):
                 return Probe(-1, max(estimate, score + 1), score)
     return Probe(-1, PROBE_CEILING + 1, PROBE_CEILING)
 
@@ -763,18 +760,19 @@ struct Meeting(ImplicitlyCopyable, TrivialRegisterPassable):
     var backward_score: Int
 
 
-def two_ended_distance(profile: Profile, cost: StepCost, ceiling: Int = Int.MAX) -> Probe:
+def two_ended_distance[cost: StepCost](profile: Profile, ceiling: Int = Int.MAX) -> Probe:
     """The edit distance by `two_ended`, keeping no history, giving up past `ceiling` steps too."""
     var first_back = List[UInt8]()
     var second_back = List[UInt8]()
     var ahead = FrontPair()
     var behind = FrontPair()
-    return two_ended_distance(profile, cost, ceiling, first_back, second_back, ahead, behind)
+    return two_ended_distance[cost](profile, ceiling, first_back, second_back, ahead, behind)
 
 
-def two_ended_distance(
+def two_ended_distance[
+    cost: StepCost
+](
     profile: Profile,
-    cost: StepCost,
     ceiling: Int,
     mut first_back: List[UInt8],
     mut second_back: List[UInt8],
@@ -787,14 +785,15 @@ def two_ended_distance(
     reversed_codes_into(second_back, profile.row_codes, profile.rows, SECOND_SENTINEL)
     ahead.reset()
     behind.reset()
-    return two_ended(profile, first_back, second_back, cost, ahead, behind, ceiling).probe
+    return two_ended[cost](profile, first_back, second_back, ahead, behind, ceiling).probe
 
 
-def two_ended(
+def two_ended[
+    cost: StepCost
+](
     profile: Profile,
     first_back: List[UInt8],
     second_back: List[UInt8],
-    cost: StepCost,
     mut ahead: FrontPair,
     mut behind: FrontPair,
     ceiling: Int = Int.MAX,
@@ -878,7 +877,7 @@ def two_ended(
                     return met(ahead, behind, sooner, False, True)
                 return met(ahead, behind, meeting, False, False)
         if checking:
-            var estimate = two_ended_gives_up(total, ahead.furthest + behind.furthest, columns, rows, cost, ceiling)
+            var estimate = two_ended_gives_up[cost](total, ahead.furthest + behind.furthest, columns, rows, ceiling)
             if estimate >= 0:
                 return Meeting(Probe(-1, estimate, total), 0, 0, 0, 0)
     return Meeting(Probe(-1, 2 * limit + 1, total), 0, 0, 0, 0)
@@ -905,9 +904,9 @@ def trusted_projection(search: Probe, projected: Probe) -> Bool:
     return first * AGREEMENT <= later * (AGREEMENT + 1) and later * AGREEMENT <= first * (AGREEMENT + 1)
 
 
-def two_ended_gives_up(
-    total: Int, reached: Int, columns: Int, rows: Int, cost: StepCost, ceiling: Int = Int.MAX
-) -> Int:
+def two_ended_gives_up[
+    cost: StepCost
+](total: Int, reached: Int, columns: Int, rows: Int, ceiling: Int = Int.MAX) -> Int:
     """The two-ended search's projected distance once what is left of it passes the budget, or the
     `ceiling` where that is less, or -1."""
     var estimate = total * (columns + rows) // max(reached, 1)
@@ -922,8 +921,8 @@ def two_ended_gives_up(
     if (
         beyond_reach(estimate, total, 2 * TWO_ENDED_LIMIT - 1)
         or (estimate * estimate - total * total) * TWO_ENDED_PERCENT // 100
-        > min(step_budget(columns, cost, estimate), cap)
-    ) and total * total * TWO_ENDED_PERCENT // 100 * GIVE_UP_SHARE >= min(step_budget(columns, cost, total), cap):
+        > min(step_budget[cost](columns, estimate), cap)
+    ) and total * total * TWO_ENDED_PERCENT // 100 * GIVE_UP_SHARE >= min(step_budget[cost](columns, total), cap):
         return max(estimate, total + 1)
     return -1
 

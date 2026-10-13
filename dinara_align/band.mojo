@@ -661,7 +661,7 @@ def band_start(profile: Profile, search: Probe, mut probe: Probe, mut trusted: B
     `PROBE_START` edits, so that is the projection handed on, unless `search` went far further.
     """
     var fronts = DiagonalFronts()
-    var projected = diagonal_transition(profile, PROJECTION_ONLY, fronts)
+    var projected = diagonal_transition[PROJECTION_ONLY](profile, fronts)
     trusted = trusted_projection(search, projected)
     probe = Probe(-1, projected.estimate, max(search.floor, projected.floor))
     comptime if FORCE_SEEDS:

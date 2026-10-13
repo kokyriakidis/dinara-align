@@ -555,7 +555,9 @@ def explain(name: str, path: Path, binaries: dict, base_label: str, head_label: 
     functions whose count moved most first. A sample that aligns in less than about half a second is counted
     repeated, so its pairs and not the runner's reading and printing make up what is counted."""
     repeated = repeated_sample(path, binaries[base_label], tool, options)
-    command = lambda label: [str(binaries[label]), "seq", tool, str(options.budget * 50), str(repeated)]
+    # Quiet, as `perf` runs it (see `ours.mojo`): with a row printed a pair, the runner's own printing had made
+    # up most of a short read's instructions.
+    command = lambda label: [str(binaries[label]), "seq", tool + " quiet", str(options.budget * 50), str(repeated)]
     lines = [f"### {name}", "", "| build | instructions | cycles | IPC |", "| :-- | --: | --: | --: |"]
     totals = {}
     for label in (base_label, head_label):

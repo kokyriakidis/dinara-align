@@ -2180,7 +2180,7 @@ def test_edit_ties_follow_a_fixed_rule() raises:
             second = "A"
         var profile = Profile(first, second)
         var fronts = DiagonalFronts()
-        var reference = diagonal_transition(profile, StepCost(1 << 30, EDITS_PER_STEP), fronts)
+        var reference = diagonal_transition[StepCost(1 << 30, EDITS_PER_STEP)](profile, fronts)
         var right = align(first, second, ties=Ties.RIGHT)
         if reference.distance >= 0:
             var moves = List[UInt8]()
@@ -3942,7 +3942,7 @@ def test_scores_refuse_what_32_bits_cannot_hold() raises:
         _ = scores(references, queries, huge)
     with assert_raises(contains="the alphabet lacks"):
         _ = alignments(references, queries, huge)
-    assert_true(step_budget(10_000_000, PROJECTION_ONLY, 5) < 0)
+    assert_true(step_budget[PROJECTION_ONLY](10_000_000, 5) < 0)
 
 
 def test_searches_refuse_what_they_cannot_honour() raises:

@@ -147,9 +147,9 @@ def edit_distance(first: String, second: String, mut space: EditSpace) raises Al
     # sweep costs the diagonal transition gives way to the sweep itself.
     var short = profile.columns <= SHORT_BAND_COLUMNS
     started = space.tally.start()
-    var search = two_ended_distance(
+    comptime distance_cost = StepCost(FORCED_STEP_TENTHS, EDITS_PER_STEP) if FORCE_DIAGONAL else DISTANCE_COST
+    var search = two_ended_distance[distance_cost](
         profile,
-        StepCost(FORCED_STEP_TENTHS, EDITS_PER_STEP) if FORCE_DIAGONAL else DISTANCE_COST,
         full_matrix_steps(profile.columns, profile.rows) if short and not FORCE_DIAGONAL else Int.MAX,
         space.first_back,
         space.second_back,
@@ -211,7 +211,7 @@ def projection(profile: Profile) -> Probe:
     """One front's projection of the distance from its first edits, as `band_start` takes it, settling
     nothing: what a band forced to take a pair (see `probes.FORCE`) starts from."""
     var fronts = DiagonalFronts()
-    var projected = diagonal_transition(profile, PROJECTION_ONLY, fronts)
+    var projected = diagonal_transition[PROJECTION_ONLY](profile, fronts)
     return Probe(-1, projected.estimate, projected.floor)
 
 
@@ -398,7 +398,7 @@ def settle(
     # A forced policy (see `probes.FORCE`): the one front only to its first check, or never giving way.
     comptime one_front = PROJECTION_ONLY if FORCE == "two-ended" else cost
     var switch = -1 if FORCE == "one-ended" else two_ended_setup(columns, rows)
-    var close = diagonal_transition(profile, one_front, traced, switch_setup=switch)
+    var close = diagonal_transition[one_front](profile, traced, switch_setup=switch)
     comptime if PROBES:
         tally.since(DIAGONAL_NS, started)
         var steps = 0
@@ -416,7 +416,7 @@ def settle(
     reversed_codes_into(second_back, profile.row_codes, rows, SECOND_SENTINEL)
     ahead.restart(record=True)
     behind.restart(record=True)
-    var meeting = two_ended(profile, first_back, second_back, cost, ahead, behind)
+    var meeting = two_ended[cost](profile, first_back, second_back, ahead, behind)
     comptime if PROBES:
         tally.since(TWO_ENDED_NS, started)
         tally.set(TWO_ENDED_SCORE, ahead.score + behind.score)
