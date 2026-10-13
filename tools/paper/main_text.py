@@ -12,21 +12,22 @@ AFFILIATION = "UC Santa Cruz Genomics Institute, Santa Cruz, CA, USA"
 KEYWORDS = ["pairwise alignment", "edit distance", "gap-affine alignment", "band doubling", "diagonal transition", "SIMD"]
 
 ABSTRACT = [('Motivation',
-  'Exact pairwise alignment guarantees an optimal alignment under the chosen costs, unaffected by the cut-offs '
-  'of heuristic aligners, and is the ground truth against which those aligners are evaluated. No single exact '
-  'algorithm, however, is fastest across workloads: diagonal transition excels on near-identical pairs, '
-  'bit-parallel band doubling on long divergent reads, and inter-sequence vectorisation on batches of short '
-  'pairs.'),
+  "Exact pairwise alignment returns an optimal alignment under the chosen costs, so its results never depend on a "
+  "heuristic's cut-offs, and it is the reference against which heuristic aligners are judged. Yet no exact "
+  'algorithm is fastest on every workload: diagonal transition wins on near-identical pairs, bit-parallel band '
+  'doubling on long divergent reads, and inter-sequence vectorisation on batches of short pairs.'),
  ('Results',
-  'We present dinara-align, an exact aligner that selects its algorithm for each pair without giving up '
-  'optimality. Switches prompted by runtime estimates wait until the current search has spent a small fixed '
-  "share of the alternative's least work, so estimates misled by clustered errors no longer abandon searches "
-  'that would finish; a gap-affine alignment adds a second wavefront search only when measured work shows two '
-  'would be cheaper, which we prove keeps it optimal; and short pairs are aligned in narrow bands that each '
-  'vector lane certifies optimal. On one Intel Skylake-X core and 25 datasets from 250 bp reads to 1 Mbp pairs, '
-  'dinara-align was the fastest exact aligner at unit costs, up to 2.4 times faster than A*PA2 on ultra-long '
-  'nanopore reads and 1.9 and 5.1 times faster than WFA on Illumina and HiFi reads, and at gap-affine costs the '
-  'fastest on every dataset any tool completed, tied with WFA on Illumina reads.'),
+  'We present dinara-align, an exact aligner that chooses the algorithm for each pair as it runs, without giving '
+  'up optimality. Three rules make these choices safe. A switch suggested by a runtime estimate is taken only '
+  'once the current search has spent a small fixed share of the least work the alternative could need, so '
+  'estimates inflated by errors clustered at read ends cannot abandon searches that would have finished. A '
+  'gap-affine alignment starts a second wavefront search only when measured work shows that two searches would '
+  'be cheaper than one, a rule we prove preserves optimality. Short pairs in batches are aligned in narrow bands '
+  'whose optimality each vector lane certifies. On one Intel Skylake-X core and 25 datasets, from 250 bp reads to '
+  '1 Mbp pairs, dinara-align was the fastest exact aligner at unit costs, up to 2.4 times faster than '
+  'A*PA2 on ultra-long nanopore reads and 2.5 and 5.7 times faster than WFA on Illumina and HiFi '
+  'reads, and at gap-affine costs the fastest on every dataset any tool completed, 1.3 times faster than '
+  'WFA on Illumina reads.'),
  ('Availability and implementation',
   'dinara-align is free software under the Mozilla Public License 2.0, available at '
   'https://github.com/kokyriakidis/dinara-align with C, C++, Python and command-line interfaces.'),
@@ -98,7 +99,7 @@ BODY = [
  "HiFi and PromethION reads, SARS-CoV-2 genomes and simulated pairs of up to 1 Mbp, with QuickEd's Illumina, "
  "HiFi and PromethION sets built from HG002 reads, each paired with the stretch of HG002's own assembly it "
  'covers. It was the fastest exact aligner on all of them at unit costs, and at gap-affine costs on every '
- 'dataset any tool completed, tied with WFA on the Illumina reads.'),
+ 'dataset any tool completed.'),
 ('sec', 'Background'),
 ('sub', 'Alignment and costs'),
 ('p',
@@ -436,10 +437,12 @@ BODY = [
 ('p',
  'Each dataset was sampled to about 2 Mbp of sequence, both sides counted, and at least four pairs. Every tool '
  'aligned each pair with traceback, on one pinned core, through one aligner object per sample as its own '
- 'benchmark runner does, with a 30 s budget per sample, in three rounds that alternated between the tools; a '
+ 'benchmark runner does, with a 30 s budget per sample, in three rounds; a '
  "pair's time is its median over the rounds, and a tool is credited only with the pairs it completed in every "
- "round. The rounds agreed closely: the median spread between a tool's fastest and slowest round was 0.5% at "
- "unit and 0.7% at gap-affine costs, at most 18%, on dinara-align's 0.6 µs Illumina alignments. Timings quoted "
+ 'round. The other tools were timed in rounds that alternated between them, and dinara-align at its final version '
+ 'a day later, on the same machine, builds and samples, every answer checked against theirs again. The rounds '
+ "agreed closely: the median spread between a tool's fastest and slowest round was 0.5% at unit and 0.6% at "
+ "gap-affine costs, at most 24%, on dinara-align's batch alignments of the HiFi reads. Timings quoted "
  'in Section 3 were recorded when each change was made, against the version before it (Supplementary Table S1). '
  'The exact aligners compared are A*PA2-full (with the seed heuristic and pruning) and A*PA2-simple (band '
  'doubling alone), A*PA [@GrootKoerkamp2024a], Edlib [@Sosic2017], WFA and BiWFA, which denote WFA2-lib in its '
@@ -451,37 +454,37 @@ BODY = [
 ('sub', 'Speed and memory'),
 ('p',
  'At unit costs dinara-align had the lowest mean time per alignment of the exact aligners on all 25 datasets. On '
- 'the real data ([#tab:unit]) it was 1.4 to 2.4 times faster than the fastest alternative on the nanopore reads '
- '(1.7 times on PromethION) and 2.6 times on the SARS-CoV-2 genomes, and 1.9 and 5.1 times faster than WFA, the '
+ 'the real data ([#tab:unit]) it was 1.5 to 2.4 times faster than the fastest alternative on the nanopore reads '
+ '(1.6 times on PromethION) and 3.1 times on the SARS-CoV-2 genomes, and 2.5 and 5.7 times faster than WFA, the '
  'fastest of the others there, on the Illumina and HiFi reads. On the simulated data ([#fig:sweeps]; '
- 'Supplementary Table S5) it was 1.1 to 2.4 times faster than the fastest alternative: 100 kbp pairs at 1, 5, 10 '
- 'and 20% errors took 1.5, 5.1, 7.2 and 15.8 ms, against 7.5, 8.4, 13.9 and 36.8 ms for A*PA2-full and 12.5, '
- '23.9, 39.0 and 62.6 ms for QuickEd. Its narrowest margin was on 10 kbp pairs at 5%, 0.268 against 0.288 ms for '
- 'A*PA2-simple. Over all 25 datasets QuickEd took 3.0 to 74 times as long, 7.8 times in the geometric mean.'),
+ 'Supplementary Table S5) it was 1.4 to 2.9 times faster than the fastest alternative: 100 kbp pairs at 1, 5, 10 '
+ 'and 20% errors took 1.1, 4.9, 7.0 and 15.4 ms, against 7.5, 8.4, 13.9 and 36.8 ms for A*PA2-full and 12.5, '
+ '23.9, 39.0 and 62.6 ms for QuickEd. Its narrowest margin was on 10 kbp pairs at 10%, 0.315 against 0.444 ms for '
+ 'A*PA2-simple. Over all 25 datasets QuickEd took 3.5 to 82 times as long, 8.7 times in the geometric mean.'),
 ('p',
- 'At gap-affine costs dinara-align was 1.02 to 3.3 times faster than the faster of WFA and BiWFA on the 16 '
- 'datasets all three completed ([#tab:affine]; Supplementary Table S4), the lowest on the Illumina reads, 1.51 '
- 'against 1.54 µs for WFA, a tie within the spread of its rounds. It aligned every PromethION pair, in 286 ms '
+ 'At gap-affine costs dinara-align was 1.3 to 3.3 times faster than the faster of WFA and BiWFA on the 16 '
+ 'datasets all three completed ([#tab:affine]; Supplementary Table S4), the lowest on the Illumina reads, 1.16 '
+ 'against 1.54 µs for WFA. It aligned every PromethION pair, in 261 ms '
  'against 576 ms for BiWFA, where WFA ran out of memory after 7 of 22, and completed more of the simulated pairs '
- 'of 100 kbp or more than any other tool, 45 against 41 for BiWFA; but it completed no ont-500k read and one of '
+ 'of 100 kbp or more than any other tool, 47 against 41 for BiWFA; but it completed no ont-500k read and one of '
  'the four ont-500k-genvar reads. In the other modes it was as fast as, or up to 22 times faster than, the '
  'fastest tool offering the same mode, infix alignment at (4, 6, 2) being a tie (Supplementary Table S3). Global '
- 'scores of 500,000 short-read pairs took 231 ms on one core and 29 ms on ten at (1, 2, 1), 4.6 and 3.9 times '
+ 'scores of 500,000 short-read pairs took 229 ms on one core and 30 ms on ten at (1, 2, 1), 4.6 and 3.7 times '
  'faster than WFA2-lib (Supplementary Table S8).'),
 ('table', 'unit'),
 ('table', 'affine'),
 ('table', 'affine_sim'),
 ('figure', 'sweeps'),
 ('p',
- 'An alignment of an ultra-long read increased peak memory by at most 48 MiB, against 81 MiB for A*PA2-full, and '
- 'of a 1 Mbp pair at 20% errors by at most 123 MiB, against 184 MiB (Supplementary Table S7). This growth '
+ 'An alignment of an ultra-long read increased peak memory by at most 54 MiB, against 81 MiB for A*PA2-full, and '
+ 'of a 1 Mbp pair at 20% errors by at most 131 MiB, against 184 MiB (Supplementary Table S7). This growth '
  'includes the seed heuristic and the band; the stored tile boundaries stayed within the default limit of 80 MiB '
  "(Section 3.7). QuickEd stayed near 25 MiB. On short reads dinara-align's peak was higher than the others' "
  '([#tab:unit]): the Mojo runtime and the sample, read whole, take about 13 MiB.'),
 ('sec', 'Discussion'),
 ('p',
  'dinara-align was the fastest exact aligner compared on every dataset at unit costs, and at gap-affine costs on '
- 'every dataset that any tool completed, tied with WFA on the Illumina reads. This is consistent with choosing '
+ 'every dataset that any tool completed. This is consistent with choosing '
  'an algorithm for each pair: no single engine was fastest across these workloads, and since every engine is '
  'exact, choosing never forfeits the guarantee or changes the alignment. Three observations stand out. First, '
  'each technique paid where its engine does the work (Supplementary Table S2): on the ultra-long reads, '
@@ -494,7 +497,7 @@ BODY = [
  'the code changes, and measuring them again belongs in the evaluation of any aligner that selects its algorithm '
  'by thresholds. Gap-affine alignment of ultra-long reads remains open: no tool completed an ont-500k read '
  'within 30 s. Where memory matters more than time, Edlib, QuickEd and BiWFA (15 to 29 MiB on ultra-long reads) '
- "use less than dinara-align's 64 MiB. The measured-work rule, the regrouped recurrence and the per-lane "
+ "use less than dinara-align's 71 to 81 MiB. The measured-work rule, the regrouped recurrence and the per-lane "
  'certificate do not depend on this implementation and apply to other wavefront, bit-parallel and inter-sequence '
  'aligners. And because its alignments are exact and the same whichever engine computes them, dinara-align can '
  'serve as the reference against which heuristic aligners are measured, at the scale of current long reads.'),
@@ -560,57 +563,57 @@ TABLES = {
   "align": "lrrrrrrrrrr",
   "rows": [
     ["*Mean time per alignment*", "", "", "", "", "", "", "", "", "", ""],
-    ["ont-1k (830 bp)", "**0.0208**", "0.0810", "0.0481", "0.613", "0.0732", "0.124", "0.0442", "0.0313", "0.119", "0.538"],
-    ["ont-10k (3.6 kbp)", "**0.154**", "0.393", "0.247", "15.4", "0.679", "1.11", "0.752", "0.599", "1.30", "13.0"],
-    ["ont-50k (9.6 kbp)", "**0.582**", "1.28", "0.941", "263", "2.31", "6.11", "7.43", "6.35", "12.3", "169"],
-    ["ont-promethion (45 kbp)", "**3.99**", "7.02", "6.76", "929", "17.1", "73.9", "71.1", "79.7", "181 [7/22]", "1,810 [15/22]"],
-    ["ont-500k (642 kbp)", "**118**", "284", "688", "t.o.", "848", "5,000", "6,370", "o.o.m.", "crash", "o.o.m."],
-    ["ont-500k-genvar (663 kbp)", "**156**", "225", "512", "t.o.", "1,390", "5,230", "6,180", "o.o.m.", "crash", "o.o.m."],
-    ["SARS-CoV-2 (30 kbp)", "**0.277**", "2.01", "0.727", "6.55", "3.86", "8.18", "0.906", "0.979", "47.0", "68.6"],
-    ["Illumina (248 bp)", "**0.000593**", "0.0145", "0.00411", "0.0137", "0.0162", "0.0234", "0.00206", "0.00112", "0.0205", "0.0124"],
-    ["PacBio HiFi (14 kbp)", "**0.0129**", "0.980", "0.259", "1.06", "0.951", "3.41", "0.0865", "0.0660", "12.2", "3.09"],
+    ["ont-1k (830 bp)", "**0.0170**", "0.0810", "0.0481", "0.613", "0.0732", "0.124", "0.0442", "0.0313", "0.119", "0.538"],
+    ["ont-10k (3.6 kbp)", "**0.143**", "0.393", "0.247", "15.4", "0.679", "1.11", "0.752", "0.599", "1.30", "13.0"],
+    ["ont-50k (9.6 kbp)", "**0.535**", "1.28", "0.941", "263", "2.31", "6.11", "7.43", "6.35", "12.3", "169"],
+    ["ont-promethion (45 kbp)", "**4.11**", "7.02", "6.76", "929", "17.1", "73.9", "71.1", "79.7", "181 [7/22]", "1,810 [15/22]"],
+    ["ont-500k (642 kbp)", "**116**", "284", "688", "t.o.", "848", "5,000", "6,370", "o.o.m.", "crash", "o.o.m."],
+    ["ont-500k-genvar (663 kbp)", "**154**", "225", "512", "t.o.", "1,390", "5,230", "6,180", "o.o.m.", "crash", "o.o.m."],
+    ["SARS-CoV-2 (30 kbp)", "**0.237**", "2.01", "0.727", "6.55", "3.86", "8.18", "0.906", "0.979", "47.0", "68.6"],
+    ["Illumina (248 bp)", "**0.000441**", "0.0145", "0.00411", "0.0137", "0.0162", "0.0234", "0.00206", "0.00112", "0.0205", "0.0124"],
+    ["PacBio HiFi (14 kbp)", "**0.0116**", "0.980", "0.259", "1.06", "0.951", "3.41", "0.0865", "0.0660", "12.2", "3.09"],
     ["*Peak resident memory (MiB)*", "", "", "", "", "", "", "", "", "", ""],
     ["ont-1k", "14", "5", "5", "6", "2", "7", "7", "8", "2", "7"],
     ["ont-10k", "16", "6", "6", "39", "6", "8", "8", "39", "25", "72"],
     ["ont-50k", "19", "8", "7", "858", "18", "8", "9", "187", "423", "650"],
-    ["ont-promethion", "23", "14", "9", "455", "19", "8", "14", "1069", "crash", "—"],
-    ["ont-500k", "64", "89", "90", "t.o.", "26", "15", "29", "o.o.m.", "crash", "o.o.m."],
-    ["ont-500k-genvar", "64", "56", "55", "t.o.", "27", "17", "27", "o.o.m.", "crash", "o.o.m."],
+    ["ont-promethion", "32", "14", "9", "455", "19", "8", "14", "1069", "crash", "—"],
+    ["ont-500k", "71", "89", "90", "t.o.", "26", "15", "29", "o.o.m.", "crash", "o.o.m."],
+    ["ont-500k-genvar", "81", "56", "55", "t.o.", "27", "17", "27", "o.o.m.", "crash", "o.o.m."],
     ["SARS-CoV-2", "18", "7", "6", "19", "15", "8", "9", "26", "215", "151"],
-    ["Illumina", "13", "5", "5", "5", "2", "7", "7", "7", "2", "7"],
-    ["PacBio HiFi", "14", "7", "6", "6", "4", "8", "8", "9", "127", "21"],
+    ["Illumina", "12", "5", "5", "5", "2", "7", "7", "7", "2", "7"],
+    ["PacBio HiFi", "13", "7", "6", "6", "4", "8", "8", "9", "127", "21"],
   ]},
 "affine_sim": {
   "caption": "Gap-affine alignment of QuickEd's simulated datasets, random sequences with uniformly spread substitutions, insertions and deletions, at costs (4, 6, 2) by every exact aligner that takes them: mean time per alignment in ms, a 30 s budget per sample. Brackets give the pairs completed where not all were; t.o. marks a tool that completed none and o.o.m. one the 8 GiB limit stopped. Datasets no tool completed are left out; every dataset is in Supplementary Table S4. Bold marks the lowest mean of the tools that completed the most pairs.",
   "header": ["Dataset", "dinara-align", "WFA", "BiWFA", "BSAlign", "KSW2"],
   "align": "lrrrrr",
   "rows": [
-    ["10 kbp, 1%", "**0.195**", "0.409", "0.649", "37.0", "21.2"],
-    ["10 kbp, 5%", "**2.37**", "7.13", "8.73", "37.2", "97.6"],
-    ["10 kbp, 10%", "**7.08**", "22.8", "27.2", "37.2", "204"],
-    ["10 kbp, 20%", "**19.9**", "65.5", "75.2", "37.5", "375 [80/99]"],
-    ["100 kbp, 1%", "**11.9**", "39.9", "39.0", "o.o.m.", "2,440"],
-    ["100 kbp, 5%", "**357**", "810", "715", "o.o.m.", "9,220 [3/9]"],
-    ["100 kbp, 10%", "**1,370**", "o.o.m.", "2,430", "o.o.m.", "17,400 [1/10]"],
-    ["100 kbp, 20%", "**3,940 [7/10]**", "o.o.m.", "7,350 [4/10]", "o.o.m.", "o.o.m."],
-    ["500 kbp, 1%", "**499**", "1,290", "942", "o.o.m.", "o.o.m."],
-    ["500 kbp, 5%", "**11,400 [2/4]**", "o.o.m.", "19,400 [1/4]", "o.o.m.", "o.o.m."],
-    ["1 Mbp, 1%", "**2,440**", "o.o.m.", "3,920", "o.o.m.", "o.o.m."],
+    ["10 kbp, 1%", "**0.186**", "0.409", "0.649", "37.0", "21.2"],
+    ["10 kbp, 5%", "**2.29**", "7.13", "8.73", "37.2", "97.6"],
+    ["10 kbp, 10%", "**6.96**", "22.8", "27.2", "37.2", "204"],
+    ["10 kbp, 20%", "**19.7**", "65.5", "75.2", "37.5", "375 [80/99]"],
+    ["100 kbp, 1%", "**11.7**", "39.9", "39.0", "o.o.m.", "2,440"],
+    ["100 kbp, 5%", "**327**", "810", "715", "o.o.m.", "9,220 [3/9]"],
+    ["100 kbp, 10%", "**1,170**", "o.o.m.", "2,430", "o.o.m.", "17,400 [1/10]"],
+    ["100 kbp, 20%", "**3,560 [8/10]**", "o.o.m.", "7,350 [4/10]", "o.o.m.", "o.o.m."],
+    ["500 kbp, 1%", "**463**", "1,290", "942", "o.o.m.", "o.o.m."],
+    ["500 kbp, 5%", "**9,710 [3/4]**", "o.o.m.", "19,400 [1/4]", "o.o.m.", "o.o.m."],
+    ["1 Mbp, 1%", "**2,230**", "o.o.m.", "3,920", "o.o.m.", "o.o.m."],
   ]},
 "affine": {
   "caption": "Gap-affine alignment of the real datasets at costs (4, 6, 2) by every exact aligner that takes them: mean time per alignment in ms, a 30 s budget per sample, the median of three alternating rounds. Brackets give the pairs completed where not all were; t.o. marks a tool that completed none and o.o.m. one the 8 GiB limit stopped. Every dataset is in Supplementary Table S4. Bold marks the lowest mean of the tools that completed the most pairs.",
   "header": ["Dataset", "dinara-align", "WFA", "BiWFA", "BSAlign", "KSW2"],
   "align": "lrrrrr",
   "rows": [
-    ["ont-1k", "**0.105**", "0.189", "0.305", "0.336", "1.10"],
-    ["ont-10k", "**1.59**", "4.86", "5.85", "7.83", "29.9"],
-    ["ont-50k", "**21.7**", "63.4", "54.9", "86.8", "341 [81/104]"],
-    ["ont-promethion", "**286**", "286 [7/22]", "576", "o.o.m.", "2,350 [7/22]"],
+    ["ont-1k", "**0.102**", "0.189", "0.305", "0.336", "1.10"],
+    ["ont-10k", "**1.57**", "4.86", "5.85", "7.83", "29.9"],
+    ["ont-50k", "**21.3**", "63.4", "54.9", "86.8", "341 [81/104]"],
+    ["ont-promethion", "**261**", "286 [7/22]", "576", "o.o.m.", "2,350 [7/22]"],
     ["ont-500k", "t.o.", "o.o.m.", "t.o.", "o.o.m.", "o.o.m."],
-    ["ont-500k-genvar", "27,300 [1/4]", "o.o.m.", "t.o.", "o.o.m.", "o.o.m."],
-    ["SARS-CoV-2", "**0.698**", "2.06", "1.78", "341", "88.6"],
-    ["Illumina", "**0.00151**", "0.00154", "0.00282", "0.0538", "0.0128"],
-    ["PacBio HiFi", "**0.0929**", "0.224", "0.232", "86.1", "9.74"],
+    ["ont-500k-genvar", "21,500 [1/4]", "o.o.m.", "t.o.", "o.o.m.", "o.o.m."],
+    ["SARS-CoV-2", "**0.674**", "2.06", "1.78", "341", "88.6"],
+    ["Illumina", "**0.00116**", "0.00154", "0.00282", "0.0538", "0.0128"],
+    ["PacBio HiFi", "**0.0787**", "0.224", "0.232", "86.1", "9.74"],
   ]},
 }
 

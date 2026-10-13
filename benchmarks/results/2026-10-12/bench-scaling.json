@@ -1,0 +1,474 @@
+[
+ {
+  "length": 10000,
+  "error": 1,
+  "pairs": 100,
+  "seconds_per_pair": {
+   "dinara-align (bit-parallel, 1 thread)": 2.4100559999999998e-05,
+   "dinara-align (bit-parallel, batch, 1 thread)": 2.678111e-05,
+   "a*pa2-full": 0.00074211839,
+   "a*pa2-simple": 0.00016051340000000001,
+   "a*pa": 0.00056705749,
+   "edlib": 0.0033007206700000004,
+   "biwfa": 9.221319999999999e-05,
+   "wfa": 6.279251e-05,
+   "ksw2": 0.0063067463899999995,
+   "quicked": 0.0006126024900000001,
+   "bsalign": 0.00555199703
+  },
+  "finished": {
+   "dinara-align (bit-parallel, 1 thread)": 100,
+   "dinara-align (bit-parallel, batch, 1 thread)": 100,
+   "a*pa2-full": 100,
+   "a*pa2-simple": 100,
+   "a*pa": 100,
+   "edlib": 100,
+   "biwfa": 100,
+   "wfa": 100,
+   "ksw2": 100,
+   "quicked": 100,
+   "bsalign": 100
+  }
+ },
+ {
+  "length": 10000,
+  "error": 5,
+  "pairs": 99,
+  "seconds_per_pair": {
+   "dinara-align (bit-parallel, 1 thread)": 0.0001981047474747475,
+   "dinara-align (bit-parallel, batch, 1 thread)": 0.00019885696969696972,
+   "a*pa2-full": 0.000793230808080808,
+   "a*pa2-simple": 0.0002884366565656566,
+   "a*pa": 0.001078985404040404,
+   "edlib": 0.003860800414141414,
+   "biwfa": 0.000636166595959596,
+   "wfa": 0.000515175898989899,
+   "ksw2": 0.021440653343434344,
+   "quicked": 0.0012645872323232324,
+   "bsalign": 0.005570758111111111
+  },
+  "finished": {
+   "dinara-align (bit-parallel, 1 thread)": 99,
+   "dinara-align (bit-parallel, batch, 1 thread)": 99,
+   "a*pa2-full": 99,
+   "a*pa2-simple": 99,
+   "a*pa": 99,
+   "edlib": 99,
+   "biwfa": 99,
+   "wfa": 99,
+   "ksw2": 99,
+   "quicked": 99,
+   "bsalign": 99
+  }
+ },
+ {
+  "length": 10000,
+  "error": 10,
+  "pairs": 100,
+  "seconds_per_pair": {
+   "dinara-align (bit-parallel, 1 thread)": 0.00031516797,
+   "dinara-align (bit-parallel, batch, 1 thread)": 0.00031965477999999997,
+   "a*pa2-full": 0.00072338007,
+   "a*pa2-simple": 0.00045416888,
+   "a*pa": 0.0032476420000000002,
+   "edlib": 0.00457676308,
+   "biwfa": 0.00226458284,
+   "wfa": 0.00185676327,
+   "ksw2": 0.040105892010000005,
+   "quicked": 0.00201868654,
+   "bsalign": 0.0056214832
+  },
+  "finished": {
+   "dinara-align (bit-parallel, 1 thread)": 100,
+   "dinara-align (bit-parallel, batch, 1 thread)": 100,
+   "a*pa2-full": 100,
+   "a*pa2-simple": 100,
+   "a*pa": 100,
+   "edlib": 100,
+   "biwfa": 100,
+   "wfa": 100,
+   "ksw2": 100,
+   "quicked": 100,
+   "bsalign": 100
+  }
+ },
+ {
+  "length": 10000,
+  "error": 20,
+  "pairs": 99,
+  "seconds_per_pair": {
+   "dinara-align (bit-parallel, 1 thread)": 0.00044308575757575757,
+   "dinara-align (bit-parallel, batch, 1 thread)": 0.0004468745252525253,
+   "a*pa2-full": 0.001436714606060606,
+   "a*pa2-simple": 0.0010155910404040405,
+   "a*pa": 0.2046157696262626,
+   "edlib": 0.005974162121212122,
+   "biwfa": 0.007340008606060606,
+   "wfa": 0.005345748171717172,
+   "ksw2": 0.09795916676767677,
+   "quicked": 0.0015520118585858585,
+   "bsalign": 0.005642529686868686
+  },
+  "finished": {
+   "dinara-align (bit-parallel, 1 thread)": 99,
+   "dinara-align (bit-parallel, batch, 1 thread)": 99,
+   "a*pa2-full": 99,
+   "a*pa2-simple": 99,
+   "a*pa": 99,
+   "edlib": 99,
+   "biwfa": 99,
+   "wfa": 99,
+   "ksw2": 99,
+   "quicked": 99,
+   "bsalign": 99
+  }
+ },
+ {
+  "length": 100000,
+  "error": 1,
+  "pairs": 9,
+  "seconds_per_pair": {
+   "dinara-align (bit-parallel, 1 thread)": 0.0011425587777777778,
+   "dinara-align (bit-parallel, batch, 1 thread)": 0.0011000782222222222,
+   "a*pa2-full": 0.0075777913333333335,
+   "a*pa2-simple": 0.0032725785555555555,
+   "a*pa": 0.007815510666666668,
+   "edlib": 0.058015697666666664,
+   "biwfa": 0.003719592888888889,
+   "wfa": 0.004089396111111111,
+   "ksw2": 0.6165473998888888,
+   "quicked": 0.012521517333333334,
+   "bsalign": 0.6420633834444445
+  },
+  "finished": {
+   "dinara-align (bit-parallel, 1 thread)": 9,
+   "dinara-align (bit-parallel, batch, 1 thread)": 9,
+   "a*pa2-full": 9,
+   "a*pa2-simple": 9,
+   "a*pa": 9,
+   "edlib": 9,
+   "biwfa": 9,
+   "wfa": 9,
+   "ksw2": 9,
+   "quicked": 9,
+   "bsalign": 9
+  }
+ },
+ {
+  "length": 100000,
+  "error": 5,
+  "pairs": 9,
+  "seconds_per_pair": {
+   "dinara-align (bit-parallel, 1 thread)": 0.004866374333333334,
+   "dinara-align (bit-parallel, batch, 1 thread)": 0.004857732333333333,
+   "a*pa2-full": 0.00834783488888889,
+   "a*pa2-simple": 0.014872344888888889,
+   "a*pa": 0.014137241444444445,
+   "edlib": 0.14710393133333333,
+   "biwfa": 0.06343313011111112,
+   "wfa": 0.05488888255555555,
+   "ksw2": 4.762200475833333,
+   "quicked": 0.023886400333333332,
+   "bsalign": 0.6407896124444444
+  },
+  "finished": {
+   "dinara-align (bit-parallel, 1 thread)": 9,
+   "dinara-align (bit-parallel, batch, 1 thread)": 9,
+   "a*pa2-full": 9,
+   "a*pa2-simple": 9,
+   "a*pa": 9,
+   "edlib": 9,
+   "biwfa": 9,
+   "wfa": 9,
+   "ksw2": 6,
+   "quicked": 9,
+   "bsalign": 9
+  }
+ },
+ {
+  "length": 100000,
+  "error": 10,
+  "pairs": 10,
+  "seconds_per_pair": {
+   "dinara-align (bit-parallel, 1 thread)": 0.0069897373,
+   "dinara-align (bit-parallel, batch, 1 thread)": 0.0069268747,
+   "a*pa2-full": 0.0139100622,
+   "a*pa2-simple": 0.027707828,
+   "a*pa": 0.048747579299999996,
+   "edlib": 0.2471098318,
+   "biwfa": 0.21832171520000002,
+   "wfa": 0.1821469865,
+   "ksw2": 9.238437545,
+   "quicked": 0.0390914713,
+   "bsalign": 0.6294944272
+  },
+  "finished": {
+   "dinara-align (bit-parallel, 1 thread)": 10,
+   "dinara-align (bit-parallel, batch, 1 thread)": 10,
+   "a*pa2-full": 10,
+   "a*pa2-simple": 10,
+   "a*pa": 10,
+   "edlib": 10,
+   "biwfa": 10,
+   "wfa": 10,
+   "ksw2": 3,
+   "quicked": 10,
+   "bsalign": 10
+  }
+ },
+ {
+  "length": 100000,
+  "error": 20,
+  "pairs": 10,
+  "seconds_per_pair": {
+   "dinara-align (bit-parallel, 1 thread)": 0.015362609900000001,
+   "dinara-align (bit-parallel, batch, 1 thread)": 0.015430423600000001,
+   "a*pa2-full": 0.0366114544,
+   "a*pa2-simple": 0.056706530899999996,
+   "edlib": 0.4454976543,
+   "biwfa": 0.7088815324000001,
+   "wfa": 0.5528204206,
+   "ksw2": 17.485783003,
+   "quicked": 0.0628282467,
+   "bsalign": 0.6290318614
+  },
+  "finished": {
+   "dinara-align (bit-parallel, 1 thread)": 10,
+   "dinara-align (bit-parallel, batch, 1 thread)": 10,
+   "a*pa2-full": 10,
+   "a*pa2-simple": 10,
+   "a*pa": 0,
+   "edlib": 10,
+   "biwfa": 10,
+   "wfa": 10,
+   "ksw2": 1,
+   "quicked": 10,
+   "bsalign": 10
+  }
+ },
+ {
+  "length": 500000,
+  "error": 1,
+  "pairs": 4,
+  "seconds_per_pair": {
+   "dinara-align (bit-parallel, 1 thread)": 0.0235396555,
+   "dinara-align (bit-parallel, batch, 1 thread)": 0.02344284725,
+   "a*pa2-full": 0.043435283500000005,
+   "a*pa2-simple": 0.0725491315,
+   "a*pa": 0.04081084925,
+   "edlib": 0.66948754025,
+   "biwfa": 0.0826861565,
+   "wfa": 0.07542141025,
+   "ksw2": 24.3620337,
+   "quicked": 0.1243627125
+  },
+  "finished": {
+   "dinara-align (bit-parallel, 1 thread)": 4,
+   "dinara-align (bit-parallel, batch, 1 thread)": 4,
+   "a*pa2-full": 4,
+   "a*pa2-simple": 4,
+   "a*pa": 4,
+   "edlib": 4,
+   "biwfa": 4,
+   "wfa": 4,
+   "ksw2": 1,
+   "quicked": 4,
+   "bsalign": 0
+  }
+ },
+ {
+  "length": 500000,
+  "error": 5,
+  "pairs": 4,
+  "seconds_per_pair": {
+   "dinara-align (bit-parallel, 1 thread)": 0.02976684375,
+   "dinara-align (bit-parallel, batch, 1 thread)": 0.02988909925,
+   "a*pa2-full": 0.04487494425,
+   "a*pa2-simple": 0.21323119575,
+   "a*pa": 0.08395812875,
+   "edlib": 2.28688040125,
+   "biwfa": 1.55407015325,
+   "wfa": 1.48498050475,
+   "quicked": 0.3927594335
+  },
+  "finished": {
+   "dinara-align (bit-parallel, 1 thread)": 4,
+   "dinara-align (bit-parallel, batch, 1 thread)": 4,
+   "a*pa2-full": 4,
+   "a*pa2-simple": 4,
+   "a*pa": 4,
+   "edlib": 4,
+   "biwfa": 4,
+   "wfa": 4,
+   "ksw2": 0,
+   "quicked": 4,
+   "bsalign": 0
+  }
+ },
+ {
+  "length": 500000,
+  "error": 10,
+  "pairs": 4,
+  "seconds_per_pair": {
+   "dinara-align (bit-parallel, 1 thread)": 0.0660622895,
+   "dinara-align (bit-parallel, batch, 1 thread)": 0.06594315425,
+   "a*pa2-full": 0.11875397074999999,
+   "a*pa2-simple": 0.42343248975000003,
+   "a*pa": 0.409021138,
+   "edlib": 4.3846685825,
+   "biwfa": 5.450531639499999,
+   "wfa": 5.014757205,
+   "quicked": 0.69853773025
+  },
+  "finished": {
+   "dinara-align (bit-parallel, 1 thread)": 4,
+   "dinara-align (bit-parallel, batch, 1 thread)": 4,
+   "a*pa2-full": 4,
+   "a*pa2-simple": 4,
+   "a*pa": 4,
+   "edlib": 4,
+   "biwfa": 4,
+   "wfa": 4,
+   "ksw2": 0,
+   "quicked": 4,
+   "bsalign": 0
+  }
+ },
+ {
+  "length": 500000,
+  "error": 20,
+  "pairs": 4,
+  "seconds_per_pair": {
+   "dinara-align (bit-parallel, 1 thread)": 0.25121564025,
+   "dinara-align (bit-parallel, batch, 1 thread)": 0.25113152475,
+   "a*pa2-full": 0.5446853334999999,
+   "a*pa2-simple": 0.89785393375,
+   "edlib": 8.528927869666667,
+   "biwfa": 18.003663163,
+   "quicked": 1.24270354825
+  },
+  "finished": {
+   "dinara-align (bit-parallel, 1 thread)": 4,
+   "dinara-align (bit-parallel, batch, 1 thread)": 4,
+   "a*pa2-full": 4,
+   "a*pa2-simple": 4,
+   "a*pa": 0,
+   "edlib": 3,
+   "biwfa": 1,
+   "wfa": 0,
+   "ksw2": 0,
+   "quicked": 4,
+   "bsalign": 0
+  }
+ },
+ {
+  "length": 1000000,
+  "error": 1,
+  "pairs": 4,
+  "seconds_per_pair": {
+   "dinara-align (bit-parallel, 1 thread)": 0.04919612175,
+   "dinara-align (bit-parallel, batch, 1 thread)": 0.049822688,
+   "a*pa2-full": 0.08981043625,
+   "a*pa2-simple": 0.25333021375,
+   "a*pa": 0.09724684775,
+   "edlib": 2.3756793475,
+   "biwfa": 0.364995368,
+   "wfa": 0.39138788625,
+   "quicked": 0.392346557
+  },
+  "finished": {
+   "dinara-align (bit-parallel, 1 thread)": 4,
+   "dinara-align (bit-parallel, batch, 1 thread)": 4,
+   "a*pa2-full": 4,
+   "a*pa2-simple": 4,
+   "a*pa": 4,
+   "edlib": 4,
+   "biwfa": 4,
+   "wfa": 4,
+   "ksw2": 0,
+   "quicked": 4,
+   "bsalign": 0
+  }
+ },
+ {
+  "length": 1000000,
+  "error": 5,
+  "pairs": 4,
+  "seconds_per_pair": {
+   "dinara-align (bit-parallel, 1 thread)": 0.06173562625,
+   "dinara-align (bit-parallel, batch, 1 thread)": 0.061597475,
+   "a*pa2-full": 0.11640209975,
+   "a*pa2-simple": 0.818968747,
+   "a*pa": 0.18371443425,
+   "edlib": 8.834827569666666,
+   "biwfa": 6.35232938375,
+   "quicked": 1.44454543
+  },
+  "finished": {
+   "dinara-align (bit-parallel, 1 thread)": 4,
+   "dinara-align (bit-parallel, batch, 1 thread)": 4,
+   "a*pa2-full": 4,
+   "a*pa2-simple": 4,
+   "a*pa": 4,
+   "edlib": 3,
+   "biwfa": 4,
+   "wfa": 0,
+   "ksw2": 0,
+   "quicked": 4,
+   "bsalign": 0
+  }
+ },
+ {
+  "length": 1000000,
+  "error": 10,
+  "pairs": 4,
+  "seconds_per_pair": {
+   "dinara-align (bit-parallel, 1 thread)": 0.17834037825,
+   "dinara-align (bit-parallel, batch, 1 thread)": 0.17851104,
+   "a*pa2-full": 0.36779262599999996,
+   "a*pa2-simple": 1.6455660435,
+   "a*pa": 0.972996051,
+   "edlib": 17.253848713,
+   "biwfa": 22.250732702,
+   "quicked": 2.65336782575
+  },
+  "finished": {
+   "dinara-align (bit-parallel, 1 thread)": 4,
+   "dinara-align (bit-parallel, batch, 1 thread)": 4,
+   "a*pa2-full": 4,
+   "a*pa2-simple": 4,
+   "a*pa": 4,
+   "edlib": 1,
+   "biwfa": 1,
+   "wfa": 0,
+   "ksw2": 0,
+   "quicked": 4,
+   "bsalign": 0
+  }
+ },
+ {
+  "length": 1000000,
+  "error": 20,
+  "pairs": 4,
+  "seconds_per_pair": {
+   "dinara-align (bit-parallel, 1 thread)": 0.89047498075,
+   "dinara-align (bit-parallel, batch, 1 thread)": 0.886906002,
+   "a*pa2-full": 2.01870618625,
+   "a*pa2-simple": 3.5121389595,
+   "quicked": 4.79530874625
+  },
+  "finished": {
+   "dinara-align (bit-parallel, 1 thread)": 4,
+   "dinara-align (bit-parallel, batch, 1 thread)": 4,
+   "a*pa2-full": 4,
+   "a*pa2-simple": 4,
+   "a*pa": 0,
+   "edlib": 0,
+   "biwfa": 0,
+   "wfa": 0,
+   "ksw2": 0,
+   "quicked": 4,
+   "bsalign": 0
+  }
+ }
+]
