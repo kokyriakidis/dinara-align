@@ -37,6 +37,8 @@ comptime FORCE = get_defined_string["DINARA_FORCE", ""]()
 - `bidirectional`: a gap-affine pair skips the one-search phase, both searches growing from the start.
 - `one-ended`, `two-ended`: an alignment's diagonal transition never gives way to the two-ended search, or
   skips the one front for it from the start.
+- `aim-search`: a band aims its first bound at the search's own projection, from every edit it reached, and
+  trusts it, rather than at the one front's from its first `PROBE_START`.
 - `trace-wavefront`, `trace-recompute`: a band's traceback traces each tile by the wavefront wherever it fits
   its work cap, or always recomputes it.
 """

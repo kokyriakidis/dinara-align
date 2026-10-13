@@ -34,6 +34,7 @@ from .diagonal import (
     DiagonalFronts,
     Probe,
     PROBE_MARGIN,
+    PROBE_START,
     PROJECTION_ONLY,
     SHORT_COLUMNS,
     trusted_projection,
@@ -668,6 +669,12 @@ def band_start(profile: Profile, search: Probe, mut probe: Probe, mut trusted: B
     var projected = diagonal_transition[PROJECTION_ONLY](profile, fronts)
     trusted = trusted_projection(search, projected)
     probe = Probe(-1, projected.estimate, max(search.floor, projected.floor))
+    comptime if FORCE == "aim-search":
+        # A forced policy (see `probes.FORCE`): the band aims at the search's own projection, from every edit
+        # it reached, once it reached past the one front's, and trusts it.
+        if search.floor >= 2 * PROBE_START and search.estimate > search.floor:
+            probe = Probe(-1, search.estimate, probe.floor)
+            trusted = True
     comptime if FORCE_SEEDS:
         comptime if FORCE == "seeds-none":
             return SeedHeuristic(profile.columns, profile.rows)
