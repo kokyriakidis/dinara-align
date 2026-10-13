@@ -638,7 +638,7 @@ def regret(options) -> str:
         + " |",
         "| :-- | --: | --: | --: | --: |" + " --: |" * (len(policies) - 1),
     ]
-    worst_lines, everything = [], {}
+    worst_lines, total_lines, everything = [], [], {}
     for name, path, facts in samples(options):
         runs = {policy: [] for policy in policies}
         for round in range(options.rounds):
@@ -690,6 +690,14 @@ def regret(options) -> str:
         cells = [f"{count} ({share_of(saved, total)})" for count, saved in wins.values()]
         lines.append(f"| {name} | {pairs} | {duration(total / len(default))} | {share_of(regret_total, total)} | "
                      f"{oracle / total:.3f} | " + " | ".join(cells) + " |")
+        # Over the pairs every policy reached: a policy's whole time against the default's, what moving the
+        # library's choice wholesale toward it would do, where the wins above are what choosing better would.
+        reached = min(len(pairs) for pairs in timed.values())
+        if reached:
+            base = sum(pair["median"] for pair in default[:reached])
+            total_lines.append(f"| {name} | {reached} | " + " | ".join(
+                f"{sum(pair['median'] for pair in timed[policy][:reached]) / base:.2f}" for policy in policies if policy
+            ) + " |")
         for item in sorted(per_pair, key=lambda item: item["best"] - item["default"])[: options.worst]:
             if not item["policy"]:
                 continue
@@ -703,6 +711,15 @@ def regret(options) -> str:
             )
         everything[name] = {"timed": {label[p]: v for p, v in timed.items()}, "lengths": facts["lengths"]}
     lines += [
+        "",
+        "## Each policy forced on every pair",
+        "",
+        "Its total time over the default's, on the pairs every policy reached: below 1, the policy beat the "
+        "library's choices wholesale; above 1 with wins above, it beat them only on the pairs it won.",
+        "",
+        "| dataset | pairs | " + " | ".join(label[p] for p in policies if p) + " |",
+        "| :-- | --: |" + " --: |" * (len(policies) - 1),
+        *total_lines,
         "",
         f"## The pairs the default's choice cost most (at most {options.worst} a dataset)",
         "",
