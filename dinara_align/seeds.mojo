@@ -9,7 +9,7 @@ the cost from any cell to the end, which narrows the band (see `SeedHeuristic`).
 """
 
 from std.bit import count_leading_zeros, count_trailing_zeros, pop_count
-from std.math import ceildiv
+from std.math import ceildiv, clamp
 from std.sys import simd_width_of
 from std.sys.intrinsics import likely, prefetch, PrefetchOptions
 
@@ -1129,9 +1129,22 @@ struct SeedHeuristic(Movable):
         var count = Int(self.counts.unsafe_ptr()[unsafe_offset=layer])
         var xs = self.slot_x.unsafe_ptr().unsafe_offset(layer * LAYER_SLOTS)
         var ys = self.slot_y.unsafe_ptr().unsafe_offset(layer * LAYER_SLOTS)
-        for index in range(count):
-            if x <= Int(xs[unsafe_offset=index]) and y <= Int(ys[unsafe_offset=index]):
-                return True
+        # Every slot at once, those past the count masked off: a branch a slot had mispredicted on the long
+        # pairs, where a band asks this at every row it prunes. The point is clamped to the slots' 32 bits,
+        # past which every slot or none lies at or above it either way.
+        comptime Slots = SIMD[DType.int32, LAYER_SLOTS]
+        var lanes = Slots()
+        comptime for lane in range(LAYER_SLOTS):
+            lanes[lane] = Int32(lane)
+        var point_x = Slots(Int32(clamp(x, Int(Int32.MIN), Int(Int32.MAX))))
+        var point_y = Slots(Int32(clamp(y, Int(Int32.MIN), Int(Int32.MAX))))
+        var inside = (
+            lanes.lt(Int32(count))
+            & point_x.le(xs.unsafe_load[width=LAYER_SLOTS]())
+            & point_y.le(ys.unsafe_load[width=LAYER_SLOTS]())
+        )
+        if inside.reduce_or():
+            return True
         if count == LAYER_SLOTS:
             ref step_x = self.spill_x.unsafe_ptr()[unsafe_offset=layer]
             ref step_y = self.spill_y.unsafe_ptr()[unsafe_offset=layer]
