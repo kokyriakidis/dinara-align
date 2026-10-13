@@ -173,8 +173,7 @@ struct CigarWriter:
 
     def __init__(out self, capacity: Int):
         """Room for `capacity` bytes, which the caller bounds: nothing past it is checked."""
-        # Eight bytes past the room asked for: an entry is stored a word at a time (see `flush`).
-        self.text = String(unsafe_uninit_length=max(capacity + 8, 32))
+        self.text = String(unsafe_uninit_length=max(capacity, 32))
         self.out = self.text.unsafe_ptr_mut().unsafe_origin_cast[MutUntrackedOrigin]()
         self.used = 0
         self.letter = 0
@@ -192,32 +191,14 @@ struct CigarWriter:
         """Writes the run being added to, if any, as its length's digits then its letter."""
         if self.length == 0:
             return
-        var out = self.out
-        var at = self.used
-        if self.length < 10_000:
-            # Most runs: their digits and letter packed into a word, the most significant digit in its
-            # lowest byte, and stored at once, so that no branch asks how many digits, a mispredicted one a
-            # run on a divergent pair. The store reaches up to three bytes past the entry, which the next
-            # entry or `finish` takes over, inside the room's slack.
-            var length = UInt64(self.length)
-            var digits = 1 + Int(length >= 10) + Int(length >= 100) + Int(length >= 1000)
-            var chars = (
-                (UInt64(ord("0")) + length // 1000)
-                | (UInt64(ord("0")) + length // 100 % 10) << 8
-                | (UInt64(ord("0")) + length // 10 % 10) << 16
-                | (UInt64(ord("0")) + length % 10) << 24
-            )
-            var word = chars >> UInt64(8 * (4 - digits)) | UInt64(self.letter) << UInt64(8 * digits)
-            out.unsafe_offset(at).unsafe_bitcast[UInt64]().unsafe_store(word)
-            self.used += digits + 1
-            self.length = 0
-            return
         var digits = 1
         var power = 10
         while power <= self.length:
             digits += 1
             power *= 10
+        var at = self.used
         self.used += digits + 1
+        var out = self.out
         var rest = self.length
         for place in range(digits - 1, -1, -1):
             out[unsafe_offset=at + place] = UInt8(ord("0") + rest % 10)
