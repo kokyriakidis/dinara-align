@@ -58,9 +58,12 @@ struct StepCost(ImplicitlyCopyable, TrivialRegisterPassable):
     var edits_per_step: Int
 
 
-comptime DISTANCE_COST = StepCost(60, EDITS_PER_STEP)
-"""A distance's band in steps: a step costs about 1.3 ns, a band column about 6 ns, and a band grows taller
-with the distance (see `EDITS_PER_STEP`)."""
+comptime DISTANCE_COST = StepCost(36, 138)
+"""A distance's band in steps: measured on the Skylake-X (2026-10-12), banded distances of 1 to 100 kbp,
+failed rounds and all, cost 0.43 to 0.73 times what the earlier model, 60 tenths and a step per 83 edits,
+gave them in two-ended steps of 1.9 ns, so both terms are that model's times 0.6; with it, the search ran
+on past where the band would have finished first (profile.py regret: band-only saved 12.5% and 16.7% on
+10 kbp pairs at 5 and 10%, 5% on the ont-10k reads)."""
 
 
 comptime ALIGNMENT_COST = StepCost(80, 52)

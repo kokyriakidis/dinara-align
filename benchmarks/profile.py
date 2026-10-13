@@ -712,7 +712,8 @@ def regret(options) -> str:
         "| :-- | --: | --: | --: | --: | :-- | --: | --: | --: |",
         *worst_lines,
     ]
-    stem = f"profile-regret-{options.affine.replace(',', '-')}" if options.affine else "profile-regret"
+    stem = (f"profile-regret-{options.affine.replace(',', '-')}" if options.affine
+            else "profile-regret-distance" if options.distance else "profile-regret")
     write(stem, "\n".join(lines) + "\n", everything)
     return "\n".join(lines) + "\n"
 
