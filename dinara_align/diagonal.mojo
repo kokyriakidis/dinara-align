@@ -48,15 +48,29 @@ comptime PROBE_START = 8
 edits to go on."""
 
 
-comptime STEP_TENTHS_DISTANCE = 60
-"""Diagonal steps, in tenths, a distance's diagonal transition may still take per column before a band
-would be cheaper, at no distance: a step costs about 1.3 ns, a band column about 6 ns."""
+@fieldwise_init
+struct StepCost(ImplicitlyCopyable, TrivialRegisterPassable):
+    """What a band costs in diagonal steps, for a hand-over (see `step_budget`): `tenths` of a step a column
+    at no distance, and a step more a column per `edits_per_step` edits of projected distance, its band
+    taller."""
+
+    var tenths: Int
+    var edits_per_step: Int
 
 
-comptime STEP_TENTHS_ALIGNMENT = 50
-"""`STEP_TENTHS_DISTANCE` when an alignment is wanted: the diagonal transition then keeps every front
-and the band records and retraces, which roughly cancel, so the budget sits a little under the
-distance's."""
+comptime DISTANCE_COST = StepCost(60, EDITS_PER_STEP)
+"""A distance's band in steps: a step costs about 1.3 ns, a band column about 6 ns, and a band grows taller
+with the distance (see `EDITS_PER_STEP`)."""
+
+
+comptime ALIGNMENT_COST = StepCost(80, 52)
+"""An alignment's band in steps, which records and retraces besides: its traceback measured 0.7 to 1.3 times
+its rounds on 1 to 50 kbp reads, while the diagonal transition writes the fronts it keeps in place, so its
+steps cost about what a distance's do. Measured on the Skylake-X (2026-10-12), banded alignments of 10 to
+50 kbp cost 1.3 to 1.9 times the distance's model in steps of a search that finishes, so this is the
+distance's band times 1.6, both terms; with the distance's, the search gave up pairs it finishes for half
+the band's time (profile.py regret: diagonal transition run to its end saved 27% on 10 kbp pairs at 5%
+and 18.5% on the SARS-CoV-2 genomes)."""
 
 
 comptime TWO_ENDED_PERCENT = 57
@@ -103,7 +117,7 @@ comptime PROBE_SPREAD = 1.5
 """Spreads of a projection's noise the search allows for before it gives up (see `noisy_budget`)."""
 
 
-comptime PROJECTION_ONLY = -(1 << 40)
+comptime PROJECTION_ONLY = StepCost(-(1 << 40), EDITS_PER_STEP)
 """A budget no search fits: the diagonal transition stops at its first check, with its projection."""
 
 
@@ -322,18 +336,18 @@ def beyond_reach(estimate: Int, edits: Int, reach: Int) -> Bool:
 
 
 @inline(.always)
-def step_budget(columns: Int, step_tenths: Int, estimate: Int) -> Int:
+def step_budget(columns: Int, cost: StepCost, estimate: Int) -> Int:
     """How many diagonal steps cost what a band over `columns` columns would, at a projected distance.
 
     A band's column costs a fixed part plus a part growing with the distance, its band taller; in
-    steps that is `step_tenths / 10 + estimate / EDITS_PER_STEP` a column. A short pair's band costs
+    steps that is `cost.tenths / 10 + estimate / cost.edits_per_step` a column. A short pair's band costs
     `SHORT_BAND_SETUP` more (see `SHORT_BAND_COLUMNS`).
     """
-    if step_tenths < 0:
+    if cost.tenths < 0:
         # `PROJECTION_ONLY`'s budget, which no search fits; scaled by the columns, past 8 Mbp it wrapped.
-        return step_tenths
+        return cost.tenths
     var setup = SHORT_BAND_SETUP if columns <= SHORT_BAND_COLUMNS else 0
-    return setup + columns * step_tenths // 10 + columns * estimate // EDITS_PER_STEP
+    return setup + columns * cost.tenths // 10 + columns * estimate // cost.edits_per_step
 
 
 @inline(.never)
@@ -424,7 +438,7 @@ def step_front[
 
 def diagonal_transition(
     profile: Profile,
-    step_tenths: Int,
+    cost: StepCost,
     mut fronts: DiagonalFronts,
     switch_setup: Int = -1,
 ) -> Probe:
@@ -512,9 +526,8 @@ def diagonal_transition(
             # finishes in microseconds to a band four times slower.
             if (
                 beyond_reach(estimate, score, PROBE_CEILING)
-                or estimate * estimate - score * score
-                > noisy_budget(step_budget(columns, step_tenths, estimate), score)
-            ) and score * score * GIVE_UP_SHARE >= step_budget(columns, step_tenths, score):
+                or estimate * estimate - score * score > noisy_budget(step_budget(columns, cost, estimate), score)
+            ) and score * score * GIVE_UP_SHARE >= step_budget(columns, cost, score):
                 return Probe(-1, max(estimate, score + 1), score)
     return Probe(-1, PROBE_CEILING + 1, PROBE_CEILING)
 
@@ -750,18 +763,18 @@ struct Meeting(ImplicitlyCopyable, TrivialRegisterPassable):
     var backward_score: Int
 
 
-def two_ended_distance(profile: Profile, step_tenths: Int, ceiling: Int = Int.MAX) -> Probe:
+def two_ended_distance(profile: Profile, cost: StepCost, ceiling: Int = Int.MAX) -> Probe:
     """The edit distance by `two_ended`, keeping no history, giving up past `ceiling` steps too."""
     var first_back = List[UInt8]()
     var second_back = List[UInt8]()
     var ahead = FrontPair()
     var behind = FrontPair()
-    return two_ended_distance(profile, step_tenths, ceiling, first_back, second_back, ahead, behind)
+    return two_ended_distance(profile, cost, ceiling, first_back, second_back, ahead, behind)
 
 
 def two_ended_distance(
     profile: Profile,
-    step_tenths: Int,
+    cost: StepCost,
     ceiling: Int,
     mut first_back: List[UInt8],
     mut second_back: List[UInt8],
@@ -774,14 +787,14 @@ def two_ended_distance(
     reversed_codes_into(second_back, profile.row_codes, profile.rows, SECOND_SENTINEL)
     ahead.reset()
     behind.reset()
-    return two_ended(profile, first_back, second_back, step_tenths, ahead, behind, ceiling).probe
+    return two_ended(profile, first_back, second_back, cost, ahead, behind, ceiling).probe
 
 
 def two_ended(
     profile: Profile,
     first_back: List[UInt8],
     second_back: List[UInt8],
-    step_tenths: Int,
+    cost: StepCost,
     mut ahead: FrontPair,
     mut behind: FrontPair,
     ceiling: Int = Int.MAX,
@@ -865,9 +878,7 @@ def two_ended(
                     return met(ahead, behind, sooner, False, True)
                 return met(ahead, behind, meeting, False, False)
         if checking:
-            var estimate = two_ended_gives_up(
-                total, ahead.furthest + behind.furthest, columns, rows, step_tenths, ceiling
-            )
+            var estimate = two_ended_gives_up(total, ahead.furthest + behind.furthest, columns, rows, cost, ceiling)
             if estimate >= 0:
                 return Meeting(Probe(-1, estimate, total), 0, 0, 0, 0)
     return Meeting(Probe(-1, 2 * limit + 1, total), 0, 0, 0, 0)
@@ -895,7 +906,7 @@ def trusted_projection(search: Probe, projected: Probe) -> Bool:
 
 
 def two_ended_gives_up(
-    total: Int, reached: Int, columns: Int, rows: Int, step_tenths: Int, ceiling: Int = Int.MAX
+    total: Int, reached: Int, columns: Int, rows: Int, cost: StepCost, ceiling: Int = Int.MAX
 ) -> Int:
     """The two-ended search's projected distance once what is left of it passes the budget, or the
     `ceiling` where that is less, or -1."""
@@ -911,10 +922,8 @@ def two_ended_gives_up(
     if (
         beyond_reach(estimate, total, 2 * TWO_ENDED_LIMIT - 1)
         or (estimate * estimate - total * total) * TWO_ENDED_PERCENT // 100
-        > min(step_budget(columns, step_tenths, estimate), cap)
-    ) and total * total * TWO_ENDED_PERCENT // 100 * GIVE_UP_SHARE >= min(
-        step_budget(columns, step_tenths, total), cap
-    ):
+        > min(step_budget(columns, cost, estimate), cap)
+    ) and total * total * TWO_ENDED_PERCENT // 100 * GIVE_UP_SHARE >= min(step_budget(columns, cost, total), cap):
         return max(estimate, total + 1)
     return -1
 

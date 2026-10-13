@@ -26,8 +26,10 @@ from .diagonal import (
     DiagonalFronts,
     FrontPair,
     reversed_codes_into,
-    STEP_TENTHS_ALIGNMENT,
-    STEP_TENTHS_DISTANCE,
+    ALIGNMENT_COST,
+    DISTANCE_COST,
+    EDITS_PER_STEP,
+    StepCost,
     grow_to,
     Probe,
     PROJECTION_ONLY,
@@ -146,7 +148,7 @@ def edit_distance(first: String, second: String, mut space: EditSpace) raises Al
     started = space.tally.start()
     var search = two_ended_distance(
         profile,
-        FORCED_STEP_TENTHS if FORCE_DIAGONAL else STEP_TENTHS_DISTANCE,
+        StepCost(FORCED_STEP_TENTHS, EDITS_PER_STEP) if FORCE_DIAGONAL else DISTANCE_COST,
         full_matrix_steps(profile.columns, profile.rows) if short and not FORCE_DIAGONAL else Int.MAX,
         space.first_back,
         space.second_back,
@@ -388,11 +390,11 @@ def settle(
         return banded_alignment(profile, Probe(-1, columns + rows, 0), budget, tally, True)
     comptime if FORCE_BAND:
         return banded_alignment(profile, projection(profile), budget, tally, False)
-    comptime step_tenths = FORCED_STEP_TENTHS if FORCE_DIAGONAL else STEP_TENTHS_ALIGNMENT
+    comptime cost = StepCost(FORCED_STEP_TENTHS, EDITS_PER_STEP) if FORCE_DIAGONAL else ALIGNMENT_COST
     # A near-identical pair: one front, kept whole, settles it before both ends' setup would pay.
     var started = tally.start()
     traced.clear()
-    var close = diagonal_transition(profile, step_tenths, traced, switch_setup=two_ended_setup(columns, rows))
+    var close = diagonal_transition(profile, cost, traced, switch_setup=two_ended_setup(columns, rows))
     comptime if PROBES:
         tally.since(DIAGONAL_NS, started)
         var steps = 0
@@ -410,7 +412,7 @@ def settle(
     reversed_codes_into(second_back, profile.row_codes, rows, SECOND_SENTINEL)
     ahead.restart(record=True)
     behind.restart(record=True)
-    var meeting = two_ended(profile, first_back, second_back, step_tenths, ahead, behind)
+    var meeting = two_ended(profile, first_back, second_back, cost, ahead, behind)
     comptime if PROBES:
         tally.since(TWO_ENDED_NS, started)
         tally.set(TWO_ENDED_SCORE, ahead.score + behind.score)

@@ -59,7 +59,7 @@ from dinara_align.diagonal import PROJECTION_ONLY, step_budget
 from dinara_align.edit_search import edit_search
 from dinara_align.cigar import text_of
 from dinara_align.bit_parallel import Profile
-from dinara_align.diagonal import DiagonalFronts, diagonal_transition, trace_diagonals
+from dinara_align.diagonal import DiagonalFronts, diagonal_transition, EDITS_PER_STEP, StepCost, trace_diagonals
 from dinara_align.traceback import EditPath, cigar_string
 from dinara_align.gap_affine import (
     ALIGNED,
@@ -2180,7 +2180,7 @@ def test_edit_ties_follow_a_fixed_rule() raises:
             second = "A"
         var profile = Profile(first, second)
         var fronts = DiagonalFronts()
-        var reference = diagonal_transition(profile, 1 << 30, fronts)
+        var reference = diagonal_transition(profile, StepCost(1 << 30, EDITS_PER_STEP), fronts)
         var right = align(first, second, ties=Ties.RIGHT)
         if reference.distance >= 0:
             var moves = List[UInt8]()
