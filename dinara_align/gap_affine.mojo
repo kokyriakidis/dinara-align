@@ -65,7 +65,7 @@ from std.sys import size_of
 
 from .common import FIRST_SENTINEL, SECOND_SENTINEL, UNREACHED
 from .cigar import append_reversed, reverse_bytes, reversed_into, reversed_list, text_of
-from .bit_parallel import DIAGONAL, LEFT, UP
+from .bit_parallel import append_moves, DIAGONAL, LEFT, UP
 from .substitutions import uniform_pair
 from .edit_distance import EditSpace
 from .errors import AlignmentError, ErrorKind
@@ -2009,19 +2009,16 @@ def trace(
         if current == ALIGNED:
             var row = c - k
             if c == 0:
-                for _ in range(row):
-                    moves.append(UInt8(SECOND_GAP))
+                append_moves(moves, UInt8(SECOND_GAP), row)
                 return
             if row == 0:
-                for _ in range(c):
-                    moves.append(UInt8(FIRST_GAP))
+                append_moves(moves, UInt8(FIRST_GAP), c)
                 return
             if spent == 0:
                 # Matches back to where the diagonal starts on the first row or column, whose free
                 # letters the walk then takes along that edge.
                 var start = max(k, 0)
-                for _ in range(c - start):
-                    moves.append(UInt8(ALIGNED))
+                append_moves(moves, UInt8(ALIGNED), c - start)
                 c = start
                 continue
             var source = Int(history.flag(spent, k) & ENTRY_MASK)
@@ -2050,8 +2047,7 @@ def trace(
                 else:
                     entry = 0 if gap_cost == 0 else history.column(gap_cost - o - e, gap_diagonal + 1)
             if entry <= c:
-                for _ in range(c - entry):
-                    moves.append(UInt8(ALIGNED))
+                append_moves(moves, UInt8(ALIGNED), c - entry)
                 c = entry
             if source == ALIGNED:
                 moves.append(UInt8(ALIGNED))
@@ -2066,15 +2062,13 @@ def trace(
                 c -= 1
                 k -= 1
                 if c == 0:
-                    for _ in range(-k):
-                        moves.append(UInt8(SECOND_GAP))
+                    append_moves(moves, UInt8(SECOND_GAP), -k)
                     return
             else:
                 moves.append(UInt8(SECOND_GAP))
                 k += 1
                 if c - k == 0:
-                    for _ in range(c):
-                        moves.append(UInt8(FIRST_GAP))
+                    append_moves(moves, UInt8(FIRST_GAP), c)
                     return
             if opened:
                 spent -= penalties.opening_of(current) + penalties.extension_of(current)
@@ -2185,10 +2179,8 @@ def solve[
         var cost = gapped_cost[pieces](penalties, letters, rows == 0, continued)
         if letters < 0 or cost > ceiling:
             return -1
-        for _ in range(columns):
-            moves.append(UInt8(FIRST_GAP))
-        for _ in range(rows):
-            moves.append(UInt8(SECOND_GAP))
+        append_moves(moves, UInt8(FIRST_GAP), columns)
+        append_moves(moves, UInt8(SECOND_GAP), rows)
         return cost
     # A whole alignment kept for its traceback begins with the one search `canonical` would trace, the
     # backward one for `Ties.LEFT`, grown by itself while it may (see `traced_alone`); the other begins

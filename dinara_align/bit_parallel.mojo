@@ -95,15 +95,23 @@ comptime UP = UInt8(2)
 def append_diagonals(mut moves: List[UInt8], count: Int):
     """`count` diagonal moves, sixteen a store rather than an append each: a run of matches is most of
     any traceback's moves."""
+    append_moves(moves, DIAGONAL, count)
+
+
+@inline(.always)
+def append_moves(mut moves: List[UInt8], move: UInt8, count: Int):
+    """`count` moves of one kind, sixteen a store (see `append_diagonals`); none when `count` is not positive."""
+    if count <= 0:
+        return
     var start = len(moves)
     moves.resize(unsafe_uninit_length=start + count)
     var out = moves.unsafe_ptr().unsafe_offset(start)
     var index = 0
     while index + 16 <= count:
-        out.unsafe_offset(index).unsafe_store(SIMD[DType.uint8, 16](DIAGONAL))
+        out.unsafe_offset(index).unsafe_store(SIMD[DType.uint8, 16](move))
         index += 16
     while index < count:
-        out[unsafe_offset=index] = DIAGONAL
+        out[unsafe_offset=index] = move
         index += 1
 
 
