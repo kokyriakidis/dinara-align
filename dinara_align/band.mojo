@@ -538,8 +538,8 @@ def band_doubling[
 
     An untrusted projection (see `trusted_projection`) neither aims the first bound nor sets the
     next: the first starts `DOUBLING_START` past the distance already ruled out, by the floor or the
-    heuristic at the origin, and each next one at most doubles, as A*PA2's band doubling grows,
-    whatever a failed round projected.
+    heuristic at the origin, and each next one at most doubles, as A*PA2's band doubling grows, unless
+    the failed round crossed far enough for its death to project the distance.
 
     Each round sweeps the band for one bound. A failed round leaves either a real alignment's cost,
     which caps the next bound, or the column at which it pruned every row, from which the distance is
@@ -645,9 +645,13 @@ def band_doubling[
             # grows `SEEDED_GROWTH` times instead, as A*PA2's grows, until a round gets far enough in
             # for its death to say where the distance lies.
             next_bound = origin + SEEDED_GROWTH * max(bound - origin, SEED_SLACK)
-        if not trusted:
-            # A round's estimate comes from where it stopped, which errors gathered at an end can
-            # set as far off as the first projection: at most doubling instead.
+        if not trusted and attempt.reached * SEEDED_TRUST_SHARE < columns:
+            # A round's estimate comes from where it stopped, which errors gathered at the start can set
+            # as far off as the first projection: at most doubling instead, unless the round crossed as
+            # much of the matrix as a seeded one must for its death to project (see `SEEDED_TRUST_SHARE`).
+            # Errors gathered at the end stop a round late and project short, which a doubling never
+            # caught either. Doubling regardless, 10 kbp pairs at 10% whose first projection disagreed
+            # spent 37% of their band on failed rounds, a round more than their deaths' projections needed.
             next_bound = min(next_bound, 2 * bound)
         threshold = min(next_bound, best)
 
