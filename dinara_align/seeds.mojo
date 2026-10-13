@@ -97,6 +97,11 @@ comptime ENTRY_BITS = 32
 gives a lookup both."""
 
 
+comptime EXACT_BATCH = 64
+"""Rows the exact scan passes through its filter together before it probes the table for any (see
+`exact_matches`): on a 1% pair, where about one row in fourteen passes, four or five probes in flight."""
+
+
 comptime SCAN_BATCH = 16
 """Rows whose half tables' buckets are looked up together before any is searched (see
 `inexact_scan`): enough misses in flight at once to hide most of their wait."""
@@ -684,35 +689,59 @@ struct SeedHeuristic(Movable):
         var target_x = self.columns - self.rows
         var target_y = self.rows - self.columns
         var budget = MATCHES_A_SEED * self.seeds
+        # In batches of `EXACT_BATCH` rows, as the inexact scan goes: first every row's window past the
+        # filter, its table slot fetched ahead, then the probes, their slots on their way. The table is
+        # larger than a core's own cache on long pairs, and a probe that waited on its miss held up the next.
+        comptime AHEAD = PrefetchOptions().for_read().high_locality()
+        var passed_rows = List[Int](length=EXACT_BATCH, fill=0)
+        var passed_codes = List[Int](length=EXACT_BATCH, fill=0)
+        var passed_slots = List[Int](length=EXACT_BATCH, fill=0)
+        var rows_ptr = passed_rows.unsafe_ptr()
+        var codes_ptr = passed_codes.unsafe_ptr()
+        var slots_ptr = passed_slots.unsafe_ptr()
         var code = 0
-        for row in range(self.rows):
-            code = ((code << 2) | Int(second[unsafe_offset=row])) & MASK
-            if row + 1 < SEED_LENGTH:
-                continue
-            var hash = UInt64(code) * 0x9E3779B97F4A7C15
-            var bit = Int(hash >> UInt64(64 - filter_bits))
-            if (filter[unsafe_offset=bit >> 6] >> UInt64(bit & 63)) & 1 == 0:
-                continue
-            var slot = Int(hash >> UInt64(64 - bits))
-            var held = slots[unsafe_offset=slot]
-            while held != EMPTY and Int(held >> 32) != code:
-                slot = (slot + 1) & (size - 1)
-                held = slots[unsafe_offset=slot]
-            if held == EMPTY:
-                continue
-            var start_row = row + 1 - SEED_LENGTH
-            var seed = Int(held & 0xFFFFFFFF)
-            while seed >= 0:
-                var column = seed * SEED_LENGTH
-                # The potential with every seed counted, the most it can be: with some uncounted this
-                # keeps more matches than it must, which only weaken the bound.
-                var potential = self.seeds - seed
-                if column - start_row - potential + 1 <= target_x and start_row - column - potential + 1 <= target_y:
-                    found_seed.append(Int32(seed))
-                    found_row.append(Int32(start_row))
-                    if len(found_seed) > budget:
-                        return False
-                seed = Int(chain[unsafe_offset=seed])
+        for batch_row in range(0, self.rows, EXACT_BATCH):
+            var passed = 0
+            for row in range(batch_row, min(batch_row + EXACT_BATCH, self.rows)):
+                code = ((code << 2) | Int(second[unsafe_offset=row])) & MASK
+                if row + 1 < SEED_LENGTH:
+                    continue
+                var hash = UInt64(code) * 0x9E3779B97F4A7C15
+                var bit = Int(hash >> UInt64(64 - filter_bits))
+                if (filter[unsafe_offset=bit >> 6] >> UInt64(bit & 63)) & 1 == 0:
+                    continue
+                var slot = Int(hash >> UInt64(64 - bits))
+                prefetch[AHEAD](slots.unsafe_offset(slot))
+                rows_ptr[unsafe_offset=passed] = row
+                codes_ptr[unsafe_offset=passed] = code
+                slots_ptr[unsafe_offset=passed] = slot
+                passed += 1
+            for index in range(passed):
+                var row = rows_ptr[unsafe_offset=index]
+                var window = codes_ptr[unsafe_offset=index]
+                var slot = slots_ptr[unsafe_offset=index]
+                var held = slots[unsafe_offset=slot]
+                while held != EMPTY and Int(held >> 32) != window:
+                    slot = (slot + 1) & (size - 1)
+                    held = slots[unsafe_offset=slot]
+                if held == EMPTY:
+                    continue
+                var start_row = row + 1 - SEED_LENGTH
+                var seed = Int(held & 0xFFFFFFFF)
+                while seed >= 0:
+                    var column = seed * SEED_LENGTH
+                    # The potential with every seed counted, the most it can be: with some uncounted this
+                    # keeps more matches than it must, which only weaken the bound.
+                    var potential = self.seeds - seed
+                    if (
+                        column - start_row - potential + 1 <= target_x
+                        and start_row - column - potential + 1 <= target_y
+                    ):
+                        found_seed.append(Int32(seed))
+                        found_row.append(Int32(start_row))
+                        if len(found_seed) > budget:
+                            return False
+                    seed = Int(chain[unsafe_offset=seed])
         return True
 
     # Out of line: inlined into `build`, it slows the pruning loop there by a few percent.
