@@ -1345,7 +1345,8 @@ def probes(options) -> str:
         print(f"{name}: probes ...", file=sys.stderr, flush=True)
         found[name] = (probes_report.run(binary, tool, path, options.budget), facts)
     report = probes_report.report(found, options)
-    stem = f"profile-probes-{options.affine.replace(',', '-')}" if options.affine else "profile-probes"
+    stem = (f"profile-probes-{options.affine.replace(',', '-')}" if options.affine
+            else "profile-probes-distance" if options.distance else "profile-probes")
     write(stem, report, {name: records for name, (records, _) in found.items()})
     return report
 
