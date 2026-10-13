@@ -64,7 +64,7 @@ from std.math import gcd
 from std.sys import size_of
 
 from .common import FIRST_SENTINEL, SECOND_SENTINEL, UNREACHED
-from .cigar import append_reversed, reverse_bytes, reversed_into, reversed_list, text_of
+from .cigar import reverse_bytes, reversed_into, reversed_list, text_of
 from .bit_parallel import append_moves, DIAGONAL, LEFT, UP
 from .substitutions import uniform_pair
 from .edit_distance import EditSpace
@@ -997,6 +997,9 @@ struct Wavefront[pieces: Int](Movable):
     var band_high: Int
     var last_reached: Int
     """The last cost any front reached a diagonal at: past `window` costs more, none will again."""
+    var stepped: List[Int]
+    """`traced_alone`'s diagonals stepped through each cost, kept from pair to pair: a list a pair had been
+    one of a short read's two allocations."""
     var probe: ProbeCounts
     """In a build with probes (see `probes`), over every pair since they were last read (`start` keeps them,
     unlike `work`): cost steps grown, diagonals stepped, meeting checks against the other search, splits for the
@@ -1031,6 +1034,7 @@ struct Wavefront[pieces: Int](Movable):
         self.band_low = 0
         self.band_high = 0
         self.last_reached = 0
+        self.stepped = List[Int]()
         self.fronts = Fronts[layers_of[Self.pieces]()](penalties.window[Self.pieces]() + 1, len(first), len(second))
         self.history = History(0)
         self.cost = 0
@@ -1823,26 +1827,21 @@ def traced_alone[
     var target = columns - rows
     var window = search.penalties.window[pieces]()
     var margin = search.penalties.widest_opening[pieces]() + window
-    # The diagonals stepped through each cost so far.
-    var stepped = List[Int]()
+    # The diagonals stepped through each cost so far, in the search's own list (see `Wavefront.stepped`).
+    search.stepped.clear()
     while True:
         var slot = search.fronts.current
         if search.fronts.lows[slot] <= target and target <= search.fronts.highs[slot]:
             if Int(search.fronts.row(slot, ALIGNED)[unsafe_offset=target]) >= columns:
                 if search.cost > ceiling:
                     return -1
-                var path = List[UInt8](capacity=columns + rows)
-                trace(search.history, search.penalties, ALIGNED, search.cost, target, columns, path)
-                if mirrored:
-                    append_reversed(moves, path)
-                else:
-                    moves.extend(path^)
+                trace_into(search.history, search.penalties, ALIGNED, search.cost, target, columns, mirrored, moves)
                 return search.cost
         if search.cost >= ceiling:
             return -1
-        stepped.append(search.work)
+        search.stepped.append(search.work)
         var cost = search.cost
-        if cost >= margin and search.work > 2 * stepped[(cost + margin) // 2]:
+        if cost >= margin and search.work > 2 * search.stepped[(cost + margin) // 2]:
             return GROWING
         if search.history.kept > limit // 2 or cost - search.last_reached > window + 1:
             return GROWING
@@ -2077,6 +2076,25 @@ def trace(
                 spent -= penalties.extension_of(current)
 
 
+def trace_into(
+    history: History,
+    penalties: Penalties,
+    layer: Int,
+    cost: Int,
+    diagonal: Int,
+    column: Int,
+    mirrored: Bool,
+    mut moves: List[UInt8],
+):
+    """`trace`'s moves appended to `moves`, turned back to front in place with `mirrored`, for a backward
+    search's path: traced into a list a pair and copied over reversed, they took most of a short read's
+    allocations."""
+    var start = len(moves)
+    trace(history, penalties, layer, cost, diagonal, column, moves)
+    if mirrored:
+        reverse_bytes(moves.unsafe_ptr().unsafe_offset(start), len(moves) - start)
+
+
 def canonical[
     pieces: Int
 ](
@@ -2097,12 +2115,7 @@ def canonical[
         return False
     var columns = ahead.columns
     var rows = ahead.rows
-    var path = List[UInt8](capacity=columns + rows)
-    trace(ahead.history, ahead.penalties, ALIGNED, total, columns - rows, columns, path)
-    if mirrored:
-        append_reversed(moves, path)
-    else:
-        moves.extend(path^)
+    trace_into(ahead.history, ahead.penalties, ALIGNED, total, columns - rows, columns, mirrored, moves)
     return True
 
 
@@ -2238,17 +2251,16 @@ def solve[
             )
         if status == MET:
             # The backward walk runs from the meeting to the corner, left to right as the forward path goes.
-            var behind = List[UInt8](capacity=columns + rows)
-            trace(
+            trace_into(
                 backward.history,
                 penalties,
                 best.layer,
                 best.backward_cost,
                 columns - rows - best.diagonal,
                 columns - best.column,
-                behind,
+                True,
+                moves,
             )
-            append_reversed(moves, behind)
             trace(forward.history, penalties, best.layer, best.forward_cost, best.diagonal, best.column, moves)
             return best.cost
         # Too large to keep: the searches go on from where they stopped keeping only their rings.
