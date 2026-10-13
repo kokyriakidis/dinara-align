@@ -439,6 +439,9 @@ def step_front[
     return furthest
 
 
+# Called from one place a specialization, it was inlined into `settle` once its cost became a parameter:
+# Illumina's 250 bp alignments took 14% longer for it.
+@inline(.never)
 def diagonal_transition[
     cost: StepCost
 ](profile: Profile, mut fronts: DiagonalFronts, switch_setup: Int = -1,) -> Probe:
@@ -791,6 +794,8 @@ def two_ended_distance[
     return two_ended[cost](profile, first_back, second_back, ahead, behind, ceiling).probe
 
 
+# Out of line, as `diagonal_transition` is and for the same reason.
+@inline(.never)
 def two_ended[
     cost: StepCost
 ](
