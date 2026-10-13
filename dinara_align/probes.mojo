@@ -122,7 +122,10 @@ comptime LAST_ROUND_WORD_COLUMNS = 51
 # and the scored modes (local, extension, substitution tables).
 comptime SEARCH_NS = 52
 comptime SCORED_NS = 53
-comptime SLOTS = 54
+# The search's own projection of the distance, from all the edits it reached, where `ESTIMATE` holds the one
+# front's from its first `PROBE_START` that the band aims at: the two `trusted_projection` compares.
+comptime SEARCH_ESTIMATE = 54
+comptime SLOTS = 55
 
 
 # The engines `ENGINE` names.
@@ -551,6 +554,7 @@ struct Tallied(Tallying):
                 "last_round_word_columns",
                 "search_ns",
                 "scored_ns",
+                "search_estimate",
             ]
             var engines: List[StaticString] = [
                 "none",

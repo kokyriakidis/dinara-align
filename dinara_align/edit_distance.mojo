@@ -67,6 +67,7 @@ from .probes import (
     GROW_NS,
     GROW_STEPS,
     PROBES,
+    SEARCH_ESTIMATE,
     SEEDS_NS,
     Tally,
     TRACEBACK_NS,
@@ -182,6 +183,7 @@ def edit_distance(first: String, second: String, mut space: EditSpace) raises Al
         space.tally.since(SEEDS_NS, started)
         space.tally.set(TRUSTED, Int(trusted))
         space.tally.set(ESTIMATE, probe.estimate)
+        space.tally.set(SEARCH_ESTIMATE, search.estimate)
         heuristic.tally_into(space.tally)
     var trail = Trail()
     started = space.tally.start()
@@ -446,6 +448,7 @@ def settle(
         tally.since(SEEDS_NS, started)
         tally.set(TRUSTED, Int(trusted))
         tally.set(ESTIMATE, probe.estimate)
+        tally.set(SEARCH_ESTIMATE, meeting.probe.estimate)
         heuristic.tally_into(tally)
     var trail = Trail(columns, budget)
     started = tally.start()
@@ -478,6 +481,7 @@ def banded_alignment(mut profile: Profile, search: Probe, budget: Int, mut tally
     tally.since(SEEDS_NS, started)
     tally.set(TRUSTED, Int(trusted))
     tally.set(ESTIMATE, probe.estimate)
+    tally.set(SEARCH_ESTIMATE, search.estimate)
     heuristic.tally_into(tally)
     var trail = Trail(columns, budget)
     started = tally.start()
