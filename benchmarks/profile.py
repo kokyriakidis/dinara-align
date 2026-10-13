@@ -533,7 +533,8 @@ def compare(options) -> str:
                   " and unequal cycles say layout or the memory system; more instructions say the code itself.", ""]
         for _, name, path in sorted(changed, reverse=True)[: options.explain]:
             lines += explain(name, path, binaries, base_label, head_label, tool, options)
-    write(f"profile-compare-{base_label}-{head_label}", "\n".join(lines) + "\n", everything)
+    kind = f"-{options.affine.replace(',', '-')}" if options.affine else "-distance" if options.distance else ""
+    write(f"profile-compare{kind}-{base_label}-{head_label}", "\n".join(lines) + "\n", everything)
     return "\n".join(lines) + "\n"
 
 
