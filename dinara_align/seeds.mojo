@@ -448,6 +448,9 @@ struct SeedHeuristic(Movable):
         self.slot_x.reserve(LAYER_SLOTS * (self.seeds + 1))
         self.slot_y.reserve(LAYER_SLOTS * (self.seeds + 1))
         self.counts.reserve(self.seeds + 1)
+        # Every layer's staircase too, so the list of them is not moved, a list at a time, as it grows.
+        self.spill_x.reserve(self.seeds + 1)
+        self.spill_y.reserve(self.seeds + 1)
         self.hint = 0
         self.add_sentinel()
         if self.seeds == 0 or self.rows < self.length + 1:
@@ -1075,10 +1078,11 @@ struct SeedHeuristic(Movable):
         return False
 
     def add_layer(mut self):
-        """One more layer, its slots empty and nothing spilled."""
-        for _ in range(LAYER_SLOTS):
-            self.slot_x.append(0)
-            self.slot_y.append(0)
+        """One more layer, its slots empty and nothing spilled: its slots grown at once, which no start reads
+        past the count, rather than an append a slot."""
+        var slots = len(self.slot_x) + LAYER_SLOTS
+        self.slot_x.resize(unsafe_uninit_length=slots)
+        self.slot_y.resize(unsafe_uninit_length=slots)
         self.counts.append(0)
         self.spill_x.append(List[Int32]())
         self.spill_y.append(List[Int32]())
@@ -1087,11 +1091,12 @@ struct SeedHeuristic(Movable):
         """Adds the transformed start `(x, y)` to `layer`: into a slot while one is free, else onto the
         layer's staircase, unless a start there lies at or above and right of it, and in place of those it
         does."""
-        var count = Int(self.counts[layer])
+        var counts = self.counts.unsafe_ptr()
+        var count = Int(counts[unsafe_offset=layer])
         if count < LAYER_SLOTS:
-            self.slot_x[layer * LAYER_SLOTS + count] = Int32(x)
-            self.slot_y[layer * LAYER_SLOTS + count] = Int32(y)
-            self.counts[layer] = Int32(count + 1)
+            self.slot_x.unsafe_ptr()[unsafe_offset=layer * LAYER_SLOTS + count] = Int32(x)
+            self.slot_y.unsafe_ptr()[unsafe_offset=layer * LAYER_SLOTS + count] = Int32(y)
+            counts[unsafe_offset=layer] = Int32(count + 1)
             return
         ref xs = self.spill_x[layer]
         ref ys = self.spill_y[layer]
