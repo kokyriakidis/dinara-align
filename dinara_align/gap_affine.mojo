@@ -64,14 +64,14 @@ from std.math import gcd
 from std.sys import size_of
 
 from .common import FIRST_SENTINEL, SECOND_SENTINEL, UNREACHED
-from .cigar import append_reversed, reversed_into, reversed_list, text_of
+from .cigar import append_reversed, reverse_bytes, reversed_into, reversed_list, text_of
 from .bit_parallel import DIAGONAL, LEFT, UP
 from .substitutions import uniform_pair
 from .edit_distance import EditSpace
 from .errors import AlignmentError, ErrorKind
 from .modes import Anchor, Band, Costs, Ties, Mode
 from .slides import GATHERED_SLIDES, gathered_slides, slide
-from .traceback import cigar_string, EditPath
+from .traceback import cigar_string, EditPath, ordered_cigar
 from .diagonal import GIVE_UP_SHARE
 from .differences import difference_bits, path_bytes, swept_cost, swept_path
 from .probes import (
@@ -1863,6 +1863,8 @@ struct SearchSpace(Movable):
     var penalties: Optional[Penalties]
     var edit: EditSpace
     """The memory a unit-cost pair's edit distance takes, kept the same way."""
+    var moves: List[UInt8]
+    """A global alignment's moves (see `cigar_within`), kept the same way."""
 
     def __init__(out self):
         """No searches yet: the first pair builds them."""
@@ -1873,6 +1875,7 @@ struct SearchSpace(Movable):
         self.costs = None
         self.penalties = None
         self.edit = EditSpace()
+        self.moves = List[UInt8]()
 
     def penalties_for(mut self, costs: Costs) raises AlignmentError -> Penalties:
         """`penalties_of(costs)`, worked out once for a batch's costs and not again for each pair: their
@@ -2412,8 +2415,11 @@ def cigar_within[
     limit: Int = HISTORY_LIMIT,
 ) -> Optional[AffineCigar]:
     """`cigar_within` through `space`'s searches, as `wavefront_distance` takes them (see `global_path`)."""
-    # UTF-8 never holds the sentinels' bytes, so the text's own bytes serve as codes.
-    var moves = List[UInt8](capacity=first.byte_length() + second.byte_length())
+    # UTF-8 never holds the sentinels' bytes, so the text's own bytes serve as codes. The moves go in the
+    # space's buffer, kept from pair to pair, which had been a list a pair, most of a short read's allocations.
+    ref moves = space.moves
+    moves.clear()
+    moves.reserve(first.byte_length() + second.byte_length())
     var cost: Int
     comptime if pieces == 1:
         cost = global_path[1](
@@ -2443,7 +2449,9 @@ def cigar_within[
         )
     if cost < 0:
         return None
-    return AffineCigar(cost * penalties.scale, cigar_of(first, second, moves^, cost, penalties, eqx))
+    return AffineCigar(
+        cost * penalties.scale, cigar_of_moves(first.as_bytes(), second.as_bytes(), moves, cost, penalties, eqx)
+    )
 
 
 def global_path[
@@ -2519,6 +2527,19 @@ def cigar_of(
     eqx: Bool,
 ) -> String:
     """The CIGAR of the moves `solve` appended for two sequences, at that cost."""
+    return cigar_of_moves(first, second, moves, cost, penalties, eqx)
+
+
+def cigar_of_moves(
+    first: ImmSpan[UInt8, _],
+    second: ImmSpan[UInt8, _],
+    mut moves: List[UInt8],
+    cost: Int,
+    penalties: Penalties,
+    eqx: Bool,
+) -> String:
+    """`cigar_of` over moves the caller keeps, turned left to right in place, which a reused space's buffer
+    takes from pair to pair rather than a list a pair."""
     # The CIGAR's room is bounded by the edits: every gapped letter, and a substitution per mismatch cost.
     # Counted 32 moves at a time: a move at a time, the count was most of a short read's CIGAR time.
     comptime CHUNK = 32
@@ -2536,8 +2557,9 @@ def cigar_of(
         index += 1
     # Each substitution costs a mismatch, so the cost bounds them; free ones only the moves do.
     var substitutions = cost // penalties.mismatch if penalties.mismatch > 0 else len(moves)
-    var path = EditPath(moves^, List[UInt8](), len(first), len(second), gapped + substitutions)
-    return cigar_string(first, second, path, eqx)
+    # Appended right to left: turned in place, then written as they stand, with no copy to order them.
+    reverse_bytes(moves.unsafe_ptr(), count)
+    return ordered_cigar(first, second, moves.unsafe_ptr(), count, gapped + substitutions, eqx)
 
 
 @fieldwise_init

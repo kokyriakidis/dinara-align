@@ -717,7 +717,19 @@ def cigar_string(first: ImmSpan[UInt8, _], second: ImmSpan[UInt8, _], path: Edit
     var ordered = moves.unsafe_ptr()
     reversed_into(ordered, path.prefix.unsafe_ptr(), before)
     copy_bytes(ordered.unsafe_offset(before), path.suffix.unsafe_ptr(), len(path.suffix))
+    return ordered_cigar(first, second, ordered, count, path.distance, eqx)
 
+
+def ordered_cigar(
+    first: ImmSpan[UInt8, _],
+    second: ImmSpan[UInt8, _],
+    ordered: ImmPointer[UInt8, _],
+    count: Int,
+    distance: Int,
+    eqx: Bool,
+) -> String:
+    """The CIGAR of `count` moves already left to right, at most `distance` edits (see `cigar_string`): what a
+    caller holding its moves in order writes without the copy `cigar_string` makes to put them there."""
     var first_bytes = first.unsafe_ptr()
     var second_bytes = second.unsafe_ptr()
     # At most two runs an edit and one more, each its length's digits and a letter.
@@ -726,7 +738,7 @@ def cigar_string(first: ImmSpan[UInt8, _], second: ImmSpan[UInt8, _], path: Edit
     while power <= max(len(first), len(second)):
         digits += 1
         power *= 10
-    var writer = CigarWriter((digits + 1) * (2 * path.distance + 2))
+    var writer = CigarWriter((digits + 1) * (2 * distance + 2))
     var column = 0
     var row = 0
     var index = 0
