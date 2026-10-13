@@ -589,8 +589,8 @@ def explain(name: str, path: Path, binaries: dict, base_label: str, head_label: 
 
 # region regret
 
-UNIT_POLICIES = ["", "band", "diagonal", "full", "seeds-none", "seeds-exact", "seeds-inexact", "trace-wavefront",
-                 "trace-recompute"]
+UNIT_POLICIES = ["", "band", "diagonal", "full", "seeds-none", "seeds-exact", "seeds-inexact", "one-ended",
+                 "two-ended", "trace-wavefront", "trace-recompute"]
 """The policies `regret` times at unit costs, "" the library's own choices (see `dinara_align.probes.FORCE`)."""
 AFFINE_POLICIES = ["", "sweep", "no-sweep", "bidirectional"]
 """The policies it times at gap-affine costs."""

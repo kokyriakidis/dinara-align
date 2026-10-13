@@ -56,6 +56,7 @@ from .probes import (
     ENGINE_WIDE_FULL,
     ESTIMATE,
     FLOOR,
+    FORCE,
     FORCE_BAND,
     FORCE_DIAGONAL,
     FORCE_FULL,
@@ -394,7 +395,10 @@ def settle(
     # A near-identical pair: one front, kept whole, settles it before both ends' setup would pay.
     var started = tally.start()
     traced.clear()
-    var close = diagonal_transition(profile, cost, traced, switch_setup=two_ended_setup(columns, rows))
+    # A forced policy (see `probes.FORCE`): the one front only to its first check, or never giving way.
+    comptime one_front = PROJECTION_ONLY if FORCE == "two-ended" else cost
+    var switch = -1 if FORCE == "one-ended" else two_ended_setup(columns, rows)
+    var close = diagonal_transition(profile, one_front, traced, switch_setup=switch)
     comptime if PROBES:
         tally.since(DIAGONAL_NS, started)
         var steps = 0
