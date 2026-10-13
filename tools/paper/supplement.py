@@ -27,6 +27,12 @@ _changes[3].extend([
     ["4558186", "Alignments pass between internal calls without an Optional", "250 bp Illumina 0.585 → 0.420 µs; at gap-affine costs 0.995 → 0.840 µs", "Skylake-X"],
     ["036e12b", "A profile coded 32 bytes at a time", "250 bp Illumina 0.421 → 0.400 µs; PacBio HiFi 5.7 → 4.95 µs", "Skylake-X"],
     ["a6d9166", "The first gap-affine search grows alone while it steps no more than two searches would", "250 bp Illumina at (4, 6, 2) 1.26 → 1.20 µs; pairs costing 9 to 32 a third less", "Skylake-X"],
+    ["02a8455", "Alignments reuse the two-ended search's memory and write kept fronts in place; CIGARs written into the string; the diagonal transition abandons a distance it cannot reach once it has spent its share (with c8ae809 to 4f9aa01)", "250 bp Illumina 0.582 → 0.444 µs; ont-1k 20.4 → 16.8 µs; 100 kbp at 1% 1.43 → 1.13 ms; 500 kbp at 1% 32.3 → 24.1 ms", "Skylake-X"],
+    ["04233cf", "An alignment's hand-over charges the band its recording and traceback", "10 kbp at 5% 250 → 193 µs", "Skylake-X"],
+    ["383bbc5", "A distance's hand-over charges the band as measured, 0.6 times the earlier model", "distances: 1 Mbp at 1% 47.0 → 43.0 ms; 10 kbp at 10% 195 → 186 µs", "Skylake-X"],
+    ["04906ec", "Gap-affine traceback writes runs of moves sixteen at a time into the alignment's own buffer (with df44eaf)", "250 bp Illumina at (4, 6, 2) 1.36 → 1.14 µs; PacBio HiFi 86.6 → 77.4 µs", "Skylake-X"],
+    ["d9dc492", "An untrusted band follows a failed round's estimate once the round crossed one eighth of the columns", "10 kbp at 10% 341 → 310 µs, at 20% 497 → 437 µs; ont-50k 557 → 528 µs", "Skylake-X"],
+    ["5a500f8", "A CIGAR's diagonal runs split by a 64-base mismatch mask; moves already in order written where they lie", "ont-10k 141 → 139 µs; 10 kbp at 20% 435 → 428 µs", "Skylake-X"],
 ])
 
 BODY = [
@@ -45,8 +51,13 @@ BODY = [
 ('sec', 'Implementation details'),
 ('sub', 'Unit costs'),
 ('p',
- '**Engine selection.** The diagonal transition receives a step budget proportional to the cost of the band it '
- 'would replace; on the Skylake-X a step costs about 1.3 ns and a band column about 6 ns. From 128 kbp on '
+ '**Engine selection.** The diagonal transition receives a step budget equal to the cost of the band it would '
+ 'replace, in steps: for a band over \\(n\\) columns at an estimated distance \\(\\hat D\\), \\(n(a + \\hat D/b)\\) '
+ 'steps, the band growing taller with the distance. Both terms were measured on the Skylake-X against bands run '
+ 'to completion: for a distance \\(a = 3.6\\) and \\(b = 138\\), and for an alignment, whose band also records '
+ 'its tiles and is traced back, \\(a = 8\\) and \\(b = 52\\). Charging alignments the cost of a distance had '
+ 'abandoned pairs that the search finishes in half the time of the band, and 10 kbp pairs at 5% divergence took '
+ '250 instead of 193 µs. From 128 kbp on '
  'AVX-512 and 64 kbp with narrower vectors, inexact seeds replace exact seeds when fewer than 20, 30 or 40% of '
  'the exact seeds chain from the origin on AVX-512, AVX2 and NEON, respectively: the wider the vector unit, the '
  'cheaper the bit-parallel band relative to the scalar construction of inexact seeds. All thresholds are fixed '
@@ -86,9 +97,14 @@ BODY = [
  'alignments took about twice as long.'),
 ('p',
  '**Retries.** Section 3.3 of the main text sets the first bound. A retry raises the bound by at least a quarter '
- 'and, unless the two estimates agreed, at most doubles it, and a failed round grows its bound from the one it '
- 'ended on, which a checkpoint may have lowered, rather than the one it started on. Before these rules, a 30 kbp '
- 'SARS-CoV-2 pair at distance 49 had been extrapolated to 14,448 and computed over the full matrix.'),
+ 'and, unless the two estimates agreed or the failed round crossed one eighth of the columns, at most doubles it, '
+ 'and a failed round grows its bound from the one it ended on, which a checkpoint may have lowered, rather than '
+ 'the one it started on. Before these rules, a 30 kbp SARS-CoV-2 pair at distance 49 had been extrapolated to '
+ '14,448 and computed over the full matrix. A round that dies early on a read whose edits gather at its start '
+ 'extrapolates from those edits alone, so its estimate is used only once the round has crossed an eighth of the '
+ 'columns, the share a seeded round must also cross; doubling regardless, 10 kbp pairs at 10% divergence whose '
+ 'estimates disagreed had spent 37% of their band computation in failed rounds, and the 10 kbp pairs at 10 and '
+ '20% took 341 and 497 µs instead of 310 and 437.'),
 ('p',
  'When they were introduced, these rules reduced the mean time on the ont-500k-genvar reads from 4.33 s, with 13 '
  'of 15 reads completed within the time limit, to 754 ms. At commit `dc980d7`, where Table S2 was measured, the '
@@ -115,7 +131,8 @@ BODY = [
  'of 1.38 s, of which 840 ms had been spent recomputing tiles of 900 words. Recomputation buffers are reused '
  'without initialisation, and tile boundaries are allocated once and written through pointers; loading the '
  'boundaries had accounted for a quarter of the traceback time. The CIGAR string is produced by reversing moves '
- '16 at a time and splitting diagonal runs eight bases at a time, which costs 1 to 3% of the alignment time.'),
+ '16 at a time and splitting each diagonal run into matches and substitutions from a mask of the mismatches of '
+ "64 bases at a time, whose trailing zeros give each piece's length, which costs 1 to 3% of the alignment time."),
 ('p',
  '**Diagonal transition.** Wavefronts are padded with unreached diagonals and advanced eight diagonals at a time '
  'with branch-free validity masks, in a separate function; a step costs about 1.3 ns, compared with 5 ns before. '

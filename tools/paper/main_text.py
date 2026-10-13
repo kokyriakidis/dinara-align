@@ -213,7 +213,8 @@ BODY = [
  'seed heuristic there, which on long reads lies within a few per cent of the distance. Otherwise it is aimed '
  'just above \\(\\hat D_1\\) when \\(\\max(\\hat D_1,\\hat D_2) \\le \\tfrac43 \\min(\\hat D_1,\\hat D_2)\\) or the search '
  'stopped within 16 edits, and failing both, as in A*PA2, it starts at most 256 above the known lower bound and '
- 'each retry at most doubles it. A failed round aims the next bound from where it stopped, and the first round '
+ 'each retry at most doubles it until a failed round has crossed one eighth of the columns, far enough for where it '
+ 'stopped to estimate the distance. A failed round aims the next bound from where it stopped, and the first round '
  'estimates the distance again after one eighth, one quarter and one half of the columns, lowering its bound or '
  'abandoning the round. A distance is accepted only within the bound its round ended on, and these rules change '
  'only the sequence of bounds, so the result stays exact.'),
