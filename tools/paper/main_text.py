@@ -510,7 +510,9 @@ BODY = [
   'set on uniform 100 kbp pairs like those of [#fig:sweeps]a, so results on unseen data may be less favourable.',
  'The ultra-long and the largest simulated sets were sampled to four pairs. The three rounds were timed from one '
   'build, while on the Skylake-X running times varied by up to a third between builds that left the code involved '
-  'unchanged (Supplementary Table S2), so margins of less than about 10% may not hold across builds.',
+  'unchanged (Supplementary Table S2), so margins of less than about 10% may not hold across builds. dinara-align '
+  "was timed a day after the other tools, on the same machine; replayed then, the other tools' times stayed within "
+  '3% of their own rounds.',
  'The Illumina, HiFi and PromethION reads come from one region of one chromosome each and exclude reads that '
   'minimap2 leaves more than a tenth clipped, such as those spanning structural variants.',
  'The ablation switches off one technique at a time, so it does not separate their interactions.']),
@@ -558,7 +560,7 @@ TABLES = {
   ]},
 "unit": {
   "fit": True,
-  "caption": "Unit-cost alignment of the real datasets by every exact aligner: mean time per alignment in ms, traceback included, and below it the peak resident memory of the run in MiB, as QuickEd reports it. t.o. marks a tool that completed no pair within 30 s, o.o.m. one the 8 GiB limit stopped, and crash one that crashed: BSAlign's edit distance crashes on pairs of about 150 kbp or more, with or without the limit, on the eighth PromethION pair among them. Times are medians of three alternating rounds. The simulated datasets are in Fig. 2 and Supplementary Table S5. Bold marks the lowest mean of the tools that completed the most pairs.",
+  "caption": "Unit-cost alignment of the real datasets by every exact aligner: mean time per alignment in ms, traceback included, and below it the peak resident memory of the run in MiB, as QuickEd reports it. t.o. marks a tool that completed no pair within 30 s, o.o.m. one the 8 GiB limit stopped, and crash one that crashed: BSAlign's edit distance crashes on pairs of about 150 kbp or more, with or without the limit, on the eighth PromethION pair among them. Times are medians of three rounds: the other tools' alternated between them, and dinara-align's were run a day later at its final version, on the same machine, builds and samples. The simulated datasets are in Fig. 2 and Supplementary Table S5. Bold marks the lowest mean of the tools that completed the most pairs.",
   "header": ["Dataset", "dinara-align", "A*PA2-full", "A*PA2-simple", "A*PA", "QuickEd", "Edlib", "BiWFA", "WFA", "BSAlign", "KSW2"],
   "align": "lrrrrrrrrrr",
   "rows": [
@@ -601,7 +603,7 @@ TABLES = {
     ["1 Mbp, 1%", "**2,230**", "o.o.m.", "3,920", "o.o.m.", "o.o.m."],
   ]},
 "affine": {
-  "caption": "Gap-affine alignment of the real datasets at costs (4, 6, 2) by every exact aligner that takes them: mean time per alignment in ms, a 30 s budget per sample, the median of three alternating rounds. Brackets give the pairs completed where not all were; t.o. marks a tool that completed none and o.o.m. one the 8 GiB limit stopped. Every dataset is in Supplementary Table S4. Bold marks the lowest mean of the tools that completed the most pairs.",
+  "caption": "Gap-affine alignment of the real datasets at costs (4, 6, 2) by every exact aligner that takes them: mean time per alignment in ms, a 30 s budget per sample, the median of three rounds, the other tools' alternating between them and dinara-align's a day later at its final version, on the same machine, builds and samples. Brackets give the pairs completed where not all were; t.o. marks a tool that completed none and o.o.m. one the 8 GiB limit stopped. Every dataset is in Supplementary Table S4. Bold marks the lowest mean of the tools that completed the most pairs.",
   "header": ["Dataset", "dinara-align", "WFA", "BiWFA", "BSAlign", "KSW2"],
   "align": "lrrrrr",
   "rows": [

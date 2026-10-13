@@ -575,7 +575,7 @@ TABLES = {
 "affine_full": {
   "label": "S4",
   "fit": True,
-  "caption": "Gap-affine alignment at costs (4, 6, 2), all datasets: mean time per alignment in ms, with a 30 s budget per sample, the median of three alternating rounds. Brackets give the pairs completed where not all were; t.o. marks a tool that completed none within 30 s and o.o.m. one the 8 GiB limit stopped. Bold marks the lowest mean of the tools that completed the most pairs.",
+  "caption": "Gap-affine alignment at costs (4, 6, 2), all datasets: mean time per alignment in ms, with a 30 s budget per sample, the median of three rounds, the other tools' alternating between them and dinara-align's a day later at its final version, on the same machine, builds and samples. Brackets give the pairs completed where not all were; t.o. marks a tool that completed none within 30 s and o.o.m. one the 8 GiB limit stopped. Bold marks the lowest mean of the tools that completed the most pairs.",
   "header": ["Dataset", "dinara-align", "WFA", "BiWFA", "BSAlign", "KSW2"],
   "align": "lrrrrr",
   "rows": [
@@ -610,7 +610,7 @@ TABLES = {
 "unit_full": {
   "label": "S5",
   "fit": True,
-  "caption": "Unit costs, all datasets: mean time per alignment in ms, with the median in parentheses, traceback included, a 30 s budget per sample, the median of three alternating rounds. Brackets give the pairs completed where not all were, the median over those; t.o. marks a tool that completed none within 30 s and o.o.m. one the 8 GiB limit stopped. Bold marks the lowest mean of the tools that completed the most pairs.",
+  "caption": "Unit costs, all datasets: mean time per alignment in ms, with the median in parentheses, traceback included, a 30 s budget per sample, the median of three rounds, the other tools' alternating between them and dinara-align's a day later at its final version, on the same machine, builds and samples. Brackets give the pairs completed where not all were, the median over those; t.o. marks a tool that completed none within 30 s and o.o.m. one the 8 GiB limit stopped. Bold marks the lowest mean of the tools that completed the most pairs.",
   "header": ["Dataset", "dinara-align", "A*PA2-full", "A*PA2-simple", "A*PA", "Edlib", "BiWFA", "WFA", "QuickEd"],
   "align": "lrrrrrrrr",
   "rows": [
