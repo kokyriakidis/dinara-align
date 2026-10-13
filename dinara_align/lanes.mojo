@@ -473,8 +473,17 @@ def side_by_side[
         var index = members[lane]
         var count = texts.length(index)
         if pad >= 0:
-            for position in range(count, stride):
-                lanes[unsafe_offset=lane * stride + position] = UInt8(pad)
+            # Sixteen at a time, then the rest: a lane's padding runs up to a block past its text.
+            comptime CHUNK = 16
+            var fill = SIMD[DType.uint8, CHUNK](UInt8(pad))
+            var position = count
+            var row = lanes.unsafe_offset(lane * stride)
+            while position + CHUNK <= stride:
+                row.unsafe_offset(position).unsafe_store(fill)
+                position += CHUNK
+            while position < stride:
+                row[unsafe_offset=position] = UInt8(pad)
+                position += 1
         if reverse:
             var source = texts.letters(index)
             var destination = lanes.unsafe_offset(lane * stride)
