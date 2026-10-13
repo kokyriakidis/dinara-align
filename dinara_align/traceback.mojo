@@ -10,6 +10,7 @@ WFA2-lib's rule for ties (see `TileTracer`), and written out as two gapped rows 
 
 from std.bit import count_trailing_zeros
 from std.math import ceildiv, clamp
+from std.memory import bitcast
 
 from .cigar import CigarWriter, reversed_into
 from .diagonal import best_source, DiagonalFronts, slide_forward
@@ -684,21 +685,51 @@ def diagonal_run(moves: ImmPointer[UInt8, _], start: Int, end: Int) -> Int:
     return index - start
 
 
-@inline(.always)
-def equal_run(first: ImmPointer[UInt8, _], second: ImmPointer[UInt8, _], column: Int, row: Int, limit: Int) -> Int:
-    """How many of the next `limit` bases along the diagonal from `(column, row)` are equal, eight at a time."""
-    var length = 0
-    while length + 8 <= limit:
-        var differing = (
-            first.unsafe_offset(column + length).unsafe_bitcast[UInt64]().unsafe_load()
-            ^ second.unsafe_offset(row + length).unsafe_bitcast[UInt64]().unsafe_load()
-        )
-        if differing != 0:
-            return length + Int(count_trailing_zeros(differing)) // 8
-        length += 8
-    while length < limit and first[unsafe_offset=column + length] == second[unsafe_offset=row + length]:
-        length += 1
-    return length
+@always_inline
+def mismatch_mask(first: ImmPointer[UInt8, _], second: ImmPointer[UInt8, _]) -> UInt64:
+    """Which of the next 64 bytes of `first` and `second` differ, a bit each, byte `i` at bit `i`: the
+    comparison's bytes, one or zero, packed eight to a byte by a multiply that lands byte `i`'s bit at
+    bit `56 + i` of its word and nothing else above bit 55."""
+    var differ = first.unsafe_load[width=64]().ne(second.unsafe_load[width=64]()).cast[DType.uint8]()
+    var packed = (bitcast[DType.uint64, 8](differ) * UInt64(0x0102040810204080)) >> 56
+    return (packed << SIMD[DType.uint64, 8](0, 8, 16, 24, 32, 40, 48, 56)).reduce_or()
+
+
+def compared_runs(
+    mut writer: CigarWriter, first: ImmSpan[UInt8, _], second: ImmSpan[UInt8, _], column: Int, row: Int, run: Int
+):
+    """A diagonal run of `run` moves from `(column, row)` as its matches `=` and substitutions `X`, from
+    the bases' mismatches 64 at a time, each piece's length the trailing zeros of the mask or of its
+    complement. Compared eight bytes, then a byte, at a time, every piece's end was a mispredicted branch
+    of its own: two thirds of a 10 kbp CIGAR's time at 10%."""
+    var first_bytes = first.unsafe_ptr()
+    var second_bytes = second.unsafe_ptr()
+    var done = 0
+    while done < run:
+        var width = min(64, run - done)
+        var at_first = column + done
+        var at_second = row + done
+        var mask: UInt64
+        if at_first + 64 <= len(first) and at_second + 64 <= len(second):
+            mask = mismatch_mask(first_bytes.unsafe_offset(at_first), second_bytes.unsafe_offset(at_second))
+        else:
+            # The sequences' last bytes: a 64-byte load would read past them.
+            mask = 0
+            for index in range(width):
+                if first_bytes[unsafe_offset=at_first + index] != second_bytes[unsafe_offset=at_second + index]:
+                    mask |= UInt64(1) << UInt64(index)
+        var at = 0
+        while at < width:
+            var rest = mask >> UInt64(at)
+            var length: Int
+            if rest & 1 == 0:
+                length = min(Int(count_trailing_zeros(rest)), width - at)
+                writer.add(UInt8(ord("=")), length)
+            else:
+                length = min(Int(count_trailing_zeros(~rest)), width - at)
+                writer.add(UInt8(ord("X")), length)
+            at += length
+        done += width
 
 
 def cigar_string(first: String, second: String, path: EditPath, eqx: Bool) -> String:
@@ -712,6 +743,9 @@ def cigar_string(first: ImmSpan[UInt8, _], second: ImmSpan[UInt8, _], path: Edit
     by comparing the bases eight at a time unless `M` stands for both."""
     var before = len(path.prefix)
     var count = before + len(path.suffix)
+    if before == 0:
+        # A path traced over the reversed pair, `Ties.LEFT`'s, is already in order: written where it lies.
+        return ordered_cigar(first, second, path.suffix.unsafe_ptr(), count, path.distance, eqx)
     var moves = List[UInt8](capacity=count)
     moves.resize(unsafe_uninit_length=count)
     var ordered = moves.unsafe_ptr()
@@ -730,8 +764,6 @@ def ordered_cigar(
 ) -> String:
     """The CIGAR of `count` moves already left to right, at most `distance` edits (see `cigar_string`): what a
     caller holding its moves in order writes without the copy `cigar_string` makes to put them there."""
-    var first_bytes = first.unsafe_ptr()
-    var second_bytes = second.unsafe_ptr()
     # At most two runs an edit and one more, each its length's digits and a letter.
     var digits = 1
     var power = 10
@@ -752,23 +784,9 @@ def ordered_cigar(
                 column += run
                 row += run
                 continue
-            var end = column + run
-            while column < end:
-                var same = equal_run(first_bytes, second_bytes, column, row, end - column)
-                if same > 0:
-                    writer.add(UInt8(ord("=")), same)
-                    column += same
-                    row += same
-                var differ = 0
-                while (
-                    column + differ < end
-                    and first_bytes[unsafe_offset=column + differ] != second_bytes[unsafe_offset=row + differ]
-                ):
-                    differ += 1
-                if differ > 0:
-                    writer.add(UInt8(ord("X")), differ)
-                    column += differ
-                    row += differ
+            compared_runs(writer, first, second, column, row, run)
+            column += run
+            row += run
             continue
         var start = index
         while index < count and ordered[unsafe_offset=index] == move:
