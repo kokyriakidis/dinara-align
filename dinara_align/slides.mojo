@@ -11,7 +11,8 @@ end in sentinels that differ from every letter and from each other, so a slide s
 The diagonal transition and the affine wavefront both slide their fronts this way.
 """
 
-from std.bit import count_trailing_zeros
+from std.bit import count_leading_zeros, count_trailing_zeros
+from std.memory import bitcast
 from std.sys import llvm_intrinsic
 from std.sys.info import CompilationTarget
 
@@ -37,6 +38,80 @@ def slide(first: ImmPointer[UInt8, _], second: ImmPointer[UInt8, _], start: Int,
             ^ lag.unsafe_offset(column).unsafe_bitcast[UInt64]().unsafe_load()
         )
     return column + (Int(count_trailing_zeros(mismatches)) >> 3)
+
+
+@always_inline
+def first_differing_byte(mismatches: SIMD[DType.uint64, LANES]) -> SIMD[DType.int32, LANES]:
+    """Each lane's lowest byte that is not zero, 8 for none: the leading zeros of the lane's bytes turned back
+    to front, a byte shuffle and AVX-512's `vplzcntq`, where its trailing zeros, which no instruction counts,
+    took five."""
+    var turned = bitcast[DType.uint8, 8 * LANES](mismatches).shuffle[
+        7,
+        6,
+        5,
+        4,
+        3,
+        2,
+        1,
+        0,
+        15,
+        14,
+        13,
+        12,
+        11,
+        10,
+        9,
+        8,
+        23,
+        22,
+        21,
+        20,
+        19,
+        18,
+        17,
+        16,
+        31,
+        30,
+        29,
+        28,
+        27,
+        26,
+        25,
+        24,
+        39,
+        38,
+        37,
+        36,
+        35,
+        34,
+        33,
+        32,
+        47,
+        46,
+        45,
+        44,
+        43,
+        42,
+        41,
+        40,
+        55,
+        54,
+        53,
+        52,
+        51,
+        50,
+        49,
+        48,
+        63,
+        62,
+        61,
+        60,
+        59,
+        58,
+        57,
+        56,
+    ]()
+    return (count_leading_zeros(bitcast[DType.uint64, LANES](turned)) >> 3).cast[DType.int32]()
 
 
 comptime GATHERED_SLIDES = CompilationTarget.has_avx512f() and not ABLATE_GATHER
@@ -79,10 +154,11 @@ def gathered_slides(
     var mismatches = gathered_words(first, entries, reached, Wide(0)) ^ gathered_words(
         second, entries - diagonals, reached, ~Wide(0)
     )
-    var slid = entries + (count_trailing_zeros(mismatches) >> 3).cast[DType.int32]()
+    var slid = entries + first_differing_byte(mismatches)
     var whole = mismatches.eq(0)
     if whole.reduce_or():
         comptime for lane in range(LANES):
             if whole[lane]:
                 slid[lane] = Int32(slide(first, second, Int(slid[lane]), Int(diagonals[lane])))
-    return reached.select(slid, entries)
+    # An unreached lane's words, zero against all ones, differ at its first byte: it stays where it was.
+    return slid
