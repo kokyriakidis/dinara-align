@@ -165,23 +165,6 @@ def align(
     return optional(aligned_within(reference, query, costs, mode, band, max_cost, ties, eqx, max_memory // KEPT_BYTES))
 
 
-def warm_pair(mut first: String, mut second: String, length: Int, apart: Int):
-    """A built-in pair for `Aligner.warm`: `length` letters from a fixed generator, and the same with one
-    letter in `apart` changed and every fortieth dropped or doubled."""
-    var state: UInt64 = 0x9E3779B97F4A7C15
-    comptime LETTERS = "ACGT"
-    for index in range(length):
-        state = state * 6364136223846793005 + 1442695040888963407
-        var letter = Int(state >> 62)
-        first += LETTERS[byte=letter]
-        if index % 40 == 7:
-            continue
-        if index % 40 == 23:
-            second += LETTERS[byte=letter]
-        var changed = (letter + 1) % 4 if index % apart == 0 else letter
-        second += LETTERS[byte=changed]
-
-
 struct Aligner(Movable):
     """One thread's aligner: `distance` and `align` as the functions of those names give them, the memory
     their searches take kept from call to call, so a loop of calls takes none once it is warm, and it is
@@ -199,22 +182,28 @@ struct Aligner(Movable):
             self.warm()
 
     def warm(mut self):
-        """Aligns two built-in pairs, so the searches, their rings and kept fronts, and the profile hold what a
-        short read takes, their pages touched: 256 letters a third apart, at gap-affine and at unit costs,
-        and 1,024 letters an eighth apart, a kilobase nanopore read's distance, at unit costs. Grown by the
-        first reads that needed them instead, a few of those took up to sixteen times a read's time: 2.9% of
-        250 bp Illumina reads' at (4, 6, 2), and two ont-1k reads at distances 151 and 169 three times the
-        31 µs of the others there, as the first to grow a front history that large."""
+        """Aligns one built-in pair of 256 letters a third apart, at gap-affine and at unit costs, so the
+        searches, their rings and kept fronts, and the profile hold what a short read takes, their pages
+        touched: grown by the first reads that needed them instead, a few of those took up to sixteen
+        times a read's time, 2.9% of 250 bp Illumina reads' at (4, 6, 2)."""
         var first = String()
         var second = String()
-        warm_pair(first, second, 256, 3)
-        var long_first = String()
-        var long_second = String()
-        warm_pair(long_first, long_second, 1024, 8)
+        var state: UInt64 = 0x9E3779B97F4A7C15
+        comptime LETTERS = "ACGT"
+        for index in range(256):
+            state = state * 6364136223846793005 + 1442695040888963407
+            var letter = Int(state >> 62)
+            first += LETTERS[byte=letter]
+            # A third of the letters changed, and every fortieth dropped or doubled.
+            if index % 40 == 7:
+                continue
+            if index % 40 == 23:
+                second += LETTERS[byte=letter]
+            var changed = (letter + 1) % 4 if index % 3 == 0 else letter
+            second += LETTERS[byte=changed]
         try:
             _ = self.align(first, second, Costs.affine(4, 6, 2))
             _ = self.align(first, second)
-            _ = self.align(long_first, long_second)
         except:
             pass
 
