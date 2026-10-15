@@ -75,13 +75,14 @@ Copies the consolidation of 2026-10-08 left separate, and why.
   pairs take 10.6 µs to WFA's 9.6, where the first search hands over to two (see
   `gap_affine.traced_alone`); its model of the two searches leaves out their setup and the far side's
   grow-on, so it hands over a little early. Count those in from what the searches measure, not a factor.
-- [ ] **The gap-affine step's memory on long divergent pairs.** On 100 kbp pairs at 20% (2026-10-14) a pair
-  steps 2.26 billion diagonals in 14.9 billion instructions, 4.7 times fewer than BiWFA's 70.4 billion, but at
-  1.28 instructions a cycle to BiWFA's 2.41, with 1.13 billion L1 misses, one every two diagonals. Seven in
-  ten of them are the gathered slides' reads of the sequences (`slides.mojo`), whose few kilobytes the rings'
-  traffic, about 270 KB a cost a search (5 cost slots, 3 layers, 8,500 diagonals), evicts from L1 between
-  costs; the rings themselves take two in ten. Prefetching was tried and left (below); a smaller ring or a
-  step that keeps the letters resident is what is left to try.
+- [ ] **The gap-affine step's instructions a cycle on long divergent pairs.** On 100 kbp pairs at 20%
+  (2026-10-14) a pair steps 2.26 billion diagonals in 14.9 billion instructions, 4.7 times fewer than BiWFA's
+  70.4 billion, at 1.28 instructions a cycle to BiWFA's 2.41. Precisely sampled (`mem_load_retired.l1_miss`),
+  nine in ten of the step's 761 million L1 misses are its source rows' loads, the front a mismatch back over
+  half, the gathered slides only 6% (an imprecise event had put seven in ten on the gathers, by skid); one
+  in eighty goes past L2. Fetching either ahead lost (below), so the rows' L2 traffic is not what holds the
+  step back: find what does (the gathers' latency, the dependent chain through `max` and the slides) before
+  changing the layout.
 - [ ] **Which nanopore reads the diagonal transition should finish.** Regret (`profile.py regret`, 2026-10-12)
   on ont-10k: run to its end, the diagonal transition beats the default on 114 of 277 reads, 3.3 of 38.7 ms,
   nearly all under 8% divergence (4.8 against 6.5 ms there); forced on every read it takes 1.53 times as
@@ -117,6 +118,11 @@ Each measured on the Skylake-X with `profile.py compare` and `regret`; none kept
   slower. Only when a cost's rings outgrow L1 (32 KB, 32 bytes a diagonal): pairs from 100 kbp still 2 to
   4% faster, but 10 kbp pairs at 5 to 20% 1.1 to 2.4% and ont-10k 1.6% slower, their fronts past L1 too. A
   width that keeps only the gains would be fitted to these sets. Left.
+- [-] **Prefetching the gap-affine step's source rows** (da955aa, reverted), five rows 64 diagonals ahead
+  when a cost's rings outgrow L1, the loads precise sampling put nine in ten of its L1 misses on: 10 kbp
+  pairs at 5 to 20% 3.6 to 7.6% slower, 100 kbp at 1% 6%, ont-10k 3.6%, only 100 kbp at 20% 2.4% faster.
+  The hardware prefetchers already stream the rows from L2; five more fetches a group only add to the
+  loop. Left.
 - [-] **Giving up only when the projection from the second half of the edits agrees** (1db41cc, reverted
   a495e85). Meant for nanopore reads whose errors gather at their ends, where the two-ended fronts start:
   no change on ont-10k or ont-50k, so their winners are not told apart that way, and recording the progress
