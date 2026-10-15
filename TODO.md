@@ -77,9 +77,11 @@ Copies the consolidation of 2026-10-08 left separate, and why.
   grow-on, so it hands over a little early. Count those in from what the searches measure, not a factor.
 - [ ] **The gap-affine step's memory on long divergent pairs.** On 100 kbp pairs at 20% (2026-10-14) a pair
   steps 2.26 billion diagonals in 14.9 billion instructions, 4.7 times fewer than BiWFA's 70.4 billion, but at
-  1.28 instructions a cycle to BiWFA's 2.41, with 1.13 billion L1 misses, one every two diagonals: the live
-  fronts, about 8,500 diagonals in 3 layers over 5 cost slots, take some 500 KB, past L1. Find which accesses
-  miss (the rings, the sequences the slides read, the kept history) before changing the layout.
+  1.28 instructions a cycle to BiWFA's 2.41, with 1.13 billion L1 misses, one every two diagonals. Seven in
+  ten of them are the gathered slides' reads of the sequences (`slides.mojo`), whose few kilobytes the rings'
+  traffic, about 270 KB a cost a search (5 cost slots, 3 layers, 8,500 diagonals), evicts from L1 between
+  costs; the rings themselves take two in ten. Prefetching was tried and left (below); a smaller ring or a
+  step that keeps the letters resident is what is left to try.
 - [ ] **Which nanopore reads the diagonal transition should finish.** Regret (`profile.py regret`, 2026-10-12)
   on ont-10k: run to its end, the diagonal transition beats the default on 114 of 277 reads, 3.3 of 38.7 ms,
   nearly all under 8% divergence (4.8 against 6.5 ms there); forced on every read it takes 1.53 times as
@@ -109,6 +111,12 @@ Each measured on the Skylake-X with `profile.py compare` and `regret`; none kept
   gives up, the memory never grows, and every later pair is charged too; 10 kbp pairs at 5% went to the
   band and took 23% longer. Model only costs every pair pays. That read's real cause is the alignment's
   band model (`ALIGNMENT_COST`, fitted on uniform pairs) overestimating its band about twice.
+- [-] **Prefetching the letters a gap-affine lane group two on will slide over** (bfb06c0 and b292774,
+  reverted), from its front a mismatch back, two prefetches a group. At every width: long divergent pairs at
+  (4, 6, 2) 3 to 4% faster (100 kbp at 5%, 1 Mbp at 1%, PromethION) but ont-1k 1.9% and Illumina 0.6%
+  slower. Only when a cost's rings outgrow L1 (32 KB, 32 bytes a diagonal): pairs from 100 kbp still 2 to
+  4% faster, but 10 kbp pairs at 5 to 20% 1.1 to 2.4% and ont-10k 1.6% slower, their fronts past L1 too. A
+  width that keeps only the gains would be fitted to these sets. Left.
 - [-] **Giving up only when the projection from the second half of the edits agrees** (1db41cc, reverted
   a495e85). Meant for nanopore reads whose errors gather at their ends, where the two-ended fronts start:
   no change on ont-10k or ont-50k, so their winners are not told apart that way, and recording the progress
