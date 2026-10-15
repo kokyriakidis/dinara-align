@@ -66,17 +66,17 @@ def tikz(scale=0.0224):
     for y, title in LANES:
         out.append(f"\\node[anchor=west,font=\\scriptsize\\scshape] at {P(10, y - 4)} {{{title}}};")
     for x, y, w, h, title, note in BOXES.values():
-        out.append(f"\\draw[rounded corners=2pt,fill=gray!8,draw=gray!60] {P(x, y)} rectangle {P(x + w, y + h)};")
+        out.append(f"\\draw[rounded corners=2pt,fill=gray!8,draw=gray!75] {P(x, y)} rectangle {P(x + w, y + h)};")
         out.append(f"\\node[align=center,font=\\scriptsize] at {P(x + w / 2, y + h / 2)} "
-                   f"{{\\textbf{{{title}}}\\\\{{\\color{{gray!70!black}}{note}}}}};")
+                   f"{{\\textbf{{{title}}}\\\\{{\\color{{black!75}}{note}}}}};")
     for points, label in ARROWS:
-        out.append("\\draw[->,>=stealth,gray!70!black] " + " -- ".join(P(x, y) for x, y in points) + ";")
+        out.append("\\draw[->,>=stealth,black!70] " + " -- ".join(P(x, y) for x, y in points) + ";")
         if label:
             x, y, lines, anchor = label
             where = {"middle": "", "start": "anchor=west,"}[anchor]
             text = "\\\\".join(lines)
-            out.append(f"\\node[{where}align={'left' if anchor == 'start' else 'center'},font=\\tiny] at "
+            out.append(f"\\node[{where}align={'left' if anchor == 'start' else 'center'},font=\\fontsize{{6}}{{7}}\\selectfont] at "
                        f"{P(x, y + 6 * (len(lines) - 1) - 3)} {{{text}}};")
     for x, y, text in NOTES:
-        out.append(f"\\node[anchor=west,font=\\tiny] at {P(x, y - 3)} {{{text}}};")
+        out.append(f"\\node[anchor=west,font=\\fontsize{{6}}{{7}}\\selectfont] at {P(x, y - 3)} {{{text}}};")
     return "\n".join(out)
