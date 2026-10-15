@@ -829,7 +829,7 @@ struct Fronts[layers: Int](Movable):
 
 @inline(.never)
 def step[
-    record: Bool, pieces: Int
+    record: Bool, pieces: Int, bounded: Bool = True
 ](
     mismatched: ImmPointer[Int32, _],
     opening: ImmPointer[Int32, _],
@@ -867,6 +867,10 @@ def step[
 
     Each lane group's alignment front then slides over its matches straight away, the eight slides
     independent of each other, and the furthest anti-diagonal, `2 column - diagonal`, comes back.
+
+    Without `bounded` the caller has shown no source lies on the matrix's last column or row (see
+    `Wavefront.advance`), so no move is tested against them: an unreached source stays far below zero,
+    which every reader takes as unreached, a few units off `UNREACHED`.
     """
     comptime Lanes = SIMD[DType.int32, LANES]
     var lane_diagonals = Lanes()
@@ -889,9 +893,17 @@ def step[
         var extended_above = second_gaps.unsafe_offset(diagonal + 1).unsafe_load[width=LANES]()
         var below = max(opened_below, extended_below)
         var above = max(opened_above, extended_above)
-        var first_gap = below.lt(column_limit).select(below + 1, unreached)
-        var second_gap = (above - diagonals).le(row_limit).select(above, unreached)
-        var substituted = (same.lt(column_limit) & (same - diagonals).lt(row_limit)).select(same + 1, unreached)
+        var first_gap: Lanes
+        var second_gap: Lanes
+        var substituted: Lanes
+        comptime if bounded:
+            first_gap = below.lt(column_limit).select(below + 1, unreached)
+            second_gap = (above - diagonals).le(row_limit).select(above, unreached)
+            substituted = (same.lt(column_limit) & (same - diagonals).lt(row_limit)).select(same + 1, unreached)
+        else:
+            first_gap = below + 1
+            second_gap = above
+            substituted = same + 1
         var gapped = max(first_gap, second_gap)
         opened_first.unsafe_offset(diagonal).unsafe_store(first_gap)
         opened_second.unsafe_offset(diagonal).unsafe_store(second_gap)
@@ -908,8 +920,12 @@ def step[
             extended_above2 = second_gaps2.unsafe_offset(diagonal + 1).unsafe_load[width=LANES]()
             var below2 = max(opened_below2, extended_below2)
             var above2 = max(opened_above2, extended_above2)
-            first_gap2 = below2.lt(column_limit).select(below2 + 1, unreached)
-            second_gap2 = (above2 - diagonals).le(row_limit).select(above2, unreached)
+            comptime if bounded:
+                first_gap2 = below2.lt(column_limit).select(below2 + 1, unreached)
+                second_gap2 = (above2 - diagonals).le(row_limit).select(above2, unreached)
+            else:
+                first_gap2 = below2 + 1
+                second_gap2 = above2
             gapped = max(gapped, max(first_gap2, second_gap2))
             opened_first2.unsafe_offset(diagonal).unsafe_store(first_gap2)
             opened_second2.unsafe_offset(diagonal).unsafe_store(second_gap2)
@@ -1186,30 +1202,62 @@ struct Wavefront[pieces: Int](Movable):
         comptime last = Self.pieces - 1
         comptime first_last = gap_layer(last, True)
         comptime second_last = gap_layer(last, False)
-        var reach = step[record, Self.pieces](
-            self.fronts.row(mismatch_slot, ALIGNED),
-            self.fronts.row(opening_slots[FIRST_GAP], ALIGNED),
-            self.fronts.row(opening_slots[SECOND_GAP], ALIGNED),
-            self.fronts.row(extension_slots[FIRST_GAP], FIRST_GAP),
-            self.fronts.row(extension_slots[SECOND_GAP], SECOND_GAP),
-            self.fronts.row(opening_slots[first_last], ALIGNED),
-            self.fronts.row(opening_slots[second_last], ALIGNED),
-            self.fronts.row(extension_slots[first_last], first_last),
-            self.fronts.row(extension_slots[second_last], second_last),
-            front,
-            self.fronts.row(slot, FIRST_GAP),
-            self.fronts.row(slot, SECOND_GAP),
-            self.fronts.row(slot, gap_layer(last, True)),
-            self.fronts.row(slot, gap_layer(last, False)),
-            kept,
-            flags,
-            self.first.unsafe_ptr().unsafe_offset(LINE_GUARD),
-            self.second.unsafe_ptr().unsafe_offset(LINE_GUARD),
-            low,
-            high,
-            columns,
-            rows,
-        )
+        # No source on the matrix's last column or row, and so no move to test against them: every source
+        # cell lies on an anti-diagonal, `2 column - diagonal`, at most the furthest reached, and on diagonals
+        # `low - 1 ..= high + 1`, which bounds its column and its row. Bidirectional searches meet in the
+        # middle, so on a long pair nearly every cost steps unbounded.
+        var interior = self.furthest + high + 1 < 2 * (columns - 1) and self.furthest - (low - 1) < 2 * (rows - 1)
+        var reach: Int
+        if interior:
+            reach = step[record, Self.pieces, False](
+                self.fronts.row(mismatch_slot, ALIGNED),
+                self.fronts.row(opening_slots[FIRST_GAP], ALIGNED),
+                self.fronts.row(opening_slots[SECOND_GAP], ALIGNED),
+                self.fronts.row(extension_slots[FIRST_GAP], FIRST_GAP),
+                self.fronts.row(extension_slots[SECOND_GAP], SECOND_GAP),
+                self.fronts.row(opening_slots[first_last], ALIGNED),
+                self.fronts.row(opening_slots[second_last], ALIGNED),
+                self.fronts.row(extension_slots[first_last], first_last),
+                self.fronts.row(extension_slots[second_last], second_last),
+                front,
+                self.fronts.row(slot, FIRST_GAP),
+                self.fronts.row(slot, SECOND_GAP),
+                self.fronts.row(slot, gap_layer(last, True)),
+                self.fronts.row(slot, gap_layer(last, False)),
+                kept,
+                flags,
+                self.first.unsafe_ptr().unsafe_offset(LINE_GUARD),
+                self.second.unsafe_ptr().unsafe_offset(LINE_GUARD),
+                low,
+                high,
+                columns,
+                rows,
+            )
+        else:
+            reach = step[record, Self.pieces, True](
+                self.fronts.row(mismatch_slot, ALIGNED),
+                self.fronts.row(opening_slots[FIRST_GAP], ALIGNED),
+                self.fronts.row(opening_slots[SECOND_GAP], ALIGNED),
+                self.fronts.row(extension_slots[FIRST_GAP], FIRST_GAP),
+                self.fronts.row(extension_slots[SECOND_GAP], SECOND_GAP),
+                self.fronts.row(opening_slots[first_last], ALIGNED),
+                self.fronts.row(opening_slots[second_last], ALIGNED),
+                self.fronts.row(extension_slots[first_last], first_last),
+                self.fronts.row(extension_slots[second_last], second_last),
+                front,
+                self.fronts.row(slot, FIRST_GAP),
+                self.fronts.row(slot, SECOND_GAP),
+                self.fronts.row(slot, gap_layer(last, True)),
+                self.fronts.row(slot, gap_layer(last, False)),
+                kept,
+                flags,
+                self.first.unsafe_ptr().unsafe_offset(LINE_GUARD),
+                self.second.unsafe_ptr().unsafe_offset(LINE_GUARD),
+                low,
+                high,
+                columns,
+                rows,
+            )
         # The step wrote whole lane groups; past `high` the slot must read unreached again, a lane group
         # a layer, within the room `ready` made.
         comptime for layer in range(layers_of[Self.pieces]()):
