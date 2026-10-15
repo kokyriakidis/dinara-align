@@ -89,7 +89,13 @@ Copies the consolidation of 2026-10-08 left separate, and why.
   nearly all under 8% divergence (4.8 against 6.5 ms there); forced on every read it takes 1.53 times as
   long. Two signals tried and left below (the search's own projection, the projection from recent
   progress) did not pick those reads out. Compare per-pair probes of the winners and the losers before
-  writing a third rule.
+  writing a third rule. The same on ont-1k (2026-10-15), where reads of 15 to 21% lose 1.35 to 1.6 times to
+  A*PA2-simple and WFA: by distance (0-50, 50-100, 100-150, 150-200) the default is within 2 to 6% of the
+  best forced policy in every bin, but single reads want different ones: read 9 (distance 152) took 112 µs,
+  34 with the diagonal transition run to its end; read 35 (151) 99, 38 two-ended; read 115 (169) 103, 47
+  one-ended. Reads 9 and 1100 gave up their two-ended search at score 56 on a projection 3.5 times the
+  distance (534 for 152), their ends dense with errors. The band reads' fresh memory (46 to 72 allocations
+  each, `Trail`, `Band`, `TileTracer`, `SeedHeuristic` made per pair) is real but 1 to 4%.
 
 ## Tried in the optimization rounds of 2026-10-12 to 14
 
