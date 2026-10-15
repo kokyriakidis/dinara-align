@@ -1098,12 +1098,12 @@ struct SeedHeuristic(Movable):
                 var row = before - diagonal
                 if row < 0 or row > self.rows:
                     continue
-                # No further than a kept match ahead on the diagonal, as the first run.
-                var kept_column = leftmost.at(diagonal)
-                var cap = min(horizon, kept_column) if kept_column >= before else horizon
-                var after = extend(first, second, before, row, cap, self.rows)
+                var after = extend(first, second, before, row, horizon, self.rows)
                 front[unsafe_offset=d] = after
-                if after >= end_column or (before <= kept_column and kept_column <= after):
+                if after >= end_column:
+                    return True
+                var kept_column = leftmost.at(diagonal)
+                if before <= kept_column and kept_column <= after:
                     return True
         return False
 
