@@ -151,7 +151,7 @@ BODY = [
  'gap-chaining seed heuristic [@GrootKoerkamp2024a], with near-identical pairs aligned by diagonal transition '
  'alone. Gap-affine costs use the wavefront of WFA and BiWFA [@MarcoSola2021; @MarcoSola2023]. At unit costs, '
  "diagonal transition runs first and hands over once its projected remaining work exceeds the band's and it has "
- "spent a twenty-fourth of the band's least work (Section 3.10); its projection, the length and the cost model "
+ "spent a twenty-fourth of the band's least work, or on a pair of at most 2,048 columns its whole cost (Section 3.10); its projection, the length and the cost model "
  'then choose the next algorithm and its parameters.'),
 ('p',
  'At unit, gap-affine and two-piece costs, every engine selects the same alignment among equally good ones, by '
