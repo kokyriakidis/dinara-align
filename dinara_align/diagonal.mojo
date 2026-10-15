@@ -578,6 +578,9 @@ struct FrontPair(Movable):
     """When recording, where diagonal zero of the front in ring slot 0 sits in the history's offsets."""
     var recorded_second: Int
     """The same for ring slot 1."""
+    var checks: List[Int]
+    """The anti-diagonal both fronts had reached at each of `two_ended`'s checks, kept by its forward search
+    from pair to pair, for its projection from recent progress (see `two_ended_gives_up`)."""
 
     def __init__(out self, record: Bool = False):
         """A ring holding only score zero's front, still to be set, and a history when `record`."""
@@ -596,6 +599,7 @@ struct FrontPair(Movable):
         self.record = record
         self.recorded_first = 0
         self.recorded_second = 0
+        self.checks = List[Int]()
         self.begin()
 
     def reset(mut self):
@@ -864,6 +868,7 @@ def two_ended[
     var meeting = overlapping(ahead, behind, False, False)
     if meeting != NO_DIAGONAL:
         return met(ahead, behind, meeting, False, False)
+    ahead.checks.clear()
     var total = 0
     while ahead.score < limit and behind.score < limit:
         total += 1
@@ -885,7 +890,19 @@ def two_ended[
                     return met(ahead, behind, sooner, False, True)
                 return met(ahead, behind, meeting, False, False)
         if checking:
-            var estimate = two_ended_gives_up[cost](total, ahead.furthest + behind.furthest, columns, rows, ceiling)
+            # The projection from the second half of the edits as well (see `two_ended_gives_up`), from the
+            # progress at the check that took half as many.
+            var reached = ahead.furthest + behind.furthest
+            ahead.checks.append(reached)
+            var recent = Int.MAX
+            # The check at about half this total: the checks fall every `PROBE_STRIDE` from `2 PROBE_START` on.
+            var half = (total // 2 - 2 * PROBE_START) // PROBE_STRIDE
+            if half >= 1 and half < len(ahead.checks) - 1:
+                var half_total = 2 * PROBE_START + PROBE_STRIDE * half
+                var gained = reached - ahead.checks[half]
+                if gained > 0:
+                    recent = total + (columns + rows - reached) * (total - half_total) // gained
+            var estimate = two_ended_gives_up[cost](total, reached, columns, rows, ceiling, recent)
             if estimate >= 0:
                 return Meeting(Probe(-1, estimate, total), 0, 0, 0, 0)
     return Meeting(Probe(-1, 2 * limit + 1, total), 0, 0, 0, 0)
@@ -914,10 +931,17 @@ def trusted_projection(search: Probe, projected: Probe) -> Bool:
 
 def two_ended_gives_up[
     cost: StepCost
-](total: Int, reached: Int, columns: Int, rows: Int, ceiling: Int = Int.MAX) -> Int:
+](total: Int, reached: Int, columns: Int, rows: Int, ceiling: Int = Int.MAX, recent: Int = Int.MAX) -> Int:
     """The two-ended search's projected distance once what is left of it passes the budget, or the
-    `ceiling` where that is less, or -1."""
+    `ceiling` where that is less, or -1.
+
+    The search gives up only when `recent` passes the budget as well: the projection from its second half of
+    edits alone, how far they carried the fronts. Nanopore reads gather errors at their ends, where both
+    fronts start, so a projection from every edit runs high and gave up searches the rest would have finished
+    sooner: on the ont-10k reads under 8% divergence, the search run to its end took 4.8 ms where the band
+    took 6.5. On errors spread evenly the two agree. The projection returned is still the whole one."""
     var estimate = total * (columns + rows) // max(reached, 1)
+    var deciding = min(estimate, recent)
     # A ceiling the search's own fallback costs, widened by the projection's noise (see `noisy_budget`),
     # so a projection that overshoots does not give up a search that would have finished cheaper.
     var cap = noisy_budget(ceiling, total) if ceiling != Int.MAX else ceiling
@@ -927,9 +951,9 @@ def two_ended_gives_up[
     # and 1 Mbp pairs at 1% the search had run to its budget for distances of 5,000 and 10,000 it could never
     # meet. Either only once the search has spent its share (see `GIVE_UP_SHARE`), as one front's does.
     if (
-        beyond_reach(estimate, total, 2 * TWO_ENDED_LIMIT - 1)
-        or (estimate * estimate - total * total) * TWO_ENDED_PERCENT // 100
-        > min(step_budget[cost](columns, estimate), cap)
+        beyond_reach(deciding, total, 2 * TWO_ENDED_LIMIT - 1)
+        or (deciding * deciding - total * total) * TWO_ENDED_PERCENT // 100
+        > min(step_budget[cost](columns, deciding), cap)
     ) and total * total * TWO_ENDED_PERCENT // 100 * GIVE_UP_SHARE >= min(step_budget[cost](columns, total), cap):
         return max(estimate, total + 1)
     return -1
