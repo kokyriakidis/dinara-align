@@ -829,6 +829,8 @@ def two_ended[
     var first_reversed = first_back.unsafe_ptr()
     var second_reversed = second_back.unsafe_ptr()
     var limit = TWO_ENDED_LIMIT
+    # A recording search's history memory, kept from the pairs before (see `FRESH_STEP_TENTHS`).
+    var kept = ahead.history.offsets.capacity() + behind.history.offsets.capacity() if ahead.record else Int.MAX
     ahead.front_mut(0)[unsafe_offset=0] = Int32(slide_forward(first, second, 0, 0))
     behind.front_mut(0)[unsafe_offset=0] = Int32(slide_forward(first_reversed, second_reversed, 0, 0))
 
@@ -885,7 +887,9 @@ def two_ended[
                     return met(ahead, behind, sooner, False, True)
                 return met(ahead, behind, meeting, False, False)
         if checking:
-            var estimate = two_ended_gives_up[cost](total, ahead.furthest + behind.furthest, columns, rows, ceiling)
+            var estimate = two_ended_gives_up[cost](
+                total, ahead.furthest + behind.furthest, columns, rows, ceiling, kept
+            )
             if estimate >= 0:
                 return Meeting(Probe(-1, estimate, total), 0, 0, 0, 0)
     return Meeting(Probe(-1, 2 * limit + 1, total), 0, 0, 0, 0)
@@ -912,11 +916,21 @@ def trusted_projection(search: Probe, projected: Probe) -> Bool:
     return first * AGREEMENT <= later * (AGREEMENT + 1) and later * AGREEMENT <= first * (AGREEMENT + 1)
 
 
+comptime FRESH_STEP_TENTHS = 14
+"""What a recording search's step costs past the memory its history already holds, in tenths of a step more:
+the history then grows into pages the process has never touched, each a fault, and copies itself as it
+doubles. Measured on the Skylake-X on a 50 kbp PromethION read at distance 1,951, the first of its sample
+that large: its two ends took 1.91 million steps in 8.7 ms, 3.9 ms of it in user space at the model's 2 ns a
+step and 5 ms in the kernel faulting 11 MB in, 2.6 ns a step more. Charged nothing for it, the search kept on
+where the band took 1.95 ms."""
+
+
 def two_ended_gives_up[
     cost: StepCost
-](total: Int, reached: Int, columns: Int, rows: Int, ceiling: Int = Int.MAX) -> Int:
+](total: Int, reached: Int, columns: Int, rows: Int, ceiling: Int = Int.MAX, kept: Int = Int.MAX) -> Int:
     """The two-ended search's projected distance once what is left of it passes the budget, or the
-    `ceiling` where that is less, or -1."""
+    `ceiling` where that is less, or -1. A recording search's steps past the `kept` entries its history
+    already holds cost `FRESH_STEP_TENTHS` more."""
     var estimate = total * (columns + rows) // max(reached, 1)
     # A ceiling the search's own fallback costs, widened by the projection's noise (see `noisy_budget`),
     # so a projection that overshoots does not give up a search that would have finished cheaper.
@@ -926,10 +940,12 @@ def two_ended_gives_up[
     # Or a distance past what both fronts together can reach, which nothing left would settle: on 500 kbp
     # and 1 Mbp pairs at 1% the search had run to its budget for distances of 5,000 and 10,000 it could never
     # meet. Either only once the search has spent its share (see `GIVE_UP_SHARE`), as one front's does.
+    var left = (estimate * estimate - total * total) * TWO_ENDED_PERCENT // 100
+    if kept != Int.MAX:
+        var fresh = estimate * estimate * TWO_ENDED_PERCENT // 100 - max(kept, total * total * TWO_ENDED_PERCENT // 100)
+        left += max(fresh, 0) * FRESH_STEP_TENTHS // 10
     if (
-        beyond_reach(estimate, total, 2 * TWO_ENDED_LIMIT - 1)
-        or (estimate * estimate - total * total) * TWO_ENDED_PERCENT // 100
-        > min(step_budget[cost](columns, estimate), cap)
+        beyond_reach(estimate, total, 2 * TWO_ENDED_LIMIT - 1) or left > min(step_budget[cost](columns, estimate), cap)
     ) and total * total * TWO_ENDED_PERCENT // 100 * GIVE_UP_SHARE >= min(step_budget[cost](columns, total), cap):
         return max(estimate, total + 1)
     return -1
