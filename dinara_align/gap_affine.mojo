@@ -62,6 +62,7 @@ searches find keeping only their last few costs, and each piece is aligned the s
 
 from std.math import gcd
 from std.sys import size_of
+from std.sys.intrinsics import prefetch, PrefetchOptions
 
 from .common import FIRST_SENTINEL, SECOND_SENTINEL, UNREACHED
 from .cigar import reverse_bytes, reversed_into, reversed_list, text_of
@@ -879,8 +880,17 @@ def step[
     # The gathered slides keep their furthest anti-diagonals a lane each, reduced once after the loop:
     # reducing every group put a chain of shuffles and maxima on each one's path.
     var reaches = Lanes(Int32.MIN // 2)
+    # The source rows fetched `RING_AHEAD` diagonals on when this cost's rings outgrow L1 (see `RING_AHEAD`).
+    var fetching = (high - low + 1) * RING_BYTES > L1_DATA_BYTES
     var diagonal = low
     while diagonal <= high:
+        if fetching:
+            var ahead = diagonal + RING_AHEAD
+            prefetch[RING_FETCH](mismatched.unsafe_offset(ahead))
+            prefetch[RING_FETCH](opening.unsafe_offset(ahead))
+            prefetch[RING_FETCH](first_gaps.unsafe_offset(ahead))
+            prefetch[RING_FETCH](opening_second.unsafe_offset(ahead))
+            prefetch[RING_FETCH](second_gaps.unsafe_offset(ahead))
         var diagonals = lane_diagonals + Int32(diagonal)
         var same = mismatched.unsafe_offset(diagonal).unsafe_load[width=LANES]()
         var opened_below = opening.unsafe_offset(diagonal - 1).unsafe_load[width=LANES]()
@@ -958,6 +968,21 @@ def step[
             flags.unsafe_offset(diagonal).unsafe_store((entry | opened).cast[DType.uint8]())
         diagonal += LANES
     return max(reach, Int(reaches.reduce_max()))
+
+
+comptime RING_AHEAD = 64
+"""Diagonals ahead the step fetches its source rows when they outgrow L1, four cache lines a row.
+
+On 100 kbp pairs at 20% a cost's rows are 8,500 diagonals, 34 KB each, and between two costs of one search
+the other search's step streams its own: the rows a cost reads were written costs before and have left L1.
+Precisely sampled (`mem_load_retired.l1_miss`), nine in ten of the step's L1 misses were these loads, the
+front a mismatch back alone over half, and one in eighty went past L2: the rows wait on L2, which four lines
+ahead covers, where the hardware's prefetchers had not kept up with five read streams and three write ones."""
+comptime RING_FETCH = PrefetchOptions().for_read().high_locality()
+comptime RING_BYTES = 32
+"""The rings' bytes a diagonal of one cost moves through the step: five lane loads and three stores of 4 bytes."""
+comptime L1_DATA_BYTES = 32 * 1024
+"""A core's L1 data cache on the Skylake-X: below it a cost's rings stay, and fetching them only costs."""
 
 
 comptime SEARCH_STEPS = 0
