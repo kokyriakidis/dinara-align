@@ -1061,12 +1061,13 @@ struct SeedHeuristic(Movable):
         # A run past the last seed answers as one reaching it: in a repeat a run to its end took each match
         # thousands of bases.
         var horizon = min(end_column, self.columns)
-        var reached = extend(first, second, start_column + self.length, end_row, horizon, self.rows)
-        front[unsafe_offset=reach] = reached
-        if reached >= end_column:
-            return True
+        # The run goes no further than a match already kept on its diagonal, which then continues it: the seeds go
+        # last first, so on a close pair the next seed's match is kept a seed on, and the run over every seed
+        # ahead had been most of local pruning's time. A run that stops short of it is the same run as before.
         var kept = leftmost.at(origin)
-        if kept <= reached:
+        var reached = extend(first, second, start_column + self.length, end_row, min(horizon, kept), self.rows)
+        front[unsafe_offset=reach] = reached
+        if reached >= end_column or kept <= reached:
             return True
         # Past the live fronts, one on either side reads as unreachable, so every front takes the best
         # of its three sources with no test of which exist.
@@ -1097,12 +1098,12 @@ struct SeedHeuristic(Movable):
                 var row = before - diagonal
                 if row < 0 or row > self.rows:
                     continue
-                var after = extend(first, second, before, row, horizon, self.rows)
-                front[unsafe_offset=d] = after
-                if after >= end_column:
-                    return True
+                # No further than a kept match ahead on the diagonal, as the first run.
                 var kept_column = leftmost.at(diagonal)
-                if before <= kept_column and kept_column <= after:
+                var cap = min(horizon, kept_column) if kept_column >= before else horizon
+                var after = extend(first, second, before, row, cap, self.rows)
+                front[unsafe_offset=d] = after
+                if after >= end_column or (before <= kept_column and kept_column <= after):
                     return True
         return False
 
