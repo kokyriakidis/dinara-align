@@ -245,10 +245,10 @@ One thread's aligner: `distance` and `align` as the functions of those names giv
 #### `__init__`
 
 ```mojo
-def Aligner.__init__(out self)
+def Aligner.__init__(out self, *, warm: Bool = True)
 ```
 
-An aligner whose memory a short divergent pair has already grown (see `warm`).
+An aligner whose memory a short divergent pair has already grown (see `warm`), some 80 µs on the Skylake-X; with `warm` false, one holding no memory yet, for a single call.
 
 #### `warm`
 

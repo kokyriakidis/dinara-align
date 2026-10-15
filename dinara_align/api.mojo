@@ -174,10 +174,12 @@ struct Aligner(Movable):
 
     var space: SearchSpace
 
-    def __init__(out self):
-        """An aligner whose memory a short divergent pair has already grown (see `warm`)."""
+    def __init__(out self, *, warm: Bool = True):
+        """An aligner whose memory a short divergent pair has already grown (see `warm`), some 80 µs on the
+        Skylake-X; with `warm` false, one holding no memory yet, for a single call."""
         self.space = SearchSpace()
-        self.warm()
+        if warm:
+            self.warm()
 
     def warm(mut self):
         """Aligns one built-in pair of 256 letters a third apart, at gap-affine and at unit costs, so the

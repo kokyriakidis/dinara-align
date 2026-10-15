@@ -150,7 +150,8 @@ def py_distance(
     reference: PythonObject, query: PythonObject, costs: PythonObject, mode: PythonObject, options: PythonObject
 ) raises -> PythonObject:
     """The least cost, or None past a cap of zero or more."""
-    var aligner = Aligner()
+    # One call's aligner: warming it would cost more than the call (see `Aligner.warm`).
+    var aligner = Aligner(warm=False)
     return distance_through(aligner, reference, query, costs, mode, options)
 
 
@@ -180,7 +181,8 @@ def py_align(
     reference: PythonObject, query: PythonObject, costs: PythonObject, mode: PythonObject, options: PythonObject
 ) raises -> PythonObject:
     """An optimal alignment as a tuple (see `alignment_tuple`), or None past a cap of zero or more."""
-    var aligner = Aligner()
+    # One call's aligner: warming it would cost more than the call (see `Aligner.warm`).
+    var aligner = Aligner(warm=False)
     return align_through(aligner, reference, query, costs, mode, options)
 
 
