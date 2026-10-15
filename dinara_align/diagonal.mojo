@@ -942,10 +942,7 @@ def two_ended_gives_up[
     # meet. Either only once the search has spent its share (see `GIVE_UP_SHARE`), as one front's does.
     var left = (estimate * estimate - total * total) * TWO_ENDED_PERCENT // 100
     if kept != Int.MAX:
-        # Projected from the estimate taken its noise low (see `noisy_budget`): squared, a projection a tenth
-        # high had charged faults to 10 kbp pairs at 5% whose histories their memory held, 192 to 238 us.
-        var low = Int(Float64(estimate) / (1.0 + PROBE_SPREAD / sqrt(Float64(max(total, 1)))))
-        var fresh = low * low * TWO_ENDED_PERCENT // 100 - max(kept, total * total * TWO_ENDED_PERCENT // 100)
+        var fresh = estimate * estimate * TWO_ENDED_PERCENT // 100 - max(kept, total * total * TWO_ENDED_PERCENT // 100)
         left += max(fresh, 0) * FRESH_STEP_TENTHS // 10
     if (
         beyond_reach(estimate, total, 2 * TWO_ENDED_LIMIT - 1) or left > min(step_budget[cost](columns, estimate), cap)
