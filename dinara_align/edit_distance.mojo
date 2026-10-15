@@ -418,10 +418,7 @@ def settle(
     reversed_codes_into(second_back, profile.row_codes, rows, SECOND_SENTINEL)
     ahead.restart(record=True)
     behind.restart(record=True)
-    # The history memory an aligner holds from its pairs before, which the swap below passes round the three
-    # (see `FRESH_STEP_TENTHS`): counting the two searches' alone, a pair saw its own last history as fresh.
-    var kept = traced.offsets.capacity() + ahead.history.offsets.capacity() + behind.history.offsets.capacity()
-    var meeting = two_ended[cost](profile, first_back, second_back, ahead, behind, kept=kept)
+    var meeting = two_ended[cost](profile, first_back, second_back, ahead, behind)
     comptime if PROBES:
         tally.since(TWO_ENDED_NS, started)
         tally.set(TWO_ENDED_SCORE, ahead.score + behind.score)

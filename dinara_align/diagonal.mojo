@@ -805,7 +805,6 @@ def two_ended[
     mut ahead: FrontPair,
     mut behind: FrontPair,
     ceiling: Int = Int.MAX,
-    kept: Int = Int.MAX,
 ) -> Meeting:
     """The edit distance by diagonal transition from both ends at once, as BiWFA scores, while cheap.
 
@@ -820,8 +819,7 @@ def two_ended[
 
     It stops as `diagonal_transition` does, once the search still to do passes the budget (see
     `step_budget`), or `ceiling` steps where that is less, projecting the distance from both fronts'
-    progress. A recording search's steps past the `kept` entries of history memory the caller holds cost more
-    (see `FRESH_STEP_TENTHS`).
+    progress.
     """
     var columns = profile.columns
     var rows = profile.rows
@@ -831,6 +829,8 @@ def two_ended[
     var first_reversed = first_back.unsafe_ptr()
     var second_reversed = second_back.unsafe_ptr()
     var limit = TWO_ENDED_LIMIT
+    # A recording search's history memory, kept from the pairs before (see `FRESH_STEP_TENTHS`).
+    var kept = ahead.history.offsets.capacity() + behind.history.offsets.capacity() if ahead.record else Int.MAX
     ahead.front_mut(0)[unsafe_offset=0] = Int32(slide_forward(first, second, 0, 0))
     behind.front_mut(0)[unsafe_offset=0] = Int32(slide_forward(first_reversed, second_reversed, 0, 0))
 
