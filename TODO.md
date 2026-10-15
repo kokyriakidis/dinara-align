@@ -75,15 +75,16 @@ Copies the consolidation of 2026-10-08 left separate, and why.
   pairs take 10.6 µs to WFA's 9.6, where the first search hands over to two (see
   `gap_affine.traced_alone`); its model of the two searches leaves out their setup and the far side's
   grow-on, so it hands over a little early. Count those in from what the searches measure, not a factor.
-- [ ] **The gap-affine step's instructions a cycle on long divergent pairs.** On 100 kbp pairs at 20%
-  (2026-10-14) a pair steps 2.26 billion diagonals in 14.9 billion instructions, 4.7 times fewer than BiWFA's
-  70.4 billion, at 1.28 instructions a cycle to BiWFA's 2.41. Top-down: core-bound 40%, memory-bound 20%; the
-  step's two gathers (`slides.gathered_slides`) take 38% of its samples. Its L1 misses (precisely sampled,
-  nine in ten on its source rows' loads, one in eighty past L2) are L2 hits the hardware already streams:
-  fetching the rows or the letters ahead lost (below). The gathers are the cheapest slide this CPU has: with
-  `-D ABLATE_GATHER`, a scalar compare a lane, 100 kbp pairs at 20% took 7.17 s to 3.56, at 5% 655 ms to 327,
-  10 kbp at 10% 12.3 ms to 7.0, ont-10k 2.65 ms to 1.58. A window in place of the gathers lost too (below).
-  Nothing cheaper for the slides is known on this CPU.
+- [ ] **The gap-affine step on long divergent pairs.** Kept since 2026-10-15: costs whose sources cannot reach
+  the matrix's last column or row step without testing against them (e382fd3, 3 to 8.5% on every set at
+  (4, 6, 2)), and the slides find their first differing byte by a byte shuffle and `vplzcntq` (c404d65, 2 to
+  6.5% more). On 100 kbp pairs at 20% a diagonal now takes about 4.6 cycles, the two gathers 46% of the step:
+  the cheapest slide this CPU has (a scalar compare a lane is twice as slow), and fetching ahead, a window in
+  their place, and the rings fetched ahead all lost (below). A pair there steps 2.26 billion diagonals, about
+  twice the two searches' meeting: its kept fronts would take some 5.7 GB against the 80 MiB limit, so it is
+  split and its halves searched again, as BiWFA does. 100 kbp at 20% fits 9 of 10 pairs in 30 s at 3.13 s a
+  pair, 500 kbp at 5% 3 of 4 at 8.85 s; neither needs anything more than another few percent of this loop,
+  which nothing tried has found.
 - [ ] **Which nanopore reads the diagonal transition should finish.** Regret (`profile.py regret`, 2026-10-12)
   on ont-10k: run to its end, the diagonal transition beats the default on 114 of 277 reads, 3.3 of 38.7 ms,
   nearly all under 8% divergence (4.8 against 6.5 ms there); forced on every read it takes 1.53 times as
