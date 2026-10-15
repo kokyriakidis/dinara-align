@@ -105,16 +105,13 @@ BODY = [
 ('p',
  'Let \\(A=a_1\\dots a_n\\) be the reference and \\(B=b_1\\dots b_m\\) the query, and let cell \\((i,j)\\) lie on '
  'diagonal \\(j-i\\). Under gap-affine costs \\((x, o, e)\\), for example (4, 6, 2), a match costs 0, a mismatch '
- '\\(x\\) and a gap of \\(k\\) letters \\(g(k)=o+ke\\); unit costs have \\(x=e=1\\) and \\(o=0\\), two-piece costs take '
- 'the minimum of two such functions [@Li2018], and a substitution matrix instead scores each pair of letters. '
- 'Global alignment compares two whole sequences; ends-free alignment places a read inside a longer window or '
- 'finds the overlap of two reads; extension grows an alignment from a seed match [@Li2018]; and local alignment '
- 'finds the best-matching parts of two sequences. Extension, local and, where asked, ends-free alignment instead '
- 'maximise a score that rewards matches (Section 3.8). An alignment is *optimal* if no alignment has a lower '
- 'cost, or a higher score, under the requested costs and mode; a caller may further restrict alignments to a '
- 'band of diagonals or a maximum cost, and an exact aligner then returns an optimal alignment among those or '
- 'reports that none exists. At unit costs the distance \\(D(i,j)\\) between the prefixes \\(a_1\\dots a_i\\) and '
- '\\(b_1\\dots b_j\\) satisfies'),
+ '\\(x\\) and a gap of \\(k\\) letters \\(g(k)=o+ke\\); unit costs have \\(x=e=1\\) and \\(o=0\\), two-piece costs take the '
+ 'minimum of two such functions [@Li2018], and a substitution matrix scores each pair of letters. Besides global '
+ 'alignment, dinara-align offers ends-free, extension [@Li2018] and local alignment, the last two maximising a '
+ 'score that rewards matches (Section 3.8). An alignment is *optimal* if none has a lower cost, or a higher '
+ 'score, under the requested costs and mode, within any band or cost limit the caller sets; an exact aligner '
+ 'returns one or reports that none exists. At unit costs the distance \\(D(i,j)\\) between the prefixes \\(a_1\\dots '
+ 'a_i\\) and \\(b_1\\dots b_j\\) satisfies'),
 ('p',
  '\\[ D(i,j) = \\min\\bigl(D(i-1,j)+1,\\; D(i,j-1)+1, \\qquad D(i-1,j-1)+[a_i \\ne b_j]\\bigr), \\]'),
 ('p',
@@ -136,21 +133,16 @@ BODY = [
  '[@MarcoSola2023].'),
 ('sub', 'The seed heuristic'),
 ('p',
- 'A*PA divides the reference into disjoint seeds of fixed length and finds their matches in the query, exactly '
- 'or with one edit [@GrootKoerkamp2024a]. The potential of a seed is the cost \\(r\\) of crossing it unmatched, 1 '
- 'for exact seeds and 2 for seeds matched with one edit, and a match crosses a seed for less than \\(r\\). The '
- 'gap-chaining seed heuristic charges a chain of matches from a cell the cost of each match and, for each gap '
- 'between consecutive matches and from the last to the end, the larger of the potential of the seeds that start '
- 'in the gap and the number of diagonals it shifts. Its value, the least charge of any chain, never exceeds the '
- 'remaining cost, and A*PA keeps the match starts in layers by how much potential the best chain from each saves '
- "[@GrootKoerkamp2024a]. A*PA2 prunes matches before the alignment, in place of A*PA's pruning during the "
- 'search: a match \\(\\nu\\) with cost \\(c(\\nu)\\) and end cell \\(\\mathrm{end}(\\nu)\\) is kept only if a path from '
- '\\(\\mathrm{end}(\\nu)\\), starting at cost \\(c(\\nu)\\), crosses the next \\(p = 14\\) seeds, counting that of '
- '\\(\\nu\\), while its cost stays below the potential of the seeds it has crossed [@GrootKoerkamp2024b]. A '
- 'diagonal transition from \\(\\mathrm{end}(\\nu)\\) tests this, dropping each furthest-reaching point whose cost '
- 'reaches that potential; a further point on a diagonal has crossed at least as much potential, so no such path '
- 'is missed. A*PA2 uses the heuristic to drop the rows of each band whose score plus the heuristic exceeds the '
- 'bound [@GrootKoerkamp2024b].'),
+ 'A*PA divides the reference into disjoint seeds and finds their matches in the query, exactly or with one edit '
+ '[@GrootKoerkamp2024a]. A seed crossed unmatched costs its potential \\(r\\), 1 for exact seeds and 2 for inexact '
+ 'ones. The gap-chaining seed heuristic charges a chain of matches the cost of each match and, for each gap '
+ 'between consecutive matches and to the end, the larger of the potential of the seeds it spans and the number of '
+ 'diagonals it shifts; its least charge never exceeds the remaining cost, and A*PA keeps the match starts in '
+ 'layers by the potential their best chain saves. A*PA2 prunes matches before the alignment: a match \\(\\nu\\) of '
+ 'cost \\(c(\\nu)\\) is kept only if a path from its end, starting at cost \\(c(\\nu)\\), crosses the next \\(p = 14\\) '
+ 'seeds while its cost stays below their potential [@GrootKoerkamp2024b], which a diagonal transition from the '
+ "match's end tests, dropping each furthest point whose cost reaches that potential. A*PA2 then drops the rows of "
+ 'each band whose score plus the heuristic exceeds the bound.'),
 ('sec', 'Methods'),
 ('sub', 'Overview'),
 ('p',
@@ -438,7 +430,6 @@ BODY = [
  'faster than WFA2-lib (Supplementary Table S8).'),
 ('table', 'unit'),
 ('table', 'affine'),
-('table', 'affine_sim'),
 ('figure', 'sweeps'),
 ('p',
  'An alignment of an ultra-long read increased peak memory by at most 54 MiB, against 81 MiB for A*PA2-full, and '
@@ -549,23 +540,6 @@ TABLES = {
     ["SARS-CoV-2", "18", "7", "6", "19", "15", "8", "9", "26", "215", "151"],
     ["Illumina", "12", "5", "5", "5", "2", "7", "7", "7", "2", "7"],
     ["PacBio HiFi", "13", "7", "6", "6", "4", "8", "8", "9", "127", "21"],
-  ]},
-"affine_sim": {
-  "caption": "Gap-affine alignment of QuickEd's simulated datasets, random sequences with uniformly spread substitutions, insertions and deletions, at costs (4, 6, 2) by every exact aligner that takes them: mean time per alignment in ms, a 30 s budget per sample. Brackets give the pairs completed where not all were; t.o. marks a tool that completed none and o.o.m. one the 8 GiB limit stopped. Datasets no tool completed are left out; every dataset is in Supplementary Table S4. Bold marks the lowest mean of the tools that completed the most pairs.",
-  "header": ["Dataset", "dinara-align", "WFA", "BiWFA", "BSAlign", "KSW2"],
-  "align": "lrrrrr",
-  "rows": [
-    ["10 kbp, 1%", "**0.186**", "0.409", "0.649", "37.0", "21.2"],
-    ["10 kbp, 5%", "**2.29**", "7.13", "8.73", "37.2", "97.6"],
-    ["10 kbp, 10%", "**6.96**", "22.8", "27.2", "37.2", "204"],
-    ["10 kbp, 20%", "**19.7**", "65.5", "75.2", "37.5", "375 [80/99]"],
-    ["100 kbp, 1%", "**11.7**", "39.9", "39.0", "o.o.m.", "2,440"],
-    ["100 kbp, 5%", "**327**", "810", "715", "o.o.m.", "9,220 [3/9]"],
-    ["100 kbp, 10%", "**1,170**", "o.o.m.", "2,430", "o.o.m.", "17,400 [1/10]"],
-    ["100 kbp, 20%", "**3,560 [8/10]**", "o.o.m.", "7,350 [4/10]", "o.o.m.", "o.o.m."],
-    ["500 kbp, 1%", "**463**", "1,290", "942", "o.o.m.", "o.o.m."],
-    ["500 kbp, 5%", "**9,710 [3/4]**", "o.o.m.", "19,400 [1/4]", "o.o.m.", "o.o.m."],
-    ["1 Mbp, 1%", "**2,230**", "o.o.m.", "3,920", "o.o.m.", "o.o.m."],
   ]},
 "affine": {
   "caption": "Gap-affine alignment of the real datasets at costs (4, 6, 2) by every exact aligner that takes them: mean time per alignment in ms, a 30 s budget per sample, the median of three rounds, the other tools' alternating between them and dinara-align's a day later at its final version, on the same machine, builds and samples. Brackets give the pairs completed where not all were; t.o. marks a tool that completed none and o.o.m. one the 8 GiB limit stopped. Every dataset is in Supplementary Table S4. Bold marks the lowest mean of the tools that completed the most pairs.",

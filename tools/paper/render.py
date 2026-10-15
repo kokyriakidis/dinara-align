@@ -512,7 +512,7 @@ def render_project():
         current[1].append(block)
     names = []
     for name, blocks in sections:
-        text = tex_body(blocks, M.TABLES, M.FIGURES, bk, wide_tables=("engines", "unit", "affine", "affine_sim"),
+        text = tex_body(blocks, M.TABLES, M.FIGURES, bk, wide_tables=("engines", "unit", "affine"),
                         parts=parts)
         parts[f"sections/{name}.tex"] = text
         names.append(name)

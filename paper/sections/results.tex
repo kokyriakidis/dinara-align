@@ -19,8 +19,6 @@ At gap-affine costs dinara-align was 1.3 to 3.3 times faster than the faster of 
 
 \input{tables/affine}
 
-\input{tables/affine_sim}
-
 \input{figures/sweeps}
 
 An alignment of an ultra-long read increased peak memory by at most 54 MiB, against 81 MiB for A*PA2-full, and of a 1~Mbp pair at 20\% errors by at most 131 MiB, against 184 MiB (Supplementary Table S7). This growth includes the seed heuristic and the band; the stored tile boundaries stayed within the default limit of 80 MiB (Section 3.7). QuickEd stayed near 25 MiB. On short reads dinara-align's peak was higher than the others' (Table~\ref{tab:unit}): the Mojo runtime and the sample, read whole, take about 13 MiB.

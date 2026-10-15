@@ -159,9 +159,6 @@ UNIT = False
 # Table 3: gap-affine, the real datasets and the 10 and 100 kbp ones its rivals finish.
 AFFINE_MAIN = [OURS_AFFINE, "wfa", "biwfa", "bsalign", "ksw2"]
 replace_rows(main, "affine", time_rows(affine, REAL, AFFINE_MAIN, "t.o."))
-# Table 4: the simulated datasets some tool completed.
-finished = [name for name in SIMULATED if any(t["finished"] > 0 for t in affine[name]["tools"].values())]
-replace_rows(main, "affine_sim", time_rows(affine, finished, AFFINE_MAIN, "t.o."))
 
 # S3 and S4: every dataset.
 replace_rows(supplement, "affine_full",
