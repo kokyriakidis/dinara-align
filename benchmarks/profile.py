@@ -972,7 +972,9 @@ def perf(options) -> str:
         # The hottest functions down to their instructions: where inside them the samples land, how much on
         # copies and sets the compiler inlined, and how much on vector instructions.
         for share, symbol in symbols[: options.annotate]:
-            name_only = symbol.split()[-1]
+            # The whole name past perf's `[.]` or `[k]`: a Mojo function's parameters hold spaces, and its last word
+            # alone matched nothing, so every parametric function went unannotated.
+            name_only = re.sub(r"^\[[.k]\]\s+", "", symbol)
             hottest, bulk, vector, covered = annotate(data, name_only, options.top)
             if not hottest:
                 continue
