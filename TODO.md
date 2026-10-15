@@ -77,12 +77,13 @@ Copies the consolidation of 2026-10-08 left separate, and why.
   grow-on, so it hands over a little early. Count those in from what the searches measure, not a factor.
 - [ ] **The gap-affine step's instructions a cycle on long divergent pairs.** On 100 kbp pairs at 20%
   (2026-10-14) a pair steps 2.26 billion diagonals in 14.9 billion instructions, 4.7 times fewer than BiWFA's
-  70.4 billion, at 1.28 instructions a cycle to BiWFA's 2.41. Precisely sampled (`mem_load_retired.l1_miss`),
-  nine in ten of the step's 761 million L1 misses are its source rows' loads, the front a mismatch back over
-  half, the gathered slides only 6% (an imprecise event had put seven in ten on the gathers, by skid); one
-  in eighty goes past L2. Fetching either ahead lost (below), so the rows' L2 traffic is not what holds the
-  step back: find what does (the gathers' latency, the dependent chain through `max` and the slides) before
-  changing the layout.
+  70.4 billion, at 1.28 instructions a cycle to BiWFA's 2.41. Top-down: core-bound 40%, memory-bound 20%; the
+  step's two gathers (`slides.gathered_slides`) take 38% of its samples. Its L1 misses (precisely sampled,
+  nine in ten on its source rows' loads, one in eighty past L2) are L2 hits the hardware already streams:
+  fetching the rows or the letters ahead lost (below). The gathers are the cheapest slide this CPU has: with
+  `-D ABLATE_GATHER`, a scalar compare a lane, 100 kbp pairs at 20% took 7.17 s to 3.56, at 5% 655 ms to 327,
+  10 kbp at 10% 12.3 ms to 7.0, ont-10k 2.65 ms to 1.58. What is left is fewer gathers, not cheaper ones:
+  a lane group whose lanes all mismatch at their first letter gathers nothing more than one load would show.
 - [ ] **Which nanopore reads the diagonal transition should finish.** Regret (`profile.py regret`, 2026-10-12)
   on ont-10k: run to its end, the diagonal transition beats the default on 114 of 277 reads, 3.3 of 38.7 ms,
   nearly all under 8% divergence (4.8 against 6.5 ms there); forced on every read it takes 1.53 times as
