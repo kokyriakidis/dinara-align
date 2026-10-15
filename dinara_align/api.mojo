@@ -167,7 +167,8 @@ def align(
 
 struct Aligner(Movable):
     """One thread's aligner: `distance` and `align` as the functions of those names give them, the memory
-    their searches take kept from call to call, so a loop of calls takes none once it is warm. An
+    their searches take kept from call to call, so a loop of calls takes none once it is warm, and it is
+    warm from the start for short reads (see `warm`), so it is made once and kept rather than made a call. An
     application calling from many threads keeps one a thread; one never crosses threads, and the library
     keeps no state of its own, so any number of them work at once."""
 

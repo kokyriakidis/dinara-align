@@ -236,7 +236,7 @@ any other mode each pair's `score`. Every kept hit is then aligned on its own, w
 struct Aligner
 ```
 
-One thread's aligner: `distance` and `align` as the functions of those names give them, the memory their searches take kept from call to call, so a loop of calls takes none once it is warm. An application calling from many threads keeps one a thread; one never crosses threads, and the library keeps no state of its own, so any number of them work at once.
+One thread's aligner: `distance` and `align` as the functions of those names give them, the memory their searches take kept from call to call, so a loop of calls takes none once it is warm, and it is warm from the start for short reads (see `warm`), so it is made once and kept rather than made a call. An application calling from many threads keeps one a thread; one never crosses threads, and the library keeps no state of its own, so any number of them work at once.
 
 | field | type | |
 | :-- | :-- | :-- |
@@ -248,7 +248,15 @@ One thread's aligner: `distance` and `align` as the functions of those names giv
 def Aligner.__init__(out self)
 ```
 
-An aligner holding no memory yet: its first call takes what it needs.
+An aligner whose memory a short divergent pair has already grown (see `warm`).
+
+#### `warm`
+
+```mojo
+def warm(mut self)
+```
+
+Aligns one built-in pair of 256 letters a third apart, at gap-affine and at unit costs, so the searches, their rings and kept fronts, and the profile hold what a short read takes, their pages touched: grown by the first reads that needed them instead, a few of those took up to sixteen times a read's time, 2.9% of 250 bp Illumina reads' at (4, 6, 2).
 
 #### `distance`
 
