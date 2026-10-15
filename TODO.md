@@ -75,6 +75,11 @@ Copies the consolidation of 2026-10-08 left separate, and why.
   pairs take 10.6 µs to WFA's 9.6, where the first search hands over to two (see
   `gap_affine.traced_alone`); its model of the two searches leaves out their setup and the far side's
   grow-on, so it hands over a little early. Count those in from what the searches measure, not a factor.
+- [ ] **The gap-affine step's memory on long divergent pairs.** On 100 kbp pairs at 20% (2026-10-14) a pair
+  steps 2.26 billion diagonals in 14.9 billion instructions, 4.7 times fewer than BiWFA's 70.4 billion, but at
+  1.28 instructions a cycle to BiWFA's 2.41, with 1.13 billion L1 misses, one every two diagonals: the live
+  fronts, about 8,500 diagonals in 3 layers over 5 cost slots, take some 500 KB, past L1. Find which accesses
+  miss (the rings, the sequences the slides read, the kept history) before changing the layout.
 - [ ] **Which nanopore reads the diagonal transition should finish.** Regret (`profile.py regret`, 2026-10-12)
   on ont-10k: run to its end, the diagonal transition beats the default on 114 of 277 reads, 3.3 of 38.7 ms,
   nearly all under 8% divergence (4.8 against 6.5 ms there); forced on every read it takes 1.53 times as
