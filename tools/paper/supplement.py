@@ -33,6 +33,11 @@ _changes[3].extend([
     ["04906ec", "Gap-affine traceback writes runs of moves sixteen at a time into the alignment's own buffer (with df44eaf)", "250 bp Illumina at (4, 6, 2) 1.36 → 1.14 µs; PacBio HiFi 86.6 → 77.4 µs", "Skylake-X"],
     ["d9dc492", "An untrusted band follows a failed round's estimate once the round crossed one eighth of the columns", "10 kbp at 10% 341 → 310 µs, at 20% 497 → 437 µs; ont-50k 557 → 528 µs", "Skylake-X"],
     ["5a500f8", "A CIGAR's diagonal runs split by a 64-base mismatch mask; moves already in order written where they lie", "ont-10k 141 → 139 µs; 10 kbp at 20% 435 → 428 µs", "Skylake-X"],
+    ["5fc0aa9", "Local pruning's first run stops at a match already kept on its diagonal", "500 kbp at 1% 23.4 → 22.8 ms; 1 Mbp at 1% 48.9 → 48.1 ms", "Skylake-X"],
+    ["ccf3dc6", "An aligner warmed on built-in pairs when it is made (with 76ef188)", "250 bp Illumina at (4, 6, 2) 1.18 → 1.14 µs", "Skylake-X"],
+    ["1084663", "A short pair's searches give up only on the work spent, never on a projection (with b6a6f07)", "ont-1k 16.5 → 16.1 µs; two reads 93 → 34 and 108 → 51 µs", "Skylake-X"],
+    ["e382fd3", "Gap-affine costs whose sources cannot reach the matrix's last column or row step without testing against them", "at (4, 6, 2): ont-50k 21.3 → 19.4 ms; 10 kbp at 20% 19.8 → 18.2 ms; PromethION 262 → 245 ms", "Skylake-X"],
+    ["c404d65", "A slide's first differing byte from its bytes reversed and `vplzcntq`", "at (4, 6, 2): 100 kbp at 5% 306 → 286 ms, PromethION 246 → 232 ms; unit-cost ont-1k 16.1 → 15.4 µs", "Skylake-X"],
 ])
 
 BODY = [
@@ -206,7 +211,10 @@ BODY = [
  'instead of 87 ms, and 30 kbp pairs at 5% divergence became 15% faster.'),
 ('p',
  '**Local pruning.** The diagonal-transition search used for local pruning updates its wavefronts in place, with '
- 'an unreachable diagonal on either side replacing three bounds checks per diagonal.'),
+ 'an unreachable diagonal on either side replacing three bounds checks per diagonal. Its first run along a match '
+ 'stops at a match already kept on the same diagonal, which continues it: the seeds are processed from last to '
+ "first, so on a close pair the next seed's match is already kept, and on 1 Mbp pairs at 1% this halved the "
+ 'instructions spent in local pruning.'),
 ('sub', 'Gap-affine costs'),
 ('p',
  "**Divergent pairs at gap-affine costs.** The wavefront's work grows with the cost times the length, so on "
@@ -236,7 +244,14 @@ BODY = [
  'one per group, reduced it further to 111 µs, and that for the ont-10k reads from 2.34 to 1.84 ms. Extension '
  'along matches was moved into the wavefront step, with columns stored through scalar loads and stores rather '
  'than reinserted into a vector, and retained wavefronts are held in fixed blocks that are never moved; memory '
- 'moves had accounted for 7.5% of profiling samples (Table S1).'),
+ 'moves had accounted for 7.5% of profiling samples (Table S1). Each lane\'s first differing byte is found from the '
+ 'leading zeros of its bytes in reverse order, a byte shuffle and `vplzcntq`, since AVX-512 has no vector '
+ 'trailing-zero count. A cost whose source cells, bounded by the furthest anti-diagonal reached, cannot lie on '
+ "the matrix's last column or row steps without testing moves against them, which the two searches of a long "
+ 'pair, meeting in the middle, almost never need. Together these made every gap-affine dataset 5 to 14% faster. '
+ 'The two gathers still take 46% of the step on 100 kbp pairs at 20% divergence; a scalar comparison per lane is '
+ 'twice as slow, and prefetching the letters or the source rows, or a 16-byte window in place of the gathers, '
+ 'were each slower overall.'),
 ('p',
  '**Memory layout.** The wavefront updates the bounds and furthest reaches of its slots at every cost. When '
  "these were separate arrays of a few words, the allocator placed them next to another thread's data, so that "
