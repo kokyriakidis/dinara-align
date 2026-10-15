@@ -62,6 +62,7 @@ searches find keeping only their last few costs, and each piece is aligned the s
 
 from std.math import gcd
 from std.sys import size_of
+from std.sys.intrinsics import prefetch, PrefetchOptions
 
 from .common import FIRST_SENTINEL, SECOND_SENTINEL, UNREACHED
 from .cigar import reverse_bytes, reversed_into, reversed_list, text_of
@@ -915,6 +916,16 @@ def step[
             opened_second2.unsafe_offset(diagonal).unsafe_store(second_gap2)
         var front = aligned.unsafe_offset(diagonal)
         comptime if GATHERED_SLIDES:
+            # The letters a group `SLIDE_AHEAD` on will slide over, fetched now from where its front a
+            # mismatch back stands: its eight lanes read within a line or two of each sequence, and the
+            # rings' traffic, hundreds of kilobytes a cost on long divergent pairs, has evicted them from L1
+            # since the cost before, where seven in ten of the step's L1 misses had been the gathers'.
+            var ahead = diagonal + SLIDE_AHEAD * LANES
+            if ahead <= high:
+                var predicted = Int(mismatched[unsafe_offset=ahead])
+                if predicted >= 0:
+                    prefetch[SLIDE_FETCH](first.unsafe_offset(predicted))
+                    prefetch[SLIDE_FETCH](second.unsafe_offset(predicted - ahead))
             var slid = gathered_slides(first, second, max(substituted, gapped), diagonals)
             front.unsafe_store(slid)
             reaches = max(reaches, slid + slid - diagonals)
@@ -958,6 +969,11 @@ def step[
             flags.unsafe_offset(diagonal).unsafe_store((entry | opened).cast[DType.uint8]())
         diagonal += LANES
     return max(reach, Int(reaches.reduce_max()))
+
+
+comptime SLIDE_AHEAD = 2
+"""Lane groups ahead whose letters the step fetches (see `step`): enough to cover a load from L2."""
+comptime SLIDE_FETCH = PrefetchOptions().for_read().high_locality()
 
 
 comptime SEARCH_STEPS = 0
