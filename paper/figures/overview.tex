@@ -26,8 +26,9 @@
 \draw[rounded corners=2pt,fill=gray!8,draw=gray!60] (7.392,-6.317) rectangle (12.768,-7.392);
 \node[align=center,font=\scriptsize] at (10.080,-6.854) {\textbf{Uncertified pairs again}\\{\color{gray!70!black}wider band; 16-bit scores on saturation}};
 \draw[->,>=stealth,gray!70!black] (3.808,-1.142) -- (4.480,-1.142);
+\node[align=center,font=\tiny] at (4.144,-0.336) {two ends cheaper};
 \draw[->,>=stealth,gray!70!black] (8.064,-1.142) -- (8.736,-1.142);
-\node[align=center,font=\tiny] at (8.400,-0.336) {after 1/24 of the cheapest band};
+\node[align=center,font=\tiny] at (8.400,-0.202) {after 1/24 of the cheapest band;\\short pairs: after its whole cost};
 \draw[->,>=stealth,gray!70!black] (12.544,-1.142) -- (13.216,-1.142);
 \draw[->,>=stealth,gray!70!black] (4.256,-3.450) -- (6.496,-3.450);
 \node[align=center,font=\tiny] at (5.376,-3.226) {steps more than two};
@@ -41,5 +42,5 @@
 \node[align=center,font=\tiny] at (6.496,-6.630) {not certified};
 \node[anchor=west,font=\tiny] at (0.224,-2.083) {A pair aligned by diagonal transition is traced back from its own wavefronts.};
 \end{tikzpicture}}
-\caption{How dinara-align assigns a pair to an algorithm, and the rule behind each hand-over. At unit costs, diagonal transition from one end and then from both aligns near-identical pairs, handing over to band doubling over bit-parallel tiles only once its projected work exceeds the band's and it has spent one twenty-fourth of the cheapest band (Section 3.10); the tiles are traced back within the memory limit. At gap-affine costs one search grows alone, its fronts kept, and is traced back at once if it reaches the end; a second search joins once one would step more diagonals than two would need (Section 3.9), and a global pair projected to take more work than a full sweep in difference recurrences is handed to that sweep after one twenty-fourth of its work, the alignment the same either way. Batches of short pairs are aligned one pair per vector lane within a band whose optimality each lane certifies (Section 3.6). The figure shows alignments; a unit-cost distance skips the one-ended search.}\label{fig:overview}
+\caption{How dinara-align assigns a pair to an algorithm, and the rule behind each hand-over. At unit costs, diagonal transition from one end and then from both aligns near-identical pairs, switching to both ends once they would finish more cheaply and handing over to band doubling over bit-parallel tiles only once its projected work exceeds the band's and it has spent one twenty-fourth of the cheapest band, or, for a pair of at most 2{,}048 columns, whose band covers the whole matrix, only once it has spent that band's whole cost (Section 3.10); the tiles are traced back within the memory limit. At gap-affine costs one search grows alone, its fronts kept, and is traced back at once if it reaches the end; a second search joins once one would step more diagonals than two would need (Section 3.9), and a global pair projected to take more work than a full sweep in difference recurrences is handed to that sweep after one twenty-fourth of its work, the alignment the same either way. Batches of short pairs are aligned one pair per vector lane within a band whose optimality each lane certifies (Section 3.6). The figure shows alignments; a unit-cost distance skips the one-ended search.}\label{fig:overview}
 \end{figure*}

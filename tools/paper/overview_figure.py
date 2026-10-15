@@ -20,8 +20,8 @@ BOXES = {
 
 # Arrows: polyline points and an optional label (x, y, text lines, anchor).
 ARROWS = [
-    ([(170, 51), (200, 51)], None),
-    ([(360, 51), (390, 51)], (375, 18, ["after 1/24 of the cheapest band"], "middle")),
+    ([(170, 51), (200, 51)], (185, 18, ["two ends cheaper"], "middle")),
+    ([(360, 51), (390, 51)], (375, 6, ["after 1/24 of the cheapest band;", "short pairs: after its whole cost"], "middle")),
     ([(560, 51), (590, 51)], None),
     ([(190, 154), (290, 154)], (240, 147, ["steps more than two"], "middle")),
     ([(470, 154), (570, 154)], (520, 147, ["searches meet"], "middle")),
