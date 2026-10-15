@@ -444,7 +444,7 @@ def step_front[
 @inline(.never)
 def diagonal_transition[
     cost: StepCost
-](profile: Profile, mut fronts: DiagonalFronts, switch_setup: Int = -1,) -> Probe:
+](profile: Profile, mut fronts: DiagonalFronts, switch_setup: Int = -1, spend: Int = Int.MAX) -> Probe:
     """The edit distance by diagonal transition, as WFA computes it, while it stays cheaper than a band.
 
     Score `s` reaches, on every diagonal, the furthest cell some path of `s` edits reaches; matches
@@ -456,7 +456,8 @@ def diagonal_transition[
     From `PROBE_START` on, the furthest anti-diagonal reached projects the distance, and once the
     search still to do, the projection squared less the score squared, passes what a band would cost
     (see `step_budget`), it stops and hands the projection on as the band's first bound. With
-    `switch_setup`, it also stops once the two-ended search would finish the rest more cheaply.
+    `switch_setup`, it also stops once the two-ended search would finish the rest more cheaply, and past
+    `spend` steps in all it stops whatever it projects.
     """
     var columns = profile.columns
     var rows = profile.rows
@@ -480,6 +481,7 @@ def diagonal_transition[
     if target == 0 and start == columns:
         return Probe(0, 0, 0)
     var score = 0
+    var stepped = 0
     while score < PROBE_CEILING:
         score += 1
         var previous_low = fronts.lows[score - 1]
@@ -487,6 +489,7 @@ def diagonal_transition[
         var low = max(-score, -rows)
         var high = min(score, columns)
         var count = high - low + 1
+        stepped += count
         var row_start = len(fronts.offsets)
         fronts.starts.append(row_start)
         fronts.lows.append(low)
@@ -515,6 +518,8 @@ def diagonal_transition[
         fronts.offsets.resize(unsafe_uninit_length=row_start + count + 2 * FRONT_PADDING)
         if checking:
             var estimate = score * (columns + rows) // max(furthest, 1)
+            if stepped >= spend:
+                return Probe(-1, max(estimate, score + 1), score)
             # With `switch_setup`, give way to the two-ended search once what this front has left costs
             # more than that search would from scratch, setup included; the work done is spent.
             if switch_setup >= 0 and estimate * estimate - score * score > (
@@ -805,6 +810,7 @@ def two_ended[
     mut ahead: FrontPair,
     mut behind: FrontPair,
     ceiling: Int = Int.MAX,
+    spend: Int = Int.MAX,
 ) -> Meeting:
     """The edit distance by diagonal transition from both ends at once, as BiWFA scores, while cheap.
 
@@ -819,7 +825,7 @@ def two_ended[
 
     It stops as `diagonal_transition` does, once the search still to do passes the budget (see
     `step_budget`), or `ceiling` steps where that is less, projecting the distance from both fronts'
-    progress.
+    progress; past `spend` steps of both fronts it stops whatever it projects.
     """
     var columns = profile.columns
     var rows = profile.rows
@@ -865,6 +871,7 @@ def two_ended[
     if meeting != NO_DIAGONAL:
         return met(ahead, behind, meeting, False, False)
     var total = 0
+    var stepped = 0
     while ahead.score < limit and behind.score < limit:
         total += 1
         # Each side measures its progress on its step just before a check, every `PROBE_STRIDE`, from
@@ -873,8 +880,10 @@ def two_ended[
         var measuring = total + 1 >= 2 * PROBE_START and (total + 1) % PROBE_STRIDE == 0
         if total % 2 == 1:
             ahead.advance(first, second, checking or measuring, columns, rows)
+            stepped += ahead.high - ahead.low + 1
         else:
             behind.advance(first_reversed, second_reversed, checking or measuring, columns, rows)
+            stepped += behind.high - behind.low + 1
         # Checked after the backward front's steps alone: a first overlap one score sooner is found
         # then, against the backward front's previous score, which the ring still holds.
         if total % 2 == 0:
@@ -885,6 +894,10 @@ def two_ended[
                     return met(ahead, behind, sooner, False, True)
                 return met(ahead, behind, meeting, False, False)
         if checking:
+            if stepped >= spend:
+                var reached = ahead.furthest + behind.furthest
+                var projected = total * (columns + rows) // max(reached, 1)
+                return Meeting(Probe(-1, max(projected, total + 1), total), 0, 0, 0, 0)
             var estimate = two_ended_gives_up[cost](total, ahead.furthest + behind.furthest, columns, rows, ceiling)
             if estimate >= 0:
                 return Meeting(Probe(-1, estimate, total), 0, 0, 0, 0)

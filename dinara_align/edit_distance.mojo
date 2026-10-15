@@ -30,7 +30,9 @@ from .diagonal import (
     DISTANCE_COST,
     EDITS_PER_STEP,
     StepCost,
+    step_budget,
     grow_to,
+    Meeting,
     Probe,
     PROJECTION_ONLY,
     two_ended,
@@ -353,6 +355,10 @@ struct Settled(Movable):
         return self.moves^
 
 
+comptime SPENT_ONLY = StepCost(FORCED_STEP_TENTHS, EDITS_PER_STEP)
+"""A cost no projection passes: a search under it gives up only on the steps it has spent (see `settle`)."""
+
+
 def settle(
     mut profile: Profile,
     mut traced: DiagonalFronts,
@@ -400,7 +406,18 @@ def settle(
     # A forced policy (see `probes.FORCE`): the one front only to its first check, or never giving way.
     comptime one_front = PROJECTION_ONLY if FORCE == "two-ended" else cost
     var switch = -1 if FORCE == "one-ended" else two_ended_setup(columns, rows)
-    var close = diagonal_transition[one_front](profile, traced, switch_setup=switch)
+    # A short pair's band sweeps the whole matrix (see `SHORT_BAND_COLUMNS`), its cost known whatever the
+    # distance, where a projection from a nanopore read's error-dense ends ran three and a half times over
+    # it: the searches give up only once their steps have cost that band, so they never take more than twice
+    # what the better of the two would have. Given up on their projection, ont-1k reads of 15 to 21% had
+    # taken 112 µs where running on took 34.
+    var short = columns <= SHORT_BAND_COLUMNS and FORCE == ""
+    var whole_band = step_budget[ALIGNMENT_COST](columns, rows)
+    var close: Probe
+    if short:
+        close = diagonal_transition[SPENT_ONLY](profile, traced, switch_setup=switch, spend=whole_band)
+    else:
+        close = diagonal_transition[one_front](profile, traced, switch_setup=switch)
     comptime if PROBES:
         tally.since(DIAGONAL_NS, started)
         var steps = 0
@@ -418,7 +435,13 @@ def settle(
     reversed_codes_into(second_back, profile.row_codes, rows, SECOND_SENTINEL)
     ahead.restart(record=True)
     behind.restart(record=True)
-    var meeting = two_ended[cost](profile, first_back, second_back, ahead, behind)
+    var meeting: Meeting
+    if short:
+        # What the one front stepped, about the square of its score, counts against the same band.
+        var left = max(whole_band - close.floor * close.floor, 0)
+        meeting = two_ended[SPENT_ONLY](profile, first_back, second_back, ahead, behind, spend=left)
+    else:
+        meeting = two_ended[cost](profile, first_back, second_back, ahead, behind)
     comptime if PROBES:
         tally.since(TWO_ENDED_NS, started)
         tally.set(TWO_ENDED_SCORE, ahead.score + behind.score)
