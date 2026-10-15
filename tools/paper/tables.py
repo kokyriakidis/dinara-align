@@ -1,7 +1,7 @@
 """Rewrites the paper's benchmark tables and figure data from bench.py's exact JSON and its tables, then prints
 the figures the text quotes; render.py then turns them into paper/.
 
-    python3 tools/paper/tables.py benchmarks/results/2026-10-12   # the run the paper reports (see merge_runs.py)
+    python3 tools/paper/tables.py benchmarks/results/2026-10-15   # the run the paper reports (see merge_runs.py)
 """
 
 import json

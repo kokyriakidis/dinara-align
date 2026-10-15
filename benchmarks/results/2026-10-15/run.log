@@ -1,0 +1,18 @@
+at 7fb47d5 TODO: where the gap-affine step stands on the near misses after the two kept speedups
+== unit Thu Oct 15 10:50:25 PDT 2026
+== unit exit=0 Thu Oct 15 10:52:19 PDT 2026
+== affine Thu Oct 15 10:52:19 PDT 2026
+== affine exit=0 Thu Oct 15 11:23:51 PDT 2026
+== modes-1 Thu Oct 15 11:23:51 PDT 2026
+== modes-1 exit=0 Thu Oct 15 11:24:46 PDT 2026
+== modes-2 Thu Oct 15 11:24:46 PDT 2026
+== modes-2 exit=0 Thu Oct 15 11:24:50 PDT 2026
+== modes-3 Thu Oct 15 11:24:50 PDT 2026
+== modes-3 exit=0 Thu Oct 15 11:24:55 PDT 2026
+== batch-1 Thu Oct 15 11:24:55 PDT 2026
+== batch-1 exit=0 Thu Oct 15 11:26:00 PDT 2026
+== batch-2 Thu Oct 15 11:26:20 PDT 2026
+== batch-2 exit=0 Thu Oct 15 11:26:40 PDT 2026
+== batch-3 Thu Oct 15 11:26:40 PDT 2026
+== batch-3 exit=0 Thu Oct 15 11:27:01 PDT 2026
+== all done Thu Oct 15 11:27:01 PDT 2026
