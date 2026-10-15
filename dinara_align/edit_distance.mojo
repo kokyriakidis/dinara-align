@@ -415,7 +415,7 @@ def settle(
     var whole_band = step_budget[ALIGNMENT_COST](columns, rows)
     var close: Probe
     if short:
-        close = diagonal_transition[SPENT_ONLY](profile, traced, switch_setup=switch, spend=whole_band)
+        close = diagonal_transition[SPENT_ONLY, True](profile, traced, switch_setup=switch, spend=whole_band)
     else:
         close = diagonal_transition[one_front](profile, traced, switch_setup=switch)
     comptime if PROBES:
@@ -439,7 +439,7 @@ def settle(
     if short:
         # What the one front stepped, about the square of its score, counts against the same band.
         var left = max(whole_band - close.floor * close.floor, 0)
-        meeting = two_ended[SPENT_ONLY](profile, first_back, second_back, ahead, behind, spend=left)
+        meeting = two_ended[SPENT_ONLY, True](profile, first_back, second_back, ahead, behind, spend=left)
     else:
         meeting = two_ended[cost](profile, first_back, second_back, ahead, behind)
     comptime if PROBES:
