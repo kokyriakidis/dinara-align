@@ -70,7 +70,7 @@ from .substitutions import uniform_pair
 from .edit_distance import EditSpace
 from .errors import AlignmentError, ErrorKind
 from .modes import Anchor, Band, Costs, Ties, Mode
-from .slides import GATHERED_SLIDES, gathered_slides, slide, windowed_slides
+from .slides import GATHERED_SLIDES, gathered_slides, slide
 from .traceback import cigar_string, EditPath, ordered_cigar
 from .diagonal import GIVE_UP_SHARE
 from .differences import difference_bits, path_bytes, swept_cost, swept_path
@@ -915,8 +915,7 @@ def step[
             opened_second2.unsafe_offset(diagonal).unsafe_store(second_gap2)
         var front = aligned.unsafe_offset(diagonal)
         comptime if GATHERED_SLIDES:
-            # The sequences hold `LINE_GUARD` bytes before and `PADDING` after, as `windowed_slides` needs.
-            var slid = windowed_slides(first, second, max(substituted, gapped), diagonals)
+            var slid = gathered_slides(first, second, max(substituted, gapped), diagonals)
             front.unsafe_store(slid)
             reaches = max(reaches, slid + slid - diagonals)
         else:
