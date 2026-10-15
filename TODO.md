@@ -75,6 +75,40 @@ Copies the consolidation of 2026-10-08 left separate, and why.
   pairs take 10.6 µs to WFA's 9.6, where the first search hands over to two (see
   `gap_affine.traced_alone`); its model of the two searches leaves out their setup and the far side's
   grow-on, so it hands over a little early. Count those in from what the searches measure, not a factor.
+- [ ] **Which nanopore reads the diagonal transition should finish.** Regret (`profile.py regret`, 2026-10-12)
+  on ont-10k: run to its end, the diagonal transition beats the default on 114 of 277 reads, 3.3 of 38.7 ms,
+  nearly all under 8% divergence (4.8 against 6.5 ms there); forced on every read it takes 1.53 times as
+  long. Two signals tried and left below (the search's own projection, the projection from recent
+  progress) did not pick those reads out. Compare per-pair probes of the winners and the losers before
+  writing a third rule.
+
+## Tried in the optimization rounds of 2026-10-12 to 14
+
+Each measured on the Skylake-X with `profile.py compare` and `regret`; none kept.
+
+- [-] **Aiming the band's first bound at the search's own projection** (`-D DINARA_FORCE=aim-search` still
+  times it). The two-ended search's projection, from every edit it reached, lies far closer to the
+  distance than the one front's from 8 edits (median 0.98 against 0.85 of it on 10 kbp pairs at 10%,
+  1.5 against 3.9 on ont-10k), and forced on every pair it saved 3 to 8% on most sets, but cost 4% on
+  ont-10k distances: where it runs 2 to 4 times high the band starts that much too wide, while a bound
+  too low costs only a cheap failed round. Safe only below the projection by a factor fitted to the
+  sample, a tuned knob. Left.
+- [-] **A CIGAR entry's digits packed into a word and stored at once** (5a500f8, reverted f2dbca5).
+  `CigarWriter.flush` then stayed out of line and its four divisions cost a third more instructions on
+  close pairs, whose long runs the digit loop predicts well: 10 kbp pairs at 1% 1.5% slower, nothing
+  gained on divergent ones. The mismatch-mask split of diagonal runs from the same change was kept.
+- [-] **Charging a recording search for the history memory it has not held before** (fa34391, reverted
+  98e5724). Measured on one 50 kbp PromethION read, its two-ended search spent 5 of 8.7 ms faulting in
+  11 MB of fresh pages where the band took 1.95 ms, and the charge fixed that read. But faults are paid
+  once an aligner, not once a pair: a fresh aligner holds no history, so the first search is charged and
+  gives up, the memory never grows, and every later pair is charged too; 10 kbp pairs at 5% went to the
+  band and took 23% longer. Model only costs every pair pays. That read's real cause is the alignment's
+  band model (`ALIGNMENT_COST`, fitted on uniform pairs) overestimating its band about twice.
+- [-] **Giving up only when the projection from the second half of the edits agrees** (1db41cc, reverted
+  a495e85). Meant for nanopore reads whose errors gather at their ends, where the two-ended fronts start:
+  no change on ont-10k or ont-50k, so their winners are not told apart that way, and recording the progress
+  at every check made short pairs' distances 2 to 4% slower (Illumina, HiFi, 10 kbp at 1%). Left.
+
 ## Tighter bounds: the audit of 2026-10-11
 
 Every bound checked against A*PA2's code and paper, QuickEd, Edlib, KSW2, BSAlign, WFA2-lib, SeedEx,
