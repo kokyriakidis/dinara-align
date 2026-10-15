@@ -136,6 +136,16 @@ Each measured on the Skylake-X with `profile.py compare` and `regret`; none kept
   (4, 6, 2): 100 kbp at 20% 3.57 to 5.05 s, ont-10k 1.58 to 2.03 ms, ont-1k 103 to 124 µs. How often a
   group fit was not measured; the test and its branch a group cost more than the gathers they replaced
   either way. Left.
+- [-] **Warming an Aligner on a kilobase pair too** (fe79987, reverted). Two ont-1k reads, 35 and 115
+  (distances 151 and 169), take 93 and 112 µs where the other one-front reads at those distances take a
+  median 31: they are the first of their run to grow the one front's history past what the warm-up's 256-letter
+  pair grew it to, 28 to 37 page faults and 66 KB copied as it doubles. Their search does not fail to switch:
+  the two-ended search costs 0.89 to 0.92 of one front at those distances, as `ALIGNED_TWO_ENDED_PERCENT`
+  has it. A second warm-up pair of 1,024 letters an eighth apart fixed read 1 (49 to 22 µs) but not those two,
+  because a two-ended alignment swaps its history into `traced` (see `settle`), so the warm pair, settled
+  two-ended, left `traced` small again; covering all three rotating buffers would hold about 0.7 MB an
+  aligner for some 120 µs of a 19.5 ms sample, a fresh aligner's once. It raised `Aligner()` from 81 to
+  141 µs and moved ont-1k by nothing measurable. Left.
 - [-] **Giving up only when the projection from the second half of the edits agrees** (1db41cc, reverted
   a495e85). Meant for nanopore reads whose errors gather at their ends, where the two-ended fronts start:
   no change on ont-10k or ont-50k, so their winners are not told apart that way, and recording the progress
