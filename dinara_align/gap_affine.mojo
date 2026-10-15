@@ -880,9 +880,6 @@ def step[
     # The gathered slides keep their furthest anti-diagonals a lane each, reduced once after the loop:
     # reducing every group put a chain of shuffles and maxima on each one's path.
     var reaches = Lanes(Int32.MIN // 2)
-    # Fetched ahead only when this cost's fronts stream more than L1 holds (see `SLIDE_AHEAD`); on short reads
-    # they fit, the letters stay, and the fetches only cost.
-    var fetching = (high - low + 1) * RING_BYTES > L1_DATA_BYTES
     var diagonal = low
     while diagonal <= high:
         var diagonals = lane_diagonals + Int32(diagonal)
@@ -924,7 +921,7 @@ def step[
             # rings' traffic, hundreds of kilobytes a cost on long divergent pairs, has evicted them from L1
             # since the cost before, where seven in ten of the step's L1 misses had been the gathers'.
             var ahead = diagonal + SLIDE_AHEAD * LANES
-            if fetching and ahead <= high:
+            if ahead <= high:
                 var predicted = Int(mismatched[unsafe_offset=ahead])
                 if predicted >= 0:
                     prefetch[SLIDE_FETCH](first.unsafe_offset(predicted))
@@ -977,12 +974,6 @@ def step[
 comptime SLIDE_AHEAD = 2
 """Lane groups ahead whose letters the step fetches (see `step`): enough to cover a load from L2."""
 comptime SLIDE_FETCH = PrefetchOptions().for_read().high_locality()
-comptime RING_BYTES = 32
-"""The rings' bytes a diagonal of one cost moves through the step: five lane loads and three stores of 4 bytes."""
-comptime L1_DATA_BYTES = 32 * 1024
-"""A core's L1 data cache on the x86 processors the gathered slides run on (AVX-512): past it, a cost's rings
-evict the letters the next cost slides over. Measured fetching at every width, short reads' alignments
-took up to 2% longer (ont-1k at (4, 6, 2)), long divergent pairs' 3 to 4% less."""
 
 
 comptime SEARCH_STEPS = 0
